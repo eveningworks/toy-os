@@ -25,6 +25,10 @@
 // Alt-B is ESC then 'b'), and the mods half is for callers that need to
 // tell Shift-Tab from Tab, which the terminal encoding cannot express.
 static int shift_pressed = 0;
+// CAPS LOCK: the one lock STATE this driver keeps (Num Lock stays always-
+// numeric, see the keypad below). `caps_held` is so a typematic repeat of
+// the key -- another press with no release -- does not toggle it again.
+static int caps_lock, caps_held;
 static int altgr_pressed = 0;
 static int ctrl_pressed = 0;
 static int alt_pressed = 0;   // LEFT Alt only -- right Alt is AltGr, see below
@@ -396,6 +400,13 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     }
     // After the modifier state moved, so a Shift press reports Shift held
     // -- the same "the world after this key" the transitions report.
+    if (keycode == INPUT_KEY_CAPSLOCK) {
+        if (down && !caps_held) {
+            caps_lock = !caps_lock;
+            input_set_leds(caps_lock ? INPUT_LED_CAPS : 0);
+        }
+        caps_held = down;
+    }
     phys_push(keycode, down);
     if (mod_code) {
         // A modifier produces NO code in the byte stream, so the tap
@@ -524,7 +535,7 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     default: break;
     }
 
-    char c = keyboard_layout_translate(keycode, shift_pressed, altgr_pressed);
+    char c = keyboard_layout_translate_caps(keycode, shift_pressed, altgr_pressed, caps_lock);
     if (!c) return;
 
     // Ctrl folds a letter to its control code (Ctrl-A -> 0x01), which

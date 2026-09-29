@@ -473,6 +473,13 @@ a client that had explicitly declined. And when you add a fourth route,
 route it through the same function rather than repeating the client
 check -- that check being repeated is what let the third one drift.
 
+**Alt+Space opens the focused window's menu**, at its corner, and the
+window manager handles it as it does Alt+F4 -- Windows' system-menu
+shortcut (KDE's is Alt+F3). It is the way back from FULLSCREEN, which
+has no title bar and hides the taskbar, and whose content right-click
+belongs to the app: before it, a window put in fullscreen from the menu
+by an app with no F11 of its own could only be closed.
+
 ## When an app stops answering
 
 A window that will not close is either **declining** or **wedged**, and

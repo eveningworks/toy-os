@@ -25,6 +25,11 @@
 static const struct input_source *g_sources[MAX_INPUT_SOURCES];
 static int g_count;
 
+void input_set_leds(uint8_t leds) {
+    for (int i = 0; i < g_count; i++)
+        if (g_sources[i]->set_leds) g_sources[i]->set_leds(leds);
+}
+
 void input_register_source(const struct input_source *src) {
     if (!src || !src->name || g_count >= MAX_INPUT_SOURCES) return;
 

@@ -72,7 +72,26 @@ struct uschema {
     uint32_t type;      // SETTING_ABI_TYPE_*
     uint8_t  dir_mode;  // USCHEMA_DIR_*
     int32_t  min, max, step;
+    // Requires=<qualified name>=<value>: this setting only applies while
+    // that other DECLARED setting has that value -- see uschema_unmet().
+    // Otherwise= is the value it reads as meanwhile, or empty.
+    char req_name[SETTING_ABI_NS_MAX + SETTING_ABI_NAME_MAX];
+    char req_value[SETTING_ABI_VALUE_MAX];
+    char otherwise[SETTING_ABI_VALUE_MAX];
 };
+
+// Is `s`'s Requires= unmet right now? Then 1, and `reason` (nullable)
+// gets the RequiresReason= sentence, or one made from the other
+// setting's label. ONLY ANOTHER DECLARED SETTING CAN BE REQUIRED: a
+// kernel name is not found here and the requirement is ignored, so
+// /etc still cannot disable a control the kernel owns.
+int uschema_unmet(const struct uschema *s, char *reason, uint32_t cap);
+
+// The value IN EFFECT: Otherwise= while the requirement is unmet, else
+// what the file says, else the default. What GET and INFO answer; the
+// file itself keeps the stored choice, so meeting the requirement again
+// brings it back.
+void uschema_effective(const struct uschema *s, char *out, uint32_t cap);
 
 // How a ChoiceDir's entries become values.
 //
@@ -100,6 +119,9 @@ struct uschema {
 #define USCHEMA_KEY_MAX         "Max"
 #define USCHEMA_KEY_STEP        "Step"
 #define USCHEMA_KEY_UNIT        "Unit"
+#define USCHEMA_KEY_REQUIRES    "Requires"
+#define USCHEMA_KEY_REQUIRES_REASON "RequiresReason"
+#define USCHEMA_KEY_OTHERWISE   "Otherwise"
 
 // How many declarations one machine may have. The cache below is a list
 // of NAMES, not of parsed schemas, so this costs ~2 KB rather than the

@@ -83,7 +83,20 @@ struct input_source {
     // an MSI-driven device very much is not. lsdev prints whichever is
     // set.
     uint8_t msi_vector;
+
+    // Sets the keyboard's lock LEDs (INPUT_LED_*), or NULL for a source
+    // with none it can drive. MUST NOT BLOCK: it is called from the key
+    // handler, which runs in the keyboard's own interrupt.
+    void (*set_leds)(uint8_t leds);
 };
+
+// The lock lights, in the PS/2 "set LEDs" (0xED) byte's own order.
+#define INPUT_LED_SCROLL 0x01
+#define INPUT_LED_NUM    0x02
+#define INPUT_LED_CAPS   0x04
+
+// Tells every source that can show them. Safe from an interrupt handler.
+void input_set_leds(uint8_t leds);
 
 void input_register_source(const struct input_source *src);
 

@@ -139,10 +139,10 @@
 // exists. NumLock's off-state (keypad as arrows) is deliberately NOT
 // modelled -- see keyboard.c.
 //
-// The three LOCK keys report their presses and nothing else: this
-// kernel has no lock STATE, so Caps Lock does not change what a letter
-// key produces. Reporting the press is still worth it -- an app that
-// wants to know is told -- and it is honest about doing nothing more.
+// The three LOCK keys report their presses. CAPS LOCK is also a STATE
+// the keyboard layer keeps (keyboard.c): it capitalises letter keys and
+// lights the PS/2 keyboard's LED. Num Lock and Scroll Lock change
+// nothing -- the keypad is always numeric (keyboard.c says why).
 #define KEY_INSERT            0xB3
 #define KEY_MENU              0xB4 // the "context menu" key, right of AltGr
 #define KEY_CAPS_LOCK         0xB5

@@ -136,6 +136,17 @@ int uschema_find(const char *qualified, struct uschema *out) {
     str_key(buf, USCHEMA_KEY_UNIT,        out->unit,       sizeof out->unit);
     str_key(buf, USCHEMA_KEY_CHOICES,     out->choices,    sizeof out->choices);
     str_key(buf, USCHEMA_KEY_CHOICE_DIR,  out->choice_dir, sizeof out->choice_dir);
+    {
+        char req[sizeof out->req_name + sizeof out->req_value];
+        str_key(buf, USCHEMA_KEY_REQUIRES, req, sizeof req);
+        char *eq = strchr(req, '=');
+        if (eq) {
+            *eq = '\0';
+            strlcpy(out->req_name, req, sizeof out->req_name);
+            strlcpy(out->req_value, eq + 1, sizeof out->req_value);
+        }
+        str_key(buf, USCHEMA_KEY_OTHERWISE, out->otherwise, sizeof out->otherwise);
+    }
 
     char mode[16];
     str_key(buf, USCHEMA_KEY_DIR_MODE, mode, sizeof mode);
@@ -265,6 +276,33 @@ int uschema_stored(const struct uschema *s, char *out, uint32_t cap) {
 void uschema_get(const struct uschema *s, char *out, uint32_t cap) {
     if (!out || !cap) return;
     if (!uschema_stored(s, out, cap) || !out[0]) strlcpy(out, s->def, cap);
+}
+
+int uschema_unmet(const struct uschema *s, char *reason, uint32_t cap) {
+    if (reason && cap) reason[0] = '\0';
+    if (!s || !s->req_name[0]) return 0;
+    struct uschema other;
+    if (!uschema_find(s->req_name, &other)) return 0;   // not DECLARED: ignored
+    char v[SETTING_ABI_VALUE_MAX];
+    uschema_get(&other, v, sizeof v);
+    if (!strcmp(v, s->req_value)) return 0;
+    if (reason && cap) {
+        char path[SCHEMA_PATH_MAX];
+        if (snprintf(path, sizeof path, SETTING_TEXT_DIR "/%s.%s", s->ns, s->name) > 0)
+            uconf_get(path, USCHEMA_KEY_REQUIRES_REASON, reason, cap);
+        if (!reason[0])
+            snprintf(reason, cap, "Unavailable while %s is %s", other.label, v);
+    }
+    return 1;
+}
+
+void uschema_effective(const struct uschema *s, char *out, uint32_t cap) {
+    if (!out || !cap) return;
+    if (s && s->otherwise[0] && uschema_unmet(s, 0, 0)) {
+        strlcpy(out, s->otherwise, cap);
+        return;
+    }
+    uschema_get(s, out, cap);
 }
 
 int uschema_validate(const struct uschema *s, const char *value) {

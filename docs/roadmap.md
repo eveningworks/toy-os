@@ -662,6 +662,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Taskbar window previews (peek)~~ DONE 2026-09-29 -- `desktop.taskbar_peek`, with a highlight mode
 - [x] ~~Drag taskbar buttons to reorder~~ DONE 2026-09-29 -- live, gliding; a drag resting on a button raises its window
 - [ ] Pinned taskbar apps -- a launcher that stays on the strip, and the order that should then persist
+- [ ] A USB keyboard's Caps Lock light -- the state and the PS/2 light work; USB needs a SET_REPORT output report
 - [ ] A Quick Settings flyout -- network and volume as ONE tray target, Windows 11's grouping, which the centred style's mockup drew
 - [ ] Alt+Tab window switching
 - [ ] Window snapping (half/quarter screen)

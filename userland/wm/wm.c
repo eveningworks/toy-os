@@ -1473,6 +1473,17 @@ void wm_run(void) {
                 // compositor's and an app cannot be allowed to shadow
                 // one (wm_shortcut.c).
                 redraw_pending = 1;
+            } else if (key == ' ' && (key_mods & KEY_MOD_ALT) && f >= 0) {
+                // ALT+SPACE: the focused window's menu, at its corner --
+                // Windows' system-menu shortcut (KDE's is Alt+F3). The
+                // one way back from FULLSCREEN, which has no title bar
+                // and hides the taskbar, and whose content area's
+                // right-click belongs to the app.
+                int mx0 = windows[f].x + 8, my0 = windows[f].y + 8;
+                if (mx0 < 8) mx0 = 8;
+                if (my0 < 8) my0 = 8;
+                wm_open_window_menu(f, mx0, my0);
+                redraw_pending = 1;
             } else if (key == KEY_F4 && (key_mods & KEY_MOD_ALT) && f >= 0) {
                 wm_request_close(f); // may shift windows[] -- f is dead after this
                 redraw_pending = 1;

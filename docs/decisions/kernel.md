@@ -1265,6 +1265,32 @@ two kernel files and rebuilding, and `SETTING_MAX` stopped being a
 ceiling the desktop competed for -- it had been raised four times, and
 the last raise found the old value exactly full.
 
+## A declared setting can require another declared setting, and nothing else
+
+`Requires=<name>=<value>` in an `/etc/settings.d` declaration makes the
+setting UNAVAILABLE while that other setting has another value: System
+Settings greys it with `RequiresReason=` in place of its description, a
+write is refused, and `Otherwise=` is what it reads as meanwhile.
+Asked for so that "Button position: Left" could not be chosen under a
+centred Start -- a combination Windows 11 cannot express either.
+
+**Why the rule "a declaration cannot make a setting unavailable" did not
+simply go.** It exists so a text file under `/etc` cannot disable a
+control the KERNEL is willing to change. A requirement is only resolved
+against another DECLARED setting (`uschema_unmet()` asks the schema, not
+the registry, so a kernel name is never found): it links two knobs
+`/etc` already owns, and reaches nothing of the kernel's.
+
+**Why `Otherwise` rather than leaving the stored value in force.** Real
+systems draw a dependent control greyed AT the value in effect; a greyed
+"Left" beside centred buttons is a control telling a lie. And because
+GET answers the effective value, the window manager needed no special
+case -- it reads `center` like any other.
+
+**Why the stored value survives.** Moving Start back to the left brings
+back the alignment the person chose, as a dependent control does on
+every desktop.
+
 ## Settings are a REGISTRY, not a pile of syscalls -- and the files stay plain text
 
 Milestone 41 stage 4's last prerequisite was written down as "syscalls
@@ -5474,15 +5500,19 @@ Four decisions inside it:
   to receive a `7` would be the wrong shape. Keypad Enter sends the same
   `\n` the main Enter does, as on every OS.
 - **NumLock's off-state is deliberately not modelled.** On real hardware
-  NumLock off turns the keypad into a second set of arrows. That needs
-  lock STATE, which this kernel does not keep for Caps Lock either, and
-  the failure mode of getting it wrong is a keypad that types nothing
-  while the light says otherwise. Always-numeric is what a keypad is
-  for; the arrows are a few inches to the left.
-- **The lock keys report their press and change nothing.** There is no
-  lock state here, so Caps Lock does not alter what a letter key
-  produces. Reporting the press is still worth it and is honest about
-  doing no more.
+  NumLock off turns the keypad into a second set of arrows, and the
+  failure mode of getting it wrong is a keypad that types nothing while
+  the light says otherwise. Always-numeric is what a keypad is for; the
+  arrows are a few inches to the left.
+- **Caps Lock is the one lock STATE kept** (since 2026-09-29; it
+  reported its press and changed nothing before). It inverts Shift on an
+  "alphabetic" key -- xkb's rule: unshifted a lowercase letter, shifted
+  its capital -- decided from the layout, so digits and punctuation are
+  untouched and Caps+Shift types lowercase. Toggled on the press and not
+  on a typematic repeat. The PS/2 keyboard's light follows through
+  `input_source.set_leds` (0xED and the LED byte, advanced by the ACKs in
+  the interrupt, as Linux's atkbd does); a USB keyboard's does not yet.
+  Scroll Lock still reports its press and changes nothing.
 
 Two scancode wrinkles worth knowing, both in `keyboard_feed_byte()`:
 

@@ -58,6 +58,63 @@ KTEST("input", "an evdev keycode becomes the character the layout says") {
     KTEST_ASSERT_EQ(c, '1');
 }
 
+KTEST("input", "Caps Lock capitalises a letter key and nothing else") {
+    // THE LAYOUT DECIDES, so the fixtures are found in it rather than
+    // assumed: any key whose unshifted symbol is a letter and shifted
+    // one its capital, and the key that types '1'.
+    int letter = -1, digit = -1;
+    for (int kc = 1; kc < 256; kc++) {
+        char lo = keyboard_layout_translate((uint16_t)kc, 0, 0);
+        char up = keyboard_layout_translate((uint16_t)kc, 1, 0);
+        if (letter < 0 && lo >= 'a' && lo <= 'z' && up == (char)(lo - 'a' + 'A')) letter = kc;
+        if (digit < 0 && lo == '1') digit = kc;
+    }
+    KTEST_ASSERT(letter >= 0 && digit >= 0);
+    char lo = keyboard_layout_translate((uint16_t)letter, 0, 0);
+    char up = keyboard_layout_translate((uint16_t)letter, 1, 0);
+    KTEST_ASSERT_EQ((int)keyboard_layout_translate_caps((uint16_t)letter, 0, 0, 1), (int)up);
+    // Caps+Shift is lowercase, as on Windows and Linux.
+    KTEST_ASSERT_EQ((int)keyboard_layout_translate_caps((uint16_t)letter, 1, 0, 1), (int)lo);
+    KTEST_ASSERT_EQ((int)keyboard_layout_translate_caps((uint16_t)letter, 0, 0, 0), (int)lo);
+    // A digit is not a letter: Caps leaves it alone, Shift still works.
+    KTEST_ASSERT_EQ((int)keyboard_layout_translate_caps((uint16_t)digit, 0, 0, 1), '1');
+    KTEST_ASSERT_EQ((int)keyboard_layout_translate_caps((uint16_t)digit, 1, 0, 1),
+                    (int)keyboard_layout_translate((uint16_t)digit, 1, 0));
+}
+
+KTEST("input", "the Caps Lock key toggles on its press, not on a repeat of it") {
+    int letter = -1;
+    for (int kc = 1; kc < 84 && letter < 0; kc++) {   // <= 83: a PS/2 make code too
+        char lo = keyboard_layout_translate((uint16_t)kc, 0, 0);
+        if (lo >= 'a' && lo <= 'z') letter = kc;
+    }
+    KTEST_ASSERT(letter >= 0);
+    char lo = keyboard_layout_translate((uint16_t)letter, 0, 0);
+    uint8_t mods = 0;
+
+    scheduler_preempt_disable();
+    while (keyboard_try_getchar_mods(&mods) != -1) { }
+    // Pressed, REPEATED (typematic: another make, no break), released.
+    input_report_key(INPUT_KEY_CAPSLOCK, 1);
+    input_report_key(INPUT_KEY_CAPSLOCK, 1);
+    input_report_key(INPUT_KEY_CAPSLOCK, 0);
+    while (keyboard_try_getchar_mods(&mods) != -1) { }   // the KEY_CAPS_LOCK codes
+    input_report_key((uint16_t)letter, 1);
+    input_report_key((uint16_t)letter, 0);
+    int on = keyboard_try_getchar_mods(&mods);
+    // Off again, so the machine is left as it was found.
+    input_report_key(INPUT_KEY_CAPSLOCK, 1);
+    input_report_key(INPUT_KEY_CAPSLOCK, 0);
+    while (keyboard_try_getchar_mods(&mods) != -1) { }
+    input_report_key((uint16_t)letter, 1);
+    input_report_key((uint16_t)letter, 0);
+    int off = keyboard_try_getchar_mods(&mods);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT_EQ(on, (int)(lo - 'a' + 'A'));   // a repeat toggled it back off
+    KTEST_ASSERT_EQ(off, (int)lo);
+}
+
 KTEST("input", "an extended keycode arrives as one key, not as two") {
     scheduler_preempt_disable();
     uint8_t mods = 0;

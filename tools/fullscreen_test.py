@@ -225,6 +225,23 @@ def run(dbg, qmp, tmp, res):
         fb = wait_lease(dbg, pid)
         res.check("...with the lease", fb.get("lease") == pid, fb)
 
+    # ALT+SPACE IS THE WAY OUT FOR ANY APP: a fullscreen window has no
+    # title bar, the taskbar is hidden, and a right-click in the content
+    # is the app's -- so without this a window put there from the menu
+    # by an app with no F11 (Notepad) had no exit but closing it.
+    dbg.key(ord(" "), mods="alt")
+    time.sleep(0.5)
+    row = dbg.ctxmenu_row("Exit Fullscreen")
+    res.check("Alt+Space opens the window menu over a fullscreen window, offering Exit Fullscreen",
+              row is not None, dbg.send("gui ctxmenu"))
+    if row:
+        dbg.click(*row)
+        win = wait_state(dbg, "normal")
+        res.check("...and choosing it leaves fullscreen", win and win.get("state") == "normal",
+                  win and win.get("state"))
+        dbg.key(KEY_F11)
+        wait_state(dbg, "fullscreen")
+
     dbg.key(KEY_F4, mods="alt")
     deadline = time.time() + 6
     while time.time() < deadline and dbg.window(TITLE):

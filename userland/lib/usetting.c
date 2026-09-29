@@ -57,12 +57,15 @@ static void fill_from_schema(const struct uschema *s, struct setting_msg *m) {
     m->stored[0] = '\0';
     uschema_stored(s, m->stored, sizeof m->stored);
     strlcpy(m->value, m->stored[0] ? m->stored : s->def, sizeof m->value);
-    // A SCHEMA SETTING IS NEVER UNAVAILABLE. `unavailable` describes the
-    // MACHINE -- a control policy or hardware has taken away -- and that
-    // is a sentence only the owner of the knob can write. A declaration
-    // file cannot invent one, and inventing a way for it to would let
-    // /etc disable a control the kernel is perfectly willing to change.
-    m->unavailable[0] = '\0';
+    // A SCHEMA SETTING IS UNAVAILABLE ONLY THROUGH ANOTHER DECLARED ONE.
+    // `unavailable` otherwise describes the MACHINE -- a control policy
+    // or hardware has taken away -- a sentence only the owner of the knob
+    // can write, and a way for /etc to invent one would let it disable a
+    // control the kernel is perfectly willing to change. Requires= can
+    // name only another DECLARED setting (uschema_unmet()), so it links
+    // two knobs /etc already owns and reaches nothing of the kernel's.
+    if (uschema_unmet(s, m->unavailable, sizeof m->unavailable) && s->otherwise[0])
+        strlcpy(m->value, s->otherwise, sizeof m->value);
     uschema_text(s, m);
 }
 
@@ -165,7 +168,7 @@ int usetting_dispatch(struct setting_msg *m) {
         switch (resolve(m->name, &s, &gen)) {
         case OWNER_KERNEL: return sys_setting(m);
         case OWNER_SCHEMA:
-            uschema_get(&s, m->value, sizeof m->value);
+            uschema_effective(&s, m->value, sizeof m->value);
             kernel_count(&m->generation);
             return 0;
         default: return -1;
@@ -184,6 +187,14 @@ int usetting_dispatch(struct setting_msg *m) {
             // bump for exactly that second case, because everything
             // watching the generation does real work when it moves.
             int changed = 0;
+            // UNAVAILABLE REFUSES A WRITE, as the ABI promises for a
+            // kernel setting's. (An UNSET is allowed: the default is
+            // always a safe place to go back to.)
+            if (uschema_unmet(&s, 0, 0)) {
+                m->result = SETTING_INVALID;
+                kernel_count(&m->generation);
+                return 0;
+            }
             m->result = (uint32_t)uschema_write(&s, m->value, &changed);
             if (changed) touch(&m->generation);
             else kernel_count(&m->generation);

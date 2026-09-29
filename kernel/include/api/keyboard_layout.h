@@ -59,4 +59,11 @@ const char *keyboard_layout_current(void);
 // produced, exactly like an unmapped scancode always has.
 char keyboard_layout_translate(uint16_t keycode, int shift, int altgr);
 
+// The same, under CAPS LOCK: xkb's rule for an "alphabetic" key -- Caps
+// inverts Shift on a key whose unshifted symbol is a lowercase letter
+// and whose shifted one is that letter's capital. So digits and
+// punctuation are untouched and Caps+Shift types lowercase, as on
+// Windows and Linux; decided from the LAYOUT, so it holds for each one.
+char keyboard_layout_translate_caps(uint16_t keycode, int shift, int altgr, int caps);
+
 #endif

@@ -271,3 +271,11 @@ char keyboard_layout_translate(uint16_t keycode, int shift, int altgr) {
     if (altgr && g_table_altgr[keycode]) return g_table_altgr[keycode];
     return shift ? g_table_shift[keycode] : g_table[keycode];
 }
+
+char keyboard_layout_translate_caps(uint16_t keycode, int shift, int altgr, int caps) {
+    if (caps && keycode < KB_KEYCODE_MAX) {
+        char lo = g_table[keycode], up = g_table_shift[keycode];
+        if (lo >= 'a' && lo <= 'z' && up == (char)(lo - 'a' + 'A')) shift = !shift;
+    }
+    return keyboard_layout_translate(keycode, shift, altgr);
+}

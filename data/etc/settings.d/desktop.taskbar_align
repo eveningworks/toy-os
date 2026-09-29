@@ -9,3 +9,6 @@ Description=Where the window buttons sit on the taskbar
 Order=11
 Choice.left=Left
 Choice.center=Centre
+Requires=desktop.start_position=left
+RequiresReason=Centred, with the Start button
+Otherwise=center

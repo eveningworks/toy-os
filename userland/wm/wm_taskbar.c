@@ -517,15 +517,16 @@ static void apply_drag(struct taskbar_button *out, int count, int w) {
     out[t].dragging = 1;
 }
 
-// ONE LAYOUT FOR EVERY COMBINATION of the three independent settings:
-// labelled or icon buttons, the buttons left or centred, Start left or
-// centred. Start is placed first and takes its room out of the strip;
-// the buttons are sized for what is left, then placed by alignment.
+// ONE LAYOUT FOR EVERY COMBINATION of the settings: labelled or icon
+// buttons, the buttons left or centred, Start left or centred. Start is
+// placed first and takes its room out of the strip; the buttons are
+// sized for what is left, then placed by alignment.
 //
-//   Start left            the corner; the buttons get everything after it
-//   Start centre, buttons centre   Start leads the centred group (Windows 11)
-//   Start centre, buttons left     Start alone in the middle; the buttons
-//                                  fill the left half up to it
+//   Start left     the corner; the buttons get everything after it
+//   Start centre   Start leads the centred group (Windows 11). The
+//                  buttons cannot be left of a centred Start: the
+//                  declaration's Requires=/Otherwise= makes
+//                  `desktop.taskbar_align` read `center` meanwhile.
 int taskbar_layout(struct taskbar_button *out, int max) {
     g_hidden = 0;
     stamp_unopened();
@@ -534,14 +535,11 @@ int taskbar_layout(struct taskbar_button *out, int max) {
     int icons = g_buttons == TASKBAR_BUTTONS_ICONS;
     int sw = start_btn_w();
     int lo = g.px + 4, hi = tray_left() - 8;
-    int with_group = g_start_center && g_align_center;
+    int with_group = g_start_center;
 
     if (!g_start_center) {
         g_start_x = lo;
         lo += sw + TB_GAP;
-    } else if (!g_align_center) {
-        g_start_x = screen_w / 2 - sw / 2;
-        if (hi > g_start_x - TB_GAP) hi = g_start_x - TB_GAP;
     } else {
         g_start_x = screen_w / 2 - sw / 2;   // alone until there are buttons
     }
@@ -589,7 +587,7 @@ int taskbar_layout(struct taskbar_button *out, int max) {
     int row = n > 0 ? n * (w + TB_GAP) - TB_GAP : 0;
     int group = row + (with_group ? sw + (n > 0 ? TB_GAP : 0) : 0);
     int x = lo;
-    if (g_align_center) {
+    if (g_align_center || with_group) {
         x = screen_w / 2 - group / 2;
         if (x + group > hi) x = hi - group;
         if (x < lo) x = lo;

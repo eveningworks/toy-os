@@ -92,6 +92,9 @@ existing ones without renumbering.
 | `ChoiceDir` | `enum`: the options are the entries of this directory — so dropping a screensaver in gives it a row with no edit anywhere. |
 | `ChoiceDirMode` | `name` (default), `stem` (the filename without its extension — the wallpapers) or `subdir` (directories only — the cursor themes). |
 | `Min` / `Max` / `Step` / `Unit` | `int`: the inclusive range, the stepper increment, and what the number means (`px`, `min`, `%`). |
+| `Requires` | `<qualified name>=<value>`: the setting only applies while that OTHER DECLARED setting has that value. Meanwhile it is UNAVAILABLE -- a UI greys it and shows `RequiresReason`, and a write is refused (an unset is not). Naming a kernel setting does nothing: `/etc` cannot disable what the kernel owns. |
+| `RequiresReason` | The sentence shown in place of the description while `Requires` is unmet. |
+| `Otherwise` | The value the setting READS as while `Requires` is unmet -- what GET answers and a UI shows. The file keeps the stored choice, so meeting the requirement again brings it back. `desktop.taskbar_align` is the example: centred while Start is. |
 
 `Choices` and `ChoiceDir` **compose**, in that order: the
 wallpaper declares `Choices=none` beside a `ChoiceDir`, which is how

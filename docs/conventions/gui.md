@@ -512,7 +512,8 @@ this the obvious way), not from how much history it accumulated.
   but until the adoption the desktop is still drawn under the old
   buffer. A client asks with `uapp_set_fullscreen()`
   (`WIN_REQ_FULLSCREEN`); the window menu offers it for any resizable
-  window. Never persisted (`wm_geometry_save()` stores the saved rect).
+  window, and **Alt+Space reaches that menu in fullscreen**, which has
+  no title bar and hides the taskbar. Never persisted (`wm_geometry_save()` stores the saved rect).
   See `docs/scanout-design.md`.
 - **A FULLSCREEN CLIENT MAY BE LEASED THE DISPLAY'S OWN SCANOUTS, AND
   WHILE IT HOLDS THEM THE COMPOSITOR DRAWS NOTHING.**

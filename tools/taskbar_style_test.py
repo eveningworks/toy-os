@@ -22,9 +22,9 @@ fake:
     centred with Start; hovering one lights it and (with peek off) arms
     the tooltip with the full title. Start left instead puts it at x=0
     and centres the rest; that floats too. Icons from the LEFT pack
-    straight after Start; labelled buttons can be centred; and Start
-    centred over left-aligned buttons sits alone in the middle with the
-    buttons clear of it.
+    straight after Start; labelled buttons can be centred; and a
+    centred Start holds the buttons centred -- the alignment's
+    Requires= refuses `left` and reads `center` until Start returns.
   * light: the strip is drawn in the light palette.
 
     python3 tools/vm.py --disk <copy> start
@@ -280,17 +280,23 @@ def main():
                   btns and btns[0]["x"] == tb["start"]["x"] + tb["start"]["w"] + 4 and packed,
                   f"start {tb['start']}, buttons {[(b['x'], b['w']) for b in btns]}")
 
-        # START CENTRED OVER LEFT-ALIGNED BUTTONS: alone in the middle,
-        # and no button reaches it.
+        # A CENTRED START CENTRES THE BUTTONS. The alignment's declaration
+        # Requires= a left Start, so meanwhile it READS `center` (its
+        # Otherwise=), a write of `left` is refused with the reason, and
+        # the stored value comes back when Start does.
         tb = set_and_wait(dbg, "desktop.start_position", "center",
                           lambda t: t.get("start_center") is True)
-        st = tb["start"]
-        right = max(b["x"] + b["w"] for b in tb["buttons"]) if tb["buttons"] else 0
-        res.check("a centred Start over left buttons sits alone in the middle",
-                  abs(st["x"] + st["w"] / 2 - sw / 2) <= 2 and right < st["x"]
-                  and tb["buttons"] and tb["buttons"][0]["x"] < 60,
-                  f"start {st}, buttons end at {right}")
-        set_and_wait(dbg, "desktop.start_position", None, lambda t: t.get("start_center") is False)
+        reply = dbg.send("sh config set desktop.taskbar_align left") or ""
+        time.sleep(1.0)
+        tb = taskbar(dbg)
+        got = dbg.send("sh config get desktop.taskbar_align") or ""
+        res.check("a centred Start keeps the buttons centred and refuses 'left'",
+                  tb.get("align_center") is True and "Start button" in reply and "center" in got,
+                  f"align_center={tb.get('align_center')} set->{reply.strip()!r} get->{got.strip()!r}")
+        tb = set_and_wait(dbg, "desktop.start_position", None,
+                          lambda t: t.get("start_center") is False)
+        res.check("...and Start back on the left brings the stored alignment back",
+                  tb.get("align_center") is False, f"align_center={tb.get('align_center')}")
 
         # LABELLED AND CENTRED: the labels survive, the group centres.
         dbg.send("sh config unset desktop.taskbar_buttons")
