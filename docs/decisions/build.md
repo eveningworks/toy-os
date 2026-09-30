@@ -1978,3 +1978,40 @@ under KASAN for the same reason; the frame-size warning goes to 2048.
 checking ring 3 is AddressSanitizer proper: a shadow in each process,
 `mmap` and signal handling that know about it, and a runtime in libc.
 A separate project, and UBSAN already covers ring 3's arithmetic.
+
+## A one-shot boot entry is GRUB's environment block, cleared by GRUB
+
+**The problem.** Picking a GRUB entry needed somebody at the machine's
+menu: taking the Lenovo off its kernel debugger for one boot, or a
+laptop into its previous kernel, meant a person pressing keys during a
+five-second timeout.
+
+**What real systems do.** Linux's `grub-reboot` writes `next_entry` into
+`/boot/grub/grubenv`, and `grub-mkconfig`'s header loads it, makes it the
+default and SAVES IT EMPTY before booting. systemd's `systemctl reboot
+--boot-loader-entry=` does the same through systemd-boot's
+`LoaderEntryOneShot` EFI variable; Windows has `bcdedit /bootsequence`,
+macOS `bless --nextonly`. Every one of them has the boot manager clear the
+choice BEFORE it boots it.
+
+**What toy-os does: exactly grub-reboot's shape.** `userland/lib/
+ubootmenu.c` writes the 1024-byte block (keeping GRUB's other variables),
+`grub.cfg` carries the stanza, and `loadenv` joined the core image's
+module list. The obvious alternative -- toy-os rewrites `set default=` and
+puts it back after a successful boot -- was declined for the reason
+every real system clears in the boot manager: an entry that never boots
+toy-os would never be put back, and the machine would boot the bad entry
+forever. Here a hang costs one reset.
+
+**`/boot` stays read-only.** The one write remounts it read-write and puts
+it back, as `remote.py flash` does -- the ESP's mount policy (`mount.c`)
+is not loosened for this.
+
+**A machine that could not honour the choice is REFUSED, by name.** A
+`grub.cfg` without the stanza, or `/etc/grub-core.modules` recording a
+core without `loadenv`, would write `next_entry` and boot the default --
+a silent no-op. `reboot --entry` says which, and the Start menu's
+Restart shows no flyout. The laptops needed `install --bootloader
+confirm` and the stanza added to their hand-kept `grub.cfg` (done
+2026-09-30, both).
+

@@ -8,6 +8,8 @@
 #include "wm_internal.h"
 #include "wm_taskbar.h"   // taskbar_start_rect()
 #include "confirm_dialog.h"
+#include "context_menu.h"
+#include "lib/ubootmenu.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"
 #include "kapi.h"
@@ -42,8 +44,66 @@ static void action_shutdown(void) {
 // Restart -- the same syscall with the other argument (the FADT's reset
 // register). Before Shutdown, as KDE orders them.
 static void do_restart(void) { sys_poweroff(1); }
+
+// RESTART INTO A BOOT ENTRY: with more than one GRUB entry, Restart opens
+// a flyout of them -- KDE's Leave dialog and Windows' power menu both
+// offer this -- and a pick is confirmed like a plain restart, naming the
+// entry. The choice is one boot only; lib/ubootmenu.h has why that is
+// GRUB's to enforce. Read when the menu OPENS, not per draw: it is a
+// file on /boot.
+static struct ubootmenu g_boot;
+static int g_boot_menu;           // two entries or more: Restart has a flyout
+static int g_from_key;            // the context menu takes no keys; see action_restart
+static int g_boot_pick;
+static char g_boot_label[UBOOTMENU_MAX][UBOOTMENU_TITLE + 12];
+static struct context_menu_item g_boot_item[UBOOTMENU_MAX];
+static char g_boot_msg[UBOOTMENU_TITLE + 64];
+
+static void do_restart_into(void) {
+    // The default needs no choice, but one left pending is cleared or
+    // it would win instead.
+    const char *title = g_boot_pick == g_boot.def ? 0 : g_boot.title[g_boot_pick];
+    if (ubootmenu_set_next(title) < 0) {
+        confirm_dialog_open_with("Could not save the boot choice. Restart normally?",
+                                 do_restart, 0);
+        return;
+    }
+    sys_poweroff(1);
+}
+
+static void pick_boot_entry(void *ctx) {
+    g_boot_pick = (int)(intptr_t)ctx;
+    k_snprintf(g_boot_msg, sizeof g_boot_msg, "Restart into %s? Unsaved changes will be lost.",
+             g_boot.title[g_boot_pick]);
+    start_menu_close();
+    confirm_dialog_open_with(g_boot_msg, do_restart_into, 0);
+}
+
 static void action_restart(void) {
-    confirm_dialog_open_with("Restart? Unsaved changes will be lost.", do_restart, 0);
+    // From the keyboard, the plain confirm: the flyout could not be
+    // driven by the keys that opened it.
+    if (!g_boot_menu || g_from_key) {
+        confirm_dialog_open_with("Restart? Unsaved changes will be lost.", do_restart, 0);
+        return;
+    }
+    int x = 0, y = 0, w = 0;
+    for (int n = 0; n < start_menu_row_count(); n++) {
+        const char *label; int kind, h;
+        if (!start_menu_row_info(n, &label, &kind, &x, &y, &w, &h, 0)) break;
+        if (kind == START_ROW_ACTION && !k_strcmp(label, "Restart")) break;
+    }
+    for (int i = 0; i < g_boot.count; i++) {
+        k_snprintf(g_boot_label[i], sizeof g_boot_label[i], "%s%s", g_boot.title[i],
+                 i == g_boot.def ? " (default)" : "");
+        k_memset(&g_boot_item[i], 0, sizeof g_boot_item[i]);
+        g_boot_item[i].label = g_boot_label[i];
+        g_boot_item[i].on_select = pick_boot_entry;
+        g_boot_item[i].ctx = (void *)(intptr_t)i;
+    }
+    // A CHILD OF THE START MENU, as a row's right-click menu is: naming
+    // the parent keeps Start up under it (wm_input.c).
+    wm_overlay_set_parent("start");
+    context_menu_open_at(x + w, y, g_boot_item, g_boot.count);
 }
 
 const struct start_action wm_system_actions[] = {
@@ -733,6 +793,7 @@ void start_menu_toggle_pin(const char *app_id) {
 void start_menu_open_now(void) {
     wm_overlay_close_others("start");
     start_menu_open = 1;
+    g_boot_menu = ubootmenu_read(&g_boot, 0) >= 2 && g_boot.oneshot;
     snapshot_recent();
     flash_row = -1;
     hover_token = 0;
@@ -885,12 +946,23 @@ void start_menu_draw(int mx, int my) {
                 ugfx_blit_alpha(wm_surface(), x + 8, y + (h - ico->h) / 2,
                                 ico->w, ico->h, ico->px, ico->w);
         }
+        // Restart with a boot menu behind it says so, as a submenu row
+        // does in every menu here (uui_menubar's arrow, same shape).
+        int right = x + w - 8;
+        if (kind == START_ROW_ACTION && g_boot_menu && !k_strcmp(label, "Restart")) {
+            int r = ugfx_char_h() / 4;
+            if (r < 3) r = 3;
+            int cx = right - r, cy = y + h / 2;
+            for (int k = 0; k <= r; k++)
+                ugfx_fill_rect(wm_surface(), cx - r / 2 + k, cy - (r - k), 1, 2 * (r - k) + 1, row_fg);
+            right -= 2 * r + 4;
+        }
         // Elided, for the same reason the strip is -- and a row label
         // that ran past its column used to be drawn through the border
         // before it was even clipped.
         ugfx_draw_string_elided(wm_surface(), text_x,
                                 y + (L.item_h - ugfx_char_h()) / 2,
-                                x + w - 8 - text_x, label, row_fg, row_bg);
+                                right - text_x, label, row_fg, row_bg);
     }
 
     // WHERE IN THE LIST THIS IS, when the list is taller than the pane.
@@ -967,14 +1039,14 @@ static int activate(int n) {
     }
     if (n < L.cats + acts) {
         wm_system_actions[n - L.cats].on_select();
-        return 1;
+        return !context_menu_open;      // a flyout keeps Start up under it
     }
     if (n < L.cats + acts + pane_visible(&L, 0)) {
         struct gui_app *a; int act;
         pane_row(scroll + n - L.cats - acts, &a, &act);
         if (a) open_app(a);
         else if (act >= 0) wm_system_actions[act].on_select();
-        return 1;
+        return !context_menu_open;
     }
     return 0;   // the search field: clicking it changes nothing, it is always focused
 }
@@ -1050,7 +1122,9 @@ int start_menu_key(int key, uint8_t mods) {
             pane_visible(&L, &first);
             int row = sel_row >= 0 ? sel_row : first;
             int n = L.cats + wm_system_action_count + (row - first);
+            g_from_key = 1;
             if (activate(n)) flash(n);
+            g_from_key = 0;
             redraw_pending = 1;
         }
         return 1;

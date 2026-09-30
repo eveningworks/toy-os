@@ -351,6 +351,51 @@ def do_exec(host, port, commands, timeout):
     return rc
 
 
+def do_reboot(host, port, entry, list_only, wait, timeout):
+    """Restart the machine, optionally into one GRUB entry for ONE boot
+    (`reboot --entry` on the machine; GRUB clears the choice before it
+    boots anything, so a bad entry costs one reset, not the machine).
+    The session dropping IS the success reply -- as flash's reboot."""
+    try:
+        sess = Session(host, port, timeout)
+    except OSError as e:
+        print(f"remote: {e}", file=sys.stderr)
+        return 1
+    try:
+        if list_only:
+            print("\n".join(sess.run("reboot --entries", timeout)))
+            return 0
+        cmd = "reboot" if entry is None else f'reboot --entry "{entry}"'
+        try:
+            lines = sess.run(cmd, 5.0)
+        except (TimeoutError, EOFError, OSError):
+            lines = None           # the machine went away: it is restarting
+        if lines is not None:
+            # Still here: the program refused (an unknown entry, a /boot
+            # it could not write) and said why.
+            print("\n".join(lines))
+            return 1
+    finally:
+        sess.close()
+    print("remote: rebooting" + ("" if entry is None else f" into {entry!r}"))
+    if not wait:
+        return 0
+    # Bounded: a machine that does not come back is the answer, and a
+    # boot that took the one-shot entry may be one without a shell.
+    t0 = time.monotonic()
+    time.sleep(5)
+    while time.monotonic() - t0 < wait:
+        try:
+            s2 = Session(host, port, 5.0)
+            s2.close()
+            print(f"remote: back after {time.monotonic() - t0:.0f} s")
+            return 0
+        except OSError:
+            time.sleep(2)
+    print(f"remote: not back after {wait:.0f} s", file=sys.stderr)
+    return 1
+
+
 # --- TFTP ---------------------------------------------------------------
 #
 # OPTIONS ARE NEGOTIATED (RFC 2347), and the two that matter are
@@ -1486,6 +1531,14 @@ def main():
 
     sub.add_parser("shell", help="an interactive session (Ctrl-] quits)")
 
+    rb = sub.add_parser("reboot", help="restart the machine, optionally into "
+                        "one GRUB entry for one boot")
+    rb.add_argument("--entry", help="a GRUB entry's title or number "
+                    "(`--list` shows them); the next boot only")
+    rb.add_argument("--list", action="store_true", help="list the boot entries")
+    rb.add_argument("--wait", type=float, default=0, metavar="SECONDS",
+                    help="wait up to this long for telnet to answer again")
+
     a = ap.parse_args()
     try:
         if a.cmd == "exec":
@@ -1506,6 +1559,8 @@ def main():
             return do_screenshot(a, a.host, a.telnet_port, a.tftp_port, a.timeout)
         if a.cmd == "shell":
             return do_shell(a.host, a.telnet_port, a.timeout)
+        if a.cmd == "reboot":
+            return do_reboot(a.host, a.telnet_port, a.entry, a.list, a.wait, a.timeout)
     except (OSError, RuntimeError) as ex:
         print(f"remote: {ex}", file=sys.stderr)
         return 1

@@ -417,6 +417,18 @@ manual steps to be worth automating:
   sprite's own pixels answer the question), and make sure the hovered
   row is not the SELECTED one, since selection correctly outranks hover
   and hovering the current value measures nothing.
+- **`boot_entry_test.py`** -- a one-shot GRUB entry is taken ONCE, and
+  GRUB is what ends it. Boots a copy of `disk.img` with reboots allowed,
+  adds a `target=text` entry so the boot it takes is visible from inside
+  (no `toywm`), and **deletes `loadenv.mod` from /boot's module
+  directory first** -- the pass has to come from the CORE image, which is
+  all an installed laptop has, or it would pass for the wrong reason.
+  Then `reboot --entry` (text boot, `next_entry` already empty) and a
+  plain `reboot` (the default, graphical), plus the two refusals: an
+  unknown entry, and a core recorded without `loadenv`. On demand: it
+  reboots twice. **The debug console's shell has no redirection** -- a
+  file the test needs in the guest goes in with `vm.py put`.
+
 - **`remote_test.py`** -- `telnetd`, `tftpd` and `remote.py` end to end
   against a QEMU guest, seven checks. On demand: it boots its own guest
   and ENABLES services that ship disabled, so it leaves `disk.img` with
@@ -448,6 +460,14 @@ manual steps to be worth automating:
       python3 tools/remote.py --host 192.168.200.104 shell      # Ctrl-] quits
       python3 tools/remote.py --host 192.168.200.104 sync seed/sync/bin /bin
       python3 tools/remote.py --host 192.168.200.104 --timeout 60 flash build/kernel.bin
+      python3 tools/remote.py --host 192.168.200.112 reboot --list
+      python3 tools/remote.py --host 192.168.200.112 reboot --entry "toy-os (no kernel debugger)" --wait 120
+
+  **`reboot --entry` is one boot**: GRUB clears the choice before it
+  boots it (`docs/commands/reboot.md`), so a session can take a laptop
+  into its rescue or no-debugger entry and a plain `reboot` brings it
+  back. The dropped session is the success reply; `--wait` polls, bounded,
+  until telnet answers again.
 
   **This is the tool for the BARE-METAL laptop**, which `vm.py` cannot
   reach: `vm.py` drives a QEMU guest through its serial debug console,

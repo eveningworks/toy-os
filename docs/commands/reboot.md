@@ -6,7 +6,15 @@
 
 ## Synopsis
 
-    reboot [--poweroff]
+    reboot [--poweroff | --entries | --entry <name|number>]
+
+## Options
+
+- `--poweroff` -- shut down instead.
+- `--entries` -- list the GRUB menu, numbered as GRUB numbers it, with the
+  default and any pending one-shot choice marked.
+- `--entry <name|number>` -- restart into that entry **for one boot**. A
+  title is matched exactly; a number is its position in `--entries`.
 
 ## Description
 
@@ -33,6 +41,32 @@ stopping.
 This is why shutdown works on VirtualBox and real hardware rather than
 only under QEMU: the old implementation wrote the fixed port
 unconditionally, and QEMU's own tables happen to agree with it.
+
+## Restarting into one entry, once
+
+`reboot --entry "toy-os (no kernel debugger)"` is `grub-reboot` and a
+reboot in one command -- the shape of systemd's `systemctl reboot
+--boot-loader-entry=` and Windows' `bcdedit /bootsequence`. It writes
+`next_entry` into GRUB's environment block (`/boot/boot/grub/grubenv`,
+remounting the read-only `/boot` for that one write), and `grub.cfg`'s
+stanza makes it the default and **saves it empty before booting
+anything**. So an entry that hangs is taken once and the next reset
+boots the default -- the reason it is safe on a machine nobody is
+sitting at. The desktop's Start menu offers the same as a flyout on
+Restart; `tools/remote.py reboot --entry` does it from the dev host.
+
+It refuses, rather than reboot into the default while claiming
+otherwise, when this machine's GRUB could not honour the choice: a
+`grub.cfg` without the stanza, or a core image `/etc/grub-core.modules`
+records without `loadenv`. `install --bootloader confirm` fixes the
+second; the first needs the stanza from the repo's `grub.cfg`.
+
+    $ reboot --entries
+     0  toy-os  (default)
+     1  toy-os (no kernel debugger)
+     2  toy-os (previous kernel)
+    $ reboot --entry 1
+    reboot: next boot: toy-os (no kernel debugger)
 
 ## When it does nothing but halt
 

@@ -246,6 +246,9 @@ TOOLS = [
     # leaves them enabled on disk.img -- run `make clean-disk && make
     # iso` after it if that matters.
     ("remote",      "remote_test.py",          "telnetd, tftpd and tools/remote.py end to end", True, None,           False),
+    # A one-shot GRUB entry, taken once. Reboots its guest twice against
+    # a COPY of disk.img, so it is here rather than in the gate.
+    ("boot_entry",  "boot_entry_test.py",      "reboot --entry: one boot, cleared by GRUB", True,  None,             False),
 
     # --- sound --------------------------------------------------------
     # Boots its own guests with an AC97 and a wav audiodev, twice. It is

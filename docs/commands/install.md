@@ -78,6 +78,9 @@ gzipped kernel its GRUB read the gzip bytes as raw ones:
     error: ... grub_loader_boot: you need to load the kernel first
 
 The default menu entry was dead until the rescue entry was picked by hand. The
+same goes for `loadenv`, which `reboot --entry` needs: a machine installed
+before it joined gets it from this refresh, and until then `reboot --entry`
+refuses by name rather than boot the default. The
 full installer cannot help there — it ERASES its target and refuses the disk the
 machine runs from.
 

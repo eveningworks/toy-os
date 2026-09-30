@@ -97,7 +97,12 @@ CORE_MODULES = ("biosdisk", "part_gpt", "part_msdos", "fat", "normal",
                 # compressed kernel fails SILENTLY -- measured: no serial
                 # output at all, which reads like a dead machine rather
                 # than a missing module.
-                "gzio")
+                "gzio",
+                # LOADENV -- load_env/save_env, for the one-shot boot
+                # entry (grub.cfg, userland/lib/ubootmenu.h). In the CORE
+                # because an installed machine has no module directory
+                # to load it from.
+                "loadenv")
 
 # mformat picks a volume serial from the clock unless told otherwise,
 # and this repo builds byte-identical images from identical inputs
