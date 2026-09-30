@@ -328,13 +328,6 @@ static uint16_t sent_tcp_window(void) {
     const uint8_t *t = sent_transport();
     return t ? net_ntohs(*(const uint16_t *)(t + 14)) : 0;
 }
-static uint32_t sent_tcp_payload(void) {
-    const uint8_t *t = sent_transport();
-    if (!t) return 0;
-    uint32_t ihl = (uint32_t)(g_sent[ETH_HDR_LEN] & 0x0F) * 4;
-    uint32_t total = (uint32_t)(g_sent[ETH_HDR_LEN + 2] << 8 | g_sent[ETH_HDR_LEN + 3]);
-    return total - ihl - (uint32_t)(t[12] >> 4) * 4;
-}
 // The shift a captured SYN offered, or 0xFF when it carried no option 3.
 static uint8_t sent_tcp_wscale(void) {
     const uint8_t *t = sent_transport();
@@ -1259,6 +1252,22 @@ static uint32_t tcp_payload_of(const uint8_t *frame, uint32_t flen) {
     return total - ihl - (uint32_t)(ip[ihl + 12] >> 4) * 4;
 }
 
+// The first data segment THIS connection sent during a capture, by its
+// source port. Not the last frame: the device is live, and another
+// process's traffic (DHCP, NTP, an ARP) can land in the capture after
+// ours -- 1 ktest run in 10 read an empty frame that way.
+static uint32_t captured_payload_from(uint16_t sport) {
+    for (int f = 0; f < g_sent_count && f < TXLOG_MAX; f++) {
+        const uint8_t *ip = g_txlog[f] + ETH_HDR_LEN;
+        if (g_txlog_len[f] < ETH_HDR_LEN + 40 || ip[9] != IP_PROTO_TCP) continue;
+        const uint8_t *t = ip + (uint32_t)(ip[0] & 0x0F) * 4;
+        if (net_ntohs(*(const uint16_t *)t) != sport) continue;
+        uint32_t n = tcp_payload_of(g_txlog[f], g_txlog_len[f]);
+        if (n) return n;
+    }
+    return 0;
+}
+
 // The peer acknowledges everything as it arrives until `total` bytes
 // of ours have been sent and acknowledged; `first` were already out.
 static void ack_all_sent(struct net_device *dev, struct fake_peer *p,
@@ -1305,7 +1314,9 @@ KTEST("tcp", "window scaling is offered, and honoured both ways when the peer of
     uint32_t room = w1 << sh;
     uint32_t shrank = (w1 - w2) << sh;
     static uint8_t in[1461];
+    capture_begin(dev);                     // the read's window ACK stays off the wire
     net_sock_stream_recv(p.sock, in, sizeof in);
+    capture_end(dev);
     p.peer_seq += 1461;
 
     // Theirs: a window of 100 at shift 2 is 400 bytes, so a 1000-byte
@@ -1316,7 +1327,7 @@ KTEST("tcp", "window scaling is offered, and honoured both ways when the peer of
     static uint8_t out[1000];
     capture_begin(dev);
     int sent = net_sock_stream_send(p.sock, out, sizeof out);
-    uint32_t seg = sent_tcp_payload();
+    uint32_t seg = captured_payload_from(p.our_port);
     capture_end(dev);
 
     ack_all_sent(dev, &p, seg, 1000);      // so the close is clean
@@ -1338,9 +1349,9 @@ KTEST("tcp", "without the peer's window scale, nothing is shifted either way") {
     capture_begin(dev);
     seg_at(dev, &p, 0x18, 0, 1);
     uint16_t win = sent_tcp_window();
-    capture_end(dev);
     uint8_t one;
-    net_sock_stream_recv(p.sock, &one, 1);
+    net_sock_stream_recv(p.sock, &one, 1);  // captured, for the same reason
+    capture_end(dev);
     p.peer_seq += 1;
 
     uint32_t len = tcp_frame_full(dev, 8080, p.our_port, 0x10, p.peer_seq, p.our_seq,
@@ -1349,7 +1360,7 @@ KTEST("tcp", "without the peer's window scale, nothing is shifted either way") {
     static uint8_t out[1000];
     capture_begin(dev);
     net_sock_stream_send(p.sock, out, sizeof out);
-    uint32_t seg = sent_tcp_payload();
+    uint32_t seg = captured_payload_from(p.our_port);
     capture_end(dev);
 
     ack_all_sent(dev, &p, seg, 1000);
@@ -1373,19 +1384,17 @@ KTEST("tcp", "the receive ring wraps, with a held range straddling the wrap") {
     // One byte is queued and the window rounds DOWN, so the ring is the
     // next power of two above what it says.
     uint32_t said = ((uint32_t)sent_tcp_window() << ours) + 1;
-    capture_end(dev);
     uint32_t cap = 1;
     while (cap < said) cap <<= 1;
     static uint8_t buf[65536];
     int bad = 0;
-    net_sock_stream_recv(p.sock, buf, 1);
+    net_sock_stream_recv(p.sock, buf, 1);   // still captured: its window ACK must not reach SLIRP
 
     // Stream up to 2000 bytes short of the ring's end, reading as it
     // goes, so the next byte lands 2000 bytes before the wrap. CAPTURED
     // throughout: this runs long enough for the real receive path to
     // run, and an ACK leaking to QEMU's SLIRP for this made-up peer is
     // answered with a valid RST.
-    capture_begin(dev);
     uint32_t at = 1;
     while (at < cap - 2000) {
         uint32_t n = cap - 2000 - at < 1460 ? cap - 2000 - at : 1460;

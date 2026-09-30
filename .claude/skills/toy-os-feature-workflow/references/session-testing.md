@@ -2906,3 +2906,13 @@ did.**
   test of anything GRUB loads must DELETE the module first or it passes
   for a reason no laptop has (`boot_entry_test.py` removes
   `loadenv.mod`; with loadenv also out of the core, it goes red).
+
+**2026-09-30, later: `g_sent` IS THE LAST FRAME THE DEVICE SENT, NOT
+YOURS.** `net_test.c`'s capture swaps the LIVE device's transmit op, so
+another process's DHCP, NTP or ARP traffic can land after the frame a
+test meant to read -- 1 ktest run in 10 read an empty frame that way. Find
+your own frame in `g_txlog` by its port (`captured_payload_from()`). And
+every read on a test connection sends a window-update ACK: outside a
+capture it reaches SLIRP, whose RST resets the connection later in the
+same test. Measured with `flake_hunt.py ktest -n 10` twice (1/10 each,
+different tests), then 20/20 after both fixes.
