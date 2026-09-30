@@ -195,6 +195,11 @@ int  tcp_connect(int idx, uint32_t ip, uint16_t port);   // starts the handshake
 // the next client is dropped, not refused.
 #define TCP_BACKLOG 2
 
+// Disjoint ranges a connection holds ahead of rcv_nxt. A segment that
+// would need one more is dropped and re-acked -- legal, the peer still
+// has it. Public because a test fills the list to prove that.
+#define TCP_OFO_MAX 16
+
 int  tcp_listen(int idx);
 int  tcp_accept(int idx);
 void tcp_peer(int idx, uint32_t *out_ip, uint16_t *out_port);

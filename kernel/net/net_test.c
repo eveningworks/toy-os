@@ -237,12 +237,16 @@ static uint32_t udp_frame(struct net_device *dev, uint32_t dst_ip, uint16_t dpor
 // `at` is the payload's offset in the STREAM, and every byte names it:
 // byte i is 'A' + ((at + i) % 26). A reassembly test whose segments all
 // carry the same bytes cannot tell a correct order from a wrong one.
-static uint32_t tcp_frame_at(struct net_device *dev, uint16_t sport, uint16_t dport,
-                             uint8_t flags, uint32_t seq, uint32_t ack,
-                             uint32_t payload_len, int corrupt, uint32_t at) {
+// `opt` (a multiple of 4 bytes) goes between the header and the payload,
+// and `window` is the raw 16-bit field.
+static uint32_t tcp_frame_full(struct net_device *dev, uint16_t sport, uint16_t dport,
+                               uint8_t flags, uint32_t seq, uint32_t ack,
+                               uint32_t payload_len, int corrupt, uint32_t at,
+                               const uint8_t *opt, uint32_t optlen, uint16_t window) {
     uint32_t n = eth_frame(dev, 0, ETH_TYPE_IPV4);
     uint8_t *ip = g_frame + n;
-    uint32_t tcp_len = 20 + payload_len;
+    uint32_t hdr = 20 + optlen;
+    uint32_t tcp_len = hdr + payload_len;
     uint32_t src = peer_ip(dev);
 
     k_memset(ip, 0, 20);
@@ -265,10 +269,11 @@ static uint32_t tcp_frame_at(struct net_device *dev, uint16_t sport, uint16_t dp
     tcp[6] = (uint8_t)(seq >> 8);  tcp[7] = (uint8_t)seq;
     tcp[8] = (uint8_t)(ack >> 24); tcp[9] = (uint8_t)(ack >> 16);
     tcp[10] = (uint8_t)(ack >> 8); tcp[11] = (uint8_t)ack;
-    tcp[12] = 5 << 4;
+    tcp[12] = (uint8_t)((hdr / 4) << 4);
     tcp[13] = flags;
-    tcp[14] = 0x20; tcp[15] = 0x00;      // a 8192-byte window
-    for (uint32_t i = 0; i < payload_len; i++) tcp[20 + i] = (uint8_t)('A' + ((at + i) % 26));
+    tcp[14] = (uint8_t)(window >> 8); tcp[15] = (uint8_t)window;
+    if (optlen) k_memcpy(tcp + 20, opt, optlen);
+    for (uint32_t i = 0; i < payload_len; i++) tcp[hdr + i] = (uint8_t)('A' + ((at + i) % 26));
 
     uint8_t pseudo[12];
     pseudo[0] = (uint8_t)(src >> 24); pseudo[1] = (uint8_t)(src >> 16);
@@ -285,6 +290,13 @@ static uint32_t tcp_frame_at(struct net_device *dev, uint16_t sport, uint16_t dp
     if (corrupt) tcp[17] ^= 0xFF;
 
     return n + 20 + tcp_len;
+}
+
+static uint32_t tcp_frame_at(struct net_device *dev, uint16_t sport, uint16_t dport,
+                             uint8_t flags, uint32_t seq, uint32_t ack,
+                             uint32_t payload_len, int corrupt, uint32_t at) {
+    return tcp_frame_full(dev, sport, dport, flags, seq, ack, payload_len, corrupt,
+                          at, 0, 0, 8192);
 }
 
 static uint32_t tcp_frame(struct net_device *dev, uint16_t sport, uint16_t dport,
@@ -310,6 +322,31 @@ static uint32_t sent_tcp_ack(void) {
 static uint16_t sent_tcp_sport(void) {
     const uint8_t *t = sent_transport();
     return t ? net_ntohs(*(const uint16_t *)t) : 0;
+}
+static uint16_t sent_tcp_window(void) {
+    const uint8_t *t = sent_transport();
+    return t ? net_ntohs(*(const uint16_t *)(t + 14)) : 0;
+}
+static uint32_t sent_tcp_payload(void) {
+    const uint8_t *t = sent_transport();
+    if (!t) return 0;
+    uint32_t ihl = (uint32_t)(g_sent[ETH_HDR_LEN] & 0x0F) * 4;
+    uint32_t total = (uint32_t)(g_sent[ETH_HDR_LEN + 2] << 8 | g_sent[ETH_HDR_LEN + 3]);
+    return total - ihl - (uint32_t)(t[12] >> 4) * 4;
+}
+// The shift a captured SYN offered, or 0xFF when it carried no option 3.
+static uint8_t sent_tcp_wscale(void) {
+    const uint8_t *t = sent_transport();
+    if (!t) return 0xFF;
+    uint32_t doff = (uint32_t)(t[12] >> 4) * 4;
+    for (uint32_t i = 20; i + 1 < doff; ) {
+        if (t[i] == 0) break;
+        if (t[i] == 1) { i++; continue; }
+        if (t[i] == 3 && t[i + 1] == 3 && i + 2 < doff) return t[i + 2];
+        if (t[i + 1] < 2) break;
+        i += t[i + 1];
+    }
+    return 0xFF;
 }
 
 KTEST("net", "a correct header sums to zero and a corrupted one does not") {
@@ -934,7 +971,11 @@ KTEST("net", "a closed socket releases its port") {
 // failure lands on the handshake rather than on whatever came after.
 struct fake_peer { int sock; uint16_t our_port; uint32_t our_seq, peer_seq; };
 
-static int establish(struct net_device *dev, struct fake_peer *p, struct ktest_ctx *ctx) {
+// `peer_shift` < 0 sends a SYN+ACK with no window-scale option; otherwise
+// it carries that shift. `our_shift`, when given, receives the shift our
+// SYN offered, or 0xFF when it offered none.
+static int establish_ws(struct net_device *dev, struct fake_peer *p, struct ktest_ctx *ctx,
+                        int peer_shift, uint8_t *our_shift) {
     // The peer must be resolvable, or the SYN never leaves.
     uint32_t len = arp_request(dev, dev->ip, 0);
     eth_input(dev, g_frame, len);
@@ -947,6 +988,7 @@ static int establish(struct net_device *dev, struct fake_peer *p, struct ktest_c
     uint8_t flags = sent_tcp_flags();
     p->our_seq = sent_tcp_seq() + 1;      // the SYN takes one
     p->our_port = sent_tcp_sport();
+    if (our_shift) *our_shift = sent_tcp_wscale();
     capture_end(dev);
 
     if (rc < 0) { ktest_fail_eq(ctx, "connect rc", rc, 0, __FILE__, __LINE__); return 0; }
@@ -957,8 +999,10 @@ static int establish(struct net_device *dev, struct fake_peer *p, struct ktest_c
 
     p->peer_seq = 0x50000000u;
     capture_begin(dev);
-    len = tcp_frame(dev, 8080, p->our_port, 0x12 /* SYN|ACK */,
-                    p->peer_seq, p->our_seq, 0, 0);
+    const uint8_t ws[4] = { 1, 3, 3, (uint8_t)(peer_shift < 0 ? 0 : peer_shift) };
+    len = tcp_frame_full(dev, 8080, p->our_port, 0x12 /* SYN|ACK */,
+                         p->peer_seq, p->our_seq, 0, 0, 0,
+                         ws, peer_shift < 0 ? 0 : 4, 8192);
     eth_input(dev, g_frame, len);
     uint8_t ackf = sent_tcp_flags();
     uint32_t acked = sent_tcp_ack();
@@ -970,6 +1014,10 @@ static int establish(struct net_device *dev, struct fake_peer *p, struct ktest_c
         return 0;
     }
     return 1;
+}
+
+static int establish(struct net_device *dev, struct fake_peer *p, struct ktest_ctx *ctx) {
+    return establish_ws(dev, p, ctx, -1, 0);
 }
 
 // Close the socket AND let the peer acknowledge the FIN, so the
@@ -1170,26 +1218,193 @@ KTEST("tcp", "more holes than the range list holds are dropped, not mis-delivere
     struct fake_peer p;
     if (!establish(dev, &p, ctx)) return;
 
-    // TCP_OFO_MAX disjoint ranges, which fills the list.
-    for (uint32_t at = 20; at <= 80; at += 20)
-        KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, at, 10), 0);
-    // A fifth has nowhere to go. Dropping it is legal -- the peer still
+    // TCP_OFO_MAX disjoint ranges, 10 bytes each with a 10-byte hole in
+    // front of every one, which fills the list.
+    for (uint32_t k = 1; k <= TCP_OFO_MAX; k++)
+        KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 20 * k, 10), 0);
+    // One more has nowhere to go. Dropping it is legal -- the peer still
     // holds it -- and the check that it was really dropped is that it
     // never appears in the stream below.
-    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 100, 10), 0);
+    const uint32_t end = 20 * TCP_OFO_MAX + 10;
+    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, end + 10, 10), 0);
 
     // Fill every hole the list did record.
     KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 0, 20), 30);
-    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 30, 10), 50);
-    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 50, 10), 70);
-    KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 70, 10), 90);
+    for (uint32_t k = 1; k < TCP_OFO_MAX; k++)
+        KTEST_ASSERT_EQ(acked_at(dev, &p, 0x18, 20 * k + 10, 10), 20 * (k + 1) + 10);
 
-    // 90, not 110: the range at offset 100 was refused rather than kept
-    // and silently spliced on past a hole at 90.
-    uint8_t buf[160];
-    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), 90);
-    for (int i = 0; i < 90; i++) KTEST_ASSERT_EQ(buf[i], 'A' + (i % 26));
-    p.peer_seq += 90;
+    // `end`, not end + 20: the range past it was refused rather than
+    // kept and silently spliced on past a hole.
+    static uint8_t buf[20 * TCP_OFO_MAX + 64];
+    KTEST_ASSERT_EQ(net_sock_stream_recv(p.sock, buf, sizeof buf), (int)end);
+    for (uint32_t i = 0; i < end; i++) KTEST_ASSERT_EQ(buf[i], 'A' + (i % 26));
+    p.peer_seq += end;
+    finish_close(dev, &p);
+}
+
+// Payload bytes of TCP in one captured frame.
+static uint32_t tcp_payload_of(const uint8_t *frame, uint32_t flen) {
+    if (flen < ETH_HDR_LEN + 20) return 0;
+    const uint8_t *ip = frame + ETH_HDR_LEN;
+    uint32_t ihl = (uint32_t)(ip[0] & 0x0F) * 4;
+    uint32_t total = (uint32_t)(ip[2] << 8 | ip[3]);
+    if (ip[9] != IP_PROTO_TCP || total < ihl + 20) return 0;
+    return total - ihl - (uint32_t)(ip[ihl + 12] >> 4) * 4;
+}
+
+// The peer acknowledges everything as it arrives until `total` bytes
+// of ours have been sent and acknowledged; `first` were already out.
+static void ack_all_sent(struct net_device *dev, struct fake_peer *p,
+                         uint32_t first, uint32_t total) {
+    uint32_t done = first;
+    while (done < total) {
+        capture_begin(dev);
+        uint32_t len = tcp_frame_full(dev, 8080, p->our_port, 0x10, p->peer_seq,
+                                      p->our_seq + done, 0, 0, 0, 0, 0, 8192);
+        eth_input(dev, g_frame, len);
+        uint32_t n = 0;
+        for (int f = 0; f < g_sent_count && f < TXLOG_MAX; f++)
+            n += tcp_payload_of(g_txlog[f], g_txlog_len[f]);
+        capture_end(dev);
+        if (!n) break;
+        done += n;
+    }
+    uint32_t len = tcp_frame_full(dev, 8080, p->our_port, 0x10, p->peer_seq,
+                                  p->our_seq + total, 0, 0, 0, 0, 0, 8192);
+    eth_input(dev, g_frame, len);
+    p->our_seq += total;
+}
+
+KTEST("tcp", "window scaling is offered, and honoured both ways when the peer offers it too") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    struct fake_peer p;
+    uint8_t ours = 0xFF;
+    if (!establish_ws(dev, &p, ctx, 2, &ours)) return;
+
+    // Our window, scaled: an ACK for one byte of data says how much
+    // room there is, in units of 1 << ours.
+    // And it must MEAN it: 1460 more bytes queued shrinks it by 1460,
+    // to within one unit -- a field that ignored the shift would sit at
+    // 65535 through both and promise eight times the ring.
+    uint8_t sh = ours == 0xFF ? 0 : ours;
+    capture_begin(dev);
+    seg_at(dev, &p, 0x18, 0, 1);
+    uint32_t w1 = sent_tcp_window();
+    seg_at(dev, &p, 0x18, 1, 1460);
+    uint32_t w2 = sent_tcp_window();
+    capture_end(dev);
+    uint32_t room = w1 << sh;
+    uint32_t shrank = (w1 - w2) << sh;
+    static uint8_t in[1461];
+    net_sock_stream_recv(p.sock, in, sizeof in);
+    p.peer_seq += 1461;
+
+    // Theirs: a window of 100 at shift 2 is 400 bytes, so a 1000-byte
+    // send leaves in a 400-byte segment -- 100 if the shift were ignored.
+    uint32_t len = tcp_frame_full(dev, 8080, p.our_port, 0x10, p.peer_seq, p.our_seq,
+                                  0, 0, 0, 0, 0, 100);
+    eth_input(dev, g_frame, len);
+    static uint8_t out[1000];
+    capture_begin(dev);
+    int sent = net_sock_stream_send(p.sock, out, sizeof out);
+    uint32_t seg = sent_tcp_payload();
+    capture_end(dev);
+
+    KTEST_ASSERT(ours != 0xFF);            // the SYN offered a shift
+    KTEST_ASSERT(room > 65535);            // and the window uses it
+    KTEST_ASSERT(shrank + (1u << sh) > 1460 && shrank < 1460 + (1u << sh));
+    KTEST_ASSERT_EQ(sent, 1000);
+    KTEST_ASSERT_EQ(seg, 400);
+
+    ack_all_sent(dev, &p, seg, 1000);      // so the close is clean
+    finish_close(dev, &p);
+}
+
+KTEST("tcp", "without the peer's window scale, nothing is shifted either way") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+
+    capture_begin(dev);
+    seg_at(dev, &p, 0x18, 0, 1);
+    uint16_t win = sent_tcp_window();
+    capture_end(dev);
+    uint8_t one;
+    net_sock_stream_recv(p.sock, &one, 1);
+    p.peer_seq += 1;
+
+    uint32_t len = tcp_frame_full(dev, 8080, p.our_port, 0x10, p.peer_seq, p.our_seq,
+                                  0, 0, 0, 0, 0, 100);
+    eth_input(dev, g_frame, len);
+    static uint8_t out[1000];
+    capture_begin(dev);
+    net_sock_stream_send(p.sock, out, sizeof out);
+    uint32_t seg = sent_tcp_payload();
+    capture_end(dev);
+
+    KTEST_ASSERT_EQ(win, 65535);           // the most an unscaled field says
+    KTEST_ASSERT_EQ(seg, 100);             // their 100 means 100
+
+    ack_all_sent(dev, &p, seg, 1000);
+    finish_close(dev, &p);
+}
+
+KTEST("tcp", "the receive ring wraps, with a held range straddling the wrap") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+
+    struct fake_peer p;
+    uint8_t ours = 0xFF;
+    if (!establish_ws(dev, &p, ctx, 0, &ours)) return;
+    KTEST_ASSERT(ours != 0xFF);
+
+    // The ring's size, from the window an idle connection advertises.
+    capture_begin(dev);
+    seg_at(dev, &p, 0x18, 0, 1);
+    // One byte is queued and the window rounds DOWN, so the ring is the
+    // next power of two above what it says.
+    uint32_t said = ((uint32_t)sent_tcp_window() << ours) + 1;
+    capture_end(dev);
+    uint32_t cap = 1;
+    while (cap < said) cap <<= 1;
+    static uint8_t buf[65536];
+    int bad = 0;
+    net_sock_stream_recv(p.sock, buf, 1);
+
+    // Stream up to 2000 bytes short of the ring's end, reading as it
+    // goes, so the next byte lands 2000 bytes before the wrap. CAPTURED
+    // throughout: this runs long enough for the real receive path to
+    // run, and an ACK leaking to QEMU's SLIRP for this made-up peer is
+    // answered with a valid RST.
+    capture_begin(dev);
+    uint32_t at = 1;
+    while (at < cap - 2000) {
+        uint32_t n = cap - 2000 - at < 1460 ? cap - 2000 - at : 1460;
+        seg_at(dev, &p, 0x18, at, n);
+        at += n;
+        if (at % 32768 < 1460 || at == cap - 2000) {
+            int got;
+            while ((got = net_sock_stream_recv(p.sock, buf, sizeof buf)) > 0) {}
+        }
+    }
+    capture_end(dev);
+    // The later half first -- it crosses the wrap and is held -- then the
+    // earlier half, which fills the hole in front of it.
+    uint32_t held = acked_at(dev, &p, 0x18, at + 1400, 1400);
+    uint32_t filled = acked_at(dev, &p, 0x18, at, 1400);
+    int got = net_sock_stream_recv(p.sock, buf, sizeof buf);
+    for (int i = 0; i < got; i++)
+        if (buf[i] != 'A' + ((at + (uint32_t)i) % 26)) { bad = i + 1; break; }
+
+    KTEST_ASSERT_EQ(held, at);             // nothing past the hole acked
+    KTEST_ASSERT_EQ(filled, at + 2800);
+    KTEST_ASSERT_EQ(got, 2800);
+    KTEST_ASSERT_EQ(bad, 0);
+    p.peer_seq += at + 2800;
     finish_close(dev, &p);
 }
 

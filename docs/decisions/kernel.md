@@ -7405,22 +7405,27 @@ the promise and the storage are the same number.
 The cost is real and worth stating. A separate queue can hold a segment
 the window would refuse; this cannot, so a peer that runs ahead of the
 window loses those bytes and resends them. And the offset identity has
-to be maintained by everything that touches the buffer -- which is the
-whole reason `tcp_recv()` compacts `rcv_len + ofo_span()` bytes rather
-than `rcv_len`. Compacting only the in-order part leaves the held bytes
-displaced by however much the reader took, and they are then delivered
-as WRONG DATA rather than as a short read: the failure is silent, and a
+to be maintained by everything that touches the buffer. (It was a
+linear buffer compacted by `rcv_len + ofo_span()` on every read; it is
+a ring now, where a read advances the head by what it takes and the
+offsets stay put.) Moving the in-order part without the held part
+delivers the held bytes displaced by however much the reader took, as
+WRONG DATA rather than as a short read: the failure is silent, and a
 test that only reads everything at once cannot see it.
 
-The bound is `TCP_OFO_MAX` disjoint ranges, not bytes. An 8 KiB window
-is under six full segments, so alternating loss cannot leave more than
-three holes; a fourth range is refused and re-acked, which is the same
-answer the stack gave to everything out of order before this existed.
+The bound is `TCP_OFO_MAX` disjoint ranges, not bytes. It was four
+against an 8 KiB window; with a 256 KiB one it is sixteen, which does
+not cover the worst case (alternating loss across ~180 segments) and is
+not meant to: a range past the list is refused and re-acked, which is
+the same answer the stack gave to everything out of order before this
+existed.
 
 ## The TCP receive buffer is guarded by disabling preemption, not by a lock
 
 `tcp_recv()` compacts the receive buffer with a memmove; `tcp_input()`
-writes arriving segments into the same buffer. Both run in SYSCALL
+writes arriving segments into the same buffer. (Since window scaling the
+buffer is a ring and the read advances a head instead of moving bytes;
+the race below is the same, between the copy-out and the advance.) Both run in SYSCALL
 context, and a ring-3 process is preemptible inside a syscall — so a
 reader can be stopped between copying bytes out and shifting the rest
 down, and `net_poll()` (reached from `scheduler_idle()` and from a dozen

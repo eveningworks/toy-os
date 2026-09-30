@@ -37,10 +37,10 @@
 // serves both.
 #define SYS_NET_MSG_MAX 65507
 
-// The most ONE stream read returns, whatever buffer it is handed. Not
-// tied to the datagram limit above; it was the same number once, and
-// raising it is a separate change with its own callers to check.
-#define SYS_NET_STREAM_READ_MAX 1472
+// The most ONE stream read returns, whatever buffer it is handed -- a
+// kernel bounce buffer of this size is allocated per read. Callers must
+// still expect any smaller count, as with every stream.
+#define SYS_NET_STREAM_READ_MAX 65536
 
 // Ephemeral ports -- what SYS_BIND allocates when asked for port 0.
 // IANA's range; Linux uses 32768-60999 and nothing here wants the

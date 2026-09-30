@@ -8,11 +8,16 @@
 // allocated. What does NOT fit -- a range list already full, or a
 // sequence past the window -- is dropped and re-acked, as before.
 //
+// THE RECEIVE BUFFER IS A HEAP RING, and the window is scaled (RFC
+// 7323) whenever the peer's SYN offers scaling too: 64 KiB is the most
+// an unscaled window can say, which is one round trip's worth at
+// ~25 Mbit/s and 20 ms. A connection with no scaling still works; it
+// just never advertises more than 64 KiB.
+//
 // WHAT THIS DELIBERATELY IS NOT. No SACK, so a hole costs the peer a
-// retransmit timeout or three duplicate ACKs to notice; no window
-// scaling, no timestamps, no RTT estimate, no Nagle (every write goes
-// out at once) and no delayed ACK (every segment is acknowledged
-// immediately).
+// retransmit timeout or three duplicate ACKs to notice; no timestamps,
+// no RTT estimate, no Nagle (every write goes out at once) and no
+// delayed ACK (every segment is acknowledged immediately).
 //
 // THE TIMERS RIDE THE BLOCKING RECEIVE. There is no softirq here and no
 // kernel thread, so nothing services a connection on its own. A socket
@@ -28,22 +33,23 @@
 #include "string.h"
 #include "errno.h"
 #include "scheduler.h" // preemption guard -- see tcp_recv()/tcp_input()
+#include "heap.h"
 
-// One listener plus several live connections, and each block carries
-// 12 KiB of buffers -- so this number is 96 KiB of .bss, not a free
-// choice. Four was enough for a client and is not enough for a server
-// that must hold a listener and the connection it is serving while a
-// second waits in the backlog.
+// One listener plus several live connections. Four was enough for a
+// client and is not enough for a server that must hold a listener and
+// the connection it is serving while a second waits in the backlog.
 #define TCP_MAX_CONNS 8
 #define TCP_SND_BUF   4096
-#define TCP_RCV_BUF   8192
+// The receive ring: allocated when a connection opens, HALVED until the
+// heap can supply it (its runs are physically contiguous), and a power
+// of two so an offset wraps with a mask. 256 KiB is a round trip at
+// ~100 Mbit/s and 20 ms; Linux autotunes to several MiB.
+#define TCP_RCV_BUF   (256u * 1024u)
+#define TCP_RCV_MIN   (16u * 1024u)
+_Static_assert((TCP_RCV_BUF & (TCP_RCV_BUF - 1)) == 0, "the ring wraps with a mask");
 // Conservative for a 1500-byte MTU: 1500 - 20 (IP) - 20 (TCP) = 1460,
 // and nothing here emits options after the SYN.
 #define TCP_MSS       1460
-// Disjoint ranges held ahead of rcv_nxt. An 8 KiB window is under six
-// segments, so alternating loss can leave at most three holes; four is
-// past that without being a number anyone has to think about.
-#define TCP_OFO_MAX   4
 // What a peer that sends no MSS option is entitled to assume of us, and
 // what we assume of it (RFC 1122).
 #define TCP_MSS_DEFAULT 536
@@ -99,8 +105,13 @@ struct tcp_conn {
 
     uint8_t snd[TCP_SND_BUF];
     uint32_t snd_len;      // unsent + unacked bytes, starting at snd_una
-    uint8_t rcv[TCP_RCV_BUF];
+    uint8_t *rcv;          // a ring of rcv_cap bytes; NULL until the connection opens
+    uint32_t rcv_cap;
+    uint32_t rcv_head;     // where the oldest unread byte sits in `rcv`
     uint32_t rcv_len;      // in-order bytes a reader has not taken
+    uint8_t wscale_ok;     // both SYNs carried window scale, so both sides shift
+    uint8_t rcv_wscale;    // our window's shift
+    uint8_t snd_wscale;    // the peer's shift, applied to every window it sends
     // Bytes past rcv_nxt already sitting in `rcv` at their own offset,
     // named by the sequence range each covers. The list is DISJOINT:
     // an arriving segment merges into everything it touches.
@@ -126,24 +137,64 @@ static uint32_t g_isn_counter;
 
 // --- helpers ----------------------------------------------------------
 
-// The peer's MSS option, or TCP_MSS_DEFAULT when it sent none. The walk
-// is bounded by the option length in every branch: a zero-length option
-// in a hostile SYN would otherwise never advance.
-static uint32_t peer_mss(const uint8_t *opt, uint32_t len) {
+// The smallest shift that lets a 16-bit window describe the whole ring.
+static uint8_t wscale_for(uint32_t cap) {
+    uint8_t s = 0;
+    while (s < 14 && (65535u << s) < cap) s++;
+    return s;
+}
+
+// Option `want` of exactly `want_len` bytes, or NULL. The walk is bounded
+// by the option length in every branch: a zero-length option in a
+// hostile SYN would otherwise never advance.
+static const uint8_t *find_option(const uint8_t *opt, uint32_t len,
+                                  uint8_t want, uint8_t want_len) {
     for (uint32_t i = 0; i + 1 < len; ) {
         uint8_t kind = opt[i];
         if (kind == 0) break;                       // end of options
         if (kind == 1) { i++; continue; }           // no-op padding
         uint8_t olen = opt[i + 1];
         if (olen < 2 || i + olen > len) break;
-        if (kind == 2 && olen == 4) {
-            uint32_t m = ((uint32_t)opt[i + 2] << 8) | opt[i + 3];
-            if (m < 88) m = 88;                     // absurd; RFC 1122's floor
-            return m < TCP_MSS ? m : TCP_MSS;       // never above our own
-        }
+        if (kind == want && olen == want_len) return opt + i;
         i += olen;
     }
-    return TCP_MSS_DEFAULT;
+    return 0;
+}
+
+// The peer's MSS option, or TCP_MSS_DEFAULT when it sent none.
+static uint32_t peer_mss(const uint8_t *opt, uint32_t len) {
+    const uint8_t *o = find_option(opt, len, 2, 4);
+    if (!o) return TCP_MSS_DEFAULT;
+    uint32_t m = ((uint32_t)o[2] << 8) | o[3];
+    if (m < 88) m = 88;                             // absurd; RFC 1122's floor
+    return m < TCP_MSS ? m : TCP_MSS;               // never above our own
+}
+
+// The peer's window-scale shift, or -1 when its SYN offered none -- in
+// which case NEITHER side scales (RFC 7323 2.2). Over 14 means 14.
+static int peer_wscale(const uint8_t *opt, uint32_t len) {
+    const uint8_t *o = find_option(opt, len, 3, 3);
+    if (!o) return -1;
+    return o[2] > 14 ? 14 : o[2];
+}
+
+// Both SYNs seen: settle the shifts. Ours was offered on our SYN (or is
+// offered on the SYN+ACK only because theirs had one).
+static void settle_wscale(struct tcp_conn *c, int theirs) {
+    c->wscale_ok = theirs >= 0;
+    if (!c->wscale_ok) { c->rcv_wscale = 0; c->snd_wscale = 0; return; }
+    c->rcv_wscale = wscale_for(c->rcv_cap);
+    c->snd_wscale = (uint8_t)theirs;
+}
+
+// What we will accept, in the units the window field carries. Rounded
+// DOWN, so the scaled value never promises space the ring does not
+// have; a window advertised larger than the buffer is how a stack loses
+// data it promised to take.
+static uint16_t adv_window(const struct tcp_conn *c) {
+    uint32_t free = c->rcv_cap - c->rcv_len;
+    uint32_t w = free >> c->rcv_wscale;
+    return (uint16_t)(w > 65535 ? 65535 : w);
 }
 
 // Sequence comparison is MODULAR: the space wraps, so "later" is a
@@ -152,26 +203,44 @@ static uint32_t peer_mss(const uint8_t *opt, uint32_t len) {
 static inline int seq_lt(uint32_t a, uint32_t b) { return (int32_t)(a - b) < 0; }
 static inline int seq_le(uint32_t a, uint32_t b) { return (int32_t)(a - b) <= 0; }
 
+// --- the receive ring --------------------------------------------------
+
+// Offsets below are from rcv_head, so byte k of what is buffered sits at
+// rcv[(rcv_head + k) & (rcv_cap - 1)].
+static void rcv_put(struct tcp_conn *c, uint32_t off, const uint8_t *p, uint32_t n) {
+    uint32_t at = (c->rcv_head + off) & (c->rcv_cap - 1);
+    uint32_t first = c->rcv_cap - at < n ? c->rcv_cap - at : n;
+    k_memcpy(c->rcv + at, p, first);
+    if (n > first) k_memcpy(c->rcv, p + first, n - first);
+}
+
+static void rcv_take(struct tcp_conn *c, uint8_t *out, uint32_t n) {
+    uint32_t first = c->rcv_cap - c->rcv_head < n ? c->rcv_cap - c->rcv_head : n;
+    k_memcpy(out, c->rcv + c->rcv_head, first);
+    if (n > first) k_memcpy(out + first, c->rcv, n - first);
+    c->rcv_head = (c->rcv_head + n) & (c->rcv_cap - 1);
+    c->rcv_len -= n;
+}
+
+// The ring, as large as the heap will give. 0 when not even the floor
+// fits, which refuses the connection rather than open one that cannot
+// receive.
+static int rcv_alloc(struct tcp_conn *c) {
+    for (uint32_t cap = TCP_RCV_BUF; cap >= TCP_RCV_MIN; cap /= 2) {
+        c->rcv = kmalloc(cap);
+        if (c->rcv) { c->rcv_cap = cap; return 1; }
+    }
+    return 0;
+}
+
 // --- out-of-order ranges ----------------------------------------------
 //
 // A held range's bytes are ALREADY in `rcv`, at rcv_len + (start -
-// rcv_nxt). That offset survives both a read (which moves the whole
-// occupied region down and drops rcv_len by the same amount) and an
-// absorb (which raises rcv_len and rcv_nxt together), so nothing here
-// ever copies payload -- it only moves the boundary between "in order"
-// and "held".
-
-// How far past rcv_nxt the furthest held byte sits; 0 when nothing is
-// held. `rcv` is occupied up to rcv_len + this, which is what a read
-// has to move rather than rcv_len alone.
-static uint32_t ofo_span(const struct tcp_conn *c) {
-    uint32_t span = 0;
-    for (uint8_t i = 0; i < c->ofo_count; i++) {
-        uint32_t end = c->ofo[i].end - c->rcv_nxt;
-        if (end > span) span = end;
-    }
-    return span;
-}
+// rcv_nxt) from rcv_head. That offset survives both a read (which
+// advances rcv_head and drops rcv_len by the same amount) and an absorb
+// (which raises rcv_len and rcv_nxt together), so nothing here ever
+// copies payload -- it only moves the boundary between "in order" and
+// "held".
 
 // Remember [start, end), merged into every range it touches or
 // overlaps -- a segment bridging two holes collapses all three into
@@ -245,12 +314,21 @@ static int send_segment(struct tcp_conn *c, uint8_t flags, uint32_t seq,
     // optimisation but a wrong answer: RFC 1122 requires a sender that
     // received no MSS to assume 536, so every peer sent 536-byte
     // segments -- 2.7x the frames for the same bytes.
+    //
+    // WINDOW SCALE rides our SYN always, and a SYN+ACK only when the
+    // client's SYN carried one -- offering it unasked is a protocol
+    // error the client may reset for.
     uint32_t optlen = 0;
     if (flags & TH_SYN) {
         uint8_t *o = g_seg + sizeof *h;
         o[0] = 2; o[1] = 4;                      // kind, length
         o[2] = (uint8_t)(TCP_MSS >> 8); o[3] = (uint8_t)TCP_MSS;
         optlen = 4;
+        if (!(flags & TH_ACK) || c->wscale_ok) {
+            o[4] = 1;                            // no-op, to align
+            o[5] = 3; o[6] = 3; o[7] = wscale_for(c->rcv_cap);
+            optlen = 8;
+        }
     }
     h->src_port = net_htons(c->local_port);
     h->dst_port = net_htons(c->remote_port);
@@ -258,10 +336,13 @@ static int send_segment(struct tcp_conn *c, uint8_t flags, uint32_t seq,
     h->ack = net_htonl(c->rcv_nxt);
     h->offset = (uint8_t)(((sizeof *h + optlen) / 4) << 4);
     h->flags = flags;
-    // What we will accept: the free space in the receive buffer. A
-    // window advertised larger than the buffer is how a stack loses
-    // data it promised to take.
-    h->window = net_htons((uint16_t)(TCP_RCV_BUF - c->rcv_len));
+    // A SYN's own window is never scaled (RFC 7323 2.2).
+    if (flags & TH_SYN) {
+        uint32_t free = c->rcv_cap - c->rcv_len;
+        h->window = net_htons((uint16_t)(free > 65535 ? 65535 : free));
+    } else {
+        h->window = net_htons(adv_window(c));
+    }
     h->checksum = 0;
     h->urgent = 0;
     if (data_len) k_memcpy(g_seg + sizeof *h + optlen, data, data_len);
@@ -348,6 +429,7 @@ int tcp_open(uint16_t local_port) {
 
 void tcp_release(int idx) {
     if (idx < 0 || idx >= TCP_MAX_CONNS) return;
+    if (g_conns[idx].rcv) kfree(g_conns[idx].rcv);
     k_memset(&g_conns[idx], 0, sizeof g_conns[idx]);
 }
 
@@ -377,6 +459,7 @@ int tcp_connect(int idx, uint32_t ip, uint16_t port) {
     struct tcp_conn *c = &g_conns[idx];
     if (c->state != TCP_STATE_CLOSED) return -EBUSY;
     if (!local_ip_for(ip)) return -ENODEV;
+    if (!c->rcv && !rcv_alloc(c)) return -ENOMEM;
 
     // The initial sequence number is not random here, and that is worth
     // being explicit about: RFC 6528 wants it unpredictable to make
@@ -458,23 +541,12 @@ int tcp_recv(int idx, void *buf, uint32_t cap) {
         // preemptible inside a syscall, and `net_poll()` -- which runs
         // `tcp_input()` into THIS buffer -- is reached from
         // scheduler_idle() and from a dozen syscalls. Preempted between
-        // the copy-out and the compaction, a reader resumes and shifts
-        // a segment that arrived meanwhile: one MSS of the stream comes
-        // out holding bytes from a few hundred bytes earlier, and
-        // nothing reports anything.
+        // the copy-out and the head's advance, a reader resumes against
+        // a segment that was placed by the old head: one MSS of the
+        // stream lands at the wrong offset, and nothing reports it.
         scheduler_preempt_disable();
         uint32_t n = c->rcv_len < cap ? c->rcv_len : cap;
-        k_memcpy(buf, c->rcv, n);
-        // A ring would avoid this move; a linear buffer plus a memmove
-        // is chosen because the reader almost always takes everything,
-        // which makes the move free and the code obviously correct.
-        // HELD RANGES MOVE WITH IT -- they live past rcv_len in the same
-        // buffer, and leaving them behind would deliver them shifted.
-        uint32_t occupied = c->rcv_len + ofo_span(c);
-        if (n < occupied) {
-            for (uint32_t i = 0; i < occupied - n; i++) c->rcv[i] = c->rcv[n + i];
-        }
-        c->rcv_len -= n;
+        rcv_take(c, buf, n);
         scheduler_preempt_enable();
         // The window just opened. Telling the peer costs one segment
         // and is what stops a transfer stalling at a closed window.
@@ -646,6 +718,8 @@ static void passive_open(struct tcp_conn *lis, uint32_t src_ip, uint16_t src_por
     if (idx < 0) return;    // no block: the same silence, for the same reason
 
     struct tcp_conn *c = &g_conns[idx];
+    if (!rcv_alloc(c)) { tcp_release(idx); return; }   // silence, as above
+    settle_wscale(c, peer_wscale(opt, optlen));
     c->pending = 1;
     c->remote_ip = src_ip;
     c->remote_port = src_port;
@@ -654,7 +728,7 @@ static void passive_open(struct tcp_conn *lis, uint32_t src_ip, uint16_t src_por
     c->iss = (g_isn_counter += 0x01000193u) + (uint32_t)clocksource_now_ns();
     c->snd_una = c->iss;
     c->snd_nxt = c->iss + 1;    // our SYN takes a sequence number
-    c->snd_wnd = window ? window : TCP_MSS;
+    c->snd_wnd = window ? window : TCP_MSS;     // a SYN's window is unscaled
     c->snd_mss = peer_mss(opt, optlen);
     c->state = TCP_STATE_SYN_RCVD;
     c->rto_ms = TCP_RTO_MIN_MS;
@@ -723,8 +797,9 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
         c->irs = seq;
         c->rcv_nxt = seq + 1;
         c->snd_una = ack;
-        c->snd_wnd = net_ntohs(h.window);
+        c->snd_wnd = net_ntohs(h.window);          // a SYN's window is unscaled
         c->snd_mss = peer_mss(pkt + sizeof h, doff - (uint32_t)sizeof h);
+        settle_wscale(c, peer_wscale(pkt + sizeof h, doff - (uint32_t)sizeof h));
         c->state = TCP_STATE_ESTABLISHED;
         c->rto_at_ns = 0;
         c->rto_ms = TCP_RTO_MIN_MS;
@@ -740,7 +815,7 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
         // leaves the connection where it is for the timer to retry.
         if ((h.flags & TH_ACK) && ack == c->snd_nxt) {
             c->snd_una = ack;
-            c->snd_wnd = net_ntohs(h.window);
+            c->snd_wnd = (uint32_t)net_ntohs(h.window) << c->snd_wscale;
             c->state = TCP_STATE_ESTABLISHED;
             c->rto_at_ns = 0;
             c->retries = 0;
@@ -773,7 +848,7 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
             else if (c->state == TCP_STATE_LAST_ACK && c->snd_una == c->snd_nxt)
                 c->state = TCP_STATE_CLOSED;
         }
-        c->snd_wnd = net_ntohs(h.window);
+        c->snd_wnd = (uint32_t)net_ntohs(h.window) << c->snd_wscale;
     }
 
     // The window is the free space in `rcv`, so a byte the window admits
@@ -793,13 +868,13 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
             if (skip >= n) n = 0;
             else { p += skip; s += skip; n -= skip; }
         }
-        uint32_t window = TCP_RCV_BUF - c->rcv_len;
+        uint32_t window = c->rcv_cap - c->rcv_len;
         if (n && !seq_lt(s, c->rcv_nxt + window)) n = 0;   // past what we promised
         if (n) {
             uint32_t off = c->rcv_len + (s - c->rcv_nxt);
-            uint32_t room = TCP_RCV_BUF - off;
+            uint32_t room = c->rcv_cap - off;
             if (n > room) n = room;
-            k_memcpy(c->rcv + off, p, n);
+            rcv_put(c, off, p, n);
             if (s == c->rcv_nxt) {
                 c->rcv_len += n;
                 c->rcv_nxt += n;

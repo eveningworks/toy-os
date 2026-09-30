@@ -3286,17 +3286,23 @@ an orderly close — what a client needs and no more.
   idle loop. Survivable for a client, and exactly what a server could
   not do.
 - **AN OUT-OF-ORDER SEGMENT IS HELD IN `rcv` ITSELF, AT THE OFFSET ITS
-  SEQUENCE NUMBER GIVES IT.** The window advertised is the buffer's free
-  space (`TCP_RCV_BUF - rcv_len`), so the sequence range the peer may
+  SEQUENCE NUMBER GIVES IT.** The window advertised is the ring's free
+  space (`rcv_cap - rcv_len`), so the sequence range the peer may
   send maps ONE-TO-ONE onto the free bytes — a byte the window admits
   always has somewhere to sit, and there is no second queue to size.
   `ofo[]` names the filled ranges and nothing else is stored;
   `ofo_drain()` only moves the boundary between "in order" and "held",
-  never payload. **A held range's offset is `rcv_len + (start -
-  rcv_nxt)`, and BOTH a read and an absorb keep it true** — which is why
-  `tcp_recv()` compacts `rcv_len + ofo_span()` bytes rather than
-  `rcv_len`. Compacting only the in-order part delivers the held bytes
-  shifted by whatever the reader took: wrong data, not a wrong length.
+  never payload. **A held range's offset from `rcv_head` is `rcv_len +
+  (start - rcv_nxt)`, and BOTH a read and an absorb keep it true** -- a
+  read advances `rcv_head` by exactly what it drops from `rcv_len`. Any
+  change that moves one without the other delivers the held bytes
+  shifted: wrong data, not a wrong length.
+- **`rcv` IS A HEAP RING, AND ITS WINDOW IS SCALED WHEN BOTH SYNs SAY
+  SO** (RFC 7323). 256 KiB, halved until the heap supplies it, a power
+  of two so an offset wraps with a mask. The advertised window rounds
+  DOWN to the shift's unit -- it may under-promise, never over -- and a
+  SYN's own window is never scaled. No option from the peer means
+  neither side shifts, and the window stops at 65535.
 - **WHAT WILL NOT FIT IS STILL DROPPED AND RE-ACKED** — a sequence past
   the window, or a `TCP_OFO_MAX`th disjoint range. The acknowledgement
   names `rcv_nxt` either way, which is the only thing this stack can say
@@ -3308,12 +3314,12 @@ an orderly close — what a client needs and no more.
   would report end-of-file in front of data still on its way — a
   truncated download that reads as a short file rather than an error.
 - **THE RECEIVE BUFFER IS NOT RE-ENTRANT, AND BOTH ENDS HOLD A
-  PREEMPTION GUARD.** `tcp_recv()` compacts `rcv` with a memmove and
-  `tcp_input()` writes segments into it, both in SYSCALL context — and a
+  PREEMPTION GUARD.** `tcp_recv()` copies out and advances `rcv_head`,
+  and `tcp_input()` places segments by that head, both in SYSCALL context — and a
   ring-3 process is preemptible inside a syscall while `net_poll()`
   (which runs `tcp_input()`) is reached from `scheduler_idle()` and from
-  a dozen syscalls. Preempted between the copy-out and the compaction, a
-  reader resumes and shifts a segment that landed meanwhile. **The
+  a dozen syscalls. Preempted between the copy-out and the head's
+  advance, a segment lands by the old head. **The
   symptom is silent and far away**: one MSS of a downloaded file holds
   the stream's own bytes from a few hundred bytes earlier, the length is
   exact, and nothing reports anything — measured at 5 corrupt runs in 14
@@ -3342,10 +3348,10 @@ an orderly close — what a client needs and no more.
   as POSIX guarantees, so code written against descriptors can be handed
   a socket. A DATAGRAM socket still refuses both, because a read that
   cannot say who sent it is not a datagram interface.
-- **NO NAGLE, NO DELAYED ACK, NO WINDOW SCALING, NO SACK, NO
-  TIMESTAMPS, AND NO RTT ESTIMATE** — a fixed 200 ms floor with
-  exponential backoff. Every one of those is a throughput optimisation,
-  and this stack has no throughput problem to solve yet.
+- **NO NAGLE, NO DELAYED ACK, NO SACK, NO TIMESTAMPS, AND NO RTT
+  ESTIMATE** — a fixed 200 ms floor with exponential backoff. Window
+  scaling is the one throughput feature built, because without it no
+  window can exceed 64 KiB.
 
 ## A WAIT CAN CARRY A DEADLINE, AND READINESS IS NOT DELIVERY.
 
