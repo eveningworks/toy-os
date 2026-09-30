@@ -2334,10 +2334,19 @@ window without going through it will find its layout polls timing out.
   there, versus a continuously responsive desktop) -- do that again
   before trusting a clean run, same reasoning as `damage_sweep.py`'s
   `--positive-control`.
-- **`gfxdemo_test.py`** -- drives the Shapes demo (`userland/gui/gfxdemo.c`)
-  and asserts on its log + its pixels, 13 checks. Run it after touching
-  `kernel/lib/geom.c`/`fixed.c`, `uui_canvas`, or anything a ring-3
-  client draws with. Three of its checks encode reasoning worth
+- **`gfxdemo_test.py`** -- drives the Shapes demo (`userland/gui/demos/gfxdemo.c`)
+  and asserts on its log + its pixels. Run it after touching
+  `kernel/lib/geom.c`/`fixed.c`, `uui_canvas`, `ugfx_tex.c`,
+  `uui_toolbar`, or anything a ring-3 client draws with. Beyond the
+  cube and the 2D scene it checks the teapot is a solid whose texture
+  reaches the pixels (the checker's grey, which the blue untextured
+  teapot never has), and RESIZES the window: the toolbar folds into
+  View when narrow, a menu row commits, Esc shuts the menu, the
+  minimum keeps the scenes and speed controls, and the scene scales
+  (no ink on the canvas's outermost pixels). It puts the window back at
+  the size it found, because uapp remembers geometry per app. Its
+  layout reader resets on each `layout canvas` line: the block is
+  re-sent whole, and only on a change. Three of its checks encode reasoning worth
   reusing: the window is proved to be a ring-3 client from `gui windows
   --json`'s `client_pid` rather than from how it looks; "it rotates" is
   paired with "it stops dead at speed 0", because either half alone
@@ -4979,6 +4988,25 @@ window without going through it will find its layout polls timing out.
   a rounding overshoot (100 -> 0 visited -1 for a frame) before any
   guest had drawn with it. `--positive-control` compiles a LINEAR curve
   and must fail on the ease-out check. Needs only gcc.
+
+- **`teapot_hostcheck.py`** -- compiles Shapes' teapot mesh
+  (`userland/shapes/teapot.c`) and `ugfx_tri3d()` (`userland/ui/ugfx_tex.c`)
+  with the host gcc. The mesh is judged against a FLOAT evaluation of
+  the control points parsed out of teapot.c itself (every vertex within
+  0.002 units), and its normals by where the teapot's SHAPE says they
+  must face -- body away from the axis, lid top up, bottom down --
+  rather than by a second copy of the same cross product. It also holds
+  teapot.h's winding claim (a face toward the eye has a positive
+  screen-space area, the sign Shapes culls by). The rasteriser: two
+  PIERCING triangles give the same pixels in either order through a
+  depth buffer (bar the crossing line, where depths tie) and different
+  ones without it -- which is the control that the scene overlaps at
+  all -- and a Gouraud triangle carries its corners' shades.
+  `--positive-control` breaks the mirror's winding fix-up, teapot.h's
+  triangle winding and the depth test ONE AT A TIME, and requires the
+  finding aimed at each -- the winding check reads the triangles through
+  `teapot_cell_tris()` itself, so it tests the header rather than a copy
+  of it. Needs only gcc.
 
 - **`hash_hostcheck.py`** -- compiles `/lib/libhash.so`'s two algorithms
   (`userland/dynlib/uhash.c` plus `kernel/lib/kcrc.c`) with the host gcc

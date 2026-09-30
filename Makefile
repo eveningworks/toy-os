@@ -899,7 +899,9 @@ EXTRA_OBJS_uiclient   =
 EXTRA_OBJS_calculator =
 EXTRA_OBJS_notepad    =
 EXTRA_OBJS_terminal   = term/term_conf term/term_prefs
-EXTRA_OBJS_gfxdemo    =
+# Shapes keeps its teapot mesh in userland/shapes/, outside the program
+# directories for the reason userland/fm/ is (see EXTRA_OBJS_files).
+EXTRA_OBJS_gfxdemo    = shapes/teapot
 # The HD Audio codec parser, compiled a second time for ring 3 -- the
 # geom.c/klineedit.c rule (see the shared-source section below), so
 # /bin/lscodec and /bin/hdad walk the graph with the kernel's own

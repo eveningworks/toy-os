@@ -5,8 +5,9 @@ WHAT THIS IS
 ------------
 Shapes (`userland/gui/demos/gfxdemo.c`) is a RING-3 client that draws with the
 shared geometry module -- `kernel/lib/geom.c` and `fixed.c`, compiled a
-second time for userland. This drives it and checks three claims that a
-screenshot cannot settle on its own:
+second time for userland -- and fills its solids with ui/ugfx_tex.h's
+triangle. This drives it and checks claims a screenshot cannot settle on
+its own:
 
   1. It is genuinely a ring-3 client, not a kernel-space window that
      happens to look like one (`gui windows --json`'s `client_pid`).
@@ -14,8 +15,18 @@ screenshot cannot settle on its own:
      stops dead at speed 0. "The frame changed" alone proves very
      little; a blinking caret would satisfy it. The pair does not.
   3. The anti-aliasing toggle changes the RASTERISER, not just a
-     checkbox: an AA frame contains many more distinct colours than an
+     button: an AA frame contains many more distinct colours than an
      aliased one, because partial coverage is what AA emits.
+  4. The cube is projected and lit; the teapot is a solid, and its
+     texture reaches the pixels.
+  5. The window RESIZES: the canvas takes the room, the toolbar folds
+     its view toggles into the View menu when narrow and gives them
+     back when wide, the menu's rows commit, and the minimum size
+     keeps the scenes and the speed controls in the strip.
+
+What it does NOT check, because tools/teapot_hostcheck.py does it far
+more precisely: the mesh's geometry and winding, the depth test, and the
+Gouraud interpolation.
 
     python3 tools/vm.py start          # or --disk a copy
     python3 tools/gfxdemo_test.py      # enters GUI mode itself
@@ -23,21 +34,24 @@ screenshot cannot settle on its own:
 
 WHY IT IS A TOOL AND NOT A SCRIPT
 ---------------------------------
-Same reasoning as tools/uidemo_test.py, plus one trap of its own:
+Same reasoning as tools/uidemo_test.py, plus traps of its own:
 
   * **Geometry comes from the app.** Shapes logs `gfxdemo: layout canvas
-    <x> <y> <w> <h>` at startup; this reads that rather than re-deriving
-    the rect from font metrics in Python. That copy drifts silently the
-    first time the layout changes -- the exact failure uidemo_test.py
-    documents.
-  * **The canvas region must be sampled WITHOUT the cursor in it.** The
-    mouse sprite is composited on top, so a cursor parked over the
-    canvas turns "did the drawing change" into "did the cursor move".
-    park_cursor() puts it somewhere harmless first.
-  * **Shapes polls rather than blocking**, so it keeps drawing while
-    this script talks over serial. Anything comparing two frames has to
-    set speed 0 first and then let the loop settle, or the "static"
-    frame is still mid-rotation.
+    <x> <y> <w> <h>` and its toolbar's describe lines (`toolbar.button
+    i`, `toolbar.more`, the open menu's `toolbar.item 0 i`) on every
+    change; this reads those rather than re-deriving rects from font
+    metrics in Python. That copy drifts silently the first time the
+    layout changes -- the exact failure uidemo_test.py documents.
+  * **A layout block is re-sent WHOLE, and only when it changes**
+    (uapp.c's dedupe), always starting with `layout canvas` -- so that
+    line resets what this remembers, or a `toolbar.more` from a narrow
+    window would outlive the widening that removed it.
+  * **The canvas region must be sampled WITHOUT the cursor in it.**
+    park_cursor() puts the sprite somewhere harmless first.
+  * **Shapes keeps drawing while this script talks over serial.**
+    Anything comparing two frames sets speed 0 first and lets it settle.
+  * **A resize is REMEMBERED per app**, so the run puts the window back
+    at the size it found, or the next tool opens a 440-pixel Shapes.
 
 CAVEAT
 ------
@@ -60,12 +74,22 @@ DEFAULT_SOCK = ".vm.serial"
 
 # The demo's own key bindings (userland/gui/demos/gfxdemo.c). Sent as hex because
 # `gui key` splits its arguments on whitespace and parses ints that way.
-K_A = "0x61"        # toggle anti-aliasing
-K_S = "0x73"        # toggle the 2D / 3D scene
-K_F = "0x66"        # toggle the shaded (filled, lit) cube
+K_A = "0x61"        # anti-aliasing
+K_S = "0x73"        # next scene
+K_F = "0x66"        # shaded (filled, lit)
+K_T = "0x74"        # textured
+K_1, K_2, K_3 = "0x31", "0x32", "0x33"   # 2D, cube, teapot
 K_MINUS = "0x2d"    # slower
 K_PLUS = "0x2b"     # faster
 K_Q = "0x71"        # quit
+K_ESC = "0x1b"
+
+# Toolbar buttons, by index in gfxdemo.c's TOOLBAR[].
+B_2D, B_CUBE, B_TEAPOT, B_SLOWER, B_FASTER, B_RESET, B_AA, B_SHADE, B_TEX = \
+    0, 1, 2, 4, 6, 8, 9, 10, 11
+KEEP_SHOWN = 7      # gfxdemo.c: scenes and the speed controls never fold
+
+BG = (16, 18, 24)   # the canvas background gfxdemo.c paints
 
 
 class Shapes:
@@ -75,13 +99,42 @@ class Shapes:
         self.verbose = verbose
         self.fails, self.passes = [], []
         self.win = None
-        self.canvas = None      # (x, y, w, h), content-relative
-        self.buttons = None     # (x, y, w, h, pitch, count), ditto
+        self.lay = {}           # the latest layout block, parsed
 
     # -- plumbing ------------------------------------------------------
 
+    def _parse(self, line):
+        rest = line.split("gfxdemo: layout ", 1)[1].split()
+        name, nums = rest[0], [int(v) for v in rest[1:]]
+        if name == "canvas":
+            self.lay = {}       # a block starts here -- see the docstring
+        if name == "toolbar.button":
+            self.lay[("button", nums[0])] = tuple(nums[1:5])
+        elif name == "toolbar.item":        # level, row, rect
+            self.lay[("row", nums[1])] = tuple(nums[2:6])
+        elif name in ("toolbar.shown", "toolbar.open"):
+            self.lay[name] = nums[0]
+        else:
+            self.lay[name] = tuple(nums[:4])
+
     def events(self):
-        return self.dbg.logs("gfxdemo:", clear=True)
+        got = self.dbg.logs("gfxdemo:", clear=True)
+        for line in got:
+            if "gfxdemo: layout " in line:
+                self._parse(line)
+        return got
+
+    @property
+    def canvas(self):
+        return self.lay.get("canvas")
+
+    def wait_layout(self, pred, timeout=8.0):
+        deadline = time.time() + timeout
+        while True:
+            self.events()
+            if pred(self.lay) or time.time() > deadline:
+                return pred(self.lay)
+            time.sleep(0.2)
 
     def key(self, k):
         self.dbg.send(f"gui key {k}")
@@ -111,14 +164,8 @@ class Shapes:
         One read after dbg.settle() is a poll whose exit condition is
         weaker than what the caller needs: settle() knows the debug
         console has gone quiet, not that this client has handled the
-        click and logged. Under parallel load that gap is wide enough to
-        lose the line -- `the 2D / 3D button switches back` failed that
-        way with four other guests running and passed alone, which reads
-        exactly like a broken toggle.
-
-        Accumulates, because events() CLEARS as it reads: a line that
-        arrived in an earlier poll would otherwise be dropped by the
-        next one.
+        click and logged. Accumulates, because events() CLEARS as it
+        reads.
         """
         got = self.click_content(cx, cy)
         deadline = time.time() + timeout
@@ -127,13 +174,35 @@ class Shapes:
             got += self.events()
         return got
 
+    def click_rect_until(self, rect, want):
+        x, y, w, h = rect
+        return self.click_content_until(x + w // 2, y + h // 2, want)
+
+    def click_button_until(self, index, want):
+        """A toolbar button, at the rect the APP reported."""
+        rect = self.lay.get(("button", index))
+        if rect is None:
+            return [f"(button {index} is not in the strip: {sorted(map(str, self.lay))})"]
+        return self.click_rect_until(rect, want)
+
+    def resize(self, w, h):
+        self.dbg.send(f"gui resize {w} {h}")
+        self.dbg.settle()
+        deadline = time.time() + 6
+        while time.time() < deadline:
+            self.win = self.dbg.window("Shapes")
+            c = self.win["content"]
+            if (c["w"], c["h"]) != self.size or (c["w"], c["h"]) == (w, h):
+                break
+            time.sleep(0.2)
+        self.size = (self.win["content"]["w"], self.win["content"]["h"])
+        # The app's own report of the new size: its toolbar spans it.
+        self.wait_layout(lambda l: l.get("toolbar", (0, 0, 0))[2] == self.size[0])
+        return self.size
+
     def park_cursor(self):
         """Get the mouse sprite out of the canvas before sampling pixels.
-
-        The cursor is composited over the window, so a frame comparison
-        with it parked on the canvas measures the cursor, not the
-        drawing. Bottom-left of the screen is always desktop here.
-        """
+        Bottom-left of the screen is always desktop here."""
         self.dbg.warp_cursor(self.qmp, 40, 620)
         self.dbg.settle()
 
@@ -157,6 +226,7 @@ class Shapes:
     def canvas_image(self, tag):
         """Screenshot, cropped to the canvas. Returns a PIL image."""
         from PIL import Image
+        self.events()
         path = os.path.join(tempfile.gettempdir(), f"gfxdemo-{tag}.png")
         self.qmp.screenshot(os.path.abspath(path), stable=False)  # the demo animates
         img = Image.open(path).convert("RGB")
@@ -177,84 +247,61 @@ class Shapes:
 
     @staticmethod
     def distinct_colors(img):
-        # getcolors() needs a ceiling high enough not to give up and
-        # return None -- 24-bit colour, so this is "no ceiling".
         return len(img.getcolors(1 << 24) or [])
+
+    @staticmethod
+    def ink(img):
+        return sum(n for n, c in (img.getcolors(1 << 24) or []) if c != BG)
+
+    @staticmethod
+    def big_colors(img, floor=1000):
+        return [c for n, c in (img.getcolors(1 << 24) or []) if c != BG and n >= floor]
+
+    @staticmethod
+    def edge_ink(img):
+        """Inked pixels in the outermost 3 columns and rows: a scene that
+        did not scale with the canvas runs off it and leaves ink here."""
+        px = img.load()
+        w, h = img.size
+        n = 0
+        for y in range(h):
+            for x in list(range(3)) + list(range(w - 3, w)):
+                n += px[x, y] != BG
+        for x in range(3, w - 3):
+            for y in list(range(3)) + list(range(h - 3, h)):
+                n += px[x, y] != BG
+        return n
 
     # -- setup ---------------------------------------------------------
 
     def open(self):
-        """Launch Shapes and read its self-reported layout.
-
-        Spawned directly rather than typed at a Terminal: the
-        kernel-space Terminal retired in M41's stage 0, and the ring-3
-        one has no window yet when the injected keys would arrive.
-        """
+        """Launch Shapes and read its self-reported layout -- WAITING for
+        everything used below, not just the first line (a poll whose exit
+        condition is weaker than what follows it is a flake)."""
         self.dbg.send("gui spawn /bin/wm/demos/shapes")
-
-        # The ELF has to be loaded and the window created before any of
-        # this is answerable; poll rather than guessing at a sleep.
-        #
-        # WAIT FOR BOTH LINES, not just the first. This used to break on
-        # `layout canvas` and then require `layout buttons` immediately
-        # after -- a poll whose exit condition is weaker than what the
-        # code following it needs, which is a flake by construction. It
-        # failed roughly one run in three under `gui_regress`'s parallel
-        # load and never once when the tool ran alone, which is how a
-        # timing bug in a HARNESS disguises itself as a regression in
-        # whatever happened to be built that day. Same bug, same fix, as
-        # calculator_client_test.py's (see CLAUDE.md).
         deadline = time.time() + 15
         lines = []
         while time.time() < deadline:
-            lines += self.dbg.logs("gfxdemo:", clear=True)
-            if (any("layout canvas" in l for l in lines)
-                    and any("layout buttons" in l for l in lines)):
+            lines += self.events()
+            if self.canvas and "toolbar.shown" in self.lay and \
+                    any("gfxdemo: ready" in l for l in lines):
                 break
             time.sleep(0.3)
         self.startup = lines
-
-        for l in lines:
-            if "layout canvas" in l:
-                parts = l.split("layout canvas")[1].split()
-                self.canvas = tuple(int(p) for p in parts[:4])
-            if "layout buttons" in l:
-                # x y w h pitch count -- so a click lands on the button
-                # the test MEANT, at any font size. Replaces this file's
-                # old `canvas_y + canvas_h + 8 + 12`, which re-derived
-                # the app's spacing here and would have been wrong the
-                # moment a fourth button was added.
-                parts = l.split("layout buttons")[1].split()
-                self.buttons = tuple(int(p) for p in parts[:6])
         self.win = self.dbg.window("Shapes")
         if self.win is None:
-            print("gfxdemo_test: no Shapes window -- did `run shapes` fail?")
+            print("gfxdemo_test: no Shapes window -- did the spawn fail?")
             print("  startup log:", lines)
             sys.exit(2)
-        if self.canvas is None or self.buttons is None:
+        if self.canvas is None or "toolbar.shown" not in self.lay:
             print("gfxdemo_test: Shapes never logged its layout:", lines)
             sys.exit(2)
-
-    def click_button(self, index):
-        """Click the centre of button `index`, from the row the app
-        reported. Never from arithmetic over the canvas rect."""
-        bx, by, bw, bh, pitch, count = self.buttons
-        if index >= count:
-            raise IndexError(f"button {index} of {count}")
-        return self.click_content(bx + index * pitch + bw // 2, by + bh // 2)
-
-    def click_button_until(self, index, want, timeout=6.0):
-        """click_button(), waiting for the log line it should produce."""
-        bx, by, bw, bh, pitch, count = self.buttons
-        if index >= count:
-            raise IndexError(f"button {index} of {count}")
-        return self.click_content_until(bx + index * pitch + bw // 2,
-                                        by + bh // 2, want, timeout)
+        self.size = (self.win["content"]["w"], self.win["content"]["h"])
+        self.home = self.size
 
     def set_speed(self, target):
         """Walk the speed to `target` with the keyboard, confirming as it
-        goes -- the app logs `gfxdemo: speed N` on every change, so this
-        does not have to assume a keystroke landed."""
+        goes -- the app logs `gfxdemo: speed N` on every change."""
         for _ in range(60):
             got = self.key(K_MINUS if target == 0 else K_PLUS)
             for l in got:
@@ -270,51 +317,38 @@ class Shapes:
 
 
 def check_cube(d):
-    """The 3D scene: a wireframe cube from geom_transform3().
+    """The cube: from geom_transform3(), wired up by the app.
 
-    What is actually worth asserting here is narrow, because the
-    projection maths is already pinned precisely by KTESTs in
-    kernel/lib/geom_test.c (the rotation axes, near-bigger-than-far, the
-    clamp at the eye). Re-testing arithmetic through a screenshot would
-    be a worse version of a test that already exists. What only THIS can
-    check is that the app wired it up:
+    The projection maths is pinned by KTESTs in kernel/lib/geom_test.c;
+    what only THIS can check is the wiring:
 
-      * the scene toggles, from the key and from the button;
-      * the cube animates, and stops dead -- the same pairing the 2D
-        scene gets, because either half alone is satisfied by a bug;
-      * the edges are DEPTH-SHADED, which is the one visible property
-        that cannot exist without a real 3D transform. A flat wireframe
-        drawn with 2D rotations has one edge colour; a projected one has
-        a different shade per edge. Counted with AA OFF, or
-        anti-aliasing's partial coverage would supply the extra colours
-        by itself and the check would pass on a flat drawing.
-      * toggling away and back restores the 2D scene EXACTLY, which
-        catches a scene switch that leaves state behind.
+      * the scene switches, from the key and from the toolbar;
+      * the edges are DEPTH-SHADED, the one visible property that cannot
+        exist without a real 3D transform (counted with AA OFF, or
+        partial coverage supplies the extra colours by itself);
+      * a shaded cube is a lit solid, and switching back is exact;
+      * switching away and back restores the 2D scene EXACTLY.
     """
     d.check("speed reaches 0 before comparing frames", d.set_speed(0))
     time.sleep(0.5)
 
-    # AA off first: the colour count below has to measure shading, not
-    # coverage. (Left off for both scenes, so the comparison is fair.)
-    d.key(K_A)
+    d.key(K_A)       # AA off: the colour count must measure shading
     time.sleep(0.4)
     flat_2d = d.canvas_image("scene-2d")
     colors_2d = d.distinct_colors(flat_2d)
 
-    # Shading belongs to the cube: in the 2D scene the box is greyed and
-    # F is refused, logged so this can see the refusal rather than infer
-    # it from silence.
+    # Shading belongs to the solids: refused in the 2D scene, and logged
+    # so this sees the refusal rather than inferring it from silence.
     got = d.key_until(K_F, "gfxdemo: shaded ignored")
     d.check_log("F in the 2D scene is refused, not applied", got, "gfxdemo: shaded ignored")
     d.check("...and nothing was toggled", not any("shaded on" in l for l in got),
             f"{[l for l in got if 'shaded' in l]}")
 
-    got = d.key_until(K_S, "gfxdemo: scene 3d")
-    d.check_log("pressing S switches to the 3D scene", got, "gfxdemo: scene 3d")
+    got = d.key_until(K_S, "gfxdemo: scene cube")
+    d.check_log("pressing S moves on to the cube", got, "gfxdemo: scene cube")
     time.sleep(0.5)
     cube = d.canvas_image("scene-3d")
-
-    d.check("the 3D scene draws something different",
+    d.check("the cube scene draws something different",
             d.differing_fraction(flat_2d, cube) > 0.01,
             "the canvas barely changed when the scene switched")
 
@@ -326,31 +360,21 @@ def check_cube(d):
             "2D one, both aliased -- a per-edge depth shade is the only thing "
             "that can add them, and it needs a real projection to exist")
 
-    # The SHADED cube, on the same still frame. Three properties, each
-    # chosen so the wireframe -- or a fill that ignores the light --
-    # cannot pass it: a solid inks several times the pixels a wireframe
-    # does; two faces lit from one fixed direction come out as two
-    # different flat colours, each covering a face's worth of pixels
-    # (an edge is a few hundred pixels at most, a face is thousands);
-    # and switching back restores the wireframe EXACTLY, since nothing
-    # else moved.
-    bg = (16, 18, 24)   # the canvas background gfxdemo.c paints
-    def ink(img):
-        return sum(n for n, c in (img.getcolors(1 << 24) or []) if c != bg)
-    def big_colors(img, floor=1000):
-        return [c for n, c in (img.getcolors(1 << 24) or []) if c != bg and n >= floor]
+    # A solid inks several times what a wireframe does; its lit faces are
+    # flat colours covering a face's worth of pixels each; and switching
+    # back restores the wireframe exactly, since nothing else moved.
     got = d.key_until(K_F, "gfxdemo: shaded on")
     d.check_log("pressing F fills the cube", got, "gfxdemo: shaded on")
     time.sleep(0.5)
     solid = d.canvas_image("scene-3d-shaded")
-    wire_ink, solid_ink = ink(cube), ink(solid)
+    wire_ink, solid_ink = d.ink(cube), d.ink(solid)
     print(f"        ({wire_ink} inked pixels as a wireframe, {solid_ink} shaded)")
     d.check("a shaded cube is a solid, not an outline",
             solid_ink > 3 * wire_ink,
             f"{solid_ink} inked pixels shaded vs {wire_ink} as a wireframe")
     d.check("a wireframe has no face-sized flat colour",
-            len(big_colors(cube)) == 0,
-            f"{big_colors(cube)} -- the control: an outline must not trip the face check")
+            len(d.big_colors(cube)) == 0,
+            f"{d.big_colors(cube)} -- the control: an outline must not trip the face check")
     got = d.key_until(K_F, "gfxdemo: shaded off")
     d.check_log("pressing F again restores the wireframe", got, "gfxdemo: shaded off")
     time.sleep(0.5)
@@ -359,15 +383,10 @@ def check_cube(d):
             d.differing_fraction(cube, wire_again) == 0.0,
             "the fill left something behind, or the angle moved at speed 0")
 
-    # Round trip, taken NOW rather than at the end of this function: the
-    # claim is "the same angle draws the same pixels", so nothing between
-    # the two captures may advance the angle. The first draft ran the
-    # spin checks in between and failed here for exactly that reason --
-    # the assertion was wrong, not the app.
-    got = d.click_button_until(3, "gfxdemo: scene 2d")  # the BUTTON, not
-                               # the key, so both paths into the toggle
-                               # are covered
-    d.check_log("the 2D / 3D button switches back", got, "gfxdemo: scene 2d")
+    # Round trip taken NOW: nothing between the two captures may move
+    # the angle. By the toolbar, so both paths into a scene are covered.
+    got = d.click_button_until(B_2D, "gfxdemo: scene 2d")
+    d.check_log("the 2D toolbar button switches back", got, "gfxdemo: scene 2d")
     time.sleep(0.5)
     back = d.canvas_image("scene-2d-again")
     d.check("returning to the 2D scene restores it exactly",
@@ -375,8 +394,8 @@ def check_cube(d):
             "the 2D scene came back different from how it was left -- at "
             "speed 0 with the angle unchanged it must be pixel-identical")
 
-    # Now the animation pair, which needs the angle to move.
-    d.key(K_S)
+    # The animation pair, which needs the angle to move.
+    d.key(K_2)
     time.sleep(0.3)
     d.check("speed returns for the cube", d.set_speed(4))
     a = d.canvas_image("cube-spin-a")
@@ -385,18 +404,14 @@ def check_cube(d):
     d.check("the cube is rotating", d.differing_fraction(a, b) > 0.01,
             "the cube did not move between frames")
 
-    # LIT, not merely filled: every face is painted from ONE base
-    # colour, so at any angle an unlit fill shows one flat colour and
-    # only a light can make the big faces differ from one moment to the
-    # next as the cube turns through it. Compared over a spin rather
-    # than at one angle because a face-on cube shows a single face, and
-    # that angle is whichever one the speed happened to reach 0 at.
+    # LIT, not merely filled: one base colour, so only a light can make
+    # the big faces differ from one moment to the next as it turns.
     got = d.key_until(K_F, "gfxdemo: shaded on")
     d.check_log("F fills the spinning cube", got, "gfxdemo: shaded on")
     time.sleep(0.4)
-    lit_a = set(big_colors(d.canvas_image("cube-lit-a")))
+    lit_a = set(d.big_colors(d.canvas_image("cube-lit-a")))
     time.sleep(0.7)
-    lit_b = set(big_colors(d.canvas_image("cube-lit-b")))
+    lit_b = set(d.big_colors(d.canvas_image("cube-lit-b")))
     print(f"        (face colours {sorted(lit_a)} then {sorted(lit_b)})")
     d.check("a face's colour changes as it turns through the light",
             lit_a and lit_b and lit_a != lit_b,
@@ -414,13 +429,132 @@ def check_cube(d):
     d.check("at speed 0 the cube is static", still < 0.001,
             f"{still:.4%} of sampled pixels still changed at speed 0")
 
-    # Hand the rest of the run the state it expects: 2D scene, AA on,
-    # speed 3. A check that leaves global state behind fails the NEXT
-    # check instead of itself, which is a genuinely confusing way to
-    # debug -- it happened on this function's first run.
-    d.key(K_S)
+    # Hand the rest of the run the state it expects: 2D, AA on, speed 3.
+    d.key(K_1)
     d.set_speed(3)
-    d.key(K_A)   # anti-aliasing back on, as the rest of the run expects
+    d.key(K_A)
+
+
+def greyish(img):
+    """Pixels whose channels are close together and not dark -- the
+    checker's light squares, shaded. The untextured teapot is strongly
+    blue (90, 200, 250 times its light) and has none."""
+    n = 0
+    for count, (r, g, b) in img.getcolors(1 << 24) or []:
+        if r > 60 and abs(r - b) < 24 and abs(g - b) < 24:
+            n += count
+    return n
+
+
+def check_teapot(d):
+    """The teapot: a solid, a texture, a spin. What its triangles and
+    depth buffer do per pixel is teapot_hostcheck.py's; this checks the
+    app draws it and the toggles reach it."""
+    got = d.click_button_until(B_TEAPOT, "gfxdemo: scene teapot")
+    d.check_log("the Teapot toolbar button shows the teapot", got, "gfxdemo: scene teapot")
+    d.check("speed reaches 0 for the teapot", d.set_speed(0))
+    time.sleep(0.5)
+    wire = d.canvas_image("teapot-wire")
+
+    got = d.key_until(K_F, "gfxdemo: shaded on")
+    d.check_log("F fills the teapot", got, "gfxdemo: shaded on")
+    time.sleep(0.6)
+    solid = d.canvas_image("teapot-solid")
+    wire_ink, solid_ink = d.ink(wire), d.ink(solid)
+    print(f"        ({wire_ink} inked pixels as a wireframe, {solid_ink} shaded)")
+    d.check("the shaded teapot is drawn, and fills more than its wireframe",
+            solid_ink > 5000 and solid_ink > wire_ink,
+            f"{solid_ink} inked shaded vs {wire_ink} as a wireframe")
+    grey_plain = greyish(solid)
+
+    got = d.key_until(K_T, "gfxdemo: textured on")
+    d.check_log("T textures the teapot", got, "gfxdemo: textured on")
+    time.sleep(0.6)
+    tex = d.canvas_image("teapot-textured")
+    grey_tex = greyish(tex)
+    print(f"        ({grey_plain} checker-light pixels untextured, {grey_tex} textured)")
+    d.check("the checker reaches the teapot's pixels",
+            grey_tex > 2000 and grey_plain < grey_tex // 10,
+            f"{grey_tex} checker-light pixels textured vs {grey_plain} plain")
+
+    d.check("the teapot turns", d.set_speed(4))
+    a = d.canvas_image("teapot-spin-a")
+    time.sleep(0.8)
+    b = d.canvas_image("teapot-spin-b")
+    d.check("the textured teapot is rotating", d.differing_fraction(a, b) > 0.01,
+            "the teapot did not move between frames")
+    d.check("the teapot stops at speed 0", d.set_speed(0))
+    time.sleep(0.6)
+    s1 = d.canvas_image("teapot-still-a")
+    time.sleep(0.8)
+    s2 = d.canvas_image("teapot-still-b")
+    still = d.differing_fraction(s1, s2)
+    d.check("at speed 0 the teapot is static", still < 0.001,
+            f"{still:.4%} of sampled pixels still changed at speed 0")
+
+
+def check_resize(d):
+    """Narrow: the toggles fold into View, the menu commits, Esc shuts
+    it. Minimum: the scenes and speed controls stay. Wide again: nothing
+    folded. And every size, the scene fits its canvas."""
+    home = d.size
+    full = d.lay.get("toolbar.shown")
+    d.check("at its opening size the whole toolbar shows", "toolbar.more" not in d.lay,
+            f"shown {full}, more {d.lay.get('toolbar.more')}")
+    wide_canvas = d.canvas
+
+    w, h = d.resize(440, 520)
+    d.check("the window takes a narrower size", w == 440, f"content {w}x{h}")
+    ok = d.wait_layout(lambda l: "toolbar.more" in l)
+    shown = d.lay.get("toolbar.shown", 99)
+    d.check("narrow, the toolbar folds its tail into a View button",
+            ok and KEEP_SHOWN <= shown < 12, f"shown {shown}, layout {d.lay}")
+    c = d.canvas
+    d.check("the canvas takes the new width and height",
+            c and c[2] == w - 20 and c[3] > wide_canvas[3],
+            f"canvas {c} in a {w}x{h} window, was {wide_canvas}")
+    time.sleep(0.5)
+    img = d.canvas_image("narrow")
+    e = d.edge_ink(img)
+    d.check("the scene scales to the narrow canvas", e == 0,
+            f"{e} inked pixels on the canvas's outermost 3 pixels")
+
+    # The View menu: its rows are the folded buttons, ticked and
+    # committed through the same item_flags and codes.
+    d.click_rect_until(d.lay["toolbar.more"], "")
+    ok = d.wait_layout(lambda l: l.get("toolbar.open") == 1 and ("row", 0) in l)
+    rows = sorted(k[1] for k in d.lay if isinstance(k, tuple) and k[0] == "row")
+    d.check("the View button opens a menu of the folded items",
+            ok and len(rows) == 12 - shown - (1 if shown <= 7 else 0),
+            f"rows {rows} with {shown} shown")
+    # Textured is the menu's LAST row whenever it has folded.
+    got = d.click_rect_until(d.lay[("row", rows[-1])], "gfxdemo: textured")
+    d.check_log("the menu's last row toggles the texture", got, "gfxdemo: textured off")
+    d.check("...and closes the menu",
+            d.wait_layout(lambda l: l.get("toolbar.open") == 0), f"{d.lay}")
+    d.click_rect_until(d.lay["toolbar.more"], "")
+    d.wait_layout(lambda l: l.get("toolbar.open") == 1)
+    d.key(K_ESC)
+    d.check("Esc shuts the View menu",
+            d.wait_layout(lambda l: l.get("toolbar.open") == 0), f"{d.lay}")
+
+    # The minimum: asked for far less, the window stops where the scenes
+    # and the speed controls still fit.
+    w, h = d.resize(200, 150)
+    d.check("the window refuses to go below its minimum", w > 200 and h > 150,
+            f"content {w}x{h}")
+    shown = d.lay.get("toolbar.shown", 0)
+    d.check("at the minimum the scenes and speed controls still show",
+            shown >= KEEP_SHOWN, f"shown {shown}")
+
+    w, h = d.resize(*home)
+    d.check("wide again, nothing is folded",
+            d.wait_layout(lambda l: "toolbar.more" not in l and l.get("toolbar.shown") == 12),
+            f"{d.lay}")
+    time.sleep(0.5)
+    e = d.edge_ink(d.canvas_image("wide-again"))
+    d.check("the scene scales back to the wide canvas", e == 0,
+            f"{e} inked pixels on the canvas's outermost 3 pixels")
 
 
 def run(d):
@@ -432,12 +566,11 @@ def run(d):
     pid = d.win.get("client_pid", 0)
     d.check("window is a ring-3 client, not kernel-space", pid > 0,
             f"client_pid was {pid} -- 0 means the WM drew it in ring 0")
+    d.check("the window is resizable", d.win.get("resizable") is True, f"{d.win}")
 
     d.park_cursor()
 
-    # 2. It animates -- and stops when told to. Neither half means much
-    #    alone; a frame that always changes could be a blinking caret,
-    #    and one that never changes could be an app that died.
+    # 2. It animates -- and stops when told to.
     a = d.canvas_image("spin-a")
     time.sleep(0.7)
     b = d.canvas_image("spin-b")
@@ -454,36 +587,37 @@ def run(d):
     d.check("at speed 0 the frame is static", still < 0.001,
             f"{still:.4%} of sampled pixels still changed at speed 0")
 
-    # 3. The AA toggle reaches the rasteriser. Held at speed 0 so the
-    #    only difference between the two frames is the toggle.
+    # 3. The AA toggle reaches the rasteriser.
     aa_on = d.distinct_colors(s2)
-    got = d.key(K_A)
+    got = d.key_until(K_A, "gfxdemo: aa off")
     d.check_log("pressing A turns anti-aliasing off", got, "gfxdemo: aa off")
     time.sleep(0.4)
     aliased = d.canvas_image("aliased")
     aa_off = d.distinct_colors(aliased)
-    # Report the numbers either way: a future session changing the
-    # palette wants to see how much margin this check actually has.
     print(f"        ({aa_on} distinct colours with AA, {aa_off} without)")
     d.check("anti-aliasing actually changes the rasteriser",
             aa_on > aa_off * 2,
             f"{aa_on} distinct colours with AA vs {aa_off} without -- "
             "a real AA path emits partial coverage, so many more")
-
-    got = d.key(K_A)
-    d.check_log("pressing A again turns it back on", got, "gfxdemo: aa on")
+    got = d.click_button_until(B_AA, "gfxdemo: aa on")
+    d.check_log("the Smooth edges button turns it back on", got, "gfxdemo: aa on")
 
     d.check("speed returns from the keyboard", d.set_speed(3))
 
     check_cube(d)
+    check_teapot(d)
 
-    # 5. The buttons work, and report through the same log grammar.
-    #    Clicked at the centre the APP reported, not at an offset derived
-    #    here -- see click_button().
-    got = d.click_button_until(0, "gfxdemo: speed 2")   # "Slower"
-    d.check_log("the Slower button changes speed", got, "gfxdemo: speed 2")
+    # The speed buttons, at the centre the APP reported.
+    got = d.click_button_until(B_FASTER, "gfxdemo: speed 1")
+    d.check_log("the + button changes speed", got, "gfxdemo: speed 1")
 
-    # 5. It exits cleanly when asked, rather than being killed.
+    try:
+        check_resize(d)
+    finally:
+        if d.size != d.home:
+            d.resize(*d.home)   # the size is remembered -- see the docstring
+
+    # It exits cleanly when asked, rather than being killed.
     got = d.key_until(K_Q, "gfxdemo: exiting")
     d.check_log("q exits the app", got, "gfxdemo: exiting")
     time.sleep(0.5)
@@ -496,7 +630,7 @@ def main():
     ap.add_argument("--in-gui", action="store_true",
                     help="the VM already shows the desktop; don't type `gui` first")
     ap.add_argument("--shot", metavar="DIR",
-                    help="also write shapes-demo.png / shapes-aliased.png here")
+                    help="also write shapes-demo.png here")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
     port_guard.resolve_instance(args, "gfxdemo_test")

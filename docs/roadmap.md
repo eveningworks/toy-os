@@ -618,6 +618,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Type-ahead in `uui_table`~~ DONE 2026-08-27 -- a DECLARED seek column, and one search shared with `uui_listbox`
 - [x] ~~A FOCUS INDICATOR for every widget that takes keys~~ DONE 2026-08-27 -- `uui_focus_ring()`, in the theme's accent; SEVEN, not six
 - [ ] Scale factor as a single input, so a HiDPI mode is a multiplier and not a rewrite
+- [x] ~~A toolbar that folds what does not fit into a menu~~ DONE 2026-09-30 -- `uui_toolbar.overflow`; Shapes' View menu first
+- [ ] The File Manager's command bar turns on `overflow` -- it runs off a narrow window today, beside a hand-made "See more"
 - [x] ~~Decide explicitly whether layout is immediate-mode~~ DONE 2026-08-18 -- it is; rects at open and on resize, drawing immediate
 
 ### Runtime font loading & text metrics

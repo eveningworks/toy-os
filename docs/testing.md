@@ -533,17 +533,19 @@ screenshot in the loop -- and when a click lands on the wrong thing, the
 log says which widget it actually hit. Read its top comment for the
 layout table and the log grammar before writing coordinates by hand.
 
-**Its ring-3 counterpart is "Shapes"** (`userland/gui/gfxdemo.c`, `run
-shapes` from a Terminal) -- **two scenes, switched with the `2D / 3D`
-button or `S`**: a rotating wireframe triangle and ellipse, or a
-perspective-projected wireframe CUBE with depth-shaded edges. Both are
-drawn with the shared geometry module, with the same one-line-per-state
-log grammar (`gfxdemo: aa off`, `gfxdemo: scene 3d`) and self-reported
-`gfxdemo: layout canvas <x> <y> <w> <h>` / `layout buttons <x> <y> <w>
-<h> <pitch> <count>` -- take button positions from the second of those
-rather than deriving them from the canvas rect. Use it as the known
-target when testing
-`kernel/lib/geom.c`, `uui_canvas`, or ring-3 drawing generally;
+**Its ring-3 counterpart is "Shapes"** (`userland/gui/demos/gfxdemo.c`,
+`run shapes` from a Terminal) -- **three scenes, from the toolbar, `1`
+`2` `3` or `S`**: a rotating triangle and ellipse, a perspective CUBE
+(depth-shaded wireframe, lit, or textured), and the Utah TEAPOT
+(`userland/shapes/teapot.c`, drawn through `ugfx_tri3d()` and a depth
+buffer). The window resizes, and its toolbar folds the view toggles
+into a View menu when narrow. The log grammar is one line per state
+(`gfxdemo: aa off`, `gfxdemo: scene teapot`), and the layout log
+carries `gfxdemo: layout canvas <x> <y> <w> <h>` plus the toolbar's
+`toolbar.button <i> ...`, `toolbar.more` and open-menu
+`toolbar.item 0 <i> ...` rects -- click those rather than deriving
+positions from the canvas rect. Use it as the known target when testing
+`kernel/lib/geom.c`, `uui_canvas`, `ugfx_tex.c` or ring-3 drawing generally;
 `tools/gfxdemo_test.py` drives it. **A ring-3 app's diagnostics go to
 `sys_eprint()` (stderr), not `sys_print()`** -- stderr reaches the
 kernel log and `dmesg`, where a test can read it, while a GUI client's

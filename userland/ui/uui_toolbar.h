@@ -35,6 +35,18 @@
 // swallow the click meant for the button beneath it. Without a surface
 // it falls back to `draw_overlay`, drawn in-window and clamped to the
 // window's edges, which is all it could ever do there.
+//
+// OVERFLOW, OPT-IN (`overflow = 1`): what does not fit collapses FROM
+// THE END into a menu behind one more button at the right edge --
+// QToolBar's extension button, the Windows 11 command bar's "See more",
+// KDE's ActionToolBar. The menu is a uui_menubar opened as a context
+// menu, its rows the hidden items' labels (or tips) and `accel`s, its
+// ticks and greying from the SAME item_flags, so an item cannot be
+// latched in the bar and unticked in the menu. A commit from the menu
+// parks its code exactly as a button's does. A folded item reports a
+// ZERO-WIDTH rect under the More button -- a UUI_TB_MENU item's popup,
+// anchored at it, opens there -- and a layout must hand the strip its real
+// width (UUI_FILL_W in a column) -- natural_size still asks for all of it.
 
 struct uui_toolbar_item {
     const char *icon; // icon_get() name; NULL makes this a SEPARATOR
@@ -45,6 +57,10 @@ struct uui_toolbar_item {
     // `code`, so a three-field initialiser still means what it did.
     const char *label;
     unsigned flags;   // UUI_TB_*
+    // The key that does the same, shown beside the row when the item
+    // has overflowed into the menu ("A", "Ctrl+R"). A label only, as
+    // uui_menu_item's is: the app binds the key.
+    const char *accel;
 };
 
 // A chevron after the label: the button opens a menu. The toolbar only
@@ -53,8 +69,15 @@ struct uui_toolbar_item {
 #define UUI_TB_MENU 0x01
 // This item and every one after it sit at the strip's RIGHT end.
 #define UUI_TB_END  0x02
+// A READOUT, not a button: `label` drawn as plain text, never hit, and
+// never offered in the overflow menu. The label may point at a buffer
+// the app rewrites ("speed 3"); the strip re-measures every draw.
+#define UUI_TB_TEXT 0x04
 
-#define UUI_TOOLBAR_SEP { 0, 0, 0, 0, 0 }
+#define UUI_TOOLBAR_SEP { 0, 0, 0, 0, 0, 0 }
+
+// Rows the overflow menu can hold. Past it, the last items are unreachable.
+#define UUI_TOOLBAR_MENU_MAX 24
 
 // ~500ms at the PIT's 100 Hz -- every desktop delays about this long.
 #define UUI_TOOLTIP_DELAY_TICKS 50
@@ -95,6 +118,22 @@ struct uui_toolbar {
     // Icons at the text's height and no strip border -- for a toolbar
     // living inside a status bar. Set after init.
     int compact;
+    // Latched items FILLED in the theme's accent with its text colour,
+    // rather than washed pressed-in -- for a strip whose latches are a
+    // selection to read at a glance (Shapes' scene and view toggles),
+    // where the grey wash barely differs from the bar. Set after init.
+    int accent_latch;
+
+    // --- overflow (see the header comment); set after init ---------------
+    int overflow;
+    // The button the hidden items collapse behind: "tb-more" with the
+    // tip "See more" by default. Hover and press report it as index
+    // `count`. An app may relabel it ("View").
+    struct uui_toolbar_item more;
+    // OWNED: the menu, and the rows it was opened with.
+    struct uui_menubar menu;
+    struct uui_menu_item menu_items[UUI_TOOLBAR_MENU_MAX];
+    int menu_press;   // the grab's press went to the open menu
 };
 
 void uui_toolbar_init(struct uui_toolbar *t,
@@ -111,9 +150,18 @@ static inline int uui_toolbar_height(const struct uui_toolbar *t) {
     return h;
 }
 
-// Item `i`'s rect, for tests and layout logs. Returns 0 past the end.
+// Item `i`'s rect, for tests and layout logs. Returns 0 past the end;
+// `i == count` is the overflow button, and 0 while it is not shown.
 int  uui_toolbar_item_rect(const struct uui_toolbar *t, int i,
                             int *x, int *y, int *w, int *h);
+
+// How many leading items are in the strip; the rest are in the menu.
+int  uui_toolbar_shown(const struct uui_toolbar *t);
+
+// Where an IN-WINDOW overflow menu may go -- the window's content rect;
+// uui_menubar_set_bounds()'s meaning. A menu granted its own popup
+// surface ignores it.
+void uui_toolbar_set_bounds(struct uui_toolbar *t, int x, int y, int w, int h);
 
 // Item index at (cx, cy), or -1. Separators and disabled items are -1.
 int  uui_toolbar_hit_item(const struct uui_toolbar *t, int cx, int cy);

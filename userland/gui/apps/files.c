@@ -210,34 +210,34 @@ static const struct uui_menu_item more_items[] = {
 // Back, Forward, Up and Refresh, beside the breadcrumb -- every browser's
 // and every file manager's place for them.
 static const struct uui_toolbar_item nav_items[] = {
-    { "tb-back",    "Back (Alt+Left)",     CMD_BACK, 0, 0 },
-    { "tb-forward", "Forward (Alt+Right)", CMD_FORWARD, 0, 0 },
-    { "tb-up",      "Up (Backspace)",      CMD_UP, 0, 0 },
-    { "tb-refresh", "Refresh (Ctrl+R)",    CMD_REFRESH, 0, 0 },
+    { "tb-back",    "Back (Alt+Left)",     CMD_BACK, 0, 0, 0 },
+    { "tb-forward", "Forward (Alt+Right)", CMD_FORWARD, 0, 0, 0 },
+    { "tb-up",      "Up (Backspace)",      CMD_UP, 0, 0, 0 },
+    { "tb-refresh", "Refresh (Ctrl+R)",    CMD_REFRESH, 0, 0, 0 },
 };
 
 // THE COMMAND BAR: the verbs with words where an icon alone would be a
 // guess. Same codes and the same item_flags as the menus, so a latched
 // button and a ticked menu row cannot disagree.
 static const struct uui_toolbar_item toolbar_items[] = {
-    { "tb-new",     "Create a folder or a file", CMD_MENU_NEW, "New", UUI_TB_MENU },
+    { "tb-new",     "Create a folder or a file", CMD_MENU_NEW, "New", UUI_TB_MENU, 0 },
     UUI_TOOLBAR_SEP,
-    { "tb-cut",     "Cut (Ctrl+X)",     CMD_CLIP_CUT,   0, 0 },
-    { "tb-copy",    "Copy (Ctrl+C)",    CMD_CLIP_COPY,  0, 0 },
-    { "tb-paste",   "Paste (Ctrl+V)",   CMD_CLIP_PASTE, 0, 0 },
-    { "tb-rename",  "Rename (F2)",      CMD_RENAME,     0, 0 },
-    { "tb-delete",  "Delete (Del)",     CMD_DELETE,     0, 0 },
+    { "tb-cut",     "Cut (Ctrl+X)",     CMD_CLIP_CUT,   0, 0, 0 },
+    { "tb-copy",    "Copy (Ctrl+C)",    CMD_CLIP_COPY,  0, 0, 0 },
+    { "tb-paste",   "Paste (Ctrl+V)",   CMD_CLIP_PASTE, 0, 0, 0 },
+    { "tb-rename",  "Rename (F2)",      CMD_RENAME,     0, 0, 0 },
+    { "tb-delete",  "Delete (Del)",     CMD_DELETE,     0, 0, 0 },
     UUI_TOOLBAR_SEP,
-    { "tb-sort",    0,                  CMD_MENU_SORT,  "Sort", UUI_TB_MENU },
-    { "tb-view",    0,                  CMD_MENU_VIEW,  "View", UUI_TB_MENU },
-    { "tb-more",    "See more",         CMD_MENU_MORE,  0, UUI_TB_MENU },
-    { "tb-pane",    "Show the details pane", CMD_VIEW_DPANE, "Details", UUI_TB_END },
+    { "tb-sort",    0,                  CMD_MENU_SORT,  "Sort", UUI_TB_MENU, 0 },
+    { "tb-view",    0,                  CMD_MENU_VIEW,  "View", UUI_TB_MENU, 0 },
+    { "tb-more",    "See more",         CMD_MENU_MORE,  0, UUI_TB_MENU, 0 },
+    { "tb-pane",    "Show the details pane", CMD_VIEW_DPANE, "Details", UUI_TB_END, 0 },
 };
 
 // The status bar's view switch, at its right end, as in Explorer.
 static const struct uui_toolbar_item viewbar_items[] = {
-    { "tb-details", "Details", CMD_VIEW_DETAILS, 0, 0 },
-    { "tb-icons",   "Icons",   CMD_VIEW_ICONS, 0, 0 },
+    { "tb-details", "Details", CMD_VIEW_DETAILS, 0, 0, 0 },
+    { "tb-icons",   "Icons",   CMD_VIEW_ICONS, 0, 0, 0 },
 };
 
 // THE CONTEXT MENU, on a secondary click inside a pane. A separate

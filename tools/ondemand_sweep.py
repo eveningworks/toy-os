@@ -89,6 +89,10 @@ TOOLS = [
     # an argument, so nothing here needs a guest.
     ("utween_host", "utween_hostcheck.py",     "the easing tween lands, is monotonic, eases out", False,
      None,                                                                                   False),
+    # Shapes' teapot mesh against a float evaluation, and the depth-
+    # tested triangle it is drawn with. Host-only, gcc alone.
+    ("teapot_host", "teapot_hostcheck.py",     "the teapot mesh and the depth-tested triangle", False,
+     None,                                                                                   False),
     # The two image harnesses, both host-only. The codec one runs the QOI
     # and PNG codecs BOTH WAYS against Pillow and zlib; the other is the
     # JPEG decoder against libjpeg.

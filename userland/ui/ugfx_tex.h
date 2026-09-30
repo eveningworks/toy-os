@@ -45,6 +45,10 @@ struct ugfx_texvert {
     int x, y;      // screen, surface-local
     int z;         // view depth, > 0
     int u, v;      // texel, in TEXELS not fractions -- 0..tw-1, 0..th-1
+    // 0..255, multiplying the colour at this corner; read ONLY by
+    // ugfx_tri3d(), which interpolates it across the face (Gouraud).
+    // ugfx_textured_tri() takes one shade for the whole face instead.
+    int shade;
 };
 
 // The source image: 32bpp, no padding, the same shape as a surface's
@@ -75,6 +79,39 @@ void ugfx_textured_tri(struct ugfx_surface *s, const struct ugfx_texture *tex,
 // remember which diagonal keeps the winding consistent.
 void ugfx_textured_quad(struct ugfx_surface *s, const struct ugfx_texture *tex,
                         const struct ugfx_texvert q[4], int shade);
+
+// --- depth-tested triangles, for a mesh that is not convex -----------
+//
+// A DEPTH BUFFER, as GL and D3D keep one: per pixel, how near the
+// nearest thing drawn there so far is. It holds 1/z rather than z,
+// because 1/z is what interpolates LINEARLY across the screen (the same
+// fact the texturing above rests on), so it needs no divide per pixel:
+// LARGER IS NEARER and a cleared buffer is 0, "nothing yet". W-buffers
+// and reverse-Z are the same idea on a GPU.
+//
+// It shadows a RECT of the surface -- a canvas, not the window -- and
+// drawing through it is clipped to that rect as well as to the clip.
+// The storage is the caller's (w * h entries), because its size follows
+// the rect and the toolkit allocates nothing.
+struct ugfx_zbuffer {
+    uint32_t *depth;
+    int x, y, w, h;   // surface-local
+};
+
+// Every entry to 0. Once per frame, before the first triangle.
+void ugfx_zbuffer_clear(struct ugfx_zbuffer *zb);
+
+// ONE triangle, as general as this file goes: each corner's `shade`
+// interpolated across the face (Gouraud), the colour taken from `tex`
+// perspective-correct or, with `tex` NULL, from `color`, and each pixel
+// kept only if it is nearer than what `zb` already holds -- `zb` NULL
+// skips the test and writes no depth, which is what a convex solid
+// drawn front faces only needs. Winding does not matter; culling is
+// the caller's, as the face list is (geom.h's rule).
+void ugfx_tri3d(struct ugfx_surface *s, struct ugfx_zbuffer *zb,
+                const struct ugfx_texture *tex, uint32_t color,
+                const struct ugfx_texvert *a, const struct ugfx_texvert *b,
+                const struct ugfx_texvert *c);
 
 // Fill `px` (w*h) with a two-colour checkerboard of `cell`-pixel squares.
 // Here rather than in an app because EVERY caller developing against

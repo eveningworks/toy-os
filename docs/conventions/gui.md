@@ -2597,12 +2597,30 @@ real scanout hardware does. Do not write a pixel assertion for one.
   a hover reaches there too, and only a click parks anything.
 
 - **A TOOLBAR BUTTON MAY CARRY A WORD AND A CHEVRON, AND THE APP OPENS
-  THE MENU.** `uui_toolbar_item` has `label` and `flags` after `code`, so
-  a three-field initialiser still means what it did: `UUI_TB_MENU` draws
+  THE MENU.** `uui_toolbar_item` has `label`, `flags` and `accel` after
+  `code`; `-Wextra` warns on a positional initialiser that leaves any of
+  them out, so every one names all six. `UUI_TB_MENU` draws
   a chevron (the app opens a popup under `uui_toolbar_item_rect()` when
   the code commits), `UUI_TB_END` packs that item and the rest against
   the right edge, and `compact` (on the toolbar) sizes a strip that
   lives inside a status bar.
+
+- **A TOOLBAR THAT CAN RUN OUT OF ROOM SETS `overflow`, AND WHAT DOES
+  NOT FIT FOLDS INTO ITS MENU FROM THE END.** QToolBar's extension
+  button, Windows 11's "See more": with `overflow = 1` the trailing
+  items the width cannot hold leave the strip for a `uui_menubar`
+  opened as a context menu under one more button (`t->more`, "See
+  more" unless the app relabels it). The rows are the items' labels (or
+  tips) and `accel`s, ticked and greyed by the SAME `item_flags`, and a
+  row commits its code exactly as the button would -- a `UUI_TB_MENU`
+  item's popup, anchored at its folded zero-width rect, opens under
+  More. So ORDER THE ARRAY
+  BY WHAT MAY FOLD FIRST -- it is last -- and set the window's
+  `min_w` from `uui_toolbar_shown()` so the items that must stay, do
+  (Shapes measures it in `on_size`, with its readout at its widest). A
+  folded item's rect has zero width; a `UUI_TB_TEXT` readout never folds into the menu, so keep it
+  ahead of what can. In a layout, give the strip `UUI_FILL_W`:
+  `natural_size` still asks for every item.
 
 - **A DETAILS VIEW DROPS COLUMNS FROM THE END, AND A COLUMN'S INDEX IS
   ITS SORT KEY.** `uui_fileview`'s columns are Name, Size, Modified,

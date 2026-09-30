@@ -92,8 +92,9 @@ matters:
    a client window has `app == NULL` by construction. So no ring-3
    window can ever be resizable -- not by decision, but because
    "resizable" is a field on a struct that only kernel-space apps have.
-   `gui windows --json` reports `"resizable": false` for Shapes today
-   for exactly this reason. Any behaviour added the same way (always on
+   `gui windows --json` reported `"resizable": false` for Shapes then
+   for exactly this reason. (Shapes is resizable now, through
+   `UAPP_RESIZABLE`.) Any behaviour added the same way (always on
    top, no chrome, fixed aspect, a minimum size) inherits the same
    dead end.
 

@@ -108,9 +108,9 @@ static int g_hist_n, g_hist_pos = -1;
 static int g_here = NO_TARGET;
 
 static const struct uui_toolbar_item TOOLBAR[] = {
-    { "tb-back",    "Back (Alt+Left)",     CMD_BACK, 0, 0 },
-    { "tb-forward", "Forward (Alt+Right)", CMD_FORWARD, 0, 0 },
-    { "tb-home",    "Home (Alt+Home)",     CMD_HOME, 0, 0 },
+    { "tb-back",    "Back (Alt+Left)",     CMD_BACK, 0, 0, 0 },
+    { "tb-forward", "Forward (Alt+Right)", CMD_FORWARD, 0, 0, 0 },
+    { "tb-home",    "Home (Alt+Home)",     CMD_HOME, 0, 0, 0 },
 };
 static struct uui_toolbar g_toolbar;
 
