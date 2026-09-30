@@ -3313,19 +3313,17 @@ an orderly close — what a client needs and no more.
   it until the stream reaches it. Ending the stream when the FIN arrives
   would report end-of-file in front of data still on its way — a
   truncated download that reads as a short file rather than an error.
-- **THE RECEIVE BUFFER IS NOT RE-ENTRANT, AND BOTH ENDS HOLD A
-  PREEMPTION GUARD.** `tcp_recv()` copies out and advances `rcv_head`,
-  and `tcp_input()` places segments by that head, both in SYSCALL context — and a
-  ring-3 process is preemptible inside a syscall while `net_poll()`
-  (which runs `tcp_input()`) is reached from `scheduler_idle()` and from
-  a dozen syscalls. Preempted between the copy-out and the head's
-  advance, a segment lands by the old head. **The
-  symptom is silent and far away**: one MSS of a downloaded file holds
-  the stream's own bytes from a few hundred bytes earlier, the length is
-  exact, and nothing reports anything — measured at 5 corrupt runs in 14
-  on a 16 MB fetch before the guard, 0 in 12 after. Same guard, same
-  reason, as `vfs.c`'s `FS_OP()`; it needs BOTH ends, because either
-  side being preempted mid-write is enough.
+- **EVERY TCP ENTRY POINT RUNS UNDER THE PREEMPTION GUARD** --
+  `tcp_send`/`recv`/`close`/`connect` from a syscall, `tcp_input`/`tick`
+  from another process's `net_poll()`. They share the rings and the
+  connection blocks, and `tcp_tick()` FREES an orphan's rings and zeroes
+  its block: interleaved with a half-finished call that is a
+  use-after-free, not a torn count. It was first found as torn DATA --
+  5 corrupt runs in 14 on a 16 MB fetch when only the receive copy was
+  guarded -- and then as a divide-by-zero panic, 1 run in 10, when a
+  zeroed block's `cwnd` reached congestion avoidance. The public
+  functions are thin wrappers over `*_locked()` bodies; a new entry
+  point is a new wrapper. Nothing under it may sleep.
 - **SEQUENCE COMPARISON IS MODULAR.** `seq_lt()` is a signed difference,
   never a plain `<`: the space wraps, and getting this wrong works
   perfectly until a connection crosses 2^32.
@@ -3346,12 +3344,21 @@ an orderly close — what a client needs and no more.
   reason `errno.h` gained both.
 - **A CONNECTED STREAM IS A STREAM: `read()` and `write()` work on it**,
   as POSIX guarantees, so code written against descriptors can be handed
-  a socket. A DATAGRAM socket still refuses both, because a read that
+  a socket. A `write()` takes what fits in the send ring and, when the
+  ring is FULL, parks until an ACK arrives -- POSIX's blocking write;
+  `O_NONBLOCK` gets `EAGAIN` instead.
+- **THE SENDER IS BOUND BY min(peer window, cwnd)** (RFC 5681): ten
+  segments to start, slow start then congestion avoidance, fast
+  retransmit on the third duplicate ACK with NewReno's partial-ACK
+  resend, and a timeout collapses cwnd to one segment and goes back to
+  `snd_una`. A send ring bigger than 4 KiB without this would put a
+  whole window on a path that cannot carry it. A DATAGRAM socket still refuses both, because a read that
   cannot say who sent it is not a datagram interface.
 - **NO NAGLE, NO DELAYED ACK, NO SACK, NO TIMESTAMPS, AND NO RTT
   ESTIMATE** — a fixed 200 ms floor with exponential backoff. Window
-  scaling is the one throughput feature built, because without it no
-  window can exceed 64 KiB.
+  scaling and congestion control are what is built: without the first
+  no window exceeds 64 KiB, and without the second a big window is a
+  flood.
 
 ## A WAIT CAN CARRY A DEADLINE, AND READINESS IS NOT DELIVERY.
 

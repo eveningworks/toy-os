@@ -7420,6 +7420,55 @@ not meant to: a range past the list is refused and re-acked, which is
 the same answer the stack gave to everything out of order before this
 existed.
 
+## TCP throughput: window scaling, NewReno, fixed rings, one guard
+
+**The problem.** A connection could never have more than 8 KiB in
+flight towards it (the receive buffer) or 4 KiB away from it (the send
+buffer), and the sender put one segment on the wire per ACK. Over a
+path with any latency that was the ceiling -- about 3 Mbit/s at 20 ms
+-- whatever the link, which is what a speed test would have measured.
+
+**What real systems do.** Linux negotiates window scaling (RFC 7323)
+by default and autotunes each connection's buffers up to several MiB
+(`tcp_rmem`/`tcp_wmem`); its congestion control is CUBIC, with an
+initial window of ten segments (RFC 6928) and SACK-based recovery.
+Windows autotunes the receive window the same way and has used CUBIC
+since Windows 10 1709. Both hold a per-socket lock that the receive
+softirq/DPC and the system call contend for.
+
+**What toy-os does, and where it deliberately stops short.**
+
+- **Window scaling, as RFC 7323 says** -- offered on every SYN,
+  answered only when offered, both shifts or neither. Nothing to
+  differ on.
+- **Fixed rings, not autotuning**: 256 KiB receive, 64 KiB send, per
+  connection, halved until the heap (whose runs are physically
+  contiguous) can supply them. Autotuning is a feedback loop on the
+  measured RTT, and this stack has no RTT estimate; 256 KiB covers
+  ~100 Mbit/s at 20 ms, which is past what the drivers here have been
+  measured to move.
+- **NewReno (RFC 5681 + 6582), not CUBIC.** CUBIC's advantage is
+  regrowing a very large window quickly after a loss on a long fat
+  path; it needs a clock-driven cubic function and an RTT estimate,
+  and it matters above the window sizes these rings allow. NewReno is
+  the RFC baseline every stack must interoperate with and is a few
+  dozen lines. Without SACK, recovery fixes one hole per round trip
+  (the partial-ACK rule); a burst loss costs several RTTs, not a
+  timeout.
+- **A timeout goes back to `snd_una`** (go-back-N): with no SACK there
+  is no telling which later segments arrived, and resending only the
+  first one left the rest to their own timeouts.
+- **One guard over every entry point, not a socket lock.** One core, so
+  the only concurrency is the scheduler; the preemption guard is the
+  whole lock and cannot deadlock. A sleeping mutex would add waits
+  where there are none. The cost: a send filling a large window runs
+  with preemption off for as many segments as the window admits.
+
+**A blocking stream write came with it.** A full send ring used to
+return `EAGAIN` to a blocking descriptor, which a program had to spin
+on; it parks now until an ACK arrives, which is POSIX's blocking write
+and what an upload loop needs.
+
 ## The TCP receive buffer is guarded by disabling preemption, not by a lock
 
 `tcp_recv()` compacts the receive buffer with a memmove; `tcp_input()`

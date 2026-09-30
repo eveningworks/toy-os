@@ -23,6 +23,7 @@
 #include "ktest.h"
 #include "kfmt.h"   // klog_printf, for the line the fallback prints
 #include "clocksource.h" // a reassembly timeout, aged by hand
+#include "scheduler.h"   // the RTO test holds the preemption guard
 
 // Frames live here rather than on the stack: the ring-0 frame budget is
 // 1 KiB and these are close enough to it to be worth not testing.
@@ -40,7 +41,7 @@ static int g_sent_count;
 static int (*g_real_transmit)(struct net_device *, const void *, uint32_t);
 
 // Every frame of a burst, for a datagram that leaves in fragments.
-#define TXLOG_MAX 4
+#define TXLOG_MAX 16
 static uint8_t g_txlog[TXLOG_MAX][NET_FRAME_MAX];
 static uint32_t g_txlog_len[TXLOG_MAX];
 
@@ -1032,6 +1033,12 @@ static void finish_close(struct net_device *dev, struct fake_peer *p) {
     uint32_t len = tcp_frame(dev, 8080, p->our_port, 0x11 /* ACK|FIN */,
                              p->peer_seq, p->our_seq + 1, 0, 0);
     eth_input(dev, g_frame, len);
+    // AND A VALID RESET, so a test that failed half way -- data never
+    // acknowledged, so no FIN was ever sent -- does not leave its block
+    // lingering and exhaust the pool for every test after it. A
+    // connection already gone ignores it.
+    len = tcp_frame(dev, 8080, p->our_port, 0x04 /* RST */, p->peer_seq + 1, 0, 0, 0);
+    eth_input(dev, g_frame, len);
     tcp_tick();
 }
 
@@ -1312,14 +1319,13 @@ KTEST("tcp", "window scaling is offered, and honoured both ways when the peer of
     uint32_t seg = sent_tcp_payload();
     capture_end(dev);
 
+    ack_all_sent(dev, &p, seg, 1000);      // so the close is clean
+    finish_close(dev, &p);
     KTEST_ASSERT(ours != 0xFF);            // the SYN offered a shift
     KTEST_ASSERT(room > 65535);            // and the window uses it
     KTEST_ASSERT(shrank + (1u << sh) > 1460 && shrank < 1460 + (1u << sh));
     KTEST_ASSERT_EQ(sent, 1000);
     KTEST_ASSERT_EQ(seg, 400);
-
-    ack_all_sent(dev, &p, seg, 1000);      // so the close is clean
-    finish_close(dev, &p);
 }
 
 KTEST("tcp", "without the peer's window scale, nothing is shifted either way") {
@@ -1346,11 +1352,10 @@ KTEST("tcp", "without the peer's window scale, nothing is shifted either way") {
     uint32_t seg = sent_tcp_payload();
     capture_end(dev);
 
-    KTEST_ASSERT_EQ(win, 65535);           // the most an unscaled field says
-    KTEST_ASSERT_EQ(seg, 100);             // their 100 means 100
-
     ack_all_sent(dev, &p, seg, 1000);
     finish_close(dev, &p);
+    KTEST_ASSERT_EQ(win, 65535);           // the most an unscaled field says
+    KTEST_ASSERT_EQ(seg, 100);             // their 100 means 100
 }
 
 KTEST("tcp", "the receive ring wraps, with a held range straddling the wrap") {
@@ -1400,12 +1405,198 @@ KTEST("tcp", "the receive ring wraps, with a held range straddling the wrap") {
     for (int i = 0; i < got; i++)
         if (buf[i] != 'A' + ((at + (uint32_t)i) % 26)) { bad = i + 1; break; }
 
+    p.peer_seq += at + 2800;
+    finish_close(dev, &p);
     KTEST_ASSERT_EQ(held, at);             // nothing past the hole acked
     KTEST_ASSERT_EQ(filled, at + 2800);
     KTEST_ASSERT_EQ(got, 2800);
     KTEST_ASSERT_EQ(bad, 0);
-    p.peer_seq += at + 2800;
+}
+
+// Sequence number and payload of captured frame `f`, for the sender tests.
+static uint32_t txlog_seq(int f) {
+    const uint8_t *ip = g_txlog[f] + ETH_HDR_LEN;
+    const uint8_t *t = ip + (uint32_t)(ip[0] & 0x0F) * 4;
+    return net_ntohl(*(const uint32_t *)(t + 4));
+}
+
+// An ACK from the peer for `upto` bytes of ours, advertising `window`.
+static void peer_ack(struct net_device *dev, struct fake_peer *p, uint32_t upto,
+                     uint16_t window) {
+    uint32_t len = tcp_frame_full(dev, 8080, p->our_port, 0x10, p->peer_seq,
+                                  p->our_seq + upto, 0, 0, 0, 0, 0, window);
+    eth_input(dev, g_frame, len);
+}
+
+// 20000 bytes of a pattern that names its own offset, for the send tests.
+static uint8_t g_upload[70000];
+static void upload_pattern(void) {
+    for (uint32_t i = 0; i < sizeof g_upload; i++) g_upload[i] = (uint8_t)('a' + (i % 23));
+}
+
+KTEST("tcp", "a send fills the initial window, not one segment per ACK") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+    upload_pattern();
+
+    // The fake SYN+ACK sent no MSS, so segments are RFC 1122's 536 and
+    // the initial window is ten of them; the peer's 32 KiB is no limit.
+    peer_ack(dev, &p, 0, 32768);
+    capture_begin(dev);
+    int took = net_sock_stream_send(p.sock, g_upload, 20000);
+    int burst = g_sent_count;
+    // One ACK for all ten grows the window by ONE segment (slow start
+    // counts ACKs, capped at a segment each), so eleven go next.
+    g_sent_count = 0;
+    peer_ack(dev, &p, 5360, 32768);
+    int next = 0;
+    for (int f = 0; f < g_sent_count && f < TXLOG_MAX; f++) {
+        uint32_t n = tcp_payload_of(g_txlog[f], g_txlog_len[f]);
+        if (n) next++;
+    }
+    capture_end(dev);
+
+    ack_all_sent(dev, &p, 5360 + 11 * 536, 20000);
     finish_close(dev, &p);
+    KTEST_ASSERT_EQ(took, 20000);
+    KTEST_ASSERT_EQ(burst, 10);
+    KTEST_ASSERT_EQ(next, 11);
+}
+
+KTEST("tcp", "the third duplicate ACK resends the first unacked segment, and not before") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+    const uint32_t base = p.our_seq;
+    upload_pattern();
+
+    peer_ack(dev, &p, 0, 32768);
+    capture_begin(dev);
+    net_sock_stream_send(p.sock, g_upload, 5360);    // exactly the initial window
+    // Segment one is "lost": the peer acknowledges nothing, three times.
+    g_sent_count = 0;
+    peer_ack(dev, &p, 0, 32768);
+    peer_ack(dev, &p, 0, 32768);
+    int before_third = g_sent_count;
+    peer_ack(dev, &p, 0, 32768);
+    int after_third = g_sent_count;
+    uint32_t seq = after_third ? txlog_seq(0) : 0;
+    uint32_t len = after_third ? tcp_payload_of(g_txlog[0], g_txlog_len[0]) : 0;
+    capture_end(dev);
+
+    ack_all_sent(dev, &p, 5360, 5360);
+    finish_close(dev, &p);
+    KTEST_ASSERT_EQ(before_third, 0);
+    KTEST_ASSERT_EQ(after_third, 1);
+    KTEST_ASSERT_EQ(seq, base);          // snd_una, not anything later
+    KTEST_ASSERT_EQ(len, 536);
+}
+
+KTEST("tcp", "a partial ACK in recovery resends the next hole at once") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+    const uint32_t base = p.our_seq;
+    upload_pattern();
+
+    peer_ack(dev, &p, 0, 32768);
+    capture_begin(dev);
+    net_sock_stream_send(p.sock, g_upload, 5360);
+    for (int i = 0; i < 3; i++) peer_ack(dev, &p, 0, 32768);   // into recovery
+    // Segments one and three were lost: the resent first one fills the
+    // first hole, and the ACK stops at the second.
+    g_sent_count = 0;
+    peer_ack(dev, &p, 2 * 536, 32768);
+    uint32_t seq = g_sent_count ? txlog_seq(0) : 0;
+    capture_end(dev);
+
+    ack_all_sent(dev, &p, 5360, 5360);
+    finish_close(dev, &p);
+    KTEST_ASSERT(seq == base + 2 * 536);  // the hole, without a timeout
+}
+
+KTEST("tcp", "a retransmission timeout goes back to snd_una with one segment of window") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+    const uint32_t base = p.our_seq;
+    upload_pattern();
+
+    peer_ack(dev, &p, 0, 32768);
+    capture_begin(dev);
+    net_sock_stream_send(p.sock, g_upload, 5360);
+    // Nothing is acknowledged. Past the 200 ms floor the timer fires --
+    // CAPTURED throughout, or the retransmission reaches SLIRP, and with
+    // preemption off, or another process's socket call runs tcp_tick()
+    // first and this one finds nothing due.
+    scheduler_preempt_disable();
+    uint64_t until = clocksource_now_ns() + 300000000ull;
+    while (clocksource_now_ns() < until) {}
+    g_sent_count = 0;
+    tcp_tick();
+    scheduler_preempt_enable();
+    int resent = g_sent_count;
+    uint32_t seq = resent ? txlog_seq(0) : 0;
+    // One ACK for it doubles the window to two.
+    g_sent_count = 0;
+    peer_ack(dev, &p, 536, 32768);
+    int next = g_sent_count;
+    uint32_t next_seq = next ? txlog_seq(0) : 0;
+    capture_end(dev);
+
+    ack_all_sent(dev, &p, 3 * 536, 5360);
+    finish_close(dev, &p);
+    KTEST_ASSERT_EQ(resent, 1);
+    KTEST_ASSERT_EQ(seq, base);
+    KTEST_ASSERT_EQ(next, 2);
+    KTEST_ASSERT_EQ(next_seq, base + 536);   // sent again: go-back-N
+}
+
+KTEST("tcp", "the send ring wraps, and every byte leaves where it belongs") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    struct fake_peer p;
+    if (!establish(dev, &p, ctx)) return;
+    upload_pattern();
+
+    // A peer window of four segments keeps every burst inside the
+    // capture log; 70000 bytes crosses a 64 KiB ring's end.
+    peer_ack(dev, &p, 0, 4 * 536);
+    uint32_t queued = 0, acked = 0;
+    int bad = 0, rounds = 0;
+    while (acked < sizeof g_upload && rounds++ < 400) {
+        capture_begin(dev);
+        if (queued < sizeof g_upload) {
+            int n = net_sock_stream_send(p.sock, g_upload + queued,
+                                         (uint32_t)sizeof g_upload - queued);
+            if (n > 0) queued += (uint32_t)n;
+        }
+        peer_ack(dev, &p, acked, 4 * 536);
+        uint32_t got = 0;
+        for (int f = 0; f < g_sent_count && f < TXLOG_MAX; f++) {
+            uint32_t n = tcp_payload_of(g_txlog[f], g_txlog_len[f]);
+            const uint8_t *ip = g_txlog[f] + ETH_HDR_LEN;
+            const uint8_t *t = ip + (uint32_t)(ip[0] & 0x0F) * 4;
+            const uint8_t *pl = t + (uint32_t)(t[12] >> 4) * 4;
+            uint32_t off = txlog_seq(f) - p.our_seq;
+            for (uint32_t i = 0; i < n && !bad; i++)
+                if (off + i >= sizeof g_upload || pl[i] != g_upload[off + i]) bad = (int)(off + i) + 1;
+            if (off + n > acked + got) got = off + n - acked;
+        }
+        capture_end(dev);
+        acked += got;
+    }
+    peer_ack(dev, &p, acked, 8192);
+    p.our_seq += acked;
+
+    finish_close(dev, &p);
+    KTEST_ASSERT_EQ(bad, 0);
+    KTEST_ASSERT_EQ(acked, (uint32_t)sizeof g_upload);
 }
 
 KTEST("tcp", "a corrupted segment is dropped entirely") {

@@ -76,9 +76,11 @@ static int socket_fd_read(struct syscall_ctx *c, struct open_file *f,
 
 static int socket_fd_write(struct syscall_ctx *c, struct open_file *f,
                            uint64_t buf_ptr, uint64_t len) {
-    // The write half of the same rule. It does NOT park: the send buffer
-    // takes what it can and reports the count, and a short write is a
-    // stream's own convention -- libsys loops.
+    // The write half of the same rule. The send buffer takes what it can
+    // and reports the count -- a short write is a stream's own
+    // convention, and libsys loops. Only a FULL buffer parks, as POSIX's
+    // blocking write does: an ACK arriving is a frame, and net_rx()
+    // wakes the channel; the re-run write then finds room.
     if (!net_sock_is_stream(f->socket.idx)) {
         klog_write(KLOG_ERR "syscall: write() rejected -- a datagram socket needs sendto()\n");
         c->regs[14] = (uint64_t)(int64_t)-EBADF;
@@ -95,6 +97,10 @@ static int socket_fd_write(struct syscall_ctx *c, struct open_file *f,
     int rc = net_sock_stream_send(f->socket.idx, kbuf, (uint32_t)n);
     kfree(kbuf);
     net_poll();   // put it on the wire before returning
+    if (rc == -EAGAIN && !f->nonblock &&
+        scheduler_block_current_until(c->regs, net_wait_chan(), SCHED_WAIT_NET,
+                                      net_wait_deadline(0)))
+        return 1;   // parked: re-run when a frame (an ACK) arrives
     c->regs[14] = (uint64_t)(int64_t)rc;
     return 0;
 }

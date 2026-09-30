@@ -14,6 +14,14 @@
 // ~25 Mbit/s and 20 ms. A connection with no scaling still works; it
 // just never advertises more than 64 KiB.
 //
+// THE SENDER IS LIMITED BY THE LESSER OF THE PEER'S WINDOW AND ITS OWN
+// CONGESTION WINDOW (RFC 5681): slow start from ten segments (Linux's
+// initial window, RFC 6928), congestion avoidance past ssthresh, fast
+// retransmit on the third duplicate ACK with NewReno's partial-ACK rule
+// (RFC 6582), and a timeout collapses to one segment and goes back to
+// snd_una. A bigger send buffer without this would put a window's worth
+// of segments on a path that cannot carry them.
+//
 // WHAT THIS DELIBERATELY IS NOT. No SACK, so a hole costs the peer a
 // retransmit timeout or three duplicate ACKs to notice; no timestamps,
 // no RTT estimate, no Nagle (every write goes out at once) and no
@@ -39,7 +47,12 @@
 // client and is not enough for a server that must hold a listener and
 // the connection it is serving while a second waits in the backlog.
 #define TCP_MAX_CONNS 8
-#define TCP_SND_BUF   4096
+// The send ring, allocated and halved the same way as the receive one.
+#define TCP_SND_BUF   (64u * 1024u)
+#define TCP_SND_MIN   (4u * 1024u)
+_Static_assert((TCP_SND_BUF & (TCP_SND_BUF - 1)) == 0, "the ring wraps with a mask");
+#define TCP_INIT_CWND_SEGS 10   // RFC 6928, Linux's default
+#define TCP_DUPACK_THRESH  3    // RFC 5681 3.2
 // The receive ring: allocated when a connection opens, HALVED until the
 // heap can supply it (its runs are physically contiguous), and a power
 // of two so an offset wraps with a mask. 256 KiB is a round trip at
@@ -103,8 +116,15 @@ struct tcp_conn {
     uint32_t snd_wnd;      // what the peer said it will take
     uint32_t snd_mss;      // the peer's MSS: its option, or RFC 1122's 536
 
-    uint8_t snd[TCP_SND_BUF];
+    uint8_t *snd;          // a ring of snd_cap bytes; NULL until the connection opens
+    uint32_t snd_cap;
+    uint32_t snd_head;     // where the byte at snd_una sits in `snd`
     uint32_t snd_len;      // unsent + unacked bytes, starting at snd_una
+    // Congestion control (RFC 5681). `recover` is snd_nxt when fast
+    // recovery began; an ACK past it ends recovery (RFC 6582).
+    uint32_t cwnd, ssthresh, recover;
+    uint8_t dupacks;
+    uint8_t in_recovery;
     uint8_t *rcv;          // a ring of rcv_cap bytes; NULL until the connection opens
     uint32_t rcv_cap;
     uint32_t rcv_head;     // where the oldest unread byte sits in `rcv`
@@ -222,15 +242,30 @@ static void rcv_take(struct tcp_conn *c, uint8_t *out, uint32_t n) {
     c->rcv_len -= n;
 }
 
-// The ring, as large as the heap will give. 0 when not even the floor
-// fits, which refuses the connection rather than open one that cannot
-// receive.
-static int rcv_alloc(struct tcp_conn *c) {
-    for (uint32_t cap = TCP_RCV_BUF; cap >= TCP_RCV_MIN; cap /= 2) {
-        c->rcv = kmalloc(cap);
-        if (c->rcv) { c->rcv_cap = cap; return 1; }
-    }
-    return 0;
+// Both rings, each as large as the heap will give. 0 when not even the
+// floors fit, which refuses the connection rather than open one that
+// cannot move data.
+static int bufs_alloc(struct tcp_conn *c) {
+    for (uint32_t cap = TCP_RCV_BUF; !c->rcv && cap >= TCP_RCV_MIN; cap /= 2)
+        if ((c->rcv = kmalloc(cap))) c->rcv_cap = cap;
+    for (uint32_t cap = TCP_SND_BUF; !c->snd && cap >= TCP_SND_MIN; cap /= 2)
+        if ((c->snd = kmalloc(cap))) c->snd_cap = cap;
+    return c->rcv && c->snd;
+}
+
+// The send ring, by offset from snd_una.
+static void snd_put(struct tcp_conn *c, uint32_t off, const uint8_t *p, uint32_t n) {
+    uint32_t at = (c->snd_head + off) & (c->snd_cap - 1);
+    uint32_t first = c->snd_cap - at < n ? c->snd_cap - at : n;
+    k_memcpy(c->snd + at, p, first);
+    if (n > first) k_memcpy(c->snd, p + first, n - first);
+}
+
+static void snd_peek(const struct tcp_conn *c, uint32_t off, uint8_t *out, uint32_t n) {
+    uint32_t at = (c->snd_head + off) & (c->snd_cap - 1);
+    uint32_t first = c->snd_cap - at < n ? c->snd_cap - at : n;
+    k_memcpy(out, c->snd + at, first);
+    if (n > first) k_memcpy(out + first, c->snd, n - first);
 }
 
 // --- out-of-order ranges ----------------------------------------------
@@ -303,10 +338,11 @@ static uint32_t local_ip_for(uint32_t dst) {
     return d ? d->ip : 0;
 }
 
-// One segment onto the wire. `data`/`data_len` may be empty, which is
-// what an ACK, a SYN and a FIN all are.
+// One segment onto the wire, carrying `data_len` bytes of the send ring
+// from offset `off` past snd_una. Empty is what an ACK, a SYN and a FIN
+// all are.
 static int send_segment(struct tcp_conn *c, uint8_t flags, uint32_t seq,
-                        const uint8_t *data, uint32_t data_len) {
+                        uint32_t off, uint32_t data_len) {
     if (data_len > TCP_MSS) data_len = TCP_MSS;
 
     struct tcp_header *h = (struct tcp_header *)g_seg;
@@ -345,7 +381,7 @@ static int send_segment(struct tcp_conn *c, uint8_t flags, uint32_t seq,
     }
     h->checksum = 0;
     h->urgent = 0;
-    if (data_len) k_memcpy(g_seg + sizeof *h + optlen, data, data_len);
+    if (data_len) snd_peek(c, off, g_seg + sizeof *h + optlen, data_len);
 
     uint32_t total = (uint32_t)sizeof *h + optlen + data_len;
     uint32_t src = local_ip_for(c->remote_ip);
@@ -375,23 +411,51 @@ static void arm_timer(struct tcp_conn *c) {
     }
 }
 
-// Everything a connection can send right now: what the peer's window
-// allows, capped at one segment. Returns the bytes put on the wire.
+// The connection just reached ESTABLISHED: RFC 5681's starting point.
+static void cc_init(struct tcp_conn *c) {
+    c->cwnd = TCP_INIT_CWND_SEGS * c->snd_mss;
+    c->ssthresh = 0xFFFFFFFFu;       // "arbitrarily high" until a loss says otherwise
+    c->dupacks = 0;
+    c->in_recovery = 0;
+}
+
+// A loss: half of what was in flight, never below two segments.
+static void cc_halve(struct tcp_conn *c) {
+    uint32_t flight = c->snd_nxt - c->snd_una;
+    uint32_t half = flight / 2;
+    c->ssthresh = half > 2 * c->snd_mss ? half : 2 * c->snd_mss;
+}
+
+// Everything a connection can send right now: as many segments as the
+// lesser of the peer's window and cwnd allows. Returns the bytes put on
+// the wire.
 static uint32_t send_pending(struct tcp_conn *c) {
     if (c->state != TCP_STATE_ESTABLISHED && c->state != TCP_STATE_CLOSE_WAIT) return 0;
 
-    uint32_t in_flight = c->snd_nxt - c->snd_una;
-    if (in_flight >= c->snd_len) return 0;      // everything is out already
-    uint32_t ready = c->snd_len - in_flight;
-    uint32_t window = c->snd_wnd > in_flight ? c->snd_wnd - in_flight : 0;
-    if (!window) return 0;                       // the peer is full; the timer probes
-    uint32_t n = ready < window ? ready : window;
-    if (n > c->snd_mss) n = c->snd_mss;
+    uint32_t limit = c->snd_wnd < c->cwnd ? c->snd_wnd : c->cwnd;
+    uint32_t sent = 0;
+    for (;;) {
+        uint32_t in_flight = c->snd_nxt - c->snd_una;
+        if (in_flight >= c->snd_len) break;          // everything is out already
+        if (in_flight >= limit) break;               // the peer, or the path, is full
+        uint32_t n = c->snd_len - in_flight;
+        if (n > limit - in_flight) n = limit - in_flight;
+        if (n > c->snd_mss) n = c->snd_mss;
+        if (send_segment(c, TH_ACK | TH_PSH, c->snd_nxt, in_flight, n) < 0) break;
+        c->snd_nxt += n;
+        sent += n;
+    }
+    if (sent) arm_timer(c);
+    return sent;
+}
 
-    if (send_segment(c, TH_ACK | TH_PSH, c->snd_nxt, c->snd + in_flight, n) < 0) return 0;
-    c->snd_nxt += n;
-    arm_timer(c);
-    return n;
+// Resend the segment at snd_una: fast retransmit, and NewReno's answer
+// to a partial ACK.
+static void resend_first(struct tcp_conn *c) {
+    uint32_t n = c->snd_len < c->snd_mss ? c->snd_len : c->snd_mss;
+    uint32_t outstanding = c->snd_nxt - c->snd_una;
+    if (n > outstanding) n = outstanding;
+    if (n) send_segment(c, TH_ACK | TH_PSH, c->snd_una, 0, n);
 }
 
 // The caller closed and the data is out: FIN goes after it, never
@@ -415,7 +479,7 @@ static void maybe_send_fin(struct tcp_conn *c) {
 
 // --- the public half --------------------------------------------------
 
-int tcp_open(uint16_t local_port) {
+static int tcp_open_locked(uint16_t local_port) {
     for (int i = 0; i < TCP_MAX_CONNS; i++) {
         if (g_conns[i].in_use) continue;
         k_memset(&g_conns[i], 0, sizeof g_conns[i]);
@@ -427,9 +491,10 @@ int tcp_open(uint16_t local_port) {
     return -ENOSPC;
 }
 
-void tcp_release(int idx) {
+static void tcp_release_locked(int idx) {
     if (idx < 0 || idx >= TCP_MAX_CONNS) return;
     if (g_conns[idx].rcv) kfree(g_conns[idx].rcv);
+    if (g_conns[idx].snd) kfree(g_conns[idx].snd);
     k_memset(&g_conns[idx], 0, sizeof g_conns[idx]);
 }
 
@@ -454,12 +519,12 @@ int tcp_error(int idx) {
     return 0;
 }
 
-int tcp_connect(int idx, uint32_t ip, uint16_t port) {
+static int tcp_connect_locked(int idx, uint32_t ip, uint16_t port) {
     if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
     struct tcp_conn *c = &g_conns[idx];
     if (c->state != TCP_STATE_CLOSED) return -EBUSY;
     if (!local_ip_for(ip)) return -ENODEV;
-    if (!c->rcv && !rcv_alloc(c)) return -ENOMEM;
+    if (!bufs_alloc(c)) return -ENOMEM;
 
     // The initial sequence number is not random here, and that is worth
     // being explicit about: RFC 6528 wants it unpredictable to make
@@ -486,7 +551,7 @@ int tcp_connect(int idx, uint32_t ip, uint16_t port) {
     return 0;
 }
 
-int tcp_listen(int idx) {
+static int tcp_listen_locked(int idx) {
     if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
     struct tcp_conn *c = &g_conns[idx];
     if (c->state != TCP_STATE_CLOSED) return -EBUSY;
@@ -498,7 +563,7 @@ int tcp_listen(int idx) {
 // The first finished connection this listener produced, or -EAGAIN.
 // The caller wraps it in a socket of its own; from here on the two
 // blocks are unrelated.
-int tcp_accept(int idx) {
+static int tcp_accept_locked(int idx) {
     if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
     if (g_conns[idx].state != TCP_STATE_LISTEN) return -EINVAL;
 
@@ -513,7 +578,7 @@ int tcp_accept(int idx) {
     return -EAGAIN;
 }
 
-int tcp_send(int idx, const void *buf, uint32_t len) {
+static int tcp_send_locked(int idx, const void *buf, uint32_t len) {
     if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
     struct tcp_conn *c = &g_conns[idx];
     if (c->refused) return -ECONNREFUSED;
@@ -522,32 +587,26 @@ int tcp_send(int idx, const void *buf, uint32_t len) {
         return -ENOTCONN;
     if (c->fin_queued) return -EPIPE;
 
-    uint32_t room = TCP_SND_BUF - c->snd_len;
+    uint32_t room = c->snd_cap - c->snd_len;
     if (!room) return -EAGAIN;          // the buffer is full; drain it first
     uint32_t n = len < room ? len : room;
-    k_memcpy(c->snd + c->snd_len, buf, n);
+    snd_put(c, c->snd_len, buf, n);
     c->snd_len += n;
     send_pending(c);
     return (int)n;
 }
 
-int tcp_recv(int idx, void *buf, uint32_t cap) {
+static int tcp_recv_locked(int idx, void *buf, uint32_t cap) {
     if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
     struct tcp_conn *c = &g_conns[idx];
 
     if (c->rcv_len) {
-        // THE RECEIVE BUFFER IS NOT RE-ENTRANT, and this is the same
-        // guard `vfs.c` holds for the same reason. A ring-3 process is
-        // preemptible inside a syscall, and `net_poll()` -- which runs
-        // `tcp_input()` into THIS buffer -- is reached from
-        // scheduler_idle() and from a dozen syscalls. Preempted between
-        // the copy-out and the head's advance, a reader resumes against
-        // a segment that was placed by the old head: one MSS of the
-        // stream lands at the wrong offset, and nothing reports it.
-        scheduler_preempt_disable();
+        // THE RECEIVE BUFFER IS NOT RE-ENTRANT: a tcp_input() landing
+        // between the copy-out and the head's advance places its segment
+        // by the old head. The entry-point guard (end of file) is what
+        // prevents it.
         uint32_t n = c->rcv_len < cap ? c->rcv_len : cap;
         rcv_take(c, buf, n);
-        scheduler_preempt_enable();
         // The window just opened. Telling the peer costs one segment
         // and is what stops a transfer stalling at a closed window.
         send_segment(c, TH_ACK, c->snd_nxt, 0, 0);
@@ -560,11 +619,11 @@ int tcp_recv(int idx, void *buf, uint32_t cap) {
     return -EAGAIN;                     // nothing yet -- the caller waits
 }
 
-void tcp_close(int idx) {
+static void tcp_close_locked(int idx) {
     if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return;
     struct tcp_conn *c = &g_conns[idx];
     if (c->state == TCP_STATE_SYN_SENT || c->state == TCP_STATE_CLOSED) {
-        tcp_release(idx);
+        tcp_release_locked(idx);
         return;
     }
     // THE BLOCK OUTLIVES THE SOCKET, and something has to reclaim it.
@@ -598,7 +657,7 @@ uint64_t tcp_next_deadline(void) {
 
 // Retransmission, run from net_poll(). Everything here is what the
 // process that woke up owes its connection.
-void tcp_tick(void) {
+static void tcp_tick_locked(void) {
     uint64_t now = clocksource_now_ns();
     for (int i = 0; i < TCP_MAX_CONNS; i++) {
         struct tcp_conn *c = &g_conns[i];
@@ -607,7 +666,7 @@ void tcp_tick(void) {
         // An abandoned connection is reclaimed as soon as it is really
         // closed, or when its linger expires -- whichever comes first.
         if (c->orphan && (c->state == TCP_STATE_CLOSED || now >= c->linger_at_ns)) {
-            tcp_release(i);
+            tcp_release_locked(i);
             continue;
         }
 
@@ -620,7 +679,7 @@ void tcp_tick(void) {
         }
 
         if (++c->retries > TCP_MAX_RETRIES) {
-            if (c->pending) { tcp_release(i); continue; }   // see backlog_depth()
+            if (c->pending) { tcp_release_locked(i); continue; }   // see backlog_depth()
             c->reset = 1;                  // gave up: report it like a reset
             c->state = TCP_STATE_CLOSED;
             c->rto_at_ns = 0;
@@ -640,14 +699,26 @@ void tcp_tick(void) {
             send_segment(c, TH_SYN | TH_ACK, c->iss, 0, 0);
             break;
         case TCP_STATE_ESTABLISHED:
-        case TCP_STATE_CLOSE_WAIT: {
-            uint32_t in_flight = c->snd_nxt - c->snd_una;
-            if (in_flight) send_segment(c, TH_ACK | TH_PSH, c->snd_una, c->snd, in_flight);
+        case TCP_STATE_CLOSE_WAIT:
+            // A TIMEOUT IS THE STRONG LOSS SIGNAL: one segment of window,
+            // and everything after snd_una is sent again as the window
+            // regrows (go-back-N -- without SACK there is no telling
+            // which of the rest arrived).
+            if (c->snd_nxt != c->snd_una) {
+                cc_halve(c);
+                c->cwnd = c->snd_mss;
+                c->in_recovery = 0;
+                c->dupacks = 0;
+                c->snd_nxt = c->snd_una;
+                send_pending(c);
+            }
             break;
-        }
         case TCP_STATE_FIN_WAIT_1:
         case TCP_STATE_LAST_ACK:
-            send_segment(c, TH_ACK | TH_FIN, c->snd_nxt - 1, 0, 0);
+            // Data still unacknowledged ahead of the FIN goes first, or
+            // a lost last segment would be skipped past forever.
+            if (c->snd_len) resend_first(c);
+            else send_segment(c, TH_ACK | TH_FIN, c->snd_nxt - 1, 0, 0);
             break;
         default:
             break;
@@ -714,11 +785,11 @@ static void passive_open(struct tcp_conn *lis, uint32_t src_ip, uint16_t src_por
         // it is a drop rather than a RST.
         return;
     }
-    int idx = tcp_open(lis->local_port);
+    int idx = tcp_open_locked(lis->local_port);
     if (idx < 0) return;    // no block: the same silence, for the same reason
 
     struct tcp_conn *c = &g_conns[idx];
-    if (!rcv_alloc(c)) { tcp_release(idx); return; }   // silence, as above
+    if (!bufs_alloc(c)) { tcp_release_locked(idx); return; }  // silence, as above
     settle_wscale(c, peer_wscale(opt, optlen));
     c->pending = 1;
     c->remote_ip = src_ip;
@@ -737,8 +808,8 @@ static void passive_open(struct tcp_conn *lis, uint32_t src_ip, uint16_t src_por
     arm_timer(c);
 }
 
-int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
-              const uint8_t *pkt, uint32_t len) {
+static int tcp_input_locked(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
+                            const uint8_t *pkt, uint32_t len) {
     (void)dev;
     if (len < sizeof(struct tcp_header)) return 1;
     if (tcp_checksum(src_ip, dst_ip, pkt, len) != 0) return 1;
@@ -786,7 +857,7 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
         c->reset = 1;
         c->state = TCP_STATE_CLOSED;
         c->rto_at_ns = 0;
-        if (c->pending) tcp_release((int)(c - g_conns));   // see backlog_depth()
+        if (c->pending) tcp_release_locked((int)(c - g_conns));   // see backlog_depth()
         return 1;
     }
 
@@ -801,6 +872,7 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
         c->snd_mss = peer_mss(pkt + sizeof h, doff - (uint32_t)sizeof h);
         settle_wscale(c, peer_wscale(pkt + sizeof h, doff - (uint32_t)sizeof h));
         c->state = TCP_STATE_ESTABLISHED;
+        cc_init(c);
         c->rto_at_ns = 0;
         c->rto_ms = TCP_RTO_MIN_MS;
         c->retries = 0;
@@ -817,6 +889,7 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
             c->snd_una = ack;
             c->snd_wnd = (uint32_t)net_ntohs(h.window) << c->snd_wscale;
             c->state = TCP_STATE_ESTABLISHED;
+            cc_init(c);
             c->rto_at_ns = 0;
             c->retries = 0;
             c->rto_ms = TCP_RTO_MIN_MS;
@@ -826,29 +899,65 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
     }
 
     if (h.flags & TH_ACK) {
-        if (seq_le(c->snd_una, ack) && seq_le(ack, c->snd_nxt)) {
+        uint32_t new_wnd = (uint32_t)net_ntohs(h.window) << c->snd_wscale;
+        if (seq_lt(c->snd_una, ack) && seq_le(ack, c->snd_nxt)) {
             uint32_t acked = ack - c->snd_una;
             // A FIN occupies a sequence number but no buffer byte, so
             // only the part covering real data may be consumed.
             uint32_t data_acked = acked;
             if (data_acked > c->snd_len) data_acked = c->snd_len;
-            if (data_acked) {
-                for (uint32_t i = 0; i < c->snd_len - data_acked; i++)
-                    c->snd[i] = c->snd[data_acked + i];
-                c->snd_len -= data_acked;
-            }
+            c->snd_head = (c->snd_head + data_acked) & (c->snd_cap - 1);
+            c->snd_len -= data_acked;
             c->snd_una = ack;
             c->retries = 0;
             c->rto_ms = TCP_RTO_MIN_MS;
             c->rto_at_ns = 0;
+            c->dupacks = 0;
+
+            if (c->in_recovery && seq_lt(ack, c->recover)) {
+                // PARTIAL ACK (RFC 6582): the next hole is at the new
+                // snd_una. Resend it now rather than wait out a timer,
+                // and deflate by what was acknowledged.
+                resend_first(c);
+                c->cwnd = c->cwnd > acked ? c->cwnd - acked : c->snd_mss;
+                c->cwnd += c->snd_mss;
+            } else if (c->in_recovery) {
+                c->in_recovery = 0;              // full ACK: recovery is over
+                c->cwnd = c->ssthresh;
+            } else if (c->cwnd < c->ssthresh) {
+                // Slow start, counted in bytes acknowledged and capped
+                // at one segment per ACK (RFC 3465 with L = 1).
+                c->cwnd += acked < c->snd_mss ? acked : c->snd_mss;
+            } else {
+                // Congestion avoidance: about one segment per window.
+                uint32_t inc = c->snd_mss * c->snd_mss / c->cwnd;
+                c->cwnd += inc ? inc : 1;
+            }
             arm_timer(c);
 
             if (c->state == TCP_STATE_FIN_WAIT_1 && c->snd_una == c->snd_nxt)
                 c->state = c->peer_fin ? TCP_STATE_CLOSED : TCP_STATE_FIN_WAIT_2;
             else if (c->state == TCP_STATE_LAST_ACK && c->snd_una == c->snd_nxt)
                 c->state = TCP_STATE_CLOSED;
+        } else if (ack == c->snd_una && c->snd_nxt != c->snd_una && !data_len &&
+                   !(h.flags & (TH_SYN | TH_FIN)) && new_wnd == c->snd_wnd &&
+                   (c->state == TCP_STATE_ESTABLISHED || c->state == TCP_STATE_CLOSE_WAIT)) {
+            // A DUPLICATE ACK by RFC 5681's definition: nothing new
+            // acknowledged, no data, no window change, and something
+            // outstanding. The third starts fast retransmit; each one
+            // after it means a segment left the network, so the window
+            // inflates by one.
+            if (++c->dupacks == TCP_DUPACK_THRESH && !c->in_recovery) {
+                cc_halve(c);
+                c->recover = c->snd_nxt;
+                c->in_recovery = 1;
+                resend_first(c);
+                c->cwnd = c->ssthresh + TCP_DUPACK_THRESH * c->snd_mss;
+            } else if (c->in_recovery) {
+                c->cwnd += c->snd_mss;
+            }
         }
-        c->snd_wnd = (uint32_t)net_ntohs(h.window) << c->snd_wscale;
+        c->snd_wnd = new_wnd;
     }
 
     // The window is the free space in `rcv`, so a byte the window admits
@@ -857,9 +966,6 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
     // their range remembered until the hole ahead of them fills.
     int took = 0;
     uint32_t fin_seq = seq + data_len;      // where a FIN in this segment sits
-    // The other half of tcp_recv()'s guard: this writes into the same
-    // buffer a reader compacts, and it is equally preemptible.
-    scheduler_preempt_disable();
     if (data_len) {
         const uint8_t *p = data;
         uint32_t s = seq, n = data_len;
@@ -893,7 +999,6 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
         c->fin_seq = fin_seq;
         c->fin_seen = 1;
     }
-    scheduler_preempt_enable();
 
     if (c->fin_seen && c->rcv_nxt == c->fin_seq) {
         c->fin_seen = 0;
@@ -910,4 +1015,81 @@ int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
     send_pending(c);
     maybe_send_fin(c);
     return 1;
+}
+
+// --- the entry points ----------------------------------------------------
+//
+// EVERY ONE RUNS UNDER THE PREEMPTION GUARD. A syscall (send, recv,
+// close) is preemptible, and another process's net_poll() runs
+// tcp_input() and tcp_tick() on the same blocks -- which move the ring
+// heads, free an orphan's rings and zero its block. Interleaved with a
+// half-finished call that is a use-after-free, not merely a torn byte
+// count. One core, so the guard is the whole lock; nothing here sleeps.
+
+int tcp_open(uint16_t local_port) {
+    scheduler_preempt_disable();
+    int r = tcp_open_locked(local_port);
+    scheduler_preempt_enable();
+    return r;
+}
+
+void tcp_release(int idx) {
+    scheduler_preempt_disable();
+    tcp_release_locked(idx);
+    scheduler_preempt_enable();
+}
+
+int tcp_connect(int idx, uint32_t ip, uint16_t port) {
+    scheduler_preempt_disable();
+    int r = tcp_connect_locked(idx, ip, port);
+    scheduler_preempt_enable();
+    return r;
+}
+
+int tcp_listen(int idx) {
+    scheduler_preempt_disable();
+    int r = tcp_listen_locked(idx);
+    scheduler_preempt_enable();
+    return r;
+}
+
+int tcp_accept(int idx) {
+    scheduler_preempt_disable();
+    int r = tcp_accept_locked(idx);
+    scheduler_preempt_enable();
+    return r;
+}
+
+int tcp_send(int idx, const void *buf, uint32_t len) {
+    scheduler_preempt_disable();
+    int r = tcp_send_locked(idx, buf, len);
+    scheduler_preempt_enable();
+    return r;
+}
+
+int tcp_recv(int idx, void *buf, uint32_t cap) {
+    scheduler_preempt_disable();
+    int r = tcp_recv_locked(idx, buf, cap);
+    scheduler_preempt_enable();
+    return r;
+}
+
+void tcp_close(int idx) {
+    scheduler_preempt_disable();
+    tcp_close_locked(idx);
+    scheduler_preempt_enable();
+}
+
+void tcp_tick(void) {
+    scheduler_preempt_disable();
+    tcp_tick_locked();
+    scheduler_preempt_enable();
+}
+
+int tcp_input(struct net_device *dev, uint32_t src_ip, uint32_t dst_ip,
+              const uint8_t *pkt, uint32_t len) {
+    scheduler_preempt_disable();
+    int r = tcp_input_locked(dev, src_ip, dst_ip, pkt, len);
+    scheduler_preempt_enable();
+    return r;
 }
