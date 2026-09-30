@@ -7084,3 +7084,11 @@ does not show it. Cause not established -- whether `ready` is declared
 before the debug console's shell is taking commands, or the first
 command is consumed by something else, was not measured.
 
+## A HALTED BULK ENDPOINT IS "RECOVERED" INTO A DEGRADED DEVICE
+
+**Repro (2026-09-30, the Lenovo, RTL8156B at 2.5 Gb/s, kernel 7c492c58):** `speedtest -s 31122` over the USB NIC. The upload phase logged `usb: slot 5 ep 0x2 recovered from halt` five times within 10 ms at 206 s; `speedtest` then blocked in both directions, and the dev host got no ARP reply from .112. Read through the kernel debugger on the onboard r8169 (`kdebug_bridge.py` + `toy-dmesg`), then after reboot with `log -p 1`. At 544 s the adapter dropped off the bus (`link SS.Inactive`, the entry above it in docs/bugs.md), came back as a fresh device, and worked -- the maintainer's own speedtest ran fine on that copy.
+
+**The code:** `xhci_deferred_work()`'s halted-endpoint loop, after `recover_halted()`: `for (b < EP_DEPTH) ep_post(e, b)` posts the interrupt-IN buffer pool for any endpoint, and the in-flight bulk TRBs (named by `buf_of_trb_phys[]`) are dropped with no `bulk_done(ctx, phys, 0, 0)`. The driver-side contract that makes reporting them enough: `rtl_usb.c`'s `tx_done` frees the slot on any result, and its receive completion re-posts the buffer.
+
+**Open:** why the OUT endpoint halted. Candidates: the adapter itself under sustained transmit; `rtl_transmit()` calling `xhci_service()` when its ring is full (added 2026-09-30 for 64 KiB datagrams); the completion code that halted it (the log does not print it -- worth adding). The ASUS's RTL8153 has not shown it.
+

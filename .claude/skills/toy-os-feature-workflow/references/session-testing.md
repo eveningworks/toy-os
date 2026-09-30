@@ -2868,3 +2868,41 @@ to fix code-review findings. Each tool boots a fresh copy when its turn
 comes, so anything that makes the image stale mid-run stops every later
 tool -- correctly, and at the cost of the whole run. Build for the
 laptop, and land review fixes, before or after a suite, never during it.
+
+**2026-09-30 (fragmentation, TCP window scaling and congestion control,
+speedtest, one-shot boot entries). Seven ways a check lied or nearly
+did.**
+
+- **A KTEST THAT RUNS LONG LEAKS ITS FAKE PEER TO SLIRP, AND SLIRP ANSWERS
+  WITH A VALID RST.** `net_test.c`'s fixtures address a made-up peer on
+  QEMU's user network; a test that streams 256 KiB runs long enough for
+  the real receive path to deliver SLIRP's reset -- whose sequence is
+  exactly `rcv_nxt`, so it is BELIEVED -- and the connection is
+  `ECONNRESET` mid-test. Capture the transmit for the whole of a long
+  test, not just around the frame you read.
+- **A FAILED KTEST LEAKS ITS CONNECTION BLOCK AND FAILS EVERY LATER TCP
+  TEST WITH `connect rc -28`.** A positive control that breaks the sender
+  hides the other controls behind pool exhaustion. `finish_close()` now
+  ends with a valid RST, and new tests clean up BEFORE they assert -- a
+  control reddens only the test it aims at.
+- **A THRESHOLD CAN PASS THE BUG IT GUARDS.** "The scaled window exceeds
+  65535" stayed green with the window unscaled, which over-promises the
+  ring eightfold. Assert the DELTA instead (queue 1460 bytes, the window
+  shrinks by 1460) -- the positive control is what found this.
+- **A THROUGHPUT NUMBER IN A VM IS OFTEN THE SINK'S.** `wget -O /tmp/x`
+  measured `/tmp`'s ramfs (2 MB/s, falling as the file grew);
+  `speedtest --url`, which discards, measured 207 Mbit/s on the same
+  path. And SLIRP on loopback has no latency, so a window change shows
+  ~20% there and nothing about a real path.
+- **THE DEBUG CONSOLE'S SHELL HAS NO REDIRECTION**, so `echo x > /etc/f`
+  through `vm.py exec` writes NOTHING and says nothing -- and the next
+  line of a test acted on a file that did not exist (it rebooted the
+  guest). Put files in with `vm.py put` and `cp`, and read them back.
+- **QMP `click_at` MISSED A 19-PIXEL MENU ROW** (the pointer is
+  accelerated); a context menu that "closed without acting" was never
+  clicked. `DebugConsole.click()` at `ctxmenu_row(label)` is exact.
+- **GRUB'S MODULE DIRECTORY SATISFIES A MISSING CORE MODULE.** `disk.img`
+  carries `/boot/grub/i386-pc/`, an installed laptop does not, so a VM
+  test of anything GRUB loads must DELETE the module first or it passes
+  for a reason no laptop has (`boot_entry_test.py` removes
+  `loadenv.mod`; with loadenv also out of the core, it goes red).

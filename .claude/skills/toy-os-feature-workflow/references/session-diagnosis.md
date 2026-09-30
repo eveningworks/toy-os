@@ -1502,3 +1502,43 @@ for "is this new?"** -- `git worktree add --detach <dir> HEAD`, patch
 the probe in, build there, measure the same way. It settled "the
 busy-bit poll is slower now" in one run, where arguing from the code
 could not.
+
+## A laptop that stops answering has a kernel log you can still read (2026-09-30)
+
+The Lenovo stopped answering telnet and ping halfway through a
+`speedtest` upload over its RTL8156B. It was not dead: **the kernel's
+network debugger lives on a DIFFERENT NIC** (the onboard r8169, which
+`kdebug=net` owns), so `kdebug_bridge.py --target 192.168.200.104:50000
+--key <from its grub.cfg>` and `gdb -x tools/gdb/toyos.py
+build/kernel.bin` with `toy-dmesg 60` and `info threads` read the log of
+a machine nothing else could reach: five `ep 0x2 recovered from halt`
+lines at 206 s, and nothing sent after. After the maintainer's reboot,
+**`log -p 1` gave the previous boot's WHOLE log** -- including what
+happened after the debugger looked.
+
+**And the first diagnosis was wrong in its strongest word.** I reported
+the adapter "permanently deaf"; the maintainer then ran speedtest on it
+before rebooting and it worked. `log -p 1` showed why both were true:
+at 544 s the adapter dropped off the bus by itself (the known
+SS.Inactive fault), came back as a FRESH device, and that clean copy
+worked. Between 206 and 544 s it was degraded (no ARP answers here),
+not dead. **A state you infer from silence is a hypothesis; say
+"degraded" until something has read the device.** The bug itself is
+real -- `xhci.c`'s halt recovery treats a bulk endpoint like an
+interrupt-IN one (docs/bugs.md).
+
+**Two quieter findings from the same day, both "a queue that drops
+without saying so":** the e1000's 32-descriptor receive ring lost
+every frame past 32 of a 45-fragment burst from SLIRP with the drop
+counter at ZERO (the loss is inside the emulated NIC), which showed up
+only as "exactly 32 frames received" whatever the size; and a
+`net_tx()` wait for a full USB transmit ring never saw a slot free,
+because completions arrive by interrupt and nothing reaped them while
+it spun -- the driver now calls `xhci_service()` before saying full.
+When a count sticks at a round number, look for the ring that size.
+
+**And a divide-by-zero panic 1 ktest run in 10 was a preemption race,
+not arithmetic**: another process's `net_poll()` released (zeroed) a
+TCP block mid-`tcp_input()`, and the zeroed `cwnd` reached congestion
+avoidance. `flake_hunt.py ktest -n 10 --keep` caught it; the fix is the
+guard over every TCP entry point.

@@ -2411,3 +2411,33 @@ split to 4 KiB).**
   Plain TCG has no invariant TSC, so without the ACPI PM timer the
   default guest would have run every test on the periodic fallback and
   passed without exercising the one-shot path at all.
+
+## One day, three stack layers, and a boot-loader feature (2026-09-30)
+
+What landed, each with its decisions entry: IPv4 fragmentation and
+reassembly (a 64 KiB buffer and a bitmap per datagram, four at once --
+docs/decisions/kernel.md); TCP window scaling with a heap receive ring,
+then RFC 5681 congestion control with a heap send ring and ONE
+preemption guard over every TCP entry point ("TCP throughput");
+`/bin/speedtest` against speedtest.net's HTTP test servers; and
+`reboot --entry`, grub-reboot's grubenv mechanism (docs/decisions/
+build.md).
+
+**The maintainer's measurements decided more than mine did.** KVM with
+virtio-net did 907 Mbit/s, the Lenovo's onboard r8169 660, the USB
+adapters ~230 -- which moved the throughput gap from "the stack" to
+"the USB receive path" in two data points. Ask for the run on the
+machine you cannot drive, and when you have a way to boot a different
+entry (`remote.py reboot --entry`), use it to swap the variable.
+
+**Each layer exposed the next queue.** Fragmentation made 45-frame
+bursts possible and found the e1000 ring and the USB transmit reap;
+window scaling made 1 MiB in flight possible and found the 64-frame
+software receive queue (1753 drops a test -> 43 at 256). Budget for
+the queue behind the one you enlarge.
+
+**A feature that edits a machine's boot path ships with its own
+refusals.** `reboot --entry` on a machine whose GRUB lacks `loadenv`
+would write the choice and boot the default -- a silent no-op -- so it
+refuses by name, and the laptops' hand-kept `grub.cfg`s got the stanza
+by hand with a `.bak` beside them (flash never touches grub.cfg).
