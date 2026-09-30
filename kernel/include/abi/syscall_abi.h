@@ -2674,6 +2674,13 @@ struct usb_control_msg {
                              // May move for an unrelated change (a hash
                              // collision), never stays for a real one.
                              // Never 0; -errno for a bad path.
+#define SYS_RENAME2 139      // RDI = old path, RSI = new path, RDX =
+                             // RENAME2_* flags. 0 flags is SYS_RENAME.
+                             // RENAME2_REPLACE replaces an existing FILE
+                             // (POSIX rename(2)); -ENOTSUP where the
+                             // filesystem cannot do it atomically, and
+                             // -EISDIR for a directory on either side.
+#define RENAME2_REPLACE 0x1
 
 struct usb_isoch_msg {
     uint32_t slot;

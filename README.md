@@ -54,7 +54,10 @@ that turned out wrong. It boots on real hardware and under QEMU.
   and a RAM filesystem, on MBR/GPT partitions the kernel reads and writes,
   over IDE, AHCI, NVMe or virtio-blk -- including disks with 4096-byte
   sectors.
-  It **installs itself** onto another disk and that disk boots.
+  It **installs itself** onto another disk and that disk boots, and it
+  **updates itself** from a build server -- `update`, or the System
+  Update window with its progress bar -- replacing only the files that
+  changed, and finishing a library or kernel update at the next boot.
 - **Networking** — ARP, IPv4 (with fragmentation), ICMP, UDP and client-side TCP over six NIC
   drivers, with DHCP, DNS, `ping`, `wget`, `speedtest` and an `httpd` that serves this
   machine's own filesystem.

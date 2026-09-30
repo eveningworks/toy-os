@@ -3467,3 +3467,39 @@ reaches and a lock drop can interleave. `docs/smp-design.md`'s rule --
 no module-level buffer in anything a syscall reaches -- is the general
 form, and this was one instance of it.
 
+
+## A replacing rename is a SECOND call, and the default still refuses
+
+**The problem.** `fs_rename()` refused an existing destination, and
+TFS3's own comment deferred "an atomic replace" as a separate decision.
+An updater needs exactly that -- write `x.upd`, then swap it in with no
+instant where `x` is missing -- and so does every portable program that
+saves a file the POSIX way (Doom's savegames, mbedTLS's key store call
+`rename()` expecting it to replace, and on toy-os it silently failed).
+
+**What real systems do.** POSIX `rename(2)` replaces an existing file
+atomically; Linux added `renameat2(RENAME_NOREPLACE)` as the opt-out.
+Windows is the reverse: `MoveFileEx` refuses unless given
+`MOVEFILE_REPLACE_EXISTING`.
+
+**What toy-os does.** Windows' default with POSIX's libc. The VFS keeps
+`fs_rename()` refusing and adds `fs_rename_replace()`; the syscall layer
+keeps `SYS_RENAME` refusing and adds `SYS_RENAME2(flags)` with
+`RENAME2_REPLACE`; libc's `rename()` asks for the replace, while `mv`
+and the File Manager (through `ufileop`) keep `sys_rename()`. The
+refusal stays the DEFAULT because the callers that must not clobber are
+interactive, and a file manager that silently destroyed a file the user
+forgot about is worse than one that asks; the programs that want
+replacement say so through the call POSIX gave them.
+
+**Atomic or refused, never emulated.** TFS3 does the swap as one journal
+transaction (repoint the destination's dirent, remove the source's,
+free the displaced inode after the commit -- clear-after-persist, as
+delete does), ramfs under the mount lock; both declare `FS_CAP_REPLACE`.
+FAT32 has no journal and returns `-ENOTSUP` instead of doing a
+delete-then-rename behind the caller's back: a caller that accepts that
+window -- `/bin/update` rotating `/boot`'s kernel to `kernel.old` --
+does the two steps itself, in the order that keeps a bootable kernel
+reachable. A directory on either side is refused, and so is a
+cross-parent replace on a v1 journal (five credits, like a directory
+move).

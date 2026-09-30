@@ -143,6 +143,7 @@ TOOLS = [
     ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
     ("devmgr", "devmgr_test.py", "the device tree and its icons, disable/enable through the dialog"),
+    ("sysupdate", "sysupdate_test.py", "System Update: finds, shows and installs a change, by pixel and by sum"),
     ("help", "help_test.py", "Help: contents, links, history and full-text search"),
     ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
     ("osk", "osk_test.py", "the on-screen keyboard types into the focused client"),

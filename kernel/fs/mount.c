@@ -393,6 +393,7 @@ static int caps_are_honest(const struct fs_ops *fs) {
     // fs_has(); a real op behind an undeclared cap is a feature callers
     // can never find. display.c's rule, verbatim.
     if (((fs->caps & FS_CAP_HARDLINKS) != 0) != (fs->link != 0)) return 0;
+    if (((fs->caps & FS_CAP_REPLACE) != 0) != (fs->rename_replace != 0)) return 0;
     // alloc and free are one fact stated twice.
     int st_ops = (fs->state_alloc != 0) + (fs->state_free != 0);
     if (st_ops == 1) return 0;

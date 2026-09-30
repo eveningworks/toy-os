@@ -876,7 +876,7 @@ run on, not by order.
 - [ ] **NEXT** The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN
 - [x] ~~USB Ethernet (CDC-ECM), and the BULK transfer type it needed~~ DONE 2026-08-31 -- `net_usb_ecm.c`; RX untested, see `docs/bugs.md`
 - [x] ~~Remote access: a shell and file transfer over the network~~ DONE 2026-08-31 -- `telnetd`, `tftpd`, `tools/remote.py`
-- [ ] `/bin/update`: a machine updates itself from an HTTP manifest, so nothing has to listen -- see `docs/update-design.md`
+- [x] ~~`/bin/update`: a machine updates itself from an HTTP manifest~~ DONE 2026-09-30 -- plus System Update and `update_server.py`
 - [x] ~~Refresh the PCI/USB id databases from the internet~~ DONE 2026-09-07 -- `/bin/hwdata`; `lspci --update` hands off to it
 - [x] ~~Per-volume state in filesystem backends~~ done -- `struct t3_state`/`fat32_state`/`ramfs_state`, switched at `FS_OP`
 - [x] ~~A self-hosted installer: partition, format, copy the running system, write the bootloader~~ done -- `/bin/install`
@@ -1214,7 +1214,7 @@ this to be better?".
 - [ ] Nothing automated covers stdio's flush-before-a-blocking-read -- see `docs/roadmap-details.md`
 - [ ] The ESP's own layout puts the kernel at `/boot/boot/kernel.bin`, because one `grub.cfg` serves the ISO and the disk
 - [ ] `/boot` is mounted read-only and there is no `/etc/fstab` to say otherwise -- the policy is `mount_boot_auto()`
-- [ ] toy-os cannot update its own kernel in place: `SYS_INSTALL_BOOT` rewrites a bootloader, nothing verifies a new kernel image
+- [ ] `/bin/update` installs a kernel checked only by crc32, with `kernel.old` as the undo: nothing tests that the image boots
 - [ ] A FAT32 `disk_usage()` scans the whole FAT the first time anything asks, inside the VFS preemption guard
 - [ ] `blk_part_create()`'s pool needs one thunk set per slot, because a `block_device` op takes no context argument
 - [ ] A ramfs root is EMPTY -- no `/bin`, so a diskless boot has a filesystem and no programs

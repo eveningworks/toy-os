@@ -343,6 +343,7 @@ int sys_getcwd(struct syscall_ctx *c);
 int resolve_user_path(uint64_t pml4, uint64_t uaddr, char *out);
 int sys_mkdir(struct syscall_ctx *c);
 int sys_rename(struct syscall_ctx *c);
+int sys_rename2(struct syscall_ctx *c);
 int sys_truncate(struct syscall_ctx *c);
 int sys_stat(struct syscall_ctx *c);
 int sys_lseek(struct syscall_ctx *c);

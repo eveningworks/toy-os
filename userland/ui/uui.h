@@ -59,6 +59,7 @@
 #include "ui/uui_statusbar.h"
 #include "ui/uui_splitter.h"
 #include "ui/uui_dialog.h"
+#include "ui/uui_progress.h"
 #include "ui/uui_focus.h"
 #include "ui/uui_route.h"
 

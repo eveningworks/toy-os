@@ -701,6 +701,24 @@ manual steps to be worth automating:
   Not a terminal emulator: a full-screen program (`edit`, `less`) is not
   usable through `exec`. Use `shell` for those.
 
+- **`update_server.py`** -- the PULL half of `remote.py flash`: serves
+  this checkout's build to machines running `/bin/update` or the System
+  Update window (`docs/commands/update.md`). `GET /manifest` is generated
+  from `seed/sync` on every request -- never a list kept beside it --
+  with `remote.py`'s `USERLAND_TREES` IMPORTED, so the push and the pull
+  agree that `/etc` and `/home` are new-files-only; `GET /files/<path>`
+  serves only what the manifest names. The kernel is listed twice, ELF
+  and gzipped, and the gzipped one only when `build/kernel.media` is not
+  older than the ELF (`make all` rebuilds one and not the other). **A
+  stale staging tree is refused per request with a 503** naming
+  iso_guard's reason, rather than served: a client would otherwise
+  install the previous build and report success. Paths are URL-quoted in
+  the manifest because some names have spaces. `--print` shows the
+  manifest; `--throttle KIB` slows each file so a progress bar has a
+  middle to watch. Binds `0.0.0.0:8080` by default (the port the dev
+  host's firewall leaves open); a QEMU guest reaches it as `10.0.2.2`.
+  Unauthenticated, as the command page says.
+
 - **`gui_flow.py`** -- named, composable QMP click-flows on top of
   `qmp_test.py`'s `QMPSession` (`GuiFlow` class: `enter_gui()`,
   `open_app(name)`, `run_system_action(label)`, `screenshot_named()`),
@@ -4025,6 +4043,17 @@ window without going through it will find its layout polls timing out.
   so a leftover window takes the spawn with the layout log still off. It
   never ticks "Keep disabled", so it leaves `/etc/devices.conf` as found.
   In `gui_regress.py`.
+- **`sysupdate_test.py`** -- the System Update window
+  (`userland/gui/system/sysupdate.c`) against `update_server.py`'s handler
+  in-process on an ephemeral port, THROTTLED so an install has a middle:
+  it checks by itself and counts the two files damaged beforehand; the
+  file list is drawn; mid-install the `uui_progress` bar is PART-filled
+  (accent pixels across its reported rect, so a bar that jumps from
+  empty to full fails) and the fetched row is tinted; it ends on
+  "installed", `sum` agrees with the manifest, and the bar is full. The
+  damaged files are neither a library (that waits for a restart) nor
+  anything running (a desktop restarted mid-test would find it
+  truncated). In `gui_regress.py`.
 - **`taskmgr_test.py`** -- the ring-3 Task Manager's three pages: the
   Processes table in its Grouped, Tree and List views (the ORDER each
   gives, read from the app's `taskmgr: order` line), sorting, folding a
@@ -5111,6 +5140,20 @@ window without going through it will find its layout polls timing out.
 
   ON DEMAND: it needs `openssl` to make the certificates and SKIPS
   cleanly without it.
+
+- **`update_test.py`** -- `/bin/update` end to end, in its own guests,
+  against `update_server.py`'s handler run IN-PROCESS on an ephemeral
+  loopback port (so two runs cannot clash, and nothing leaves the
+  machine). Seventeen checks, each read back through an independent
+  reader (`sum`, `cat`, `dmesg`): a fresh `disk.img` is up to date
+  against its own build; a damaged binary and a deleted document are
+  found (the second as NEW) and installed live; a file the server
+  CORRUPTS in transit is refused with the old file and no `.upd` left;
+  a damaged LIBRARY is staged, not replaced, and the SECOND guest --
+  the same disk rebooted -- applies it before init; `--server` persists.
+  `--positive-control` serves the "corrupted" file intact while still
+  expecting the refusal: two checks must go red (measured: 15 of 17).
+  In `ondemand_sweep.py`.
 
 - **`hwdata_test.py`** -- drives `hwdata update` against a plain
   `http.server` on this machine, reached through SLIRP's 10.0.2.2, the

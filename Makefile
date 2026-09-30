@@ -1149,6 +1149,9 @@ EXTRA_OBJS_settings = settings/set_registry settings/set_page settings/set_owner
                       settings/set_sysinfo
 # Task Manager, the same way: userland/taskmgr/ is its pages.
 EXTRA_OBJS_taskmgr = taskmgr/tm_procs taskmgr/tm_perf taskmgr/tm_services
+# System Update: one engine behind the command and the window.
+EXTRA_OBJS_update    = update/upd
+EXTRA_OBJS_sysupdate = update/upd
 
 EXTRA_OBJS_cjson_test = ports/cjson/cJSON
 EXTRA_OBJS_cjson_bench = ports/cjson/cJSON
@@ -1167,6 +1170,8 @@ ULIB_SO_sum = $(BUILD)/lib/libhash.so
 ULIB_SO_wget = $(LIBHTTP_SO) $(LIBSSL_SO)
 ULIB_SO_speedtest = $(LIBHTTP_SO) $(LIBSSL_SO)
 ULIB_SO_hwdata = $(LIBHTTP_SO) $(LIBSSL_SO)
+ULIB_SO_update = $(LIBHTTP_SO) $(LIBSSL_SO) $(BUILD)/lib/libhash.so
+ULIB_SO_sysupdate = $(LIBHTTP_SO) $(LIBSSL_SO) $(BUILD)/lib/libhash.so
 
 ulibso = $(ULIB_SO_$(notdir $(1)))
 

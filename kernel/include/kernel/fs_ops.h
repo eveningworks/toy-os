@@ -281,6 +281,11 @@ struct fs_ops {
     // as everything above.
     int (*link)(void *st, const char *existing, const char *newpath);
 
+    // FS_CAP_REPLACE. `rename` that swaps an existing FILE at `newpath`
+    // for `oldpath` atomically -- see fs.h's fs_rename_replace(). The
+    // VFS only calls it when `newpath` exists.
+    int (*rename_replace)(void *st, const char *oldpath, const char *newpath);
+
     // ---- per-object locks inside a volume (fslock stage 4) ----
     //
     // OPTIONAL, and only a backend that drops the volume lock mid-call

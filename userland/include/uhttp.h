@@ -23,8 +23,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// FS_PATH_MAX is 64, so a URL path cannot be sized against it -- a URL
-// is not a path, and sizing it like one truncates it (the shell
+// A URL path is not sized against FS_PATH_MAX -- a URL is not a path,
+// and sizing it like one ties two unrelated limits together (the shell
 // conventions make the same point about a command line).
 #define UHTTP_HOST_MAX 128
 #define UHTTP_PATH_MAX 512

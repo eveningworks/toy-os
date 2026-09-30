@@ -327,6 +327,11 @@ int sys_rename(const char *oldpath, const char *newpath) {
                               (uint64_t)(uintptr_t)newpath));
 }
 
+int sys_rename2(const char *oldpath, const char *newpath, unsigned flags) {
+    return (int)err(syscall3(SYS_RENAME2, (uint64_t)(uintptr_t)oldpath,
+                              (uint64_t)(uintptr_t)newpath, flags));
+}
+
 int sys_truncate(const char *path, unsigned long long size) {
     return (int)err(syscall2(SYS_TRUNCATE, (uint64_t)(uintptr_t)path, (uint64_t)size));
 }

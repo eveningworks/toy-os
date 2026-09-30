@@ -1022,6 +1022,17 @@ def icon_devmgr():
     return im
 
 
+def icon_sysupdate():
+    # A circular arrow around a down-arrow: "fetch, and refresh" -- the
+    # shape Windows Update and KDE Discover both use for the job.
+    im, d = tile((60, 130, 170))
+    d.arc([12, 12, 52, 52], start=200, end=500, fill=WHITE, width=5)
+    d.polygon([(44, 8), (52, 22), (38, 22)], fill=WHITE)   # the arc's arrowhead
+    d.line([32, 22, 32, 38], fill=WHITE, width=5)
+    d.polygon([(24, 36), (40, 36), (32, 45)], fill=WHITE)
+    return im
+
+
 def icon_dev_usb():
     # The USB trident: a stem with an arrowhead, a branch ending in a
     # circle and one ending in a square, on a base dot.
@@ -1220,6 +1231,7 @@ ICONS = {
     "cat-storage": icon_cat_storage,
     "cat-sound": icon_cat_sound,
     "devmgr": icon_devmgr,
+    "sysupdate": icon_sysupdate,
     "dev-usb": icon_dev_usb,
     "badge-warning": icon_badge_warning,
     "badge-disabled": icon_badge_disabled,

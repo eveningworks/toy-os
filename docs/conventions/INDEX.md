@@ -402,6 +402,7 @@ whenever a headline here tells you something you did not already know.
 - **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**
 - **`uui_meter` IS THE READING WIDGET, AND IT RESERVES EVERY ROW IT
   COULD USE**
+- **`uui_progress` IS A JOB'S PROGRESS; A NEGATIVE VALUE IS BUSY, NOT ZERO**
 - **LONG WORK BELONGS IN A CHILD PROCESS, NOT IN A GUI CLIENT'S EVENT
   LOOP**
 - **A WIDGET ARRAY IS DECLARED TWICE: `uapp_desc.layout` SIZES AND
@@ -847,6 +848,9 @@ whenever a headline here tells you something you did not already know.
   CACHES AND NOT `lookup()`**
 - **UNDER `batched`, THE ALLOCATION BITMAP RIDES THE DEFERRED COMMIT**
 - **A FILE OTHER PROCESSES READ IS PUBLISHED, NEVER REWRITTEN IN PLACE**
+- **`rename()` REPLACES; `sys_rename()` REFUSES; ONLY TFS3 AND RAMFS CAN SWAP**
+- **A LIBRARY IS NEVER REPLACED UNDER A RUNNING SYSTEM** -- a mapping names
+  a path, so `/bin/update` stages `/lib` for the next boot
 - **A DELETE READS ITS TABLES IN THE LOCK'S GAPS, AND EVERY ALLOCATOR
   MUST EMPTY THE TRIM QUEUE BEFORE HANDING OUT A BLOCK**
 - **A TFS3 INODE CHANGES ONLY THROUGH `t3_txn_stage_inode()`** -- the

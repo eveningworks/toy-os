@@ -131,7 +131,8 @@ int     sys_chdir(const char *path);
 int     sys_getcwd(char *buf, unsigned long cap);
 
 int     sys_mkdir(const char *path);
-int     sys_rename(const char *oldpath, const char *newpath);
+int     sys_rename(const char *oldpath, const char *newpath);   // refuses an existing destination
+int     sys_rename2(const char *oldpath, const char *newpath, unsigned flags); // RENAME2_* (syscall_abi.h)
 int     sys_truncate(const char *path, unsigned long long size);
 int     sys_stat(const char *path, struct sys_stat *out);
 

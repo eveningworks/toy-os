@@ -407,6 +407,7 @@ fix a rederive-from-scratch cost". `--list` on `preflight.sh`,
 | Is it safe to commit? | `preflight.sh` (**stop your `vm.py` guest first**) |
 | Has the on-demand half rotted? | `ondemand_sweep.py` -- the ~30 tools no other runner covers |
 | Drive the BARE-METAL machine | `remote.py` (`exec`/`put`/`get`/`sync`/`flash`/`screenshot`/`shell`) |
+| Let a machine PULL this build | `update_server.py` (the machine runs `update` or System Update) |
 | Run the GUI TOOLS on it | `gui_regress.py --host <ip>`, over `remote_gui.py` |
 | Drive a VM | `vm.py` (text in, text out), `qmp_test.py`, `gui_debug.py`, `gui_flow.py`, `shell_flow.py`, `serial_console.py`, `serial_capture.py`, `watch_vm.sh`, `run_release.sh` |
 | Is it INTERMITTENT, and at what rate? | `boot_rate.py` (bare metal), `flake_hunt.py` (VM) |

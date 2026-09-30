@@ -221,6 +221,12 @@ KTEST("ramfs", "rename moves a file, and refuses to move a directory into itself
     // A destination that already exists is refused too.
     KTEST_ASSERT(R()->write(ST, "/taken", "x", 0));
     KTEST_ASSERT(!R()->rename(ST, "/a/b/g.txt", "/taken"));
+    // ...unless asked to replace it, which only a file may be.
+    KTEST_ASSERT(R()->rename_replace(ST, "/a/b/g.txt", "/taken"));
+    KTEST_ASSERT(!R()->exists(ST, "/a/b/g.txt"));
+    k_memset(d, 0, sizeof d);
+    KTEST_ASSERT(R()->read_range(ST, "/taken", 0, d, sizeof d) == 4 && k_memcmp(d, "data", 4) == 0);
+    KTEST_ASSERT(!R()->rename_replace(ST, "/taken", "/a"));
 
     ramfs_test_unmount();
 }

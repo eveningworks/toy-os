@@ -1560,8 +1560,41 @@ reports a falsehood rather than an error. It became a real window once
 a disk write could sleep: `service` read init's status file mid-rewrite
 and said `init supervises no service called toywm` about a running
 desktop, which took the kernel suite's desktop stop with it. Write
-`x.new`, move `x` to `x.old`, rename `x.new` to `x`, remove `x.old`
-(`rename()` here refuses an existing destination -- `tftpd.c` and
-`init.c`'s `write_status()` both do this). A reader then sees the old
-file, the new one, or for an instant none, and "none" is the case a
-reader already retries.
+`x.new`, then `rename("x.new", "x")`: libc's `rename()` REPLACES, and on
+TFS3 it is one journal transaction, so a reader sees the old file or the
+new one and never neither. (Before 2026-09-30 it refused an existing
+destination, which is why `tftpd.c` and `init.c`'s `write_status()` move
+`x` aside to `x.old` first; that still works, with an instant of "none"
+a reader already retries.)
+
+## `rename()` REPLACES; `sys_rename()` REFUSES; ONLY TFS3 AND RAMFS CAN SWAP
+
+Two calls, on purpose. libc's `rename()` is POSIX -- an existing FILE at
+the destination is replaced -- through `SYS_RENAME2(RENAME2_REPLACE)` and
+the VFS's `fs_rename_replace()`. `sys_rename()` (`SYS_RENAME`) still
+REFUSES an existing destination, and that is what `mv` and the File
+Manager reach through `ufileop`, because a file manager that silently
+destroyed a file the user forgot about is the failure the refusal
+exists for. The reverse of Linux, where `rename(2)` replaces and
+`renameat2(RENAME_NOREPLACE)` opts out.
+
+A replace is ATOMIC or it is REFUSED: TFS3 does it as one transaction
+(`FS_CAP_REPLACE`), ramfs under the mount lock, and FAT32 returns
+`-ENOTSUP` rather than emulating it with delete-then-rename -- a caller
+that accepts that window (`/bin/update` rotating `/boot`'s kernel) does
+the two steps itself and says so. A directory on either side is
+refused (`-EISDIR`).
+
+## A LIBRARY IS NEVER REPLACED UNDER A RUNNING SYSTEM
+
+An mmap region names a PATH, not an inode (`struct mmap_region.path`),
+and libraries are demand-paged -- so a `/lib` file replaced while
+programs run feeds their not-yet-touched pages from the NEW file, and a
+process ends up executing two builds at once, with nothing reported.
+Linux avoids this because a mapping pins the old inode; toy-os does not.
+So `/bin/update` STAGES a set that touches `/lib` (or the kernel) as
+`<path>.upd`, lists the targets in `/var/lib/update/pending`
+(`abi/update_abi.h`), and the KERNEL renames them into place at the next
+boot, before it spawns init -- Windows' `PendingFileRenameOperations`.
+`remote.py flash` replaces `/lib` live and reboots at once, which keeps
+the window short rather than closing it.

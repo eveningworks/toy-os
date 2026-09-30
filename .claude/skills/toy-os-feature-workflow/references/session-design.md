@@ -2441,3 +2441,28 @@ refusals.** `reboot --entry` on a machine whose GRUB lacks `loadenv`
 would write the choice and boot the default -- a silent no-op -- so it
 refuses by name, and the laptops' hand-kept `grub.cfg`s got the stanza
 by hand with a `.bak` beside them (flash never touches grub.cfg).
+
+**2026-09-30 (System Update: `/bin/update`, the window, `update_server.py`,
+an atomic rename-replace and a boot-time apply).**
+
+**A design doc's "measured SAFE" can be true of the case it measured and
+false of the neighbour.** `update-design.md` recorded that replacing a
+running binary is safe because `elf_load()` copies -- right for an
+EXECUTABLE. A research pass before coding found that a LIBRARY is
+demand-paged through an mmap region that names a PATH, so any
+replacement feeds untouched pages from the new file. That one finding
+turned "rename into place" into "stage for the kernel to apply at boot"
+and was worth re-asking the maintainer over. Ask what ELSE reads the
+thing a measurement covered.
+
+**A static check's count can be a property of the FILE, not the
+construct.** `check_dispatch.py` groups every `else if` at one brace
+depth across a whole file, so five honest branches in a new function
+failed a chain that began in a different one. Early returns in a helper
+were the better code anyway; a waiver would have hidden the next real
+ladder.
+
+**A VM built with plain `make iso` cannot take a kernel update** (GRUB
+`timeout=0`, so the rescue entry is unreachable, so `update` refuses
+everything). Test the kernel and staged paths on `make iso MENU=1`, and
+remember the next `make iso` puts the default back.

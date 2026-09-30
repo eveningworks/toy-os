@@ -1886,12 +1886,14 @@ genuinely stepping, as ramfs's does. Doing it properly means a second
 write path through the chain walker, for a mount that is read-only by
 default and holds a bootloader.
 
-**Updating the machine's own kernel is NOT done.** Writing
-`/boot/boot/kernel.bin` from inside toy-os works and is verified, but
-nothing reinstalls GRUB's `core.img`, nothing verifies the image is a
-kernel before overwriting the one that boots the machine, and nothing
-keeps a known-good copy to fall back to. Those three, not the write, are
-what "toy-os can update itself" would mean.
+**Updating the machine's own kernel is HALF done.** `/bin/update`
+(2026-09-30) writes `/boot/boot/kernel.bin` with the running kernel kept
+as `kernel.old` -- GRUB's *previous kernel* entry -- and refuses while
+`grub.cfg` has `set timeout=0`, since the undo is then unreachable. What
+is still missing: nothing verifies the image is a KERNEL (the crc32 only
+proves it arrived as the server sent it), and nothing notices a kernel
+that fails to boot and falls back by itself; that is A/B slots with a
+boot counter, `docs/update-design.md` stage 5.
 
 **The path is `/boot/boot/kernel.bin`, not `/boot/kernel.bin.`** The ESP
 holds a `boot/` directory because `tools/install_grub.py` keeps the

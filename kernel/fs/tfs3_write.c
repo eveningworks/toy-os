@@ -1043,10 +1043,72 @@ static int path_is_within(const char *parent, const char *child) {
     return child[plen] == '\0' || child[plen] == '/';
 }
 
+// THE REPLACING HALF OF rename_impl(): `newpath` names a file and it is
+// to become `oldpath`'s file, dpkg's write-`.new`-then-rename shape.
+// ONE transaction repoints the destination's dirent at the source inode
+// and removes the source's, so a crash shows the old file or the new
+// one under that name and never neither -- what a two-call unlink and
+// rename cannot promise. The displaced inode is freed after the commit
+// (clear-after-persist, as tfs3_delete()).
+//
+// Files only: a directory on either side is refused, and so is a
+// cross-parent replace on a v1 journal (five credits, like a directory
+// move).
+static int replace_locked(struct t3_state *sbi, uint64_t ino, const struct t3_inode *node,
+                          uint64_t old_ino, uint64_t src_pino, const char *src_name,
+                          uint32_t src_len, uint64_t dst_pino, const char *dst_name,
+                          uint32_t dst_len) {
+    struct t3_inode victim, src_parent, dst_parent;
+    if (node->type == T3_TYPE_DIR) return 0;
+    if (!t3_read_inode(sbi, old_ino, &victim) || victim.type == T3_TYPE_DIR) return 0;
+    if (!t3_read_inode(sbi, src_pino, &src_parent) || src_parent.type != T3_TYPE_DIR) return 0;
+    if (!t3_read_inode(sbi, dst_pino, &dst_parent) || dst_parent.type != T3_TYPE_DIR) return 0;
+
+    int same_parent = (src_pino == dst_pino);
+    // Two dirent blocks, the displaced inode, and each parent's mtime.
+    int credits = same_parent ? 4 : 5;
+    if (credits > (int)sbi->jslots) {
+        klog_write("tfs3: this volume's journal is too small to replace a file in another "
+                   "directory (v1 format)\n");
+        return 0;
+    }
+    struct t3_inode *dstp = same_parent ? &src_parent : &dst_parent;
+
+    if (!t3_txn_begin(sbi, credits)) return 0;
+    if (!dirent_repoint(sbi, dstp, dst_name, dst_len, ino)) { t3_txn_reset(sbi); return 0; }
+    uint64_t removed = 0;
+    if (!dirent_remove(sbi, &src_parent, src_name, src_len, &removed) || removed != ino) {
+        t3_txn_reset(sbi); return 0;
+    }
+    int gone = victim.links <= 1;
+    if (gone) {
+        if (!t3_txn_stage_inode(sbi, old_ino, 0)) { t3_txn_reset(sbi); return 0; }
+    } else {
+        victim.links--;   // a hardlink elsewhere keeps the old data alive
+        if (!t3_txn_stage_inode(sbi, old_ino, &victim)) { t3_txn_reset(sbi); return 0; }
+    }
+    uint64_t now = t3_now_epoch();
+    src_parent.modified = now;
+    dstp->modified = now;
+    if (!t3_txn_stage_inode(sbi, src_pino, &src_parent)) { t3_txn_reset(sbi); return 0; }
+    if (!same_parent && !t3_txn_stage_inode(sbi, dst_pino, &dst_parent)) {
+        t3_txn_reset(sbi); return 0;
+    }
+    if (!t3_txn_commit(sbi)) return 0;
+    t3_ncache_flush(sbi);
+
+    if (gone) {
+        if (free_all_blocks(sbi, &victim) < 0) return 1;   // committed; fsck reclaims
+        t3_free_inode_bit(sbi, old_ino);
+        t3_flush_alloc_state(sbi);
+    }
+    return 1;
+}
+
 // Rename/move, in ONE journal transaction: the namespace never shows
-// both names or neither. Refuses an existing destination (fs.h's
-// contract -- an atomic replace is a bigger operation and a separate
-// decision), a directory moved into its own subtree, and the root.
+// both names or neither. Refuses an existing destination unless
+// `replace` (fs_rename_replace(), fs.h), a directory moved into its own
+// subtree, and the root.
 //
 // Credit accounting is the interesting part, and it is why v2's larger
 // journal exists. Worst case is a directory changing parents: both
@@ -1054,7 +1116,7 @@ static int path_is_within(const char *parent, const char *child) {
 // counts -- five. Every other shape needs three or four, which is why
 // a v1 image can still rename freely and only refuses that one case,
 // with a message, instead of failing halfway.
-int tfs3_rename(void *st, const char *oldpath, const char *newpath) {
+static int rename_impl(void *st, const char *oldpath, const char *newpath, int replace) {
     struct t3_state *sbi = st;
     char *const oldn = sbi->pb.tfs3_rename_oldn;
     char *const newn = sbi->pb.tfs3_rename_newn; // see t3_normalize()
@@ -1065,7 +1127,9 @@ int tfs3_rename(void *st, const char *oldpath, const char *newpath) {
     uint64_t ino, clash;
     struct t3_inode node;
     if (!t3_resolve(sbi, oldn, &ino) || !t3_read_inode(sbi, ino, &node)) return 0;
-    if (t3_resolve(sbi, newn, &clash)) return 0; // destination taken
+    int has_clash = t3_resolve(sbi, newn, &clash);
+    if (has_clash && !replace) return 0; // destination taken
+    if (has_clash && clash == ino) return 1; // two names of one inode: POSIX does nothing
     if (node.type == T3_TYPE_DIR && path_is_within(oldn, newn)) return 0;
 
     uint64_t src_pino, dst_pino;
@@ -1077,7 +1141,10 @@ int tfs3_rename(void *st, const char *oldpath, const char *newpath) {
     // (t3_lock()), so there is no order to keep and no rename mutex.
     if (!t3_lock(sbi, src_pino, 1) || !t3_lock(sbi, dst_pino, 1) || !t3_lock(sbi, ino, 1))
         return 0;
+    if (has_clash && !t3_lock(sbi, clash, 1)) return 0;
     if (!t3_read_inode(sbi, ino, &node)) return 0;   // under the lock
+    if (has_clash) return replace_locked(sbi, ino, &node, clash, src_pino, src_name, src_len,
+                                         dst_pino, dst_name, dst_len);
 
     struct t3_inode src_parent, dst_parent;
     if (!t3_read_inode(sbi, src_pino, &src_parent) || src_parent.type != T3_TYPE_DIR) return 0;
@@ -1130,6 +1197,14 @@ int tfs3_rename(void *st, const char *oldpath, const char *newpath) {
     t3_alog_commit(sbi);
     t3_ncache_flush(sbi);
     return 1;
+}
+
+int tfs3_rename(void *st, const char *oldpath, const char *newpath) {
+    return rename_impl(st, oldpath, newpath, 0);
+}
+
+int tfs3_rename_replace(void *st, const char *oldpath, const char *newpath) {
+    return rename_impl(st, oldpath, newpath, 1);
 }
 
 // Set a file's size exactly. Growing is SPARSE -- the size moves and

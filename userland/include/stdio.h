@@ -234,7 +234,9 @@ static inline int snprintf(char *out, size_t cap, const char *fmt, ...) {
 // first real caller was Doom's savegame handling, which is precisely the
 // "somebody else's program" case the argument is about.
 //
-// Both return 0, or -1 with errno set.
+// Both return 0, or -1 with errno set. rename() REPLACES an existing
+// file, as POSIX says (ENOTSUP on a filesystem that cannot do it
+// atomically, such as FAT32); `mv` uses sys_rename(), which refuses.
 int   remove(const char *path);
 int   rename(const char *oldpath, const char *newpath);
 

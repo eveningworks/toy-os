@@ -198,6 +198,70 @@ KTEST("fs", "rename refuses an existing destination and the root") {
     fs_delete("/.ktest_mvx_b");
 }
 
+KTEST("fs", "rename_replace swaps a file and frees the one it displaced") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_rp_new");
+    FRESH("/.ktest_rp_cur");
+    // The VICTIM spans several blocks, so forgetting to free them is a
+    // leak fsck can count rather than one block lost in the noise.
+    static char chunk[12288];
+    for (int i = 0; i < (int)sizeof chunk; i++) chunk[i] = 'o';
+    KTEST_ASSERT(fs_write_range("/.ktest_rp_cur", 0, chunk, sizeof chunk) == 1);
+    KTEST_ASSERT(fs_write("/.ktest_rp_new", "new", 0) == 1);
+
+    KTEST_ASSERT(fs_rename_replace("/.ktest_rp_new", "/.ktest_rp_cur") == 1);
+    KTEST_ASSERT_EQ(fs_exists("/.ktest_rp_new"), 0);
+    uint32_t size = 0;
+    const char *data = read_whole("/.ktest_rp_cur", &size);
+    KTEST_ASSERT(data != 0 && size == 3 && k_strcmp(data, "new") == 0);
+
+    struct fs_check_result r;
+    KTEST_ASSERT(fs_check(0, &r) == 1);
+    KTEST_ASSERT_EQ(r.leaked, 0);
+    KTEST_ASSERT_EQ(r.double_allocated, 0);
+    KTEST_ASSERT_EQ(r.referenced_but_free, 0);
+
+    // With nothing to replace it is a plain rename.
+    KTEST_ASSERT(fs_rename_replace("/.ktest_rp_cur", "/.ktest_rp_new") == 1);
+    KTEST_ASSERT(fs_exists("/.ktest_rp_new") == 1);
+    fs_delete("/.ktest_rp_new");
+}
+
+KTEST("fs", "rename_replace refuses a directory on either side") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_rpd_f");
+    fs_delete("/.ktest_rpd_d");
+    KTEST_ASSERT(fs_write("/.ktest_rpd_f", "f", 0) == 1);
+    KTEST_ASSERT(fs_mkdir("/.ktest_rpd_d") == 1);
+    KTEST_ASSERT_EQ(fs_rename_replace("/.ktest_rpd_f", "/.ktest_rpd_d"), 0);
+    KTEST_ASSERT_EQ(fs_rename_replace("/.ktest_rpd_d", "/.ktest_rpd_f"), 0);
+    KTEST_ASSERT(fs_is_dir("/.ktest_rpd_d") == 1);
+    KTEST_ASSERT(fs_exists("/.ktest_rpd_f") == 1 && fs_is_dir("/.ktest_rpd_f") == 0);
+    fs_delete("/.ktest_rpd_f");
+    fs_delete("/.ktest_rpd_d");
+}
+
+KTEST("fs", "a failed rename_replace leaves both files as they were") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_rpf_a");
+    FRESH("/.ktest_rpf_b");
+    KTEST_ASSERT(fs_write("/.ktest_rpf_a", "incoming", 0) == 1);
+    KTEST_ASSERT(fs_write("/.ktest_rpf_b", "current", 0) == 1);
+    KTEST_ASSERT_EQ(fs_sync(NULL), 1);   // durable before the fault: see the rename test below
+
+    fault_fail_next_block_writes(64);
+    int ok = fs_rename_replace("/.ktest_rpf_a", "/.ktest_rpf_b");
+    fault_fail_next_block_writes(0);
+    KTEST_ASSERT_EQ(ok, 0);
+    uint32_t size = 0;
+    const char *data = read_whole("/.ktest_rpf_a", &size);
+    KTEST_ASSERT(data != 0 && k_strcmp(data, "incoming") == 0);
+    data = read_whole("/.ktest_rpf_b", &size);
+    KTEST_ASSERT(data != 0 && k_strcmp(data, "current") == 0);
+    fs_delete("/.ktest_rpf_a");
+    fs_delete("/.ktest_rpf_b");
+}
+
 KTEST("fs", "rename moves a directory and its contents between parents") {
     if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
     fs_delete("/.ktest_md/sub/f");

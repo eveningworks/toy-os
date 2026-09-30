@@ -1,9 +1,11 @@
 # Updating a machine over the network: a manifest, and a client that pulls
 
-**Status: DESIGNED, NOT BUILT (2026-09-01).** What exists today is the
-opposite shape -- `tools/remote.py sync`, a host-side PUSH. This
-document is the case for a `/bin/update` that PULLS, what it costs, and
-the three traps that will bite in the order they bite.
+**Status: BUILT (2026-09-30), stages 1-4.** `/bin/update`, the System
+Update window (`userland/gui/system/sysupdate.c`) and
+`tools/update_server.py`, over one engine in `userland/update/upd.c`.
+Designed 2026-09-01 as the case for a PULL beside `tools/remote.py
+sync`'s PUSH; "What was built" at the end records where the build
+departed from the design and why. Usage is `docs/commands/update.md`.
 
 **The one-sentence version:** a toy-os machine should be able to update
 itself from an HTTP server carrying a manifest of files and their
@@ -82,8 +84,10 @@ reason to distrust it ever appears.
 
 **AND THE CHECKSUM IS INTEGRITY, NOT AUTHENTICITY.** A hash served by
 the same unauthenticated server as the file proves the bytes arrived
-intact, not that they came from the person who built them. toy-os has no
-TLS and no signature verification, so anyone on the segment who answers
+intact, not that they came from the person who built them. There is no
+signature verification, and the dev server speaks plain http (toy-os
+has had a TLS client since `libssl.so`, but a server certificate on a
+build host is its own decision), so anyone on the segment who answers
 first is the update server. This is still strictly better than leaving
 `telnetd` enabled -- outbound only, and only while updating -- but it
 must be written in the command's own page rather than implied, because
@@ -151,3 +155,61 @@ documents set.
 5. **A/B root slots**, if it is ever wanted -- the point at which this
    stops being a convenience and becomes something a machine can survive
    losing power in the middle of. That is its own document.
+
+## What was built, and where it departed from the design
+
+**The manifest** is `<crc32> <size> <path> [opts]` with the path
+URL-QUOTED (settings files have spaces in their names) under a
+`# version` / `# built` header, and a file is fetched from
+`<server>/files<path>`. `opts` carries `new-only` (`/etc`, `/home`,
+imported from `remote.py`'s `USERLAND_TREES` so push and pull agree),
+and `kernel` / `kernel-gz` with a `src=` -- the kernel is listed as the
+ELF and the gzipped image, and the client picks by what its own GRUB
+records (`/etc/grub-core.modules`), as `remote.py flash` does. The
+server GENERATES it from `seed/sync` per request and answers 503 while
+the staging tree is older than the build.
+
+**Everything is fetched and verified before anything is committed**, to
+`<path>.upd`. A failed or cancelled run deletes what it staged and has
+changed nothing -- the design's "one file at a time, rename as you go"
+would have left a half-updated machine on every network hiccup.
+
+**Trap 2 was worse than recorded.** The design measured that a running
+EXECUTABLE holds no reference to its file, and it does not: `elf_load()`
+copies. But a LIBRARY is demand-paged through an mmap region that names
+a PATH (`struct mmap_region.path`), and any replacement -- delete and
+rename, or the atomic rename below -- feeds a running process's
+untouched pages from the new file. No ETXTBSY, no error: two builds in
+one process. So:
+
+- **A set with no `/lib` file and no kernel is installed LIVE**, each
+  file renamed over its target.
+- **A set touching `/lib` or the kernel waits for the next boot.** The
+  staged files stay `.upd`, their targets go in `/var/lib/update/pending`
+  (`abi/update_abi.h`), and the KERNEL renames them into place in
+  `kernel_main()` after the filesystems mount and before init --
+  `fs_apply_pending_replacements()`. Windows' `PendingFileRenameOperations`
+  (applied by `smss` before anything maps a DLL) and systemd's offline
+  updates are the shape. The kernel, not init, because after the reboot
+  the kernel is the one component certain to be new -- init is itself a
+  file the list may replace. A line names only the TARGET, so the list
+  cannot move an arbitrary file; it is idempotent, so a power cut during
+  the apply is finished by the boot after. The kernel is in the rule too:
+  a new kernel may change an ABI the new userland assumes, and the reboot
+  that switches kernels is the moment both switch.
+
+**Replacing a file is now atomic.** TFS3's rename refused an existing
+destination ("an atomic replace is ... a separate decision"). That
+decision is `fs_rename_replace()` and `SYS_RENAME2(RENAME2_REPLACE)`:
+one journal transaction repoints the destination's dirent at the new
+inode and frees the old one after the commit. libc's `rename()` uses it
+(POSIX), `sys_rename()` still refuses (`mv`, the File Manager), and FAT32
+refuses rather than emulate it (`docs/conventions/storage.md`).
+
+**The kernel refuses the WHOLE update when GRUB has no menu.** The
+design said "keep `kernel.old`"; that copy is only an undo if GRUB can
+be asked for it, and an image built with `set timeout=0` cannot. Refusing
+the kernel alone would install a userland newer than its kernel, which
+is how a flashed laptop once came up with no network. So nothing is
+installed, and the window says why.
+

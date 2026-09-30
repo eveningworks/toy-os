@@ -737,6 +737,24 @@ int fs_rename(const char *oldpath, const char *newpath) {
     return changed2(FS_OP(a.m, a.gen, rename, a.sub, b.sub), oldpath, newpath);
 }
 
+int fs_path_has(const char *path, uint32_t cap) {
+    struct resolved r;
+    if (!resolve(path, &r)) return 0;
+    return (r.m->fs->caps & cap) == cap;
+}
+
+int fs_rename_replace(const char *oldpath, const char *newpath) {
+    struct resolved a, b;
+    if (!resolve(oldpath, &a) || !resolve(newpath, &b)) return 0;
+    if (a.m != b.m) return 0;
+    if (!FS_OP(b.m, b.gen, exists, b.sub)) return fs_rename(oldpath, newpath);
+    if (!writable(&a, "rename", oldpath)) return 0;
+    if (!a.m->fs->rename_replace) return 0;   // no atomic swap: refused, never emulated
+    imgcache_forget(oldpath);
+    imgcache_forget(newpath);
+    return changed2(FS_OP(a.m, a.gen, rename_replace, a.sub, b.sub), oldpath, newpath);
+}
+
 int fs_truncate(const char *path, uint64_t size) {
     struct resolved r;
     if (!resolve(path, &r) || !writable(&r, "truncate", path)) return 0;

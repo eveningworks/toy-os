@@ -121,6 +121,8 @@ void config_files_scan(void) {
                          "Remembered window positions and sizes", 1);
     config_file_register("sound", "/etc/sound.conf",
                          "Per-application playback volume", 1);
+    config_file_register("update", "/etc/update.conf",
+                         "The server System Update pulls from", 1);
     config_file_register("keymaps", "/etc/kbs",
                          "Keyboard layout tables (dir)", 1);
     config_file_register("apps", "/usr/wm/applications",

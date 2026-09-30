@@ -1,0 +1,6 @@
+# System Update -- see this directory's README.md for the format.
+Name=System Update
+Exec=/bin/wm/system/sysupdate
+Category=system
+Comment=Install a newer build from the update server
+Icon=sysupdate

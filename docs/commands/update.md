@@ -1,0 +1,115 @@
+# update
+
+**a `/bin` program.**
+
+**Category:** System administration
+
+## Synopsis
+
+    update [--check] [-v] [--from <url>] | --server [<url>] | --log
+
+## Options
+
+- *(none)* -- check, then fetch and install everything that differs.
+- `--check` (or `-n`) -- check and list what differs; change nothing.
+- `-v` -- with `--check`, list every file rather than the first ten.
+- `--from <url>` -- use this server for this run only.
+- `--server` -- print the server address and the recently used ones.
+- `--server <url>` -- set it (the `update.server` setting, also on
+  System Settings' Updates page) and add it to the recent list.
+- `--log` -- print the last run's log, `/var/log/update.log`.
+
+## Description
+
+`/bin/update` brings this machine up to date from an **update server**:
+a static HTTP server carrying a manifest of files and their checksums,
+which `tools/update_server.py` runs on the development host. The machine
+PULLS; nothing listens on it. The **System Update** window
+(`/bin/wm/system/sysupdate`, Start > System) is the same engine with a
+progress bar, and what this prints *is* the log that window shows.
+
+    $ update
+    server http://10.0.2.2:8080
+    manifest: 664 files, version 0.4.0-dev, built 2026-09-30 16:06
+    compared 664 files: 3 to fetch
+    3 files to fetch, 2.3M:
+      /bin/hello                          169.1K
+      /boot/boot/kernel.bin                 2.0M  (restart needed)
+      /lib/libhello.so                     16.2K
+    fetching 3 files
+    /bin/hello: 173176 bytes, crc 1130093803 ok
+    ...
+    staged 2 files for the next boot (a library is in the set)
+    kernel: installed; the running kernel is kept as /boot/boot/kernel.old
+    done: 3 files staged, restart to finish
+    update: restart to finish (`reboot`)
+
+Run over `tools/remote.py exec "update"` it streams the same lines back
+to the host.
+
+## What decides that a file changed
+
+**Size and crc32, never dates.** A machine whose clock is wrong would
+otherwise refuse every update or take every one. `/etc` and `/home` are
+this machine's own: a file there is installed only if it is **absent**,
+as `remote.py flash` does. A file the manifest does not list is left
+alone -- nothing is ever deleted.
+
+## When it waits for a restart
+
+Everything is **downloaded and verified first**, as `<path>.upd`, so a
+failed or cancelled download changes nothing. Then:
+
+- **No library and no kernel in the set**: each file is renamed over
+  its target, atomically (`SYS_RENAME2`). A program is read whole when it
+  starts, so replacing one under a running copy is safe.
+- **Any `/lib` file, or the kernel**: the files stay as `.upd` and are
+  listed in `/var/lib/update/pending`; the **next boot** renames them
+  into place before it starts anything. A running program pages its
+  libraries in by path, so replacing one live would mix old code and
+  new -- Windows applies in-use files at boot for the same reason.
+
+**The kernel** is written to `/boot` straight away, with the running one
+kept as `kernel.old` -- the GRUB rescue entry, *toy-os (previous
+kernel)*. So `update` **refuses to install anything** while
+`/boot/boot/grub/grub.cfg` has `set timeout=0`: with no menu, a new
+kernel that fails to boot could not be undone. A VM built with plain
+`make iso` is in that state; `make iso MENU=1` gives it a menu. The
+gzipped kernel is sent instead of the ELF when this machine's GRUB
+records `gzio` (`/etc/grub-core.modules`).
+
+A second `update` before the restart says an update is already staged
+and installs nothing.
+
+## Setting up a server
+
+On the development host, after `make iso`:
+
+    python3 tools/update_server.py              # 0.0.0.0:8080
+
+A QEMU guest reaches the host as `10.0.2.2`, which is the default
+server. A real machine needs the host's LAN address:
+
+    update --server http://<host>:8080
+
+The server refuses (503) while `seed/sync` is older than the build, so a
+machine cannot install the previous build by accident.
+
+## What it is not
+
+**Not authenticated.** The crc32 proves a file arrived intact, not who
+built it: anyone who can answer on the server's address can install
+anything. Use it on a network you trust.
+
+**Not a package manager** -- no packages, no dependencies, no removal.
+
+**Not atomic as a whole.** Each file is replaced atomically; a machine
+that loses power while the list is being applied at boot finishes it on
+the boot after (the list is idempotent), but a power cut during a live
+install leaves some files new and some old.
+
+## See also
+
+`docs/update-design.md` for the design, `tools/update_server.py` for
+the server, `reboot` to finish a staged update, `sum` for the checksums
+it compares.

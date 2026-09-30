@@ -498,6 +498,7 @@ int tfs3_delete(void *st, const char *path);
 int tfs3_link(void *st, const char *existing, const char *newpath);
 int tfs3_mkdir(void *st, const char *path);
 int tfs3_rename(void *st, const char *oldpath, const char *newpath);
+int tfs3_rename_replace(void *st, const char *oldpath, const char *newpath);
 int tfs3_touch(void *st, const char *path);
 int tfs3_truncate(void *st, const char *path, uint64_t size);
 int tfs3_write(void *st, const char *path, const char *data, int append);

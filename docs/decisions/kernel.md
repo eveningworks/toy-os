@@ -8674,3 +8674,47 @@ anything blocks. `read`/`write` return 1 when they PARKED the caller --
 NT's STATUS_PENDING, the wake writes RAX -- which is the contract the
 `sys_do_*` helpers already had, so each op keeps its own check-and-park
 under the preemption guard rather than having one imposed.
+
+## An update that touches a library or the kernel is applied BY THE KERNEL, at the next boot
+
+**The problem.** `/bin/update` (and the System Update window) replace
+files on a running machine. An EXECUTABLE is safe to replace live:
+`elf_load()` copies its segments, so a running process holds no reference
+to its file. A LIBRARY is not: `ld-toy.so` maps `/lib/*.so` through
+file-backed mmap regions, and a region names a PATH
+(`struct mmap_region.path`), faulting pages in on first touch. Replace
+`/lib/libc.so` -- by any method, atomic or not -- and every running
+process reads its untouched pages from the new build. Nothing reports
+it; a process simply runs two builds of libc at once.
+
+**What real systems do.** Linux avoids it by construction: a mapping
+pins the INODE, and a rename over the file leaves the old inode alive
+until the last mapping goes. dnf and apt then replace live and rely on
+that. Windows cannot replace an in-use DLL at all, so Windows Update
+records the rename in `PendingFileRenameOperations` and `smss` performs
+it at the next boot, before anything maps the file; systemd's offline
+updates (GNOME Software, PackageKit) reboot into `system-update.target`
+for the same reason.
+
+**What toy-os does.** Windows' shape, because it needs nothing new from
+the VM layer: a set with no `/lib` file and no kernel is installed live;
+any other set is downloaded and verified to `<path>.upd`, its targets are
+listed in `/var/lib/update/pending`, and `fs_apply_pending_replacements()`
+renames them into place in `kernel_main()` after `INIT_FS` and before
+`INIT_CONFIG` and init. The KERNEL does it, not init, because after the
+reboot the kernel is the one component certain to be the new build --
+init is itself a file the list may be replacing, and an old static init
+running on a new kernel is exactly the mismatch the reboot exists to
+avoid. The kernel is in the rule for the same reason: a new kernel may
+change an ABI the new userland already assumes, so kernel and userland
+switch at the same reboot.
+
+**The list names targets only** (the source is always the target plus
+`.upd`), so it cannot be used to move an arbitrary file; and it is
+idempotent (a target with no `.upd` left was done by a boot that lost
+power), so a power cut during the apply is finished by the next boot.
+
+**Revisit when** mmap regions pin an inode rather than naming a path --
+the Linux answer, which would let a library update apply live. That is a
+change to rename, delete and the fault path together, and this feature
+did not need it.

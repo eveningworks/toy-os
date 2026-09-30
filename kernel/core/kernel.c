@@ -2,6 +2,7 @@
 // the drivers are up, it hands off to apps_start() and never looks at
 // app-level code again. Compare with apps/apps.c, which knows nothing
 // about hardware.
+#include "pending_replace.h" // staged /bin/update files, applied before init
 #include "vga.h"
 #include "gfx.h"
 #include "serial.h"
@@ -337,6 +338,9 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // happens when `fsformat` reformats a live disk and that path
     // skipped this line entirely -- see vfs.c's ensure_layout().
     initcalls_run(INIT_FS);
+    // Before INIT_CONFIG reads /etc and long before init is spawned:
+    // nothing may have a staged library mapped while it is swapped in.
+    fs_apply_pending_replacements();
     // /bin binaries (e.g. lspci) are no longer bootstrap-installed here
     // at boot time -- tools/tfs3_writer.py seeds them into disk.img at
     // BUILD time now (see the Makefile's `seed` step), so by the time

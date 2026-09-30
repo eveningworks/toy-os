@@ -613,6 +613,19 @@ static int ramfs_rename(void *st, const char *oldpath, const char *newpath) {
     return 1;
 }
 
+// Atomic by construction: the whole tree is memory, and the mount lock
+// is held across both steps, so nothing can observe the gap.
+static int ramfs_rename_replace(void *st, const char *oldpath, const char *newpath) {
+    struct ramfs_state *sbi = st;
+    if (!sbi->mounted) return 0;
+    int src = find(sbi, oldpath), dst = find(sbi, newpath);
+    if (src <= 0 || dst <= 0) return 0;
+    if (src == dst) return 1;
+    if (sbi->nodes[src]->is_dir || sbi->nodes[dst]->is_dir) return 0;
+    if (!ramfs_del(st, newpath)) return 0;
+    return ramfs_rename(st, oldpath, newpath);
+}
+
 static int ramfs_truncate(void *st, const char *path, uint64_t size) {
     struct ramfs_state *sbi = st;
     if (!sbi->mounted) return 0;
@@ -745,7 +758,7 @@ const struct fs_ops ramfs_ops = {
     // format carries. No FS_CAP_HARDLINKS, and .link stays NULL to
     // match -- one fact stated twice, which vfs.c's caps_are_honest()
     // checks both ways.
-    .caps = 0,
+    .caps = FS_CAP_REPLACE,
     // 0, and it is the first honest 0 this field has ever had: ramfs
     // does not go through the block layer at all, so try_partitions()
     // must never offer it a partition. See fs_ops.h.
@@ -782,6 +795,7 @@ const struct fs_ops ramfs_ops = {
     .disk_usage = ramfs_disk_usage,
     .check = ramfs_check,
     .link = 0,
+    .rename_replace = ramfs_rename_replace,
 };
 
 // ---- test seam ------------------------------------------------------

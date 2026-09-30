@@ -1616,7 +1616,7 @@ const struct fs_ops tfs3_ops = {
     // see fs.h's FS_CAP_* comment on exactly this distinction.
     .chmod = tfs3_chmod,
     .caps = FS_CAP_INODES | FS_CAP_HARDLINKS | FS_CAP_SYMLINKS | FS_CAP_EPOCH_TIME |
-            FS_CAP_MODE,
+            FS_CAP_MODE | FS_CAP_REPLACE,
     .volume_relative = 1, // all I/O is volume-relative through vol_read/vol_write -- mountable from a partition
     // MORE THAN ONCE, because every per-volume field is in struct
     // t3_state and every op is handed its own. Two is what an
@@ -1653,6 +1653,7 @@ const struct fs_ops tfs3_ops = {
     .idle = tfs3_idle,
     .check = tfs3_check,
     .link = tfs3_link, // optional op, paired with FS_CAP_HARDLINKS above
+    .rename_replace = tfs3_rename_replace, // FS_CAP_REPLACE
 };
 
 // ---- the deferred allocation flush ----------------------------------------

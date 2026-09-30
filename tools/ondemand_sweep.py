@@ -163,6 +163,9 @@ TOOLS = [
     # Same arrangement, no certificates needed: a plain http server on
     # the host, so this too leaves nothing.
     ("hwdata",      "hwdata_test.py",          "the id databases refuse a bad download", False, None,               False),
+    # tools/update_server.py's handler in-process on a loopback port: two
+    # guests (the second is the boot that applies a staged library).
+    ("update",      "update_test.py",          "/bin/update: verify, install, stage for boot", False, None,         False),
     # --- storage and boot -------------------------------------------
     ("partition",   "partition_test.py",       "mounting from an MBR/GPT partition", True,  None,                   False),
     ("fs_switch",   "fs_switch_test.py",       "format, remount, reboot persistence", True, None,                   False),

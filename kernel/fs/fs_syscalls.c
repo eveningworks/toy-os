@@ -519,7 +519,30 @@ int sys_mkdir(struct syscall_ctx *c) {
     return 0;
 }
 
-int sys_rename(struct syscall_ctx *c) {
+// What a rename answers, once both paths are known to be good. Early
+// returns rather than an else-if ladder: each refusal is independent.
+static int64_t rename_errno(const char *from, const char *to, uint64_t flags) {
+    if (!fs_exists(from)) return -ENOENT;
+    if (flags & ~(uint64_t)RENAME2_REPLACE) return -EINVAL;
+    if (fs_exists(to)) {
+        if (!(flags & RENAME2_REPLACE)) return -EEXIST;
+        if (fs_is_dir(to) || fs_is_dir(from)) return -EISDIR;
+        if (!fs_path_has(to, FS_CAP_REPLACE)) return -ENOTSUP;
+    }
+    int ok = (flags & RENAME2_REPLACE) ? fs_rename_replace(from, to) : fs_rename(from, to);
+    if (!ok) {
+        // Includes the one case a v1 TFS3 journal genuinely cannot do
+        // (a cross-parent directory move needs five credits) -- see
+        // fs.h. -EIO rather than a guess at which of several it was.
+        klog_write(KLOG_ERR "syscall: rename() failed\n");
+        return -EIO;
+    }
+    return 0;
+}
+
+// SYS_RENAME refuses an existing destination; SYS_RENAME2 may ask to
+// replace it (fs.h's fs_rename_replace()). One body, as listdir's pair.
+static int rename_common(struct syscall_ctx *c, uint64_t flags) {
     char *from = kpath_get();
     if (!from) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
     char *to = kpath_get();
@@ -529,21 +552,19 @@ int sys_rename(struct syscall_ctx *c) {
     if (err) {
         klog_write(KLOG_ERR "syscall: rename() rejected -- bad path\n");
         c->regs[14] = (uint64_t)(int64_t)err;
-    } else if (!fs_exists(from)) {
-        c->regs[14] = (uint64_t)(int64_t)-ENOENT;
-    } else if (fs_exists(to)) {
-        c->regs[14] = (uint64_t)(int64_t)-EEXIST;
-    } else if (!fs_rename(from, to)) {
-        // Includes the one case a v1 TFS3 journal genuinely cannot do
-        // (a cross-parent directory move needs five credits) -- see
-        // fs.h. -EIO rather than a guess at which of several it was.
-        klog_write(KLOG_ERR "syscall: rename() failed\n");
-        c->regs[14] = (uint64_t)(int64_t)-EIO;
     } else {
-        c->regs[14] = 0;
+        c->regs[14] = (uint64_t)rename_errno(from, to, flags);
     }
     kpath_put(from); kpath_put(to);
     return 0;
+}
+
+int sys_rename(struct syscall_ctx *c) {
+    return rename_common(c, 0);
+}
+
+int sys_rename2(struct syscall_ctx *c) {
+    return rename_common(c, c->a2);
 }
 
 int sys_truncate(struct syscall_ctx *c) {

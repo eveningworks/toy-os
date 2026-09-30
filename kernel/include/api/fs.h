@@ -75,11 +75,11 @@ int fs_delete(const char *path);
 // alike. Returns 1 on success, 0 on failure.
 //
 // Three refusals worth knowing, all returning 0 rather than guessing:
-//   - `newpath` ALREADY EXISTS. There is deliberately no atomic
-//     replace here (POSIX rename(2) has one); a caller that wants to
-//     overwrite deletes the destination first and owns the decision,
-//     and the shell's `mv` says so rather than silently destroying a
-//     file the user forgot about.
+//   - `newpath` ALREADY EXISTS. Replacing it is fs_rename_replace(),
+//     a separate call so that `mv` and the file manager, which must
+//     not silently destroy a file the user forgot about, cannot reach
+//     it by accident -- the reverse of Linux, where rename(2) replaces
+//     and renameat2(RENAME_NOREPLACE) is the opt-out.
 //   - a directory moved INTO ITS OWN SUBTREE (`mv /docs /docs/old`),
 //     which would detach the subtree into a cycle nothing references.
 //   - either path being the root.
@@ -94,6 +94,22 @@ int fs_delete(const char *path);
 // backend's own doc comment, and the reason the atomicity promise
 // above names the backend.
 int fs_rename(const char *oldpath, const char *newpath);
+
+// fs_rename(), except that an existing FILE at `newpath` is replaced --
+// POSIX rename(2), and the write-`.new`-then-rename shape an updater
+// needs. On a backend with FS_CAP_REPLACE (TFS3) the swap is ONE
+// journal transaction: a crash leaves the old file or the new one
+// under `newpath`, never neither. Without the cap an existing
+// destination is refused, never emulated with delete-then-rename:
+// a caller that accepts that window says so by doing it itself.
+// A directory on either side of a replace is refused. With nothing at
+// `newpath` this is exactly fs_rename().
+//
+// A PROCESS THAT HAS THE OLD FILE MAPPED IS NOT PROTECTED. An mmap
+// region names a PATH, not an inode, so a replaced /lib library feeds
+// its not-yet-touched pages from the NEW file. docs/update-design.md
+// is why /bin/update stages a library replacement for the next boot.
+int fs_rename_replace(const char *oldpath, const char *newpath);
 
 // Sets a file's size exactly, ftruncate(2)-style. Shrinking frees the
 // blocks past the new end; growing extends the file with zeros and
@@ -333,6 +349,7 @@ int fs_chmod(const char *path, uint16_t mode);
 #define FS_CAP_SYMLINKS   (1u << 2) // format carries symlinks (resolution may still be unimplemented)
 #define FS_CAP_EPOCH_TIME (1u << 3) // timestamps stored as epoch natively, not converted at stat time
 #define FS_CAP_MODE       (1u << 4) // format stores permission bits (else stat reports a default)
+#define FS_CAP_REPLACE    (1u << 5) // a rename can replace an existing file atomically (fs_rename_replace)
 
 // The active backend's short name ("tfs3") -- diagnostic, for
 // df/fsck/about-style output. Valid after fs_init(); never NULL.
@@ -341,6 +358,9 @@ const char *fs_backend_name(void);
 // The active backend's FS_CAP_* bits / a single-bit convenience test.
 uint32_t fs_capabilities(void);
 int fs_has(uint32_t cap);
+// fs_has() for the mount that holds `path` rather than the root -- the
+// question to ask before an op on /boot or /tmp. 0 for a bad path.
+int fs_path_has(const char *path, uint32_t cap);
 
 // Hardlink: a second name for an existing file. Returns 1 on success,
 // 0 on failure -- including "the active filesystem has no hardlinks"

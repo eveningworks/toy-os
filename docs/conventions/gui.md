@@ -1243,6 +1243,15 @@ this the obvious way), not from how much history it accumulated.
   a data problem, not a paint-order one. Its own comment had asserted
   the opposite order, which is what made it invisible.
 
+- **`uui_progress` IS A JOB'S PROGRESS; A NEGATIVE VALUE IS BUSY, NOT
+  ZERO.** `userland/ui/uui_progress.h`: a track and a fill in per mille,
+  control-height, stretched by its row (`UUI_FILL_W`). Not `uui_meter`'s
+  bar, which is one row of a READING. A negative value is QProgressBar's
+  busy / Windows' marquee -- a sliding block for work whose total is not
+  known yet -- and it is distinct from 0, which says "none done"; call
+  `uui_progress_tick()` from `on_tick` to move it. No `hit`, and its
+  `describe` reports the value so a test can check the pixels against
+  it (System Update and `tools/sysupdate_test.py`).
 - **`uui_meter` IS THE READING WIDGET, AND IT RESERVES EVERY ROW IT
   COULD USE.** A caption, a big number in its own font, a unit, an
   optional detail line and an optional bar -- `userland/ui/uui_meter.h`.

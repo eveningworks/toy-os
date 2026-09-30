@@ -1,0 +1,559 @@
+// System Update -- pull a new build from an update server, with the
+// progress on screen.
+//
+// A WINDOW over userland/update/upd.c, the engine /bin/update also
+// runs; the design, and why a library update waits for a restart, is
+// docs/update-design.md. The layout is Windows Update's single page: a
+// status heading, the server, one overall bar, the files, and the log
+// behind a toggle (the mockup chosen 2026-09-30).
+//
+// THREADS: a check or an install runs on a worker, which owns the plan
+// while it runs and talks to this thread ONLY through uapp_post() and
+// the log queue below. Everything drawn is touched here.
+#include <pthread.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "rt/sys.h"
+#include "lib/human.h"
+#include "ui/uapp.h"
+#include "ui/uui.h"
+#include "ui/uui_label.h"
+#include "ui/uui_table.h"
+#include "ui/ulog.h"
+#include "ui/utheme.h"
+#include "update/upd.h"
+
+enum { EV_LOG = 1, EV_PROGRESS, EV_DONE };
+enum { JOB_NONE, JOB_CHECK, JOB_APPLY };
+
+enum {
+    ID_CHANGE = 1, ID_SERVER_EDIT, ID_RECENT, ID_USE, ID_EDIT_CANCEL,
+    ID_TABLE, ID_LOGVIEW, ID_LOG, ID_CHECK, ID_MAIN,
+};
+
+// What the window is showing, which decides the heading and the buttons.
+enum view {
+    V_CHECKING, V_AVAILABLE, V_UPTODATE, V_INSTALLING, V_INSTALLED, V_RESTART, V_BLOCKED,
+    V_FAILED, V_CANCELLED,
+};
+
+// ---- state shared with the worker -------------------------------------------
+
+static struct upd_plan g_plan;
+static char g_server[UPD_URL_MAX];
+static int g_job;                   // JOB_*, set here, cleared here on EV_DONE
+static volatile int g_cancel;
+static int g_job_rc;
+
+// Log lines cross threads through this queue; EV_LOG says "drain it".
+#define LOGQ 64
+static char g_logq[LOGQ][200];
+static int g_logq_n;
+static pthread_mutex_t g_logq_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static struct uapp *g_app;
+static unsigned long long g_last_post_ns;
+
+// ---- widgets --------------------------------------------------------------
+
+static enum view g_view = V_CHECKING;
+static char g_title_text[64], g_detail_text[200], g_amount_text[64], g_rate_text[64];
+static struct uui_label g_title, g_detail, g_server_key, g_server_val, g_amount, g_rate, g_spacer;
+static struct uui_button g_change, g_use, g_edit_cancel, g_log_btn, g_check, g_main;
+static struct uui_textbox g_edit;
+static struct uui_dropdown g_recent;
+static char g_recent_urls[UPD_RECENT_MAX][UPD_URL_MAX];
+static const char *g_recent_items[UPD_RECENT_MAX + 1];
+static struct uui_progress g_bar;
+static struct uui_table g_table;
+static struct uui_textview g_log;
+static char g_log_buf[32768];
+static int g_rows[UUI_TABLE_MAX_ROWS];   // plan index per table row
+static int g_row_count;
+static int g_show_log;
+
+// Speed, from the bytes done since the install started.
+static unsigned long long g_apply_start_ns;
+
+static const struct uui_table_column COLS[] = {
+    { "File", 0, UUI_TALIGN_LEFT },
+    { "Size", 8, UUI_TALIGN_RIGHT },
+    { "Status", 12, UUI_TALIGN_LEFT },
+};
+
+static struct uui_item g_server_items[] = {
+    { .ops = &uui_label_ops,  .widget = &g_server_key, .name = "serverkey" },
+    { .ops = &uui_label_ops,  .widget = &g_server_val, .name = "server", .flags = UUI_FILL_W },
+    { .ops = &uui_button_ops, .widget = &g_change, .id = ID_CHANGE, .name = "change" },
+};
+static struct uui_layout g_server_row = {
+    .dir = UUI_ROW, .items = g_server_items,
+    .count = sizeof g_server_items / sizeof g_server_items[0],
+};
+static struct uui_item g_edit_items[] = {
+    { .ops = &uui_textbox_ops,  .widget = &g_edit, .id = ID_SERVER_EDIT, .name = "serveredit",
+      .flags = UUI_FILL_W },
+    { .ops = &uui_dropdown_ops, .widget = &g_recent, .id = ID_RECENT, .name = "recent" },
+    { .ops = &uui_button_ops,   .widget = &g_use, .id = ID_USE, .name = "use" },
+    { .ops = &uui_button_ops,   .widget = &g_edit_cancel, .id = ID_EDIT_CANCEL, .name = "editcancel" },
+};
+static struct uui_layout g_edit_row = {
+    .dir = UUI_ROW, .items = g_edit_items, .count = sizeof g_edit_items / sizeof g_edit_items[0],
+};
+static struct uui_item g_amount_items[] = {
+    { .ops = &uui_label_ops, .widget = &g_amount, .name = "amount", .flags = UUI_FILL_W },
+    { .ops = &uui_label_ops, .widget = &g_rate, .name = "rate" },
+};
+static struct uui_layout g_amount_row = {
+    .dir = UUI_ROW, .items = g_amount_items,
+    .count = sizeof g_amount_items / sizeof g_amount_items[0],
+};
+static struct uui_item g_button_items[] = {
+    { .ops = &uui_button_ops, .widget = &g_log_btn, .id = ID_LOG, .name = "logtoggle" },
+    { .ops = &uui_label_ops,  .widget = &g_spacer, .flags = UUI_FILL_W },
+    { .ops = &uui_button_ops, .widget = &g_check, .id = ID_CHECK, .name = "check" },
+    { .ops = &uui_button_ops, .widget = &g_main, .id = ID_MAIN, .name = "main" },
+};
+static struct uui_layout g_button_row = {
+    .dir = UUI_ROW, .items = g_button_items,
+    .count = sizeof g_button_items / sizeof g_button_items[0],
+};
+
+// Indices into g_items, for the two rows that come and go.
+enum { ITEM_EDIT = 3, ITEM_TABLE = 6, ITEM_LOG = 7 };
+static struct uui_item g_items[] = {
+    { .ops = &uui_label_ops,    .widget = &g_title, .name = "title" },
+    { .ops = &uui_label_ops,    .widget = &g_detail, .name = "detail", .flags = UUI_FILL_W },
+    { .ops = &uui_layout_ops,   .widget = &g_server_row, .flags = UUI_FILL_W },
+    { .ops = &uui_layout_ops,   .widget = &g_edit_row, .flags = UUI_FILL_W, .hidden = 1 },
+    { .ops = &uui_progress_ops, .widget = &g_bar, .name = "bar", .flags = UUI_FILL_W },
+    { .ops = &uui_layout_ops,   .widget = &g_amount_row, .flags = UUI_FILL_W },
+    { .ops = &uui_table_ops,    .widget = &g_table, .id = ID_TABLE, .name = "files",
+      .flags = UUI_FILL_W | UUI_FILL_H },
+    { .ops = &uui_textview_ops, .widget = &g_log, .id = ID_LOGVIEW, .name = "log",
+      .flags = UUI_FILL_W | UUI_FILL_H, .hidden = 1 },
+    { .ops = &uui_layout_ops,   .widget = &g_button_row, .flags = UUI_FILL_W },
+};
+static struct uui_layout g_root = {
+    .dir = UUI_COLUMN, .items = g_items, .count = sizeof g_items / sizeof g_items[0],
+};
+
+static struct uui_focusable g_focusables[] = {
+    { &g_change, &uui_button_ops },
+    { &g_edit, &uui_textbox_ops },
+    { &g_recent, &uui_dropdown_ops },
+    { &g_use, &uui_button_ops },
+    { &g_edit_cancel, &uui_button_ops },
+    { &g_table, &uui_table_ops },
+    { &g_log_btn, &uui_button_ops },
+    { &g_check, &uui_button_ops },
+    { &g_main, &uui_button_ops },
+};
+static struct uui_focus g_focus;
+
+// ---- the worker ------------------------------------------------------------
+
+static void w_log(void *ctx, const char *line) {
+    (void)ctx;
+    pthread_mutex_lock(&g_logq_lock);
+    if (g_logq_n < LOGQ) snprintf(g_logq[g_logq_n++], sizeof g_logq[0], "%s", line);
+    pthread_mutex_unlock(&g_logq_lock);
+    uapp_post(g_app, EV_LOG, 0);
+}
+
+// Throttled: a download calls this every 32 KiB, and ten repaints a
+// second is all a person can see.
+static void w_progress(void *ctx, const struct upd_plan *p, int idx) {
+    (void)ctx;
+    unsigned long long now = sys_monotonic_ns();
+    int milestone = idx >= 0 && p->files[idx].status != UPD_FETCHING;
+    if (!milestone && now - g_last_post_ns < 100000000ULL) return;
+    g_last_post_ns = now;
+    uapp_post(g_app, EV_PROGRESS, idx);
+}
+
+static int w_cancelled(void *ctx) { (void)ctx; return g_cancel; }
+
+static const struct upd_hooks HOOKS = {
+    .log = w_log, .progress = w_progress, .cancelled = w_cancelled,
+};
+
+static void *worker(void *arg) {
+    int job = (int)(long)arg;
+    if (job == JOB_CHECK) {
+        upd_plan_free(&g_plan);
+        g_job_rc = upd_check(g_server, &g_plan, &HOOKS);
+    } else {
+        g_job_rc = upd_apply(&g_plan, &HOOKS);
+    }
+    uapp_post(g_app, EV_DONE, job);
+    return 0;
+}
+
+static void refresh(struct uapp *a);
+
+static void start_job(struct uapp *a, int job) {
+    if (g_job != JOB_NONE) return;
+    g_job = job;
+    g_cancel = 0;
+    g_view = job == JOB_CHECK ? V_CHECKING : V_INSTALLING;
+    if (job == JOB_APPLY) g_apply_start_ns = sys_monotonic_ns();
+    if (job == JOB_CHECK) g_row_count = 0;
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    pthread_t th;
+    if (pthread_create(&th, &at, worker, (void *)(long)job) != 0) {
+        worker((void *)(long)job);   // no thread: the window freezes for it, but it still works
+    }
+    ulogf("sysupdate: %s started\n", job == JOB_CHECK ? "check" : "install");
+    refresh(a);
+}
+
+// ---- presenting --------------------------------------------------------------
+
+static const char *status_word(const struct upd_file *f) {
+    static char pct[16];
+    switch (f->status) {
+    case UPD_FETCHING:
+        snprintf(pct, sizeof pct, "%d%%", f->size ? (int)(f->got * 100 / f->size) : 100);
+        return pct;
+    case UPD_STAGED:    return "Downloaded";
+    case UPD_INSTALLED: return "Installed";
+    case UPD_AT_BOOT:   return "At restart";
+    case UPD_FAILED:    return g_view == V_CANCELLED ? "Stopped" : "Failed";
+    default:            return f->change == UPD_NEW ? "New" : "Queued";
+    }
+}
+
+static void cell(void *ctx, int row, int col, char *out, int cap) {
+    (void)ctx;
+    out[0] = '\0';
+    if (row < 0 || row >= g_row_count) return;
+    const struct upd_file *f = &g_plan.files[g_rows[row]];
+    if (col == 0) snprintf(out, (size_t)cap, "%s", f->path);
+    else if (col == 1) human_size(out, (unsigned long)cap, f->size);
+    else snprintf(out, (size_t)cap, "%s", status_word(f));
+}
+
+// The row being fetched is tinted, so the eye finds it in a long list.
+static uint32_t tint(void *ctx, int row) {
+    (void)ctx;
+    if (row < 0 || row >= g_row_count) return 0;
+    return g_plan.files[g_rows[row]].status == UPD_FETCHING ? UTHEME_SELECTION : 0;
+}
+
+static void collect_rows(void) {
+    g_row_count = 0;
+    for (int i = 0; i < g_plan.count && g_row_count < UUI_TABLE_MAX_ROWS; i++) {
+        int c = g_plan.files[i].change;
+        if (c == UPD_CHANGED || c == UPD_NEW) g_rows[g_row_count++] = i;
+    }
+    uui_table_set_rows(&g_table, g_row_count);
+}
+
+static void set_button(struct uui_button *b, const char *label, int enabled) {
+    b->label = label;
+    b->disabled = !enabled;
+}
+
+static void relayout(struct uapp *a) {
+    uui_layout_run(&g_root, 0, 0, uapp_width(a), uapp_height(a));
+}
+
+static void refresh(struct uapp *a) {
+    char total[16], done[16];
+    human_size(total, sizeof total, g_plan.bytes);
+    human_size(done, sizeof done, g_plan.done_bytes);
+    const char *title = "";
+    g_detail_text[0] = g_amount_text[0] = g_rate_text[0] = '\0';
+    char built[96] = "";
+    if (g_plan.built[0])
+        snprintf(built, sizeof built, ", build of %s%s%s%s", g_plan.built,
+                 g_plan.version[0] ? " (" : "", g_plan.version, g_plan.version[0] ? ")" : "");
+
+    switch (g_view) {
+    case V_CHECKING:
+        title = "Checking for updates";
+        snprintf(g_detail_text, sizeof g_detail_text, "Comparing this machine with the server");
+        uui_progress_set_busy(&g_bar);
+        break;
+    case V_AVAILABLE:
+        title = "Updates available";
+        snprintf(g_detail_text, sizeof g_detail_text, "%d of %d files changed, %s%s",
+                 g_plan.changed, g_plan.count, total, built);
+        uui_progress_set(&g_bar, 0);
+        snprintf(g_amount_text, sizeof g_amount_text, "%s to download", total);
+        break;
+    case V_UPTODATE:
+        title = "Up to date";
+        snprintf(g_detail_text, sizeof g_detail_text, "All %d files match the server%s",
+                 g_plan.count, built);
+        uui_progress_set(&g_bar, 1000);
+        break;
+    case V_INSTALLING:
+        title = "Installing updates";
+        snprintf(g_detail_text, sizeof g_detail_text, "%d of %d files changed, %s%s",
+                 g_plan.changed, g_plan.count, total, built);
+        uui_progress_set(&g_bar, g_plan.bytes ? (int)(g_plan.done_bytes * 1000 / g_plan.bytes) : 0);
+        snprintf(g_amount_text, sizeof g_amount_text, "%s of %s", done, total);
+        {
+            unsigned long long el = sys_monotonic_ns() - g_apply_start_ns;
+            unsigned long long ms = el / 1000000ULL;
+            if (ms > 500 && g_plan.done_bytes) {
+                unsigned long long rate = g_plan.done_bytes * 1000ULL / ms;
+                unsigned long long left = g_plan.bytes > g_plan.done_bytes
+                                          ? (g_plan.bytes - g_plan.done_bytes) / (rate ? rate : 1) : 0;
+                char r[16];
+                human_size(r, sizeof r, rate);
+                snprintf(g_rate_text, sizeof g_rate_text, "%s/s, about %llu s left", r,
+                         left + 1);
+            }
+        }
+        break;
+    case V_INSTALLED:
+        title = "Updates installed";
+        snprintf(g_detail_text, sizeof g_detail_text, "%d file%s updated%s", g_plan.changed,
+                 g_plan.changed == 1 ? "" : "s", built);
+        uui_progress_set(&g_bar, 1000);
+        snprintf(g_amount_text, sizeof g_amount_text, "%s", total);
+        break;
+    case V_RESTART:
+        title = "Restart to finish";
+        if (g_plan.staged_for_boot && !g_plan.at_boot)
+            snprintf(g_detail_text, sizeof g_detail_text,
+                     "An update is waiting; it is applied while the machine starts");
+        else
+            snprintf(g_detail_text, sizeof g_detail_text,
+                     "%d files downloaded and verified%s. They are put in place while "
+                     "the machine restarts, because %s", g_plan.changed, built,
+                     g_plan.kernel_installed ? "the kernel changed" : "a library changed");
+        uui_progress_set(&g_bar, 1000);
+        if (g_plan.at_boot || g_plan.kernel_installed)
+            snprintf(g_amount_text, sizeof g_amount_text, "%s downloaded", total);
+        break;
+    case V_BLOCKED:
+        title = "The kernel cannot be updated";
+        snprintf(g_detail_text, sizeof g_detail_text,
+                 "GRUB on this machine shows no menu, so the previous kernel could not be "
+                 "chosen if a new one failed. Nothing will be installed.");
+        uui_progress_set(&g_bar, 0);
+        break;
+    case V_CANCELLED:
+        title = "Update cancelled";
+        snprintf(g_detail_text, sizeof g_detail_text, "Nothing was changed");
+        uui_progress_set(&g_bar, 0);
+        break;
+    case V_FAILED:
+        title = "Update failed";
+        snprintf(g_detail_text, sizeof g_detail_text, "%s", g_plan.error[0] ? g_plan.error : "see the log");
+        uui_progress_set(&g_bar, 0);
+        break;
+    }
+    snprintf(g_title_text, sizeof g_title_text, "%s", title);
+    uui_label_set_text(&g_title, g_title_text);
+    uui_label_set_text(&g_detail, g_detail_text);
+    uui_label_set_text(&g_amount, g_amount_text);
+    uui_label_set_text(&g_rate, g_rate_text);
+    uui_label_set_text(&g_server_val, g_server);
+
+    int busy = g_job != JOB_NONE;
+    set_button(&g_check, "Check again", !busy);
+    set_button(&g_change, "Change...", !busy);
+    switch (g_view) {
+    case V_CHECKING: case V_INSTALLING: set_button(&g_main, "Cancel", 1); break;
+    case V_AVAILABLE:                   set_button(&g_main, "Install", 1); break;
+    case V_RESTART:                     set_button(&g_main, "Restart now", 1); break;
+    default:                            set_button(&g_main, "Install", 0); break;
+    }
+    uui_table_set_rows(&g_table, g_row_count);
+    relayout(a);
+    uapp_redraw(a);
+}
+
+static void drain_log(void) {
+    pthread_mutex_lock(&g_logq_lock);
+    for (int i = 0; i < g_logq_n; i++) {
+        for (const char *c = g_logq[i]; *c; c++) utext_putc(&g_log.tb, *c);
+        utext_putc(&g_log.tb, '\n');
+    }
+    g_logq_n = 0;
+    pthread_mutex_unlock(&g_logq_lock);
+}
+
+static void job_done(struct uapp *a, int job) {
+    g_job = JOB_NONE;
+    if (job == JOB_CHECK) {
+        collect_rows();
+        if (g_job_rc != 0) g_view = g_cancel ? V_CANCELLED : V_FAILED;
+        else if (g_plan.staged_for_boot) g_view = V_RESTART;
+        else if (g_plan.kernel_blocked) g_view = V_BLOCKED;
+        else g_view = g_plan.changed ? V_AVAILABLE : V_UPTODATE;
+    } else {
+        if (g_job_rc != 0) g_view = g_cancel ? V_CANCELLED : V_FAILED;
+        else if (g_plan.at_boot || g_plan.kernel_installed) g_view = V_RESTART;
+        else g_view = V_INSTALLED;
+    }
+    // What a test reads: the view, and the counts it was drawn from.
+    ulogf("sysupdate: view %d changed %d staged %d installed %s\n", (int)g_view, g_plan.changed,
+          g_plan.at_boot, g_job_rc == 0 ? "ok" : "failed");
+    refresh(a);
+}
+
+// ---- the server editor --------------------------------------------------------
+
+static void show_editor(struct uapp *a, int on) {
+    g_items[ITEM_EDIT].hidden = !on;
+    if (on) {
+        uui_textbox_set_text(&g_edit, g_server);
+        int n = upd_recent(g_recent_urls, UPD_RECENT_MAX);
+        g_recent_items[0] = "Recent";
+        for (int i = 0; i < n; i++) g_recent_items[i + 1] = g_recent_urls[i];
+        uui_dropdown_init(&g_recent, 0, 0, 0, 0, g_recent_items, n + 1);
+        uui_focus_set(&g_focus, 1);
+    }
+    relayout(a);
+    uapp_redraw(a);
+}
+
+static void use_server(struct uapp *a) {
+    const char *url = uui_textbox_text(&g_edit);
+    if (upd_server_set(url) != 0) {
+        snprintf(g_detail_text, sizeof g_detail_text,
+                 "Not saved: the address must start with http:// and fit in 63 characters");
+        uui_label_set_text(&g_detail, g_detail_text);
+        uapp_redraw(a);
+        return;
+    }
+    snprintf(g_server, sizeof g_server, "%s", url);
+    ulogf("sysupdate: server %s\n", g_server);
+    show_editor(a, 0);
+    start_job(a, JOB_CHECK);
+}
+
+// ---- callbacks ----------------------------------------------------------------
+
+static void on_widget(struct uapp *a, int id, int reason) {
+    if (id == ID_RECENT && reason == UUI_REASON_RELEASE) {
+        int s = uui_dropdown_selected(&g_recent);
+        if (s > 0) uui_textbox_set_text(&g_edit, g_recent_items[s]);
+        return;
+    }
+    if (reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return;
+    switch (id) {
+    case ID_CHANGE:      if (g_job == JOB_NONE) show_editor(a, g_items[ITEM_EDIT].hidden); break;
+    case ID_USE:         use_server(a); break;
+    case ID_EDIT_CANCEL: show_editor(a, 0); break;
+    case ID_CHECK:       start_job(a, JOB_CHECK); break;
+    case ID_LOG:
+        g_show_log = !g_show_log;
+        g_items[ITEM_TABLE].hidden = g_show_log;
+        g_items[ITEM_LOG].hidden = !g_show_log;
+        g_log_btn.label = g_show_log ? "Show files" : "Show log";
+        relayout(a);
+        uapp_redraw(a);
+        break;
+    case ID_MAIN:
+        if (g_view == V_CHECKING || g_view == V_INSTALLING) g_cancel = 1;
+        else if (g_view == V_AVAILABLE) start_job(a, JOB_APPLY);
+        else if (g_view == V_RESTART) { sys_sync(); sys_poweroff(1); }
+        break;
+    }
+}
+
+static void on_key(struct uapp *a, int key, unsigned mods) {
+    (void)mods;
+    if ((key == '\n' || key == '\r') && !g_items[ITEM_EDIT].hidden) use_server(a);
+}
+
+static int on_user(struct uapp *a, int kind, int arg) {
+    if (kind == EV_LOG) { drain_log(); return 1; }
+    if (kind == EV_DONE) { drain_log(); job_done(a, arg); return 1; }
+    if (kind == EV_PROGRESS) {
+        if (g_job == JOB_CHECK && g_plan.count && g_row_count == 0) {
+            snprintf(g_detail_text, sizeof g_detail_text, "Comparing %d files", g_plan.count);
+            uui_label_set_text(&g_detail, g_detail_text);
+        }
+        if (g_job == JOB_APPLY) refresh(a);
+        return 1;
+    }
+    return 0;
+}
+
+static int on_tick(struct uapp *a) {
+    (void)a;
+    return uui_progress_tick(&g_bar);
+}
+
+// Closing mid-install would leave the worker writing into a process
+// that is going away; ask it to stop first, and let the next close go.
+static int on_close(struct uapp *a) {
+    (void)a;
+    if (g_job == JOB_NONE) return 1;
+    g_cancel = 1;
+    return 0;
+}
+
+// Font-derived, so here rather than in main(): the session font is not
+// mapped until uapp_run() fetches it.
+static void on_size(int *w, int *h) {
+    g_title.font = ugfx_font_session(UGFX_FONT_BOLD);
+    *w = ugfx_char_w() * 76;
+    *h = ugfx_char_h() * 28;
+}
+
+static void on_open(struct uapp *a) {
+    g_app = a;
+    start_job(a, JOB_CHECK);
+}
+
+int main(void) {
+    if (!ugfx_font_init()) return 2;
+    upd_server_get(g_server, sizeof g_server);
+
+    uui_label_init(&g_title, g_title_text);
+    uui_label_init(&g_detail, g_detail_text);
+    uui_label_set_wrap(&g_detail, 2);
+    uui_label_init(&g_server_key, "Server");
+    uui_label_init(&g_server_val, g_server);
+    uui_label_init(&g_amount, g_amount_text);
+    uui_label_init(&g_rate, g_rate_text);
+    uui_label_init(&g_spacer, "");
+    uui_button_init(&g_change, 0, 0, 0, 0, "Change...", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_CHANGE);
+    uui_button_init(&g_use, 0, 0, 0, 0, "Use", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_USE);
+    uui_button_init(&g_edit_cancel, 0, 0, 0, 0, "Cancel", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_EDIT_CANCEL);
+    uui_button_init(&g_log_btn, 0, 0, 0, 0, "Show log", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_LOG);
+    uui_button_init(&g_check, 0, 0, 0, 0, "Check again", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_CHECK);
+    uui_button_init(&g_main, 0, 0, 0, 0, "Restart now", UTHEME_ACCENT, UTHEME_ACCENT_TEXT, ID_MAIN);
+    g_change.outlined = g_use.outlined = g_edit_cancel.outlined = g_log_btn.outlined = 1;
+    g_check.outlined = 1;
+    uui_textbox_init(&g_edit, g_server);
+    g_recent_items[0] = "Recent";
+    uui_dropdown_init(&g_recent, 0, 0, 0, 0, g_recent_items, 1);
+    uui_progress_init(&g_bar);
+    uui_table_init(&g_table, 0, 0, 0, 0, COLS, (int)(sizeof COLS / sizeof COLS[0]), cell, 0);
+    uui_table_set_tint(&g_table, tint);
+    uui_textview_init(&g_log, 0, 0, 0, 0, UTHEME_TEXT, UTHEME_WHITE, UTHEME_PANEL_BG,
+                      UTHEME_BUTTON_BG, UTHEME_SELECTION, g_log_buf, (int)sizeof g_log_buf);
+    uui_focus_init(&g_focus, g_focusables, (int)(sizeof g_focusables / sizeof g_focusables[0]));
+
+    struct uapp_desc desc = {
+        .title = "System Update",
+        .app_id = "sysupdate",
+        .layout = &g_root,
+        .widgets = g_items,
+        .widget_count = sizeof g_items / sizeof g_items[0],
+        .focus = &g_focus,
+        .on_widget = on_widget,
+        .on_key = on_key,
+        .on_open = on_open,
+        .on_user = on_user,
+        .on_tick = on_tick,
+        .tick_ms = 50,
+        .on_close = on_close,
+        .flags = UAPP_RESIZABLE | UAPP_SINGLE_INSTANCE,
+        .on_size = on_size,
+    };
+    return uapp_run(&desc);
+}
