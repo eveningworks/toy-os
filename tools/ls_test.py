@@ -46,6 +46,7 @@ import tempfile
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools"))
 import vm as vm_mod                   # noqa: E402 -- started_ok(), see its comment
+from harness import copy_disk  # noqa: E402
 VM = os.path.join(REPO, "tools", "vm.py")
 WRITER = os.path.join(REPO, "tools", "tfs3_writer.py")
 
@@ -183,7 +184,7 @@ def main():
         t.close()
         # --sparse=always: disk.img is a few MB of data in a 9 GB sparse
         # file, and a hole-filling copy costs the whole 9 GB.
-        subprocess.run(["cp", "--reflink=auto", "--sparse=always", src, t.name], check=True)
+        copy_disk(src, t.name)
         args.disk = tmp_disk = t.name
         print(f"ls_test: staging {BIG_COUNT} files in {BIG_DIR}")
         err = stage_fixture(args.disk)

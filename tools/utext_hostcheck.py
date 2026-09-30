@@ -58,6 +58,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import hostcheck  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -92,6 +93,21 @@ void ugfx_fill_rect(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t
 { (void)s; (void)x; (void)y; (void)w; (void)h; (void)c; }
 void ugfx_draw_char(struct ugfx_surface *s, int x, int y, char ch, uint32_t f, uint32_t b)
 { (void)s; (void)x; (void)y; (void)ch; (void)f; (void)b; }
+// Smooth scrolling, the caret blink and the clip stack are drawing and
+// animation, not wrap accounting -- and the real ones drag in the
+// settings client. Stubbed with the no-animation answer: sync returns
+// the position it was given.
+#include "ui/uui_scrollanim.h"
+void uui_scrollanim_init(struct uui_scrollanim *a) { (void)a; }
+void uui_scrollanim_arm(struct uui_scrollanim *a) { (void)a; }
+void uui_scrollanim_cancel(struct uui_scrollanim *a) { (void)a; }
+int uui_scrollanim_sync(struct uui_scrollanim *a, int pos_px) { (void)a; return pos_px; }
+int uui_caret_visible(void) { return 1; }
+void ugfx_clip_save(const struct ugfx_surface *s, struct ugfx_clip *out)
+{ (void)s; out->x0 = out->y0 = out->x1 = out->y1 = out->active = 0; }
+void ugfx_clip_restore(struct ugfx_surface *s, const struct ugfx_clip *c) { (void)s; (void)c; }
+void ugfx_clip_intersect(struct ugfx_surface *s, int x, int y, int w, int h)
+{ (void)s; (void)x; (void)y; (void)w; (void)h; }
 
 // **INCLUDED, NOT LINKED.** line_span() and line_begin() are static --
 // they are the rule and the accelerator, and testing an accelerator
@@ -398,18 +414,11 @@ int main(int argc, char **argv) {
 
 
 def build(tmp):
-    src = os.path.join(tmp, "utext_host.c")
-    with open(src, "w") as fh:
-        fh.write(DRIVER)
-    exe = os.path.join(tmp, "utext_host")
-    subprocess.run(
-        ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-o", exe, src,
-         os.path.join(ROOT, "userland", "ui", "uui_edit.c"),
-         "-I" + os.path.join(ROOT, "userland"),
-         "-I" + os.path.join(ROOT, "kernel", "include", "api"),
-         "-I" + os.path.join(ROOT, "kernel", "include", "abi")],
-        check=True)
-    return exe
+    drv = hostcheck.write(tmp, "utext_host.c", DRIVER)
+    return hostcheck.compile(
+        tmp, "utext_host", [drv, os.path.join(ROOT, "userland", "ui", "uui_edit.c")],
+        includes=[os.path.join(ROOT, "userland"), os.path.join(ROOT, "kernel", "include", "api"),
+                  os.path.join(ROOT, "kernel", "include", "abi")], tool="utext_hostcheck")
 
 
 def corpus(tmp):

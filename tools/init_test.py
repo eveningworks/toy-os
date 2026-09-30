@@ -107,6 +107,7 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools"))
 import vm as vm_mod                   # noqa: E402 -- started_ok(), see its comment
+from harness import copy_disk  # noqa: E402
 VM = os.path.join(REPO, "tools", "vm.py")
 
 # One process row from `ps`: PID PPID PGID STATE CPU(s) MEM(K) NAME.
@@ -198,8 +199,7 @@ def main():
         tmp.close()
         # --sparse=always: disk.img is a few MB of data in a 9 GB sparse
         # file, and a hole-filling copy costs the whole 9 GB.
-        subprocess.run(["cp", "--reflink=auto", "--sparse=always", src, tmp.name],
-                       check=True)
+        copy_disk(src, tmp.name)
         args.disk = tmp.name
 
         # The crash-loop fixture -- see the module docstring. Written

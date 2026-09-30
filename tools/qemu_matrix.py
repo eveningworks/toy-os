@@ -41,6 +41,7 @@ import argparse
 import os
 import subprocess
 import sys
+from harness import copy_disk  # noqa: E402
 
 # base image -> the QEMU it ships. Ubuntu 24.04 is what GitHub's
 # ubuntu-latest runner uses, which makes it the one that matters most.
@@ -86,13 +87,13 @@ def run_suite(tag, suite, virtio, timeout, run=1):
     os.makedirs(work, exist_ok=True)
     # Sparse, always: disk.img is ~4 MB of data in a 9 GB sparse file, and
     # a hole-filling copy costs the 9 GB (CLAUDE.md).
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", f"{work}/disk.img"], check=True)
+    copy_disk("disk.img", f"{work}/disk.img")
     script, prefix, verdicts = SUITES[suite]
     args = ["python3", "-u"] + script + ["--disk", f"{work}/disk.img"]
     if suite == "ktest":
         args += ["--qemu-log", f"{work}/qemu.log"]
         if virtio:
-            subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", f"{work}/virtio.img"], check=True)
+            copy_disk("disk.img", f"{work}/virtio.img")
             args += ["--virtio-disk", f"{work}/virtio.img"]
     else:
         # The guest's own record, which survives an emulator that hangs.

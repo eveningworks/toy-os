@@ -54,6 +54,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui
 from qmp_test import QMPSession
 import port_guard  # noqa: E402
+from harness import Results  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 HANG_BIN = "/tests/hangclient"
@@ -88,15 +89,7 @@ DIALOG_WAIT_S = max(2.0, PING_TIMEOUT_S * 6)
 CYCLES = 6
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(("  PASS  " if ok else "  FAIL  ") + name)
-        if not ok and detail:
-            print(f"        {detail}")
+Result = Results
 
 
 def gui_json(dbg, command):

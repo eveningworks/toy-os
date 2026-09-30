@@ -31,18 +31,16 @@ in which check 1 stays green is a run where the validator is not looking
 at what arrived -- which is exactly the bug the whole design is against.
 """
 import argparse
-import http.server
 import os
-import subprocess
 import sys
 import tempfile
-import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 from net_test import launch, kill  # noqa: E402
+from harness import BodyServer, Results, copy_disk  # noqa: E402
 
 PORT = 18089
 GATEWAY = "10.0.2.2"
@@ -83,44 +81,13 @@ def html_body():
             + b"<p>not found</p>\n" * 4000 + b"</body></html>\n")
 
 
-class Check:
-    def __init__(self):
-        self.rows = []
-
-    def ok(self, name, cond, detail=""):
-        self.rows.append((bool(cond), name, detail))
-        print(f"  {'ok  ' if cond else 'FAIL'}  {name}"
-              + (f"   [{detail}]" if detail and not cond else ""))
-        return bool(cond)
-
-    def failed(self):
-        return [r for r in self.rows if not r[0]]
+Check = Results
 
 
 def server(bodies):
     """`bodies` maps a path to the bytes served there, so one server
     answers every case and a check picks its failure by URL."""
-    class Handler(http.server.BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.0"
-
-        def do_GET(self):
-            body = bodies.get(self.path)
-            if body is None:
-                self.send_response(404)
-                self.end_headers()
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *a):
-            pass
-
-    srv = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return srv
+    return BodyServer(port=PORT, routes=bodies)
 
 
 def sum_of(sh, path):
@@ -166,8 +133,7 @@ def main():
         })
 
         disk = os.path.join(tmp, "hwdata.img")
-        subprocess.run(["cp", "--reflink=auto", "--sparse=always", disk_src, disk],
-                       check=True)
+        copy_disk(disk_src, disk)
 
         print("hwdata_test: booting")
         sh, pidfile = boot(disk, tmp, "hwdata")

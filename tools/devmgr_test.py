@@ -39,18 +39,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui, changed_rows   # noqa: E402
 from qmp_test import QMPSession                        # noqa: E402
 import port_guard  # noqa: E402
+from harness import Results  # noqa: E402
 
 DEVMGR = "/bin/wm/system/devmgr"
 TITLE = "Device Manager"
 K_ESC = "0x1b"
 
-checks = []
 
 
-def check(name, ok, detail=""):
-    checks.append((name, bool(ok), detail))
-    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   {detail}" if detail else ""))
-    return bool(ok)
+_res = Results()
+check = _res.check
+checks = _res.rows
 
 
 _lay = {}
@@ -304,9 +303,7 @@ def overlay_hover(dbg, qmp, win, lay, tmp):
 
 
 def finish():
-    passed = sum(1 for _, ok, _ in checks if ok)
-    print(f"\ndevmgr_test: {passed} passed, {len(checks) - passed} failed")
-    return 0 if checks and passed == len(checks) else 1
+    return _res.finish("devmgr_test")
 
 
 if __name__ == "__main__":

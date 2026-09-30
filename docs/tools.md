@@ -152,6 +152,34 @@ manual steps to be worth automating:
   `fs_syscalls.c` failed a chain that began in another function. Two
   chains at one depth inside one function still merge, which is the
   safe direction.
+- **`harness.py`** -- what every test tool had written for itself: a
+  results table (`Results`: `.check()`/`.ok()` returning the verdict,
+  `.passes`/`.fails`, `.rows`, `.failed()`, and `.finish(tool)` printing
+  the `<tool>: N passed, M failed` line `gui_regress.py` reads),
+  `copy_disk(src, dst, cwd=None)` (the sparse, reflinked copy), and
+  `BodyServer` (a threaded HTTP(S) server on this machine answering
+  with one body or a route table, reached from a guest as 10.0.2.2).
+  Moved in on 2026-09-30 from 67 tools' own tables, 40 `cp` lines and
+  `hwdata_test`/`https_test`'s servers. **Only the part that did not
+  differ** (`dup_scan.py`'s rule): a table with `skip()` or `report()`,
+  `clipboard_test.py`'s `check(ok, what)` order, and `damage_hunt.py`'s
+  copy with a plain-copy fallback keep their own. A new tool uses this.
+- **`hostcheck.py`** -- the build half of a `*_hostcheck.py`: `write()`
+  the C driver, `stage()` a repo source into the temp directory with the
+  positive control's (before, after) edits -- STOPPING when a `before`
+  is gone, since a control that patched nothing proves nothing -- and
+  `compile()` with the host gcc (`STRICT` flags by default). Used by
+  hash, utween, umd, utext, hid_parse and teapot; divti3, midi, regex,
+  usnd, ugfx_text, uimg and uimg_codec build differently enough
+  (sanitizers, shim headers, two compilers) to keep their own.
+- **`serial_boot.py`** -- the TCP-serial plumbing the controller boot
+  tests (`virtio_boot_test`, `ahci_test`, `partition_test`,
+  `poweroff_test`) each had: `connect()`, `read_until()`, and
+  `run_session()` (wait for the debug console, send commands -- a
+  `(command, needle)` pair waits on the ARTIFACT rather than a fixed
+  settle -- return the transcript, kill QEMU). Each tool keeps its own
+  `launch()`, which is the part that really differs.
+  `serial_console.py` is the unix-socket equivalent.
 - **`fresh_disk.py`** -- a PRISTINE image of the current build, and
   whether an existing one has drifted. `make_fresh(dest)` is `make
   iso`'s recipe pointed elsewhere -- a sparse image, `seed_disk.py`,
@@ -4796,6 +4824,18 @@ window without going through it will find its layout polls timing out.
 - **`ondemand_sweep.py`** -- runs the ~30 test tools that **neither**
   `preflight.sh` nor `gui_regress.py` covers, and reports which have
   rotted.
+
+  **THE SHARED GUEST MUST HAVE A DESKTOP, AND THE SWEEP NOW CHECKS.**
+  `stdin`, `ansi` and `console_bleed` each delete
+  `/etc/services.d/toywm` to free the console, and until 2026-09-30 none
+  put it back -- so every attaching tool after the first of them booted
+  with no desktop and failed as `no provider named gui`, twenty lines
+  that each looked like their own bug. All three copy the descriptor to
+  `/var/tmp` and restore it at exit now, and the sweep boots the shared
+  guest once up front and refuses to start without the service (`make
+  iso` puts it back). **`--only` prefers an EXACT name**: `--only
+  console` used to run `console_bleed` too. `fileop`'s row attaches to a
+  guest now; with none, every check read an empty answer.
 
   **The gap it fills is measured, not theoretical.** Two of those tools
   were found red by accident in one session, having failed for an

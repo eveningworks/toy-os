@@ -62,6 +62,7 @@ from gui_debug import DebugConsole      # noqa: E402
 from qmp_test import QMPSession         # noqa: E402
 import port_guard                       # noqa: E402
 import vm as vm_mod                     # noqa: E402 -- started_ok()
+from harness import copy_disk  # noqa: E402
 
 VM = os.path.join(REPO, "tools", "vm.py")
 
@@ -341,8 +342,7 @@ def main():
         print(f"kbd_test: {label} on slot {inst} (QMP {4445 + inst})")
         t = tempfile.NamedTemporaryFile(suffix=".img", delete=False)
         t.close()
-        subprocess.run(["cp", "--reflink=auto", "--sparse=always", src, t.name],
-                       check=True)
+        copy_disk(src, t.name)
         try:
             got = run_path(t.name, inst, virtio, label)
             if got is None:

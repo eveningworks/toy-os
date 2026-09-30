@@ -128,6 +128,7 @@ from qmp_test import guarded_boot_args  # noqa: E402
 # The TFS3 volume is found by LOOKING, never by assuming partition 1 --
 # a bootable image puts GRUB's core.img in front of it.
 from mkpart_test import volume_of  # noqa: E402
+from harness import Results, copy_disk  # noqa: E402
 
 PROMPT = "dbg> "
 BOOT_TIMEOUT_S = 60.0
@@ -270,15 +271,7 @@ class Shell:
             pass
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}")
-        if not ok and detail:
-            print(f"        {detail}")
+Result = Results
 
 
 # --- the host-side decoder -------------------------------------------
@@ -1764,8 +1757,7 @@ def seed_net_conf(base_disk, tmp, tag, text):
     so the `dhcp = no` half would be untestable that way.
     """
     img = os.path.join(tmp, f"net_{tag}.img")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", base_disk, img],
-                   check=True)
+    copy_disk(base_disk, img)
     src = os.path.join(tmp, f"{tag}.conf")
     with open(src, "w") as f:
         f.write(text)
@@ -1838,7 +1830,7 @@ def main():
     # A COPY, sparse: this launches several guests and the user may have
     # their own QEMU holding disk.img's write lock.
     disk = os.path.join(tmp, "net_test.img")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", args.disk, disk], check=True)
+    copy_disk(args.disk, disk)
 
     r = Result()
     try:

@@ -51,6 +51,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from qmp_test import guarded_boot_args  # noqa: E402
+from harness import Results  # noqa: E402
 
 BOOT_TIMEOUT_S = 40.0
 PROMPT = "dbg> "
@@ -148,15 +149,7 @@ class Shell:
             pass
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}")
-        if not ok and detail:
-            print(f"        {detail}")
+Result = Results
 
 
 def build_second_disk(tmp):

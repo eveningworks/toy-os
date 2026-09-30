@@ -127,6 +127,7 @@ static void nope(const char *who) {
     abort();
 }
 void sys_exit(int c) { (void)c; nope("sys_exit"); }
+int sys_getpid(void) { nope("sys_getpid"); return 0; }
 void *kmalloc(unsigned long n) { (void)n; nope("kmalloc"); return 0; }
 void *kcalloc(unsigned long a, unsigned long b) { (void)a; (void)b; nope("kcalloc"); return 0; }
 unsigned long kmalloc_size(const void *p) { (void)p; nope("kmalloc_size"); return 0; }
@@ -147,7 +148,10 @@ void kfree(void *p) { (void)p; nope("kfree"); }
                     "-I" + os.path.join(REPO, "userland/include"),
                     "-I" + os.path.join(REPO, "kernel/include/api"),
                     "-I" + os.path.join(REPO, "kernel/include/abi"),
-                    "-I" + os.path.join(REPO, "userland")]
+                    "-I" + os.path.join(REPO, "userland"),
+                    # kconfig.h is GENERATED (build.conf -> build/gen), and
+                    # timer.h reaches it through syscall_abi.h.
+                    "-I" + os.path.join(REPO, "build/gen")]
 
     objs = []
     for name, path in (("toy_stdlib", os.path.join(workdir, "toy_stdlib.c")),

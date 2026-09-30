@@ -54,6 +54,7 @@ import time
 sys.path.insert(0, "tools")
 from gui_debug import DebugConsole      # noqa: E402
 from qmp_test import QMPSession         # noqa: E402
+from harness import Results  # noqa: E402
 
 
 class _Jiggler(threading.Thread):
@@ -103,14 +104,7 @@ class _Jiggler(threading.Thread):
             time.sleep(0.02)
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(f"  {'ok  ' if ok else 'FAIL'}  {name}" + (f"  -- {detail}" if detail else ""))
-        return ok
+Result = Results
 
 
 def event_count(dbg):

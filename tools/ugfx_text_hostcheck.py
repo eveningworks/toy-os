@@ -127,6 +127,7 @@ int ugfx_char_h(void) { return 16; }
 
 // Everything uui_textbox.c draws through. None of the geometry depends
 // on a pixel landing anywhere, so stubs are the whole port.
+int uui_caret_visible(void) { return 1; }   // the blink phase: drawing, not geometry
 void ugfx_fill_rect(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t c)
 { (void)s; (void)x; (void)y; (void)w; (void)h; (void)c; }
 void ugfx_draw_rect(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t c)

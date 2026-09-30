@@ -38,17 +38,10 @@ sys.path.insert(0, HERE)
 
 from audio_test import measure, wait_serial  # noqa: E402  -- one oracle, not two
 from qmp_test import QMPSession  # noqa: E402
+from harness import Results, copy_disk  # noqa: E402
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        print(f"  {'ok   ' if ok else 'FAIL '} {name}" +
-              (f"  -- {detail}" if detail else ""))
-        (self.passes if ok else self.fails).append(name)
-        return ok
+Result = Results
 
 
 class Guest:
@@ -379,8 +372,7 @@ def main():
     mid_a = os.path.join(tmp, "mid_ac97.wav")
     mid_u = os.path.join(tmp, "mid_usb.wav")
     img = os.path.join(tmp, "disk.img")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
-                   cwd=REPO, check=True)
+    copy_disk("disk.img", img, cwd=REPO)
 
     g = Guest(args.instance, img)
     phase_usb_only(g, res, usb_only)

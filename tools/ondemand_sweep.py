@@ -195,7 +195,9 @@ TOOLS = [
     # failing. Run it after touching the File Manager or userland/fm/.
     ("files",       "filemanager_test.py",     "the File Manager: panes, marks, file ops", True, None,                 True),
     ("ls",          "ls_test.py",              "/bin/ls flags and the listing cap",  True,  None,                   False),
-    ("fileop",      "fileop_test.py",          "lib/ufileop through cp/mv/rm",       True,  None,                   False),
+    # ATTACHES (it drives `vm.py exec`), so wants_vm -- without a guest
+    # every check read an empty answer and 5 of 7 "failed".
+    ("fileop",      "fileop_test.py",          "lib/ufileop through cp/mv/rm",       True,  None,                   True),
     # ATTACHES to a running guest: it only types at the debug console and
     # compares against digests it computes on the host.
     ("sum",         "sum_test.py",             "/bin/sum and /lib/libhash.so",       False, None,                   True),
@@ -525,6 +527,16 @@ def vm(*args):
                    cwd=REPO, capture_output=True, text=True)
 
 
+def shared_guest_has_desktop():
+    """Boot the shared guest once and ask whether its desktop service exists."""
+    vm("stop")
+    vm("start")
+    r = subprocess.run([sys.executable, os.path.join(HERE, "vm.py"), "exec",
+                        "ls /etc/services.d"], cwd=REPO, capture_output=True, text=True)
+    vm("stop")
+    return "toywm" in r.stdout
+
+
 def run_one(entry, timeout, logdir):
     name, script, _what, _serial, _needs, wants_vm = entry
     # A row may carry arguments after the script name (`audio_test.py
@@ -576,7 +588,11 @@ def main():
                          "raising it is usually wrong.")
     args = ap.parse_args()
 
-    chosen = [t for t in TOOLS if not args.only or args.only in t[0]]
+    # AN EXACT NAME WINS over the substring match: `--only console` also
+    # matched `console_bleed`, which deletes the desktop service and left
+    # every later attaching tool with no desktop (2026-09-30).
+    exact = [t for t in TOOLS if args.only and t[0] == args.only]
+    chosen = exact or [t for t in TOOLS if not args.only or args.only in t[0]]
     if not chosen:
         sys.exit(f"ondemand_sweep: nothing matches --only {args.only!r}")
 
@@ -586,6 +602,18 @@ def main():
             flag = "" if ok else f"   [would skip: {why}]"
             print(f"  {name:<13} {script:<26} {what}{flag}")
         return 0
+
+    # THE SHARED GUEST MUST HAVE A DESKTOP, or every attaching tool fails
+    # at once with `no provider named gui`, twenty lines that each look
+    # like their own bug. A tool that deletes the service and dies before
+    # restoring it (stdin, ansi and console_bleed all remove it), so an image one earlier
+    # sweep dirtied stays without one until `make iso`: asked here,
+    # answered in one line.
+    if any(e[5] for e in chosen) and not shared_guest_has_desktop():
+        sys.exit("ondemand_sweep: disk.img has no /etc/services.d/toywm, so the shared guest "
+                 "boots with NO desktop and every tool that attaches to it would fail.\n"
+                 "  `make iso` puts it back (a tool that removes it -- console_bleed, stdin, "
+                 "ansi -- must restore it; one that did not, or died first, left it gone)")
 
     results = []
     runnable = []

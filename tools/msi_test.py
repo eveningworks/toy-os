@@ -63,6 +63,7 @@ sys.path.insert(0, HERE)
 import port_guard  # noqa: E402
 from gui_debug import DebugConsole  # noqa: E402
 from qmp_test import QMPSession  # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 checks = []
 
@@ -152,8 +153,7 @@ def main():
     sock = os.path.join(REPO, ".vm.serial" if n == 0 else f".vm.{n}.serial")
 
     img = os.path.join("/tmp", f"msi_test_{n}.img")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
-                   cwd=REPO, check=True)
+    copy_disk("disk.img", img, cwd=REPO)
     subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
                     "--instance", str(n), "stop"], capture_output=True)
     boot = subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),

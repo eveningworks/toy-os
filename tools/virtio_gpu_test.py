@@ -43,6 +43,7 @@ import time
 sys.path.insert(0, "tools")
 from gui_debug import DebugConsole            # noqa: E402
 from qmp_test import QMPSession               # noqa: E402
+from harness import Results  # noqa: E402
 
 # For "the desktop is drawn": how much of the screen must be NON-BLACK.
 # It used to be how much a single colour had to cover, which stopped
@@ -54,14 +55,7 @@ DESKTOP_MIN_NONBLACK = 0.5
 CURSOR_X, CURSOR_Y = 400, 300
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(f"  {'ok  ' if ok else 'FAIL'}  {name}" + (f"  -- {detail}" if detail else ""))
-        return ok
+Result = Results
 
 
 def dominant(im):

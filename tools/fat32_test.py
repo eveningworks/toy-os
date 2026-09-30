@@ -50,6 +50,7 @@ sys.path.insert(0, HERE)
 
 import install_grub  # noqa: E402  (path set above)
 import vm  # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 SECTOR = 512
 
@@ -149,7 +150,7 @@ def main():
     # SPARSE, and it is not an optimisation: disk.img is ~4 MB of data in
     # a 9 GB sparse file, so a hole-filling copy costs 9 GB -- of RAM,
     # when the destination is a tmpfs.
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", args.disk, img], check=True)
+    copy_disk(args.disk, img)
 
     start_lba, sectors = esp_window(img)
     if start_lba is None:

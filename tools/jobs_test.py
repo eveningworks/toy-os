@@ -106,6 +106,7 @@ from gui_debug import DebugConsole      # noqa: E402
 import vm as vm_mod                   # noqa: E402 -- started_ok(), see its comment
 from shell_flow import ShellFlow        # noqa: E402
 import port_guard                       # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 VM = os.path.join(REPO, "tools", "vm.py")
 
@@ -207,8 +208,7 @@ def main():
             return 2
         tmp = tempfile.NamedTemporaryFile(suffix=".img", delete=False)
         tmp.close()
-        subprocess.run(["cp", "--reflink=auto", "--sparse=always", src, tmp.name],
-                       check=True)
+        copy_disk(src, tmp.name)
         args.disk = tmp.name
 
     sock = ".vm.serial" if not args.instance else f".vm.{args.instance}.serial"

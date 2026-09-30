@@ -28,6 +28,7 @@ import re
 import subprocess
 import sys
 import time
+from harness import Results  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VM = [sys.executable, os.path.join(ROOT, "tools", "vm.py")]
@@ -35,14 +36,7 @@ WAIT_S = 8          # what the guest is told to wait for an address
 MAX_ATTEMPTS = 2    # netheal.c's own ceiling
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}"
-              + (f"\n        {detail}" if detail and not ok else ""))
+Result = Results
 
 
 def vm(inst, *args, timeout=240):

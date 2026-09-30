@@ -44,6 +44,7 @@ sys.path.insert(0, HERE)
 import port_guard                      # noqa: E402
 from gui_debug import DebugConsole      # noqa: E402
 from qmp_test import QMPSession         # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 CONFIG = "/etc/sound.conf"
 FIXTURE = "/tests/sine1k.wav"
@@ -114,8 +115,7 @@ def main():
     # A copy cannot do it however this tool exits.
     tmp = tempfile.mkdtemp(prefix="mixer_test_")
     img = os.path.join(tmp, "disk.img")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
-                   cwd=REPO, check=True)
+    copy_disk("disk.img", img, cwd=REPO)
     boot = [sys.executable, os.path.join(HERE, "vm.py"), "--instance", str(n),
             "--disk", img, "--audio", "hda", "start"]
     if subprocess.run(boot, cwd=REPO).returncode != 0:

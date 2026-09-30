@@ -40,6 +40,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import hostcheck  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -157,13 +158,8 @@ def stage(tmp, poison=None):
 
 
 def compile_exe(tmp, name, sources):
-    exe = os.path.join(tmp, name)
-    cmd = ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-I", tmp, "-o", exe] + \
-          [os.path.join(tmp, s) for s in sources]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        sys.exit(f"teapot_hostcheck: compile of {name} failed:\n" + r.stderr)
-    return exe
+    return hostcheck.compile(tmp, name, [os.path.join(tmp, s) for s in sources],
+                             includes=[tmp], tool="teapot_hostcheck")
 
 
 def parse_tables(src):

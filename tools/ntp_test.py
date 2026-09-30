@@ -55,6 +55,7 @@ import sys
 import tempfile
 import threading
 import time
+from harness import copy_disk  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -243,7 +244,7 @@ def main():
 
     tmp = tempfile.mkdtemp(prefix="ntptest.")
     disk = os.path.join(tmp, "ntp.img")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", disk_src, disk], check=True)
+    copy_disk(disk_src, disk)
 
     server = SntpServer(NTP_PORT, TARGET_EPOCH, broken=control)
     if server.error:

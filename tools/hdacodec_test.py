@@ -35,6 +35,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from harness import copy_disk  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -80,8 +81,7 @@ def main():
     img = os.path.join(tmp, "disk.img")
     # A COPY, so a re-seed underneath this run cannot change what it
     # booted and the user's own QEMU keeps its write lock.
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
-                   cwd=REPO, check=True)
+    copy_disk("disk.img", img, cwd=REPO)
 
     def vm(*argv):
         # BOTH STREAMS: vm.py labels some replies on stderr, and a check

@@ -81,6 +81,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import fresh_disk  # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 # How many tools run at once by default. Each one is a QEMU with 256 MB
 # of guest RAM under TCG, so this is bounded by host cores far more than
@@ -324,8 +325,7 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot, kvm=False):
     # RAM per tool (`cp` defaults to --sparse=auto and gets this right
     # already; stating it means a future edit cannot quietly lose it,
     # which is exactly how damage_hunt.py's shutil.copyfile did).
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", disk_src, img],
-                   cwd=REPO, check=True)
+    copy_disk(disk_src, img, cwd=REPO)
 
     # KVM is a per-run choice, passed straight to vm.py. Opt-in, never
     # the default -- see launch_qemu_cmd()'s comment on why a gate

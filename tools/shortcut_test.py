@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui          # noqa: E402
 from qmp_test import QMPSession                        # noqa: E402
 import port_guard  # noqa: E402
+from harness import Results  # noqa: E402
 
 SETTINGS_EXEC = "/bin/wm/system/settings"
 CONF = "/etc/shortcuts.conf"
@@ -50,15 +51,7 @@ DEFAULTS = [
 ]
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, what, ok, detail=""):
-        (self.passes if ok else self.fails).append(what)
-        print(f"  {'PASS' if ok else 'FAIL'}  {what}")
-        if not ok and detail:
-            print(f"        {detail}")
+Result = Results
 
 
 # WHERE SETTINGS SAYS ITS CONTROLS ARE, content-relative: one `control`

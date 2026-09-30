@@ -45,6 +45,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import hostcheck  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -155,16 +156,10 @@ int main(int argc, char **argv) {
 
 
 def build(tmp):
-    src = os.path.join(tmp, "hid_host.c")
-    with open(src, "w") as fh:
-        fh.write(DRIVER)
-    exe = os.path.join(tmp, "hid_host")
-    subprocess.run(
-        ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-o", exe, src,
-         os.path.join(ROOT, "kernel", "lib", "hid_parse.c"),
-         "-I" + os.path.join(ROOT, "kernel", "include", "api")],
-        check=True)
-    return exe
+    drv = hostcheck.write(tmp, "hid_host.c", DRIVER)
+    return hostcheck.compile(tmp, "hid_host", [drv, os.path.join(ROOT, "kernel", "lib", "hid_parse.c")],
+                             includes=[os.path.join(ROOT, "kernel", "include", "api")],
+                             tool="hid_parse_hostcheck")
 
 
 def run(exe, desc, want_mouse, extra=()):

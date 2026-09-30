@@ -58,6 +58,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 import port_guard  # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 VM = [sys.executable, os.path.join(HERE, "vm.py")]
 
@@ -326,8 +327,7 @@ def run_bootloader(args, c):
     self_img = os.path.join(args.scratch, "self.img")
     ctrl_img = os.path.join(args.scratch, "nogzio.img")
     for img in (self_img, ctrl_img):
-        subprocess.run(["cp", "--reflink=auto", "--sparse=always",
-                        os.path.join(ROOT, "disk.img"), img], check=True)
+        copy_disk(os.path.join(ROOT, "disk.img"), img)
 
     base = VM + ["--instance", str(args.instance), "--disk", self_img]
     env = dict(os.environ)
@@ -432,8 +432,7 @@ def main():
     # A COPY of disk.img, and a sparse one: it is ~50 MB of data in a 9 GB
     # sparse file, so a hole-filling copy costs 9 GB of whatever this
     # lands on (CLAUDE.md).
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always",
-                    os.path.join(ROOT, "disk.img"), args.system], check=True)
+    copy_disk(os.path.join(ROOT, "disk.img"), args.system)
 
     c = Checks()
     for m in media:

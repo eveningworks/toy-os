@@ -56,6 +56,7 @@ sys.path.insert(0, HERE)
 from gui_debug import DebugConsole, enter_gui   # noqa: E402
 from qmp_test import QMPSession                 # noqa: E402
 from port_guard import port_is_free             # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 # A 50 ms window counts as carrying sound above this peak. Well clear of
 # the dither the recorder adds and well below any real effect.
@@ -176,8 +177,7 @@ def main():
 
     tmp = tempfile.mkdtemp(prefix="doom_sound_")
     img = os.path.join(tmp, "disk.img")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
-                   cwd=REPO, check=True)
+    copy_disk("disk.img", img, cwd=REPO)
     wav_music = os.path.join(tmp, "music.wav")
     wav_sfx = os.path.join(tmp, "sfx.wav")
 

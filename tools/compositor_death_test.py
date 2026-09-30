@@ -98,18 +98,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui          # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 import port_guard  # noqa: E402
+from harness import Results  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 COMP = "/tests/screenclient"
 CLIENT = "/tests/winclient"
 TOYWM = "/bin/wm/system/toywm"
 
-checks = []
 
 
-def check(name, ok, detail=""):
-    checks.append((name, bool(ok), detail))
-    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"    [{detail}]" if detail else ""))
+_res = Results()
+check = _res.check
+checks = _res.rows
 
 
 # The descriptor init supervises the desktop through.

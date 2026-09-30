@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui   # noqa: E402
 from qmp_test import QMPSession                  # noqa: E402
 import port_guard                                # noqa: E402
+from harness import Results  # noqa: E402
 
 SPAWN = "/bin/wm/apps/files"
 TITLE = "File Manager"
@@ -42,13 +43,7 @@ GLIDE_S = 0.7       # comfortably past UUI_SCROLL_MS plus a slow frame or two
 TS = re.compile(r"^\[(\d+\.\d+)\]")
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"\n        {detail}" if detail and not ok else ""))
+Result = Results
 
 
 def cell_frames(dbg, pane, since):

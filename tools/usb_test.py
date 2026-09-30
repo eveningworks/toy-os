@@ -39,6 +39,7 @@ import port_guard
 import vm as vm_mod
 from gui_debug import DebugConsole
 from qmp_test import QMPSession
+from harness import copy_disk  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -66,8 +67,7 @@ class Guest:
         t = tempfile.NamedTemporaryFile(suffix=".img", delete=False)
         t.close()
         self.disk = t.name
-        subprocess.run(["cp", "--reflink=auto", "--sparse=always",
-                        os.path.join(REPO, "disk.img"), self.disk], check=True)
+        copy_disk(os.path.join(REPO, "disk.img"), self.disk)
 
     def _run(self, *args):
         cmd = [sys.executable, os.path.join(REPO, "tools", "vm.py"),

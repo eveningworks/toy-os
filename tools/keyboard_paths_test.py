@@ -68,6 +68,7 @@ from gui_debug import DebugConsole      # noqa: E402
 import vm as vm_mod                   # noqa: E402 -- started_ok(), see its comment
 from qmp_test import QMPSession         # noqa: E402
 import port_guard                       # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 VM = os.path.join(REPO, "tools", "vm.py")
 
@@ -182,8 +183,7 @@ def main():
     for label, virtio in (("PS/2", False), ("virtio-input", True)):
         t = tempfile.NamedTemporaryFile(suffix=".img", delete=False)
         t.close()
-        subprocess.run(["cp", "--reflink=auto", "--sparse=always", src, t.name],
-                       check=True)
+        copy_disk(src, t.name)
         try:
             results[label] = run_path(t.name, inst, virtio, label)
         finally:

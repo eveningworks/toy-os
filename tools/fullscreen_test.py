@@ -33,6 +33,7 @@ sys.path.insert(0, "tools")
 from gui_debug import DebugConsole            # noqa: E402
 from qmp_test import QMPSession               # noqa: E402
 import vm as vm_mod                           # noqa: E402 -- started_ok(), see its comment
+from harness import Results  # noqa: E402
 
 TITLE = "Fullscreen Client"
 FILL = (0x30, 0x60, 0xC0)   # fsclient.c's FILL, as RGB
@@ -41,14 +42,7 @@ KEY_F4 = 0xA5
 KEY_SUPER = 0xA6
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(f"  {'ok  ' if ok else 'FAIL'}  {name}" + (f"  -- {detail}" if detail else ""))
-        return ok
+Result = Results
 
 
 def near(p, q, tol=12):

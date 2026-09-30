@@ -49,6 +49,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from vm import parse_framed   # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VM = os.path.join(REPO, "tools", "vm.py")
@@ -652,7 +653,7 @@ def main():
         # the user may have their own QEMU holding a write lock on it.
         tmp = tempfile.NamedTemporaryFile(suffix=".img", delete=False)
         tmp.close()
-        subprocess.run(["cp", "--reflink=auto", src, tmp.name], check=True)
+        copy_disk(src, tmp.name)
         args.disk = tmp.name
 
     try:

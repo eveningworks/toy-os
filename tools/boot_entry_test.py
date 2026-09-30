@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from harness import copy_disk  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -79,8 +80,7 @@ def main():
     r = Result()
     tmp = tempfile.mkdtemp(prefix="boot_entry_test_")
     disk = os.path.join(tmp, "disk.img")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always",
-                    os.path.join(REPO, "disk.img"), disk], check=True)
+    copy_disk(os.path.join(REPO, "disk.img"), disk)
     try:
         print("boot_entry_test: booting a guest that may reboot")
         out = vm(inst, "--disk", disk, "--reboot", "start", timeout=300)

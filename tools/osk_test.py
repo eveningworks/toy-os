@@ -51,6 +51,7 @@ import gui_debug  # noqa: E402
 import port_guard  # noqa: E402
 from gui_debug import DebugConsole  # noqa: E402
 from qmp_test import QMPSession  # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 checks = []
 
@@ -126,8 +127,7 @@ def main():
         return 2
 
     img = os.path.join("/tmp", f"osk_test_{n}.img")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
-                   cwd=REPO, check=True)
+    copy_disk("disk.img", img, cwd=REPO)
     subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
                     "--instance", str(n), "stop"], capture_output=True)
     boot = subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),

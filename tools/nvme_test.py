@@ -46,6 +46,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from qmp_test import guarded_boot_args  # noqa: E402
 from multidisk_test import Result, connect, kill  # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 NS2_MB = 1024
 PAYLOAD = "/bin/ls"
@@ -99,7 +100,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="nvme_")
     ns1 = os.path.join(tmp, "ns1.img")
     ns2 = os.path.join(tmp, "ns2.img")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", args.disk, ns1], check=True)
+    copy_disk(args.disk, ns1)
     subprocess.run(["truncate", "-s", f"{NS2_MB}M", ns2], check=True)
 
     sums = {}

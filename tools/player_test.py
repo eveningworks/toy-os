@@ -52,6 +52,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui        # noqa: E402
 from qmp_test import QMPSession                      # noqa: E402
 import port_guard  # noqa: E402
+from harness import Results  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 MUSIC_DIR = "/usr/share/music"
@@ -64,16 +65,7 @@ HOST_SOUNDS = os.path.join(REPO, "data", "usr", "share", "sounds")
 HOST_MUSIC = os.path.join(REPO, "data", "usr", "share", "music")
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(("  PASS  " if ok else "  FAIL  ") + name)
-        if not ok and detail:
-            print("        " + detail)
-        return ok
+Result = Results
 
 
 LOG = []

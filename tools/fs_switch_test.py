@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from harness import copy_disk  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -90,7 +91,7 @@ def main():
     copy = os.path.join(tmp, "switch.img")
     # --reflink keeps the copy cheap on Btrfs/XFS; --sparse keeps a 9 GB
     # sparse image from filling its holes elsewhere (CLAUDE.md).
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", disk, copy], check=True)
+    copy_disk(disk, copy)
 
     try:
         print("fs_switch_test: boot 1 (build image)")

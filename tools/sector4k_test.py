@@ -54,6 +54,7 @@ sys.path.insert(0, HERE)
 from qmp_test import guarded_boot_args  # noqa: E402
 from multidisk_test import Result, connect, kill  # noqa: E402
 from install_grub import add_boot_word  # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 DISK_MB = 1024
 FAT_MB = 300      # >= 65525 clusters at 4 KiB, so other systems read it as FAT32
@@ -124,7 +125,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="s4k_")
     boot = os.path.join(tmp, "boot.img")
     disk4k = os.path.join(tmp, "four_k.img")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", args.disk, boot], check=True)
+    copy_disk(args.disk, boot)
     ok, why = add_boot_word(boot, "root=ata0p3")
     if not ok:
         print(f"sector4k_test: {why}")

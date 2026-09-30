@@ -47,19 +47,12 @@ from qmp_test import QMPSession  # noqa: E402
 from gui_debug import DebugConsole, enter_gui  # noqa: E402
 from menubar_test import (npwin, wait_layout, wait_actions, actions, shot,  # noqa: E402
                           spawn, POPUP_BG, CMD_STATUSBAR)
+from harness import Results  # noqa: E402
 
 SMALL_W, SMALL_H = 240, 120   # Notepad's minimum -- and too narrow for its View menu
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}")
-        if not ok and detail:
-            print(f"        {detail}")
+Result = Results
 
 
 def popups(dbg):

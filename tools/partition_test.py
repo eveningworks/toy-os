@@ -46,14 +46,13 @@ Same category as tools/virtio_boot_test.py and tools/live_boot_test.py.
 import argparse
 import os
 import re
-import socket
 import subprocess
 import tempfile
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from qmp_test import guarded_boot_args  # noqa: E402
+import serial_boot  # noqa: E402
 
 SERIAL_PORT = 4559  # not ktest_run.py's 4555 nor virtio_boot_test.py's 4557
 
@@ -79,54 +78,12 @@ def launch(iso, img, qemu_log):
     return subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
 
 
-def connect(timeout):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            return socket.create_connection(("127.0.0.1", SERIAL_PORT), timeout=1.0)
-        except OSError:
-            time.sleep(0.2)
-    return None
 
 
-def read_until(sock, needle, timeout, transcript):
-    deadline = time.time() + timeout
-    sock.settimeout(0.5)
-    while time.time() < deadline:
-        try:
-            chunk = sock.recv(4096)
-        except socket.timeout:
-            continue
-        except OSError:
-            break
-        if not chunk:
-            break
-        transcript.append(chunk.decode("utf-8", "replace"))
-        if needle in "".join(transcript):
-            return True
-    return False
 
 
 def run_boot(iso, img, qemu_log, commands, timeout):
-    qemu = launch(iso, img, qemu_log)
-    transcript = []
-    try:
-        sock = connect(timeout)
-        if sock is None:
-            return None, "could not connect to the guest's serial console"
-        if not read_until(sock, "debug console ready", timeout, transcript):
-            return None, "the debug console never came up"
-        for cmd in commands:
-            sock.sendall((cmd + "\n").encode())
-            time.sleep(1.5)
-            read_until(sock, "\x00never-matches\x00", 1.5, transcript)
-        return "".join(transcript), None
-    finally:
-        try:
-            qemu.kill()
-            qemu.wait(timeout=5)
-        except Exception:
-            pass
+    return serial_boot.run_session(launch(iso, img, qemu_log), SERIAL_PORT, commands, timeout)
 
 
 def build_image(path, size_bytes, kind, layout, seed_dir):

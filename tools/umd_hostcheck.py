@@ -38,6 +38,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import hostcheck  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -102,16 +103,9 @@ int main(int argc, char **argv) {
 
 
 def build(tmp):
-    src = os.path.join(tmp, "umd_host.c")
-    with open(src, "w") as fh:
-        fh.write(DRIVER)
-    exe = os.path.join(tmp, "umd_host")
-    subprocess.run(
-        ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-o", exe, src,
-         os.path.join(ROOT, "userland", "lib", "umd.c"),
-         "-I" + os.path.join(ROOT, "userland")],
-        check=True)
-    return exe
+    drv = hostcheck.write(tmp, "umd_host.c", DRIVER)
+    return hostcheck.compile(tmp, "umd_host", [drv, os.path.join(ROOT, "userland", "lib", "umd.c")],
+                             includes=[os.path.join(ROOT, "userland")], tool="umd_hostcheck")
 
 
 def run(exe, *args):

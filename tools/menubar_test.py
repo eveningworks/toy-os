@@ -63,6 +63,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui
 from qmp_test import QMPSession
 import port_guard  # noqa: E402
+from harness import Results  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 SPAWN_PATH = "/bin/wm/apps/notepad"   # spawned directly -- see spawn()
@@ -92,15 +93,7 @@ SAMPLE_LINES = ["line one", "line two", "line three"]
 SAVE_NAME = "menutest.txt"
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(("  PASS  " if ok else "  FAIL  ") + name)
-        if not ok and detail:
-            print(f"        {detail}")
+Result = Results
 
 
 class Layout:

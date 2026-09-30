@@ -32,6 +32,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from harness import copy_disk  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIELDS = ("tick_hz", "tick_mode", "tick_events", "tick_ticks",
@@ -149,7 +150,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="timer_bench.") as tmp:
         for i in range(args.runs):
             disk = os.path.join(tmp, "disk.img")
-            subprocess.run(["cp", "--reflink=auto", "--sparse=always", args.disk, disk], check=True)
+            copy_disk(args.disk, disk)
             runs.append(one_run(args, disk, args.iso))
             os.remove(disk)
 

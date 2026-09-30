@@ -37,7 +37,6 @@ import argparse
 import http.server
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
@@ -49,6 +48,7 @@ sys.path.insert(0, HERE)
 from net_test import launch, kill  # noqa: E402
 from fat32_test import esp_window, mtools_at, mrun  # noqa: E402
 import update_server  # noqa: E402
+from harness import Results, copy_disk  # noqa: E402
 
 GATEWAY = "10.0.2.2"
 # A message every boot prints, and a same-length twin: a kernel carrying
@@ -57,18 +57,7 @@ BOOT_MSG = b"toy-os: kernel heap initialized"
 TWIN_MSG = b"toy-os: KERNEL heap initialized"
 
 
-class Check:
-    def __init__(self):
-        self.rows = []
-
-    def ok(self, name, cond, detail=""):
-        self.rows.append((bool(cond), name, detail))
-        print(f"  {'ok  ' if cond else 'FAIL'}  {name}"
-              + (f"   [{detail}]" if detail and not cond else ""))
-        return bool(cond)
-
-    def failed(self):
-        return [r for r in self.rows if not r[0]]
+Check = Results
 
 
 class Server:
@@ -198,7 +187,7 @@ def main():
     url = f"http://{GATEWAY}:{srv.port}"
     try:
         disk = os.path.join(tmp, "update.img")
-        subprocess.run(["cp", "--reflink=auto", "--sparse=always", disk_src, disk], check=True)
+        copy_disk(disk_src, disk)
         print("update_test: booting")
         sh, pidfile = launch(disk, tmp, "upd", "e1000")
 

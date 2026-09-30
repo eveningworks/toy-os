@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui          # noqa: E402
 from qmp_test import QMPSession                        # noqa: E402
 import port_guard  # noqa: E402
+from harness import Results  # noqa: E402
 
 FILES_EXEC = "/bin/wm/apps/files"
 FILES_CONF = "/etc/files.conf"
@@ -48,15 +49,7 @@ MIN_RATE = 8.0
 MIN_COUNT = 12
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, what, ok, detail=""):
-        (self.passes if ok else self.fails).append(what)
-        print(f"  {'PASS' if ok else 'FAIL'}  {what}")
-        if not ok and detail:
-            print(f"        {detail}")
+Result = Results
 
 
 def drain_reports(dbg, seen):

@@ -79,6 +79,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import port_guard  # noqa: E402
 from qmp_test import QMPSession  # noqa: E402
 from gui_debug import DebugConsole, enter_gui  # noqa: E402
+from harness import Results  # noqa: E402
 
 NOTEPAD = "/bin/wm/apps/notepad"
 IMGVIEW = "/bin/wm/apps/imgview"
@@ -95,15 +96,7 @@ PICK_NAME = "sample.txt"
 MIXED_DIR = "/tests"
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}")
-        if not ok and detail:
-            print(f"        {detail}")
+Result = Results
 
 
 # --- asking, rather than guessing -------------------------------------

@@ -146,6 +146,9 @@ def main():
     try:
         # Take the desktop out of init's hands, then kill it, so the
         # physical console is what the framebuffer shows.
+        # Copied aside and put back in the finally: the image is shared
+        # with every later tool in a sweep (2026-09-30).
+        vm("exec", f"cp {TOYWM_SVC} /var/tmp/toywm.service.saved")
         vm("exec", f"rm {TOYWM_SVC}")
         ps = vm("exec", "ps")
         pid = None
@@ -213,6 +216,7 @@ def main():
         check("the screen above the pattern is blank",
               not ink(1, 1) and not ink(2, 1) and not ink(1, 40))
     finally:
+        vm("exec", f"cp /var/tmp/toywm.service.saved {TOYWM_SVC}")
         if not args.keep:
             vm("stop")
 

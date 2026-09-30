@@ -33,6 +33,7 @@ from gui_debug import DebugConsole, enter_gui   # noqa: E402
 from qmp_test import QMPSession                 # noqa: E402
 import port_guard                               # noqa: E402
 import update_server                            # noqa: E402
+from harness import Results  # noqa: E402
 
 APP = "/bin/wm/system/sysupdate"
 TITLE = "System Update"
@@ -41,19 +42,15 @@ TITLE = "System Update"
 DAMAGE = ("/bin/hello", "/install/kernel.bin")
 V_AVAILABLE, V_INSTALLED = 1, 4
 
-checks = []
 
 
-def check(name, ok, detail=""):
-    checks.append((name, bool(ok), detail))
-    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   {detail}" if detail else ""))
-    return bool(ok)
+_res = Results()
+check = _res.check
+checks = _res.rows
 
 
 def finish():
-    passed = sum(1 for _, ok, _ in checks if ok)
-    print(f"\nsysupdate_test: {passed} passed, {len(checks) - passed} failed")
-    return 0 if checks and passed == len(checks) else 1
+    return _res.finish("sysupdate_test")
 
 
 def serve(throttle_kib):

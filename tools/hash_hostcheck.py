@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import zlib
+import hostcheck  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -72,53 +73,24 @@ int main(int argc, char **argv) {
 def build(tmp, poison=False):
     """Compile uhash.c + kcrc.c + ksha256.c + the driver with the host gcc.
 
-    Both sources are COPIED into the temp directory, which is what makes
+    The sources are COPIED into the temp directory, which is what makes
     --positive-control possible without leaving a test hook in shipped
     code: the copy is edited, the original never is.
+
+    kcrc.h is copied rather than reached with -Ikernel/include/api,
+    because that directory also holds the toolkit's own string.h --
+    which would shadow the host's and take memcpy/strcmp away from a
+    compile that has no toy-os libc under it.
     """
-    import shutil
-    drv = os.path.join(tmp, "driver.c")
-    with open(drv, "w") as f:
-        f.write(DRIVER)
-
-    # kcrc.h is copied rather than reached with -Ikernel/include/api,
-    # because that directory also holds the toolkit's own string.h --
-    # which would shadow the host's and take memcpy/strcmp away from a
-    # compile that has no toy-os libc under it. In the guest build
-    # -Iuserland/include comes first and resolves them; here nothing does.
-    for h in ("kcrc.h", "ksha256.h"):
-        shutil.copy(os.path.join(ROOT, "kernel/include/api", h), os.path.join(tmp, h))
-    shutil.copy(os.path.join(ROOT, "userland/include/uhash.h"),
-                os.path.join(tmp, "uhash.h"))
-
-    srcs = []
-    for src, edits in (("userland/dynlib/uhash.c", []),
-                       ("kernel/lib/ksha256.c",
-                        [("ror(e, 6) ^", "ror(e, 7) ^")]),
-                       ("kernel/lib/kcrc.c",
-                        [("0xEDB88320u", "0xEDB88321u")])):
-        body = open(os.path.join(ROOT, src)).read()
-        if poison:
-            for before, after in edits:
-                if before not in body:
-                    sys.exit("hash_hostcheck: positive control cannot find %r "
-                             "in %s -- the code moved, fix the control"
-                             % (before, src))
-                body = body.replace(before, after, 1)
-        dst = os.path.join(tmp, os.path.basename(src))
-        with open(dst, "w") as f:
-            f.write(body)
-        srcs.append(dst)
-    srcs.append(drv)
-
-    exe = os.path.join(tmp, "uhash_host")
-    cmd = ["gcc", "-O2", "-Wall", "-Wextra", "-Werror",
-           "-I", tmp,
-           "-o", exe] + srcs
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        sys.exit("hash_hostcheck: compile failed:\n" + r.stderr)
-    return exe
+    for h in ("kernel/include/api/kcrc.h", "kernel/include/api/ksha256.h",
+              "userland/include/uhash.h"):
+        hostcheck.stage(tmp, h)
+    srcs = [hostcheck.stage(tmp, src, edits=edits, apply=poison, tool="hash_hostcheck")
+            for src, edits in (("userland/dynlib/uhash.c", []),
+                               ("kernel/lib/ksha256.c", [("ror(e, 6) ^", "ror(e, 7) ^")]),
+                               ("kernel/lib/kcrc.c", [("0xEDB88320u", "0xEDB88321u")]))]
+    srcs.append(hostcheck.write(tmp, "driver.c", DRIVER))
+    return hostcheck.compile(tmp, "uhash_host", srcs, includes=[tmp], tool="hash_hostcheck")
 
 
 def run(exe, alg, chunk, data):

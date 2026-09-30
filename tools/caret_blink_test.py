@@ -33,19 +33,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, wait_for_desktop  # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 import port_guard  # noqa: E402
+from harness import Results  # noqa: E402
 
 INTERVAL_S = 0.27   # does not divide the 500 ms half-period
 SAMPLES = 8
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"    [{detail}]" if detail else ""))
-        (self.passes if ok else self.fails).append(name)
-        return ok
+Result = Results
 
 
 def captures(qmp, tmp, box, tag, n=SAMPLES):

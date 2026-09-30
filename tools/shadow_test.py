@@ -28,17 +28,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui   # noqa: E402
 from qmp_test import QMPSession                  # noqa: E402
 import port_guard                                # noqa: E402
+from harness import Results  # noqa: E402
 
 FAR = 60   # px past an edge: beyond any shadow's reach (~1.8 line heights)
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"\n        {detail}" if detail and not ok else ""))
+Result = Results
 
 
 def lum(px):

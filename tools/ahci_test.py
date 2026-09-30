@@ -34,14 +34,14 @@ does not affect it. Same category as tools/virtio_boot_test.py.
 import argparse
 import os
 import re
-import socket
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import install_grub  # noqa: E402
 from qmp_test import guarded_boot_args  # noqa: E402
+from harness import copy_disk  # noqa: E402
+import serial_boot  # noqa: E402
 
 SERIAL_PORT = 4558  # not virtio_boot_test.py's 4557, so both can run at once
 
@@ -73,59 +73,14 @@ def launch(img, qemu_log):
     return subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
 
 
-def connect(timeout):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            return socket.create_connection(("127.0.0.1", SERIAL_PORT), timeout=1.0)
-        except OSError:
-            time.sleep(0.2)
-    return None
 
 
-def read_until(sock, needle, timeout, transcript):
-    deadline = time.time() + timeout
-    sock.settimeout(0.5)
-    while time.time() < deadline:
-        try:
-            chunk = sock.recv(4096)
-        except socket.timeout:
-            continue
-        except OSError:
-            break
-        if not chunk:
-            break
-        transcript.append(chunk.decode("utf-8", "replace"))
-        if needle in "".join(transcript):
-            return True
-    return False
 
 
 def run_boot(img, qemu_log, commands, timeout, settle=2.0):
     """Boot once, run `commands` on the debug console, return the transcript."""
-    qemu = launch(img, qemu_log)
-    transcript = []
-    try:
-        sock = connect(timeout)
-        if sock is None:
-            return None, "could not connect to the guest's serial console"
-        if not read_until(sock, "debug console ready", timeout, transcript):
-            return None, "the debug console never came up"
-        for cmd, wait in commands:
-            sock.sendall((cmd + "\n").encode())
-            # Wait on the ARTIFACT where there is one -- a fixed sleep
-            # long enough for `ktest` is far too long for everything else.
-            if wait:
-                read_until(sock, wait, timeout, transcript)
-            else:
-                read_until(sock, "\x00never-matches\x00", settle, transcript)
-        return "".join(transcript), None
-    finally:
-        try:
-            qemu.kill()
-            qemu.wait(timeout=5)
-        except Exception:
-            pass
+    return serial_boot.run_session(launch(img, qemu_log), SERIAL_PORT, commands, timeout,
+                                   settle=settle)
 
 
 # ---- the `noahci` boot word -----------------------------------------
@@ -165,8 +120,7 @@ def main():
 
     # A COPY, and a SPARSE one: disk.img is ~4 MB of data in a 9 GB
     # sparse file, so a hole-filling copy costs 9 GB.
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", args.disk, args.work],
-                   check=True)
+    copy_disk(args.disk, args.work)
 
     checks, skipped = [], []
 

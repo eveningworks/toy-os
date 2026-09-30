@@ -33,6 +33,7 @@ Usage (it ATTACHES to a running guest -- start one first):
     python3 tools/console_bleed_test.py
 """
 
+import atexit
 import argparse
 import os
 import sys
@@ -145,12 +146,12 @@ def main():
     # zero backoff and REUSES the slot, so without this the console comes
     # back for a few frames and a new desktop covers it again -- the pid
     # does not even change. Same precondition compositor_death_test.py
-    # establishes, and for the same reason. `make iso` re-seeds /etc by
-    # sync, so the file comes back on the next build -- there is nothing
-    # in the guest to copy it from, which is why this is not restored
-    # here. IT LEAVES THE IMAGE WITHOUT AN AUTOSTARTED DESKTOP until the
-    # next `make iso`; `enter_gui()` still works, because that runs `gui`
-    # by hand. Same trade compositor_death_test.py makes.
+    # establishes, and for the same reason. The descriptor is copied
+    # aside first and PUT BACK at exit: the image is shared with every
+    # later tool in a sweep, and one left without a desktop fails them
+    # all with `no provider named gui` (2026-09-30).
+    dbg.send("sh cp /etc/services.d/toywm /var/tmp/toywm.service.saved")
+    atexit.register(dbg.send, "sh cp /var/tmp/toywm.service.saved /etc/services.d/toywm")
     dbg.send("sh rm /etc/services.d/toywm")
     time.sleep(0.5)
     # KILLED rather than asked through the Start menu. Both land in

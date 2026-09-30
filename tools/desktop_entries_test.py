@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui          # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 import port_guard  # noqa: E402
+from harness import Results  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 ENTRY_DIR = "/usr/wm/applications"
@@ -51,13 +52,11 @@ ENTRY_DIR = "/usr/wm/applications"
 TEST_NAME = "ZZ Probe"
 TEST_FILE = f"{ENTRY_DIR}/zzprobe.desktop"
 
-checks = []
 
 
-def check(name, ok, detail=""):
-    checks.append((name, bool(ok), detail))
-    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   {detail}" if detail else ""))
-    return bool(ok)
+_res = Results()
+check = _res.check
+checks = _res.rows
 
 
 def menu_labels(dbg):

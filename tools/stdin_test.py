@@ -72,6 +72,7 @@ Usage (the VM must already be up):
 """
 
 import argparse
+import atexit
 import os
 import sys
 import time
@@ -79,18 +80,27 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole          # noqa: E402
 from shell_flow import ShellFlow            # noqa: E402
+from harness import Results  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 TOYWM_SVC = "/etc/services.d/toywm"
+# Where the descriptor waits while the test runs: on DISK, so it outlives
+# a crash of this run, and put back at the end. The image is shared with
+# every later tool in a sweep, and a desktop that never comes back fails
+# them all with `no provider named gui` (2026-09-30).
+TOYWM_SAVED = "/var/tmp/toywm.service.saved"
+
+
+def restore_desktop(dbg):
+    dbg.send(f"sh cp {TOYWM_SAVED} {TOYWM_SVC}")
 PROBE = "/claimprobe.txt"
 MADE = "/filetest.txt"
 
-checks = []
 
 
-def check(name, ok, detail=""):
-    checks.append((name, bool(ok), detail))
-    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"    [{detail}]" if detail else ""))
+_res = Results()
+check = _res.check
+checks = _res.rows
 
 
 def root_names(dbg):
@@ -132,6 +142,7 @@ def free_the_console(dbg):
     module's docstring for why both steps are needed."""
     comp = dbg.json("gui compositor --json") or {}
     pid = comp.get("pid") or 0
+    dbg.send(f"sh cp {TOYWM_SVC} {TOYWM_SAVED}")    # put back by restore_desktop()
     dbg.send(f"sh rm {TOYWM_SVC}")
     time.sleep(0.5)
     if pid:
@@ -165,6 +176,7 @@ def main():
     time.sleep(0.4)
 
     pid = free_the_console(dbg)
+    atexit.register(restore_desktop, dbg)   # every exit path, a crash of this script included
     check("the desktop was found and killed, freeing the console", bool(pid),
           f"toywm pid {pid}")
 

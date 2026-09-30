@@ -82,17 +82,17 @@ from gui_debug import DebugConsole      # noqa: E402
 import vm as vm_mod                   # noqa: E402 -- started_ok(), see its comment
 from shell_flow import ShellFlow        # noqa: E402
 import port_guard                       # noqa: E402
+from harness import Results, copy_disk  # noqa: E402
 
 VM = os.path.join(REPO, "tools", "vm.py")
 PROBE = "/kprobe.txt"
 MADE = "/filetest.txt"
 
-checks = []
 
 
-def check(name, ok, detail=""):
-    checks.append((name, bool(ok), detail))
-    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"    [{detail}]" if detail else ""))
+_res = Results()
+check = _res.check
+checks = _res.rows
 
 
 def vm_cmd(disk, instance, *argv):
@@ -200,8 +200,7 @@ def main():
         tmp.close()
         # --sparse=always: disk.img is a few MB of data in a 9 GB sparse
         # file, and a hole-filling copy costs the whole 9 GB.
-        subprocess.run(["cp", "--reflink=auto", "--sparse=always", src, tmp.name],
-                       check=True)
+        copy_disk(src, tmp.name)
         args.disk = tmp.name
 
     sock = ".vm.serial" if not args.instance else f".vm.{args.instance}.serial"

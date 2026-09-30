@@ -50,18 +50,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui          # noqa: E402
 from qmp_test import QMPSession                        # noqa: E402
 import port_guard  # noqa: E402
+from harness import Results  # noqa: E402
 
 # 4:3 against the wallpapers' 16:9, and in display.c's mode list.
 TARGET = (1024, 768)
 TASKBAR_BAND = 60   # rows at the bottom to keep out of the wallpaper box
 
-checks = []
 
 
-def check(name, ok, detail=""):
-    checks.append((name, bool(ok), detail))
-    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   {detail}" if detail else ""))
-    return bool(ok)
+_res = Results()
+check = _res.check
+checks = _res.rows
 
 
 def setting(dbg, key):

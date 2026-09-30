@@ -70,6 +70,7 @@ sys.path.insert(0, TOOLS)
 import install_grub  # noqa: E402
 import kdebug_bridge  # noqa: E402
 from qmp_test import QMPSession  # noqa: E402
+from harness import Results, copy_disk  # noqa: E402
 
 VM = [sys.executable, os.path.join(TOOLS, "vm.py")]
 KERNEL = os.path.join(REPO, "build", "kernel.bin")
@@ -78,15 +79,7 @@ BP_FUNC = "heap_total_bytes"    # called by the debug console's `meminfo`
 WATCH_VAR = "g_ticks"           # clockevent.c: written on every tick
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}"
-              + (f"\n        {detail}" if detail and not ok else ""))
-        return ok
+Result = Results
 
 
 # --- the ELF ---------------------------------------------------------------
@@ -658,7 +651,7 @@ def main():
     work = tempfile.mkdtemp(prefix="kdebug_test.")
     disk = os.path.join(work, "disk.img")
     log = os.path.join(work, "serial.log")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", args.disk, disk], check=True)
+    copy_disk(args.disk, disk)
     global NET
     word = "kdebug=ttyS2"
     if args.net:

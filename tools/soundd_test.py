@@ -43,6 +43,7 @@ sys.path.insert(0, HERE)
 
 from gui_debug import DebugConsole          # noqa: E402
 import port_guard                           # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 TONE_A_HZ = 1000   # /tests/sine1k.wav
 TONE_B_HZ = 440    # /tests/sine440.wav
@@ -163,8 +164,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="soundd_test_")
     wav_path = os.path.join(tmp, "out.wav")
     img = os.path.join(tmp, "disk.img")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
-                   cwd=REPO, check=True)
+    copy_disk("disk.img", img, cwd=REPO)
 
     def halt():
         subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),

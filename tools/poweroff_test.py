@@ -42,13 +42,14 @@ three of them by stopping the machine.
 """
 import argparse
 import os
-import socket
 import subprocess
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from qmp_test import guarded_boot_args  # noqa: E402
+from harness import copy_disk  # noqa: E402
+import serial_boot  # noqa: E402
 
 SERIAL_PORT = 4561  # not ktest_run.py's 4555 nor virtio_boot_test.py's 4557
 
@@ -83,32 +84,8 @@ def launch(iso, disk, machine, qemu_log, reboot_ok=False):
     return subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
 
 
-def connect(timeout):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            return socket.create_connection(("127.0.0.1", SERIAL_PORT), timeout=1.0)
-        except OSError:
-            time.sleep(0.2)
-    return None
 
 
-def read_until(sock, needle, timeout, transcript):
-    deadline = time.time() + timeout
-    sock.settimeout(0.5)
-    while time.time() < deadline:
-        try:
-            chunk = sock.recv(4096)
-        except socket.timeout:
-            continue
-        except OSError:
-            break
-        if not chunk:
-            break
-        transcript.append(chunk.decode("utf-8", "replace"))
-        if needle and needle in "".join(transcript):
-            return True
-    return False
 
 
 def boot_and_run(iso, disk, machine, qemu_log, command, wait_for, timeout,
@@ -122,10 +99,10 @@ def boot_and_run(iso, disk, machine, qemu_log, command, wait_for, timeout,
     qemu = launch(iso, disk, machine, qemu_log, reboot_ok)
     transcript = []
     try:
-        sock = connect(timeout)
+        sock = serial_boot.connect(SERIAL_PORT, timeout)
         if sock is None:
             return None, False, "could not connect to the guest's serial console"
-        if not read_until(sock, "debug console ready", timeout, transcript):
+        if not serial_boot.read_until(sock, "debug console ready", timeout, transcript):
             return None, False, "the debug console never came up"
 
         # `sh ` because this is the KERNEL DEBUG CONSOLE, not a shell:
@@ -142,7 +119,7 @@ def boot_and_run(iso, disk, machine, qemu_log, command, wait_for, timeout,
         before = "".join(transcript).count(wait_for) if wait_for else 0
         deadline = time.time() + timeout
         while time.time() < deadline:
-            read_until(sock, None, 1.0, transcript)  # None: read for the slice
+            serial_boot.read_until(sock, None, 1.0, transcript)  # None: read for the slice
             if "".join(transcript).count(wait_for) > before:
                 break
             if qemu.poll() is not None:
@@ -189,8 +166,7 @@ def main():
 
     # A COPY, sparse: disk.img is a few MB of data in a 9 GB sparse file,
     # and the real one may be open in the user's own QEMU.
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", args.disk, args.work],
-                   check=True)
+    copy_disk(args.disk, args.work)
 
     checks = []
 

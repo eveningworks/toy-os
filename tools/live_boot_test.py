@@ -61,6 +61,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from qmp_test import launch_qemu_cmd          # noqa: E402
+from harness import Results  # noqa: E402
 
 BOOT_TIMEOUT_S = 40.0
 PROMPT = "dbg> "
@@ -106,15 +107,7 @@ class Shell:
         pass
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}")
-        (self.passes if ok else self.fails).append(name)
-        if not ok and detail:
-            print(f"        {detail}")
+Result = Results
 
 
 # `df` PRINTS A TABLE, and this tool parsed `used:`/`total:` LINES --

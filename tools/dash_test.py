@@ -36,6 +36,7 @@ import argparse
 import os
 import subprocess
 import sys
+from harness import copy_disk  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -214,8 +215,7 @@ def main():
     os.makedirs(os.path.dirname(img), exist_ok=True)
     # SPARSE, and the flag matters: disk.img is ~130 MB of data in a
     # 9 GB file, so a hole-filling copy costs 9 GB (CLAUDE.md).
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", src, img],
-                   check=True)
+    copy_disk(src, img)
 
     lba, sectors = volume(img)
     cases = [c for c in CASES if not args.only or c[0] == args.only]

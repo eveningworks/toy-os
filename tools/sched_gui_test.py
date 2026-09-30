@@ -47,6 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui          # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 import port_guard  # noqa: E402
+from harness import Results  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 
@@ -87,18 +88,7 @@ def type_text(dbg, text):
     dbg.settle()
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}")
-        if ok:
-            self.passes.append(name)
-        else:
-            if detail:
-                print(f"        {detail}")
-            self.fails.append(name)
+Result = Results
 
 
 def run(dbg, qmp, shot_dir, res):

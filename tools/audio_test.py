@@ -53,21 +53,14 @@ REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 from gui_debug import DebugConsole  # noqa: E402
+from harness import Results, copy_disk  # noqa: E402
 
 # abi/sound_abi.h's SND_CONFIG_FILE. Named once because two phases have
 # to agree on it, and neither can read the header.
 SND_CONFIG = "/etc/sound.conf"
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        print(f"  {'ok   ' if ok else 'FAIL '} {name}" +
-              (f"  -- {detail}" if detail else ""))
-        (self.passes if ok else self.fails).append(name)
-        return ok
+Result = Results
 
 
 def wait_serial(sock, timeout_s=60):
@@ -314,8 +307,7 @@ def main():
     wav6_path = os.path.join(tmp, "out_snddrv.wav")
     wav7_path = os.path.join(tmp, "out_restart.wav")
     img = os.path.join(tmp, "disk.img")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", "disk.img", img],
-                   cwd=REPO, check=True)
+    copy_disk("disk.img", img, cwd=REPO)
 
     def boot(recording):
         subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),

@@ -28,10 +28,10 @@ Needs only gcc and the standard library.
 
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
+import hostcheck  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -67,30 +67,16 @@ def build(tmp, poison=False):
     """Compile utween.c + the driver. fixed.h is copied rather than
     reached with -Ikernel/include/api, because that directory also
     holds the toolkit's own string.h, which would shadow the host's."""
-    shutil.copy(os.path.join(ROOT, "kernel/include/api/fixed.h"),
-                os.path.join(tmp, "fixed.h"))
-    shutil.copy(os.path.join(ROOT, "userland/lib/utween.h"),
-                os.path.join(tmp, "utween.h"))
-    body = open(os.path.join(ROOT, "userland/lib/utween.c")).read()
-    if poison:
-        # A LINEAR curve: still monotonic, still lands -- and the
-        # ease-out check is what must catch it.
-        needle = "fx_t u3 = fx_mul(fx_mul(u, u), u);\n    return FX_ONE - u3;"
-        if needle not in body:
-            sys.exit("utween_hostcheck: positive control cannot find the "
-                     "curve -- the code moved, fix the control")
-        body = body.replace(needle, "(void)u;\n    return t;", 1)
-    with open(os.path.join(tmp, "utween.c"), "w") as f:
-        f.write(body)
-    with open(os.path.join(tmp, "driver.c"), "w") as f:
-        f.write(DRIVER)
-    exe = os.path.join(tmp, "utween_host")
-    cmd = ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-I", tmp, "-o", exe,
-           os.path.join(tmp, "utween.c"), os.path.join(tmp, "driver.c")]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        sys.exit("utween_hostcheck: compile failed:\n" + r.stderr)
-    return exe
+    hostcheck.stage(tmp, "kernel/include/api/fixed.h")
+    hostcheck.stage(tmp, "userland/lib/utween.h")
+    # The control: a LINEAR curve -- still monotonic, still lands, and the
+    # ease-out check is what must catch it.
+    src = hostcheck.stage(tmp, "userland/lib/utween.c", apply=poison, tool="utween_hostcheck",
+                          edits=[("fx_t u3 = fx_mul(fx_mul(u, u), u);\n    return FX_ONE - u3;",
+                                  "(void)u;\n    return t;")])
+    drv = hostcheck.write(tmp, "driver.c", DRIVER)
+    return hostcheck.compile(tmp, "utween_host", [src, drv], includes=[tmp],
+                             tool="utween_hostcheck")
 
 
 def run(exe, *args):

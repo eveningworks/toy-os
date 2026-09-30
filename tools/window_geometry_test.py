@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui          # noqa: E402
 from qmp_test import QMPSession                        # noqa: E402
 import port_guard                                      # noqa: E402
+from harness import Results  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 CONF = "/etc/windows.conf"
@@ -49,15 +50,7 @@ APP = "System Settings"
 APP_ID = "settings"
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}")
-        (self.passes if ok else self.fails).append(name)
-        if not ok and detail:
-            print(f"        {detail}")
+Result = Results
 
 
 def close_all(dbg, timeout=12.0):

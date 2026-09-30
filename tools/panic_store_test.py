@@ -44,20 +44,14 @@ TOOLS = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(TOOLS)
 sys.path.insert(0, TOOLS)
 import install_grub  # noqa: E402
+from harness import Results, copy_disk  # noqa: E402
 
 VM = [sys.executable, os.path.join(TOOLS, "vm.py")]
 BOOT_MARK = "\nidt: syscall gate"        # a boot's raw line; dmesg's echo has a [stamp]
 PANIC_MARK = "panic: restarting in"
 
 
-class Result:
-    def __init__(self):
-        self.passes, self.fails = [], []
-
-    def check(self, name, ok, detail=""):
-        (self.passes if ok else self.fails).append(name)
-        print(f"  {'PASS' if ok else 'FAIL'}  {name}"
-              + (f"\n        {detail}" if detail and not ok else ""))
+Result = Results
 
 
 def vm(inst, disk, log, *args, timeout=240):
@@ -185,7 +179,7 @@ def main():
     work = tempfile.mkdtemp(prefix="panic_store_test.")
     disk = os.path.join(work, "disk.img")
     log = os.path.join(work, "serial.log")
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always", args.disk, disk], check=True)
+    copy_disk(args.disk, disk)
     ok, why = install_grub.add_boot_word(disk, "faultinject")
     if not ok:
         print(f"panic_store_test: cannot arm the copy: {why}")

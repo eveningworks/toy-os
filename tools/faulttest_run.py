@@ -45,13 +45,13 @@ run at all.
 
 import argparse
 import os
-import subprocess
 import sys
 import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from serial_console import DEFAULT_PORT, SerialGuest  # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -127,8 +127,7 @@ def run_one(name, required, forbidden, workdir, slot, keep_logs):
     # --sparse=always: disk.img is a few MB of data in a 9 GB sparse
     # file, and a hole-filling copy costs the full 9 GB of the
     # destination filesystem (tmpfs, i.e. RAM, here).
-    subprocess.run(["cp", "--reflink=auto", "--sparse=always",
-                    os.path.join(REPO, "disk.img"), disk], check=True)
+    copy_disk(os.path.join(REPO, "disk.img"), disk)
 
     guest = SerialGuest(os.path.join(REPO, "toy-os.iso"), disk,
                         port=DEFAULT_PORT + slot,

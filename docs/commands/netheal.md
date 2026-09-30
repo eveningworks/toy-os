@@ -8,6 +8,8 @@
 
     netheal
 
+## Description
+
 Reboot once if this machine came up with no network at all.
 
 Started by init from `/etc/services.d/netheal` and **idle unless
