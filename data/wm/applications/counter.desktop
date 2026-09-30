@@ -1,0 +1,8 @@
+# Counter -- the worked example of docs/gui-app-tutorial.md. Development,
+# and the Start menu only: it is there to be read, not used.
+Name=Counter
+Exec=/bin/wm/demos/counter
+Category=development
+Comment=The GUI tutorial's example app
+Icon=#
+ShowIn=startmenu

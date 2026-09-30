@@ -470,6 +470,7 @@ one-line pointer.** Add detail there.
 | `docs/conventions/` | convention BODIES by area -- `INDEX.md` first |
 | `docs/decisions.md` | the INDEX over `docs/decisions/`: why toy-os works this way |
 | `docs/gui-guidelines.md` | how the GUI looks and behaves -- binding; read before touching anything drawn |
+| `docs/gui-app-tutorial.md` | writing a ring-3 GUI app, walked through `userland/gui/demos/counter.c` -- change the two together |
 | `docs/driver-guide.md` | writing a driver; `e1000.c` and `r8169.c` are the worked examples |
 | `docs/devices.md` | every driver, by registry; `check_docs.py` wants a row per `DRIVER_DECLARE` |
 | `docs/filesystem-layout.md` | what lives where on disk; `check_layout.py` enforces it in both directions |

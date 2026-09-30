@@ -9,7 +9,7 @@ add something new.
 **This is the small half of the system now.** Real programs are ring-3
 processes under `userland/`, with their own address spaces, and that is
 where anything new should go unless it genuinely has to run inside the
-kernel. What is left here is what does: the shell (it is what the kernel
+kernel. A desktop app starts at `docs/gui-app-tutorial.md`. What is left here is what does: the shell (it is what the kernel
 starts), the `edit` command, and the one-line launcher that spawns the
 desktop.
 

@@ -502,6 +502,14 @@ opt-in fields, not a required content model.
 
 ## What a small app looks like
 
+**THIS SKETCH IS THE PLAN, NOT THE API THAT WAS BUILT** (noted
+2026-09-30). There is no `UUI_BUTTON`/`UUI_LABEL`/`UAPP_COLUMN` and no
+`struct uui_widget`: widgets are `struct uui_item`s pairing a widget
+struct with its ops table, the open question below was settled for
+SETTERS (`uui_label_set_text()`), and a new program needs no Makefile
+line at all. `docs/gui-app-tutorial.md` walks through the real thing,
+and its example, `userland/gui/demos/counter.c`, builds.
+
 A button labelled "Hello" and "World" underneath, complete:
 
 ```c
