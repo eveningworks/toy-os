@@ -122,6 +122,20 @@ def root_names(dbg):
     return names
 
 
+def cat_when(dbg, path, want, timeout=15.0):
+    """`sh cat path` once `want(output)` holds, or the last reply when
+    `timeout` runs out, plus the seconds it took. A POLL, not a sleep:
+    under TCG a pipeline -- two ELF loads and a redirect -- lands 3 to 6
+    s after Enter late in this run, and one fixed-time read failed it
+    while the file appeared a second later."""
+    t0 = time.monotonic()
+    while True:
+        out = dbg.send(f"sh cat {path}") or ""
+        if want(out) or time.monotonic() - t0 > timeout:
+            return out, time.monotonic() - t0
+        time.sleep(0.5)
+
+
 def dmesg(dbg, marker=None, tries=8, cmd="sh dmesg"):
     """The kernel log, read with a generous timeout and RETRIED until a
     marker appears.
@@ -529,8 +543,13 @@ def main():
         # A console with an owner and no foreground group is the state
         # in which Ctrl-C silently does nothing while everything else
         # looks healthy -- kernel/include/kernel/tty.h's invariant, from outside.
+        # tty0's OWN section: `tty` lists every terminal, and the serial
+        # debug console's tty1 legitimately has no foreground group --
+        # the whole-output check matched ITS line (c2f311a2 added it).
+        tty0 = out.split("\ntty1")[0]
         check("...and it has a foreground group, so Ctrl-C means something",
-              "foreground group: none" not in out, out.strip()[:90])
+              "foreground group: none" not in tty0 and "foreground group: pgid" in tty0,
+              tty0.strip()[:90])
         # WHICH suspend reason, not merely that there is one: on a text
         # boot ring 0 stands down because a ring-3 process claimed fd 0,
         # NOT because a compositor took the keyboard. A `tty` that
@@ -613,10 +632,9 @@ def main():
         # hello writes one line; catin copies stdin to stdout. Asserted
         # through a file, so nothing depends on what the shell echoes.
         type_line(flow, "hello | catin > /pipe_out.txt")
-        time.sleep(3.0)
-        out = dbg.send("sh cat /pipe_out.txt") or ""
+        out, took = cat_when(dbg, "/pipe_out.txt", lambda o: "Hello" in o)
         check("a two-stage pipeline carries data between processes",
-              "Hello" in out, out.strip()[:60])
+              "Hello" in out, f"{out.strip()[:60]} after {took:.1f}s")
 
         # THREE stages, so the loop is exercised rather than a special
         # case for two. Each catin is a real process copying the stream
@@ -624,10 +642,9 @@ def main():
         dbg.send("sh rm /pipe3.txt")
         time.sleep(0.4)
         type_line(flow, "hello | catin | catin > /pipe3.txt")
-        time.sleep(3.5)
-        out = dbg.send("sh cat /pipe3.txt") or ""
+        out, took = cat_when(dbg, "/pipe3.txt", lambda o: "Hello" in o)
         check("a three-stage pipeline works, not just two",
-              "Hello" in out, out.strip()[:60])
+              "Hello" in out, f"{out.strip()[:60]} after {took:.1f}s")
 
         # A BUILTIN as the producer -- a builtin prints through the
         # shell's own sink, so this is the check that its output reaches
@@ -636,9 +653,14 @@ def main():
         dbg.send("sh rm /pipe_ls.txt")
         time.sleep(0.4)
         type_line(flow, "pwd | catin > /pipe_ls.txt")
-        time.sleep(3.0)
-        out = dbg.send("sh cat /pipe_ls.txt") or ""
-        check("a builtin can feed a pipeline", "/" in out, out.strip()[:60])
+        out, took = cat_when(dbg, "/pipe_ls.txt",
+                             lambda o: any(ln.strip() == "/" for ln in o.splitlines()))
+        # A LINE that is exactly `/`, pwd's answer at the root: `"/" in
+        # out` passed on `cat: /pipe_ls.txt: no such file`, the very
+        # failure this is here to catch.
+        check("a builtin can feed a pipeline",
+              any(ln.strip() == "/" for ln in out.splitlines()),
+              f"{out.strip()[:60]} after {took:.1f}s")
 
         # And a redirect that cannot be opened must NOT run the command.
         # `cat < missing` printing nothing is not enough -- a shell that

@@ -235,6 +235,13 @@ def guest_utc(disk):
     return int(m.group(1)) if m else 0
 
 
+def wait_served(server, n, timeout=15.0):
+    """Until the host server has answered `n` queries, bounded."""
+    deadline = time.time() + timeout
+    while server.served < n and time.time() < deadline:
+        time.sleep(0.2)
+
+
 def main():
     control = "--positive-control" in sys.argv
 
@@ -277,6 +284,10 @@ def main():
         # received, and the clock afterwards.
         before = guest_utc(disk)
         vm("exec", f"spawn /bin/ntpd -q -p {NTP_PORT} {GATEWAY}", disk=disk)
+        # `spawn` RETURNS AT ONCE, before ntpd has sent anything, so the
+        # host's counter is waited on rather than read -- read straight
+        # away it said served=0 while the query was still on its way.
+        wait_served(server, 1)
         check("a query reaches the server", server.served >= 1,
               f"served={server.served}")
         check("the request is a well-formed SNTP v4 client packet",
@@ -291,6 +302,7 @@ def main():
         # --- phase 3: -1 sets it ---------------------------------------
         served_before = server.served
         vm("exec", f"spawn /bin/ntpd -1 -p {NTP_PORT} {GATEWAY}", disk=disk)
+        wait_served(server, served_before + 1)
         check("the one-shot asked the server too", server.served > served_before,
               f"{served_before} -> {server.served}")
         year = guest_year(disk)

@@ -154,7 +154,16 @@ def run_path(disk, instance, virtio, label):
     type_line(qmp, "touch /kb_probe.txt")
     type_line(qmp, "echo x | touch /kb_pipe.txt")
 
-    names = dbg.send("sh ls /") or ""
+    # POLLED: the pipeline is two ELF loads, and under TCG it can land
+    # seconds after Enter -- one read at a fixed delay failed a `|` that
+    # had arrived.
+    deadline = time.monotonic() + 15
+    while True:
+        names = dbg.send("sh ls /") or ""
+        if ("kb_probe.txt" in names and "kb_pipe.txt" in names) \
+                or time.monotonic() > deadline:
+            break
+        time.sleep(0.5)
     vm_run(disk, instance, virtio, "stop")
     return names, None
 

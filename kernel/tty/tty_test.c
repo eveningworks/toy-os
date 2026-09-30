@@ -249,11 +249,10 @@ KTEST("tty", "a muted discipline passes bytes straight through") {
     KTEST_ASSERT_EQ(emitted, 0);  // and nothing painted despite ECHO
 }
 
-KTEST("tty", "changing the mode discards a half-typed line") {
-    // POSIX's TCSAFLUSH. Carrying the line into raw mode would make its
-    // bytes readable at the instant of the change -- which is not what
-    // a program asking for raw mode asked for; it asked for what
-    // arrives NEXT.
+KTEST("tty", "leaving canonical mode keeps a half-typed line, as type-ahead") {
+    // Linux's N_TTY: the partial line becomes readable. Discarding it
+    // lost whatever a person had typed of the next command when the
+    // shell took the terminal back from a finished job.
     struct tty *t = scratch(TTY_ICANON);
     if (!t) KTEST_SKIP("no free terminal slot");
     feed(t, "half");
@@ -266,7 +265,8 @@ KTEST("tty", "changing the mode discards a half-typed line") {
     char buf[16] = {0};
     unsigned n = tty_read(t, buf, sizeof buf);
     tty_destroy(t);
-    KTEST_ASSERT_EQ((int)n, 0);
+    KTEST_ASSERT_EQ((int)n, 4);
+    KTEST_ASSERT(k_memcmp(buf, "half", 4) == 0);
 }
 
 KTEST("tty", "every terminal has its own wait channel, and tty0 cannot be destroyed") {

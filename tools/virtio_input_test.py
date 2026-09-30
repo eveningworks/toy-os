@@ -13,10 +13,9 @@ WHAT IT ASSERTS, and the interesting ones are the last two:
 
   * all three devices are claimed with the right capabilities, and the
     tablet is the only one reporting `abs`;
-  * they are IRQ-DRIVEN, and two of them SHARE a line -- which is the
-    case kernel/arch/x86_64/irq.c's handler chain was rewritten for.
-    The chipset routes PCI functions onto four wires, so this is not a
-    contrived case, it is what happens;
+  * they are INTERRUPT-DRIVEN: each on an MSI-X vector of its own, or,
+    booted `nomsi`, on INTx lines two of which SHARE -- the case
+    kernel/arch/x86_64/irq.c's handler chain was rewritten for;
   * an absolute position lands EXACTLY where the arithmetic says, which
     is what proves the tablet's range is being scaled to the screen
     rather than passed through;
@@ -161,13 +160,23 @@ def run(dbg, qmp, res, race_check=False, booted=True):
     # time a desktop has been up for a few seconds -- an oracle that
     # expires is an oracle that fails for reasons unrelated to the code,
     # so the servicing is a fact `lsdev` reports instead.
-    irqs = re.findall(r"(QEMU Virtio [A-Za-z]+).*\[irq (\d+)\]", dev)
-    res.check("every virtio input device is IRQ-driven", len(irqs) == 3,
+    #
+    # TWO SHAPES, by what the device was given. An MSI-X vector is its own
+    # and never shared (d223e81b moved virtio onto one); only on INTx --
+    # a boot with `nomsi` -- do the four PCI wires make two devices SHARE
+    # a line, the case irq.c's handler chain exists for.
+    irqs = re.findall(r"(QEMU Virtio [A-Za-z]+).*\[(irq|msi) (\d+)\]", dev)
+    res.check("every virtio input device is interrupt-driven", len(irqs) == 3,
               f"{irqs}" if irqs else "none reported an IRQ (are they polled?)")
-    lines = [irq for _, irq in irqs]
-    res.check("at least two devices SHARE an interrupt line "
-              "(the case the handler chain exists for)",
-              len(lines) > len(set(lines)), f"lines: {lines}")
+    lines = [n for _, kind, n in irqs if kind == "irq"]
+    vectors = [n for _, kind, n in irqs if kind == "msi"]
+    if vectors:
+        res.check("each MSI-X device has a vector of its own",
+                  len(vectors) == len(set(vectors)), f"vectors: {vectors}")
+    if lines:
+        res.check("at least two INTx devices SHARE an interrupt line "
+                  "(the case the handler chain exists for)",
+                  len(lines) > len(set(lines)), f"lines: {lines}")
     res.check("the PS/2 pair reports its own lines too",
               "[irq 1]" in dev and "[irq 12]" in dev)
 

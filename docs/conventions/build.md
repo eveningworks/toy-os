@@ -861,8 +861,11 @@ ordinary canonical, echoing terminal -- the same reasoning behind
 keystroke until Enter, so an arrow key arrives as a byte in the middle
 of a finished line and nothing can act on it. **A test that sends a key
 must therefore wait for the PROMPT first**, or it fires into the window
-where the terminal is canonical and the key is swallowed; that cost an
-afternoon and is why `/tests/dashedit_test` waits rather than sleeps.
+where the terminal is canonical: the discipline echoes it and holds it,
+and the editor only sees it once it goes raw (`tty_set_termios()` hands
+a half-typed line over rather than dropping it, as N_TTY does -- it
+dropped it until 2026-10-01, which ate a shell's type-ahead). That cost
+an afternoon and is why `/tests/dashedit_test` waits rather than sleeps.
 
 **An editing key that seems missing belongs in klineedit's keymap.** All
 three front ends gain it there at once. Adding one to this shim would be

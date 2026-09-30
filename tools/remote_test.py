@@ -47,6 +47,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import port_guard                      # noqa: E402 -- the serial socket's path
+from harness import copy_disk          # noqa: E402
 import remote as rmod                  # noqa: E402 -- WANT_BLKSIZE/WANT_WINDOW
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -74,8 +75,14 @@ class Result:
               + (f"\n          {detail}" if detail and not ok else ""))
 
 
+# A COPY of disk.img, set by main(): this test enables and disables
+# services, which would otherwise outlive it on the real image.
+DISK = None
+
+
 def vm(*args, timeout=180):
-    return subprocess.run([sys.executable, VM, *args], cwd=REPO,
+    disk = ["--disk", DISK] if DISK else []
+    return subprocess.run([sys.executable, VM, *disk, *args], cwd=REPO,
                           capture_output=True, text=True, timeout=timeout)
 
 
@@ -88,8 +95,10 @@ def remote(*args, timeout=120):
 
 
 def main():
+    global DISK
     r = Result()
     tmp = tempfile.mkdtemp(prefix="remote_test_")
+    DISK = copy_disk(os.path.join(REPO, "disk.img"), os.path.join(tmp, "disk.img"))
     print("remote_test: booting a guest with telnet and tftp forwarded")
     vm("stop")
     # Telnet only: vm.py forwards TFTP_PORT onto 69 for every guest it
@@ -109,8 +118,17 @@ def main():
         vm("exec", "service disable telnetd", "service disable tftpd")
         vm("exec", "service stop telnetd", "service stop tftpd")
         before = vm("exec", "service").stdout
+        # `disabled` is the listing's word for a descriptor that is gone
+        # (docs/commands/service.md); init still lists what it knew.
+        def state(listing, name):
+            for ln in listing.splitlines():
+                f = ln.split()
+                if len(f) > 1 and f[0] == name:
+                    return f[1]
+            return None
         r.check("service disable takes the descriptor away",
-                "telnetd" not in before and "tftpd" not in before,
+                state(before, "telnetd") in (None, "disabled")
+                and state(before, "tftpd") in (None, "disabled"),
                 before[-300:])
 
         # AN ADMIN STOP OUTRANKS Restart=, so `enable` alone does not
@@ -120,11 +138,15 @@ def main():
         # reported `running` and nothing answered the network.
         vm("exec", "service enable telnetd", "service enable tftpd")
         vm("exec", "service start telnetd", "service start tftpd")
-        after = vm("exec", "service").stdout
+        for _ in range(10):  # `starting` until init has spawned both
+            after = vm("exec", "service").stdout
+            if state(after, "telnetd") == state(after, "tftpd") == "running":
+                break
+            time.sleep(1)
         r.check("service enable + start brings telnetd back",
-                "telnetd" in after and "stopped" not in after, after[-400:])
+                state(after, "telnetd") == "running", after[-400:])
         r.check("service enable + start brings tftpd back",
-                "tftpd" in after, after[-400:])
+                state(after, "tftpd") == "running", after[-400:])
 
         # 2. Output, not echo. `uptime` is used because its output shares
         #    no words with the command line, so an echoed command line
@@ -352,6 +374,7 @@ def main():
             dbg.close()
     finally:
         vm("stop")
+        os.unlink(DISK)
 
     print(f"\nremote_test: {len(r.passes)} passed, {len(r.fails)} failed")
     return 1 if r.fails else 0

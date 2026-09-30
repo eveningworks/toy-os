@@ -103,6 +103,15 @@ void tty_ldisc_discard_line(struct tty *t) {
     if (t) t->canon_len = 0;
 }
 
+// The half-assembled line, readable as it stands -- canonical mode
+// being left (tty_set_termios()).
+void tty_ldisc_release_line(struct tty *t) {
+    if (!t) return;
+    for (unsigned i = 0; i < t->canon_len; i++)
+        tty_enqueue(t, (uint8_t)t->canon[i], 0);
+    t->canon_len = 0;
+}
+
 // A finished line becomes readable IN ONE PIECE. Pushed byte by byte
 // because the queue is a byte queue -- a reader asking for fewer bytes
 // than the line holds gets the rest on its next read, exactly as a pipe

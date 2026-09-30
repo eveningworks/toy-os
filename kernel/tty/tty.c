@@ -219,12 +219,15 @@ void tty_get_termios(const struct tty *t, struct tty_termios *out) {
 
 void tty_set_termios(struct tty *t, const struct tty_termios *tio) {
     if (!t || !tio) return;
-    // A HALF-TYPED LINE DOES NOT SURVIVE THE CHANGE. Carrying it into
-    // raw mode would make its bytes readable the instant the mode
-    // changed, which is not something the program asking for raw mode
-    // requested -- it asked for what arrives NEXT. POSIX's TCSAFLUSH,
-    // and the only one of its three flush modes worth having here.
-    tty_ldisc_discard_line(t);
+    // A HALF-TYPED LINE SURVIVES THE CHANGE: leaving canonical mode
+    // makes it readable, as Linux's N_TTY does, and staying canonical
+    // keeps it. This used to discard it (POSIX's TCSAFLUSH), which ate
+    // TYPE-AHEAD: a shell puts the terminal back to raw the moment a job
+    // ends, and whatever had been typed of the next command by then was
+    // gone (console_shell_test, keyboard_paths_test). readline switches
+    // with TCSADRAIN for exactly this reason.
+    if ((t->tio.lflag & TTY_ICANON) && !(tio->lflag & TTY_ICANON))
+        tty_ldisc_release_line(t);
     t->tio = *tio;
 }
 

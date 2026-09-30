@@ -98,6 +98,7 @@ struct tty {
 // ldisc.c's entry points, called by tty.c.
 void tty_ldisc_input(struct tty *t, uint8_t byte, uint8_t mods);
 void tty_ldisc_discard_line(struct tty *t);
+void tty_ldisc_release_line(struct tty *t);   // the partial line, made readable
 
 // tty.c's, called by ldisc.c.
 void tty_enqueue(struct tty *t, uint8_t byte, uint8_t mods);
