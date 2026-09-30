@@ -270,11 +270,11 @@ def main():
         # --- init exists, and is what the kernel says it is -----------
         #
         # POLLED. `vm.py start` returns when the shell prompt appears,
-        # and the desktop is coming up right then -- a `dmesg` reply read
-        # in that window has come back INCOMPLETE, which showed up as
-        # this tool reporting that the kernel never spawned init on
-        # roughly one run in five. The line is printed before the prompt
-        # exists, so its absence is always the read, never the kernel.
+        # and the desktop is coming up right then, so a reply read in that
+        # window can come back incomplete. (The line going missing on ~1
+        # boot in 4 was NOT that: it was the KERNEL -- init's own first
+        # line spliced into the middle of it, `init started as piinit:
+        # starting` -- fixed in klog_write(), 2026-09-30.)
         deadline = time.time() + 20
         boot = ""
         while time.time() < deadline:
@@ -522,9 +522,12 @@ def main():
             # under test. It is written as a service with the default
             # policy, so what is checked is the DEFAULT rather than a
             # value this test chose.
-            vm.sh("write /tmp/oneshot Name=oneshot")
-            vm.sh("append /tmp/oneshot Exec=/bin/hello")
-            vm.sh("mv /tmp/oneshot /etc/services.d/oneshot")
+            # Staged in /var/tmp, on the SAME filesystem as /etc: /tmp is a
+            # RAM mount, and a rename across mounts is refused, so a
+            # descriptor staged there never arrived and "none started".
+            vm.sh("write /var/tmp/oneshot Name=oneshot")
+            vm.sh("append /var/tmp/oneshot Exec=/bin/hello")
+            vm.sh("mv /var/tmp/oneshot /etc/services.d/oneshot")
 
             # AND THEN WAKE INIT. It rescans /etc/services.d on every
             # pass of its loop, but with a child running it BLOCKS in
@@ -610,6 +613,18 @@ def main():
             # request written into the control file for a service init
             # has never heard of would otherwise be dropped with the
             # operator none the wiser.
+            # LET INIT GO QUIET before the ordering groups are staged. The
+            # restarted desktop announces READY a second or so later, and
+            # that wakes init -- which then rescans /etc/services.d midway
+            # through the staging below and starts the first descriptor on
+            # its own (measured: `ordp ordr ordq`, 4 runs in 4).
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                row = next((l for l in vm.sh("service status toywm").splitlines()
+                            if l.startswith("toywm")), "")
+                if " yes " in row:
+                    break
+                time.sleep(0.5)
             out = vm.sh("service stop nosuchservice")
             check("an unknown service name is refused",
                   "no service called nosuchservice" in out, out.strip()[:70])
@@ -652,12 +667,12 @@ def main():
             # with a unit file for the same reason.
             for grp in groups:
                 for name, order_key in grp:
-                    vm.sh(f"write /tmp/{name} Name={name}")
-                    vm.sh(f"append /tmp/{name} Exec=/bin/hello")
-                    vm.sh(f"append /tmp/{name} Restart=no")
+                    vm.sh(f"write /var/tmp/{name} Name={name}")
+                    vm.sh(f"append /var/tmp/{name} Exec=/bin/hello")
+                    vm.sh(f"append /var/tmp/{name} Restart=no")
                     if order_key:
-                        vm.sh(f"append /tmp/{name} {order_key}")
-                    vm.sh(f"mv /tmp/{name} /etc/services.d/{name}")
+                        vm.sh(f"append /var/tmp/{name} {order_key}")
+                    vm.sh(f"mv /var/tmp/{name} /etc/services.d/{name}")
 
             vm.sh("service reload")   # wake init, as above
 
@@ -687,11 +702,11 @@ def main():
             # machine that starts nothing has no console left to fix
             # itself from.
             for a, b in (("ordm", "ordn"), ("ordn", "ordm")):
-                vm.sh(f"write /tmp/{a} Name={a}")
-                vm.sh(f"append /tmp/{a} Exec=/bin/hello")
-                vm.sh(f"append /tmp/{a} Restart=no")
-                vm.sh(f"append /tmp/{a} After={b}")
-                vm.sh(f"mv /tmp/{a} /etc/services.d/{a}")
+                vm.sh(f"write /var/tmp/{a} Name={a}")
+                vm.sh(f"append /var/tmp/{a} Exec=/bin/hello")
+                vm.sh(f"append /var/tmp/{a} Restart=no")
+                vm.sh(f"append /var/tmp/{a} After={b}")
+                vm.sh(f"mv /var/tmp/{a} /etc/services.d/{a}")
             vm.sh("service reload")
 
             deadline = time.time() + 25
@@ -708,11 +723,11 @@ def main():
 
             # An unresolvable name is normal, not fatal: naming a service
             # on the other boot target reaches here identically.
-            vm.sh("write /tmp/ordu Name=ordu")
-            vm.sh("append /tmp/ordu Exec=/bin/hello")
-            vm.sh("append /tmp/ordu Restart=no")
-            vm.sh("append /tmp/ordu After=nosuchservice")
-            vm.sh("mv /tmp/ordu /etc/services.d/ordu")
+            vm.sh("write /var/tmp/ordu Name=ordu")
+            vm.sh("append /var/tmp/ordu Exec=/bin/hello")
+            vm.sh("append /var/tmp/ordu Restart=no")
+            vm.sh("append /var/tmp/ordu After=nosuchservice")
+            vm.sh("mv /var/tmp/ordu /etc/services.d/ordu")
             vm.sh("service reload")
 
             deadline = time.time() + 25

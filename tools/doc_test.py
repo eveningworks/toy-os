@@ -194,9 +194,13 @@ def main():
             check("-K matches on body text (%s)" % word,
                   any(("cmd/%s:" % n) in K for n in in_body), K[:200])
 
-        # -k still matches what it is for.
-        k = vm.sh("doc --no-pager -k timezone")
-        check("-k matches a name", "cmd/timezone" in k, k[:160])
+        # -k still matches what it is for. The name is taken from the
+        # pages this build ships, not written here: `timezone` was one
+        # until the command went away (94a006bf) and the check went red.
+        name = next(n[:-3] for n in sorted(os.listdir(os.path.join(REPO, "docs", "commands")))
+                    if n.endswith(".md") and n != "README.md" and len(n) > 7)
+        k = vm.sh("doc --no-pager -k %s" % name)
+        check("-k matches a name", ("cmd/%s" % name) in k, k[:160])
         check("-k prints ONE line per page",
               all(len(l) < 200 for l in k.splitlines() if l.startswith("cmd/")),
               k[:200])

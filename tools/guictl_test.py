@@ -30,6 +30,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -75,6 +76,13 @@ def main():
         return r.stdout + r.stderr
 
     print("guictl_test: the WM's diagnostics from ring 3")
+
+    # `vm.py start` returns when the debug CONSOLE answers, which is
+    # before init has the desktop up -- so wait for a compositor, bounded,
+    # rather than failing five checks on "no window manager is running".
+    deadline = time.time() + 60
+    while time.time() < deadline and "no window manager" in run("guictl compositor"):
+        time.sleep(1.0)
 
     out = run("guictl state")
     check("state answers with the screen and the cursor",

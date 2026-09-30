@@ -96,7 +96,7 @@ static void describe(struct tm_service *s, const struct tm_service *old, int nol
 }
 
 void tm_services_read(void) {
-    static char buf[2048];
+    static char buf[8192];   // init.c's SVC_STATUS_MAX
     static struct tm_service old[TM_SERVICES_MAX];
     int fd = open(STATUS_PATH, O_RDONLY);
     if (fd < 0) {

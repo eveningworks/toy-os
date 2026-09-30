@@ -39,6 +39,7 @@
 // no-history-beyond-N tradeoff a real kernel's dmesg ring buffer
 // makes. A toy OS session producing more than 16KB of log output in
 // one boot isn't a case worth handling specially.
+#include "scheduler.h" // scheduler_preempt_disable(): a write is not split
 #include "klog.h"
 #include "vga.h"
 #include "serial.h"
@@ -172,7 +173,16 @@ void klog_write(const char *s) {
         if (at_line_start) g_line_level = s[1] - '0';
         s += 2;
     }
+    // ONE CALL IS ONE UNSPLIT RUN OF BYTES. Without the guard a switch
+    // between two klog_putc()s let another writer's line land inside
+    // this one -- `init started as piinit: starting`, when init ran the
+    // moment kernel_main spawned it (tools/init_test.py, ~1 boot in 4).
+    // printk's per-message record is the same promise. A plain counter
+    // (enable() never switches), so it is safe from an interrupt too; a
+    // line built from SEVERAL calls can still be split between them.
+    scheduler_preempt_disable();
     while (*s) klog_putc(*s++);
+    scheduler_preempt_enable();
 }
 
 void klog_set_console_level(int level) {

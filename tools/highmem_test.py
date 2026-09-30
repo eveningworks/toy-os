@@ -104,7 +104,15 @@ def ring3_phase(mem):
                     return int(ln.strip())
             return None
 
-        before = free_high()
+        # The first command after a boot can be DROPPED (send() answers
+        # ''), which read as "no free frames above 4 GiB"; send() resyncs,
+        # so ask again rather than fail on the harness.
+        before = None
+        for _ in range(3):
+            before = free_high()
+            if before:
+                break
+            time.sleep(1.0)
         if not before:
             print("highmem_test: FAIL -- the guest reports no free frames above 4 GiB")
             return 1

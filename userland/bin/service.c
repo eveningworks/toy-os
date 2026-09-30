@@ -61,7 +61,7 @@
 #define SETTLE_MS    3000
 #define SETTLE_STEP  50
 
-static char g_status[2048];
+static char g_status[8192];   // init.c's SVC_STATUS_MAX: every row at SVC_MAX
 
 // Defined below, beside init_pid(), which it needs: the status file,
 // asking init to publish one if it has not.

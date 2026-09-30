@@ -52,7 +52,10 @@ WRITER = os.path.join(REPO, "tools", "tfs3_writer.py")
 
 # Comfortably past SYS_LISTDIR_MAX (256), so the cap is reached whatever
 # else the directory happens to hold.
-BIG_DIR = "/tmp/lsbig"
+# On DISK: /tmp is a RAM filesystem mounted at boot, so a fixture written
+# into the image there is hidden -- the listing came back empty and the
+# cap check below passed on nothing.
+BIG_DIR = "/var/tmp/lsbig"
 BIG_COUNT = 300
 
 
@@ -138,16 +141,12 @@ def stage_fixture(disk):
     tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False)
     tmp.write("x\n")
     tmp.close()
-    # /tmp FIRST, AND ITS FAILURE IS IGNORED. It is created at BOOT by
-    # the kernel's own layout pass, never seeded by the build -- so a
-    # freshly `make clean-disk`ed image that has not been booted yet has
-    # no /tmp at all, and this fixture failed with "no such directory:
-    # /tmp" against a perfectly healthy system. Ignoring the result is
-    # right rather than lazy: on every image that HAS been booted the
-    # directory is already there, and either outcome leaves what the
-    # line after this needs.
-    subprocess.run([sys.executable, WRITER, "mkdir", disk, "/tmp", *_volume_args(disk)],
-                   cwd=REPO, capture_output=True, text=True)
+    # The parents FIRST, AND THEIR FAILURE IS IGNORED: an image that has
+    # never been booted may not have them, one that has does, and either
+    # way leaves what the line after this needs.
+    for parent in ("/var", "/var/tmp"):
+        subprocess.run([sys.executable, WRITER, "mkdir", disk, parent, *_volume_args(disk)],
+                       cwd=REPO, capture_output=True, text=True)
     # The directory itself -- `write` does not create parents.
     r = subprocess.run([sys.executable, WRITER, "mkdir", disk, BIG_DIR, *_volume_args(disk)],
                        cwd=REPO, capture_output=True, text=True)
@@ -251,7 +250,7 @@ def main():
         big = vm.sh(f"ls -1 {BIG_DIR}")
         listed = [l for l in big if l.strip().startswith("f")]
         check(f"a directory of {BIG_COUNT} files is truncated at the cap",
-              len(listed) < BIG_COUNT, f"listed {len(listed)}")
+              0 < len(listed) < BIG_COUNT, f"listed {len(listed)}")
         check("...and the truncation is REPORTED, not silent",
               any("truncated" in l for l in big),
               "listing simply stopped -- the silent bug is back")

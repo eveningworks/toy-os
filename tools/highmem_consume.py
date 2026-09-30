@@ -47,12 +47,19 @@ FRAME = 4096
 
 
 def fact(con, name):
-    """A kernel fact as an int, or None. `config get` prints the value first."""
-    out = con.send("sh config get " + name)
-    for line in out.splitlines():
-        line = line.strip()
-        if re.fullmatch(r"\d+", line):
-            return int(line)
+    """A kernel fact as an int, or None. `config get` prints the value first.
+
+    ASKED UP TO THREE TIMES: the first command after `vm.py start` can be
+    dropped by a guest still finishing its boot, and send() answers ''
+    for it -- which read as "no memory above 4 GiB" in 1 run of 3
+    (2026-09-30). send() resyncs the console before the retry."""
+    for _ in range(3):
+        out = con.send("sh config get " + name)
+        for line in out.splitlines():
+            line = line.strip()
+            if re.fullmatch(r"\d+", line):
+                return int(line)
+        time.sleep(1.0)
     return None
 
 

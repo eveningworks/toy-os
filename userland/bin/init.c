@@ -136,11 +136,13 @@
 #define CONTROL_PATH   TMP_RUNDIR "/init.ctl"
 #define STATUS_PATH    TMP_RUNDIR "/init.status"
 
-// Sixteen, not eight: ordering only means anything with several
-// services, and the table is static rather than on the stack, so the
-// cap costs address space instead of the ring-3 guard page. Overflow
-// is refused with a line naming the descriptor, never silently.
-#define SVC_MAX        16
+// Static rather than on the stack, so the cap costs address space
+// instead of the ring-3 guard page; overflow is refused with a line
+// naming the descriptor, never silently. 64 because the SHIPPED set
+// alone reached 12 of the old 16, and a few enabled (telnetd, tftpd)
+// plus a few of one's own then silently lost the rest. The status file
+// below is sized to hold every row.
+#define SVC_MAX        64
 #define SVC_NAME_MAX   24
 #define SVC_EXEC_MAX   64
 #define SVC_ARGS_MAX   64
@@ -1193,8 +1195,11 @@ static const char *svc_ready(const struct service *s) {
 // on every child exit and every doorbell, and a service manager that
 // rewrites a file each pass writes to the disk forever on an idle
 // machine.
-static char g_status[2048];
-static char g_status_prev[2048];
+// Every row at SVC_MAX (~100 bytes each): a status that does not fit is
+// not written at all, so an undersized buffer freezes `service list`.
+#define SVC_STATUS_MAX 8192
+static char g_status[SVC_STATUS_MAX];
+static char g_status_prev[SVC_STATUS_MAX];
 int g_publish;
 
 static void write_status(int settled) {
@@ -1219,9 +1224,10 @@ static void write_status(int settled) {
     // "init supervises no service called toywm" about a desktop that was
     // up -- and once a disk write could sleep, that gap was a whole disk
     // transfer wide. So: write a new file, move the old aside, rename the
-    // new in (rename here refuses an existing destination -- tftpd.c has
-    // the same three steps). A reader sees the old file, the new one, or
-    // for an instant none, and none is what service already retries on.
+    // new in (tftpd.c has the same three steps; rename() replaces since
+    // SYS_RENAME2, so the aside is now belt and braces). A reader sees the
+    // old file, the new one, or for an instant none, and none is what
+    // service already retries on.
     int fd = open(STATUS_PATH ".new", O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) return;                // no disk, or a full one: not fatal
     int wrote = (int)write(fd, g_status, (size_t)n) == n;
