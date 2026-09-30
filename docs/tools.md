@@ -702,21 +702,35 @@ manual steps to be worth automating:
   usable through `exec`. Use `shell` for those.
 
 - **`update_server.py`** -- the PULL half of `remote.py flash`: serves
-  this checkout's build to machines running `/bin/update` or the System
-  Update window (`docs/commands/update.md`). `GET /manifest` is generated
+  builds to machines running `/bin/update` or the System Update window
+  (`docs/commands/update.md`), on TWO CHANNELS: `/dev` is this checkout's
+  `seed/sync`, live, and `/stable` is the published snapshot
+  `~/.local/share/toy-os/updates/current` points at. `--publish` COPIES
+  the current build there (refusing a stale one) and flips `current`
+  atomically -- a new symlink renamed over the old -- keeping the last
+  `--keep` (5); `--list` and `--promote NAME` are the rollback. The
+  server re-reads the link per request, so neither needs a restart.
+  `--install-service` fills in `tools/systemd/toy-os-update.service` and
+  enables it under `systemd --user`; `journalctl --user -u
+  toy-os-update` is then the access log. `GET /` lists the channels; a
+  request for a path outside them answers 404 naming them, which the
+  client prints. Per channel, `GET <ch>/manifest` is generated
   from `seed/sync` on every request -- never a list kept beside it --
   with `remote.py`'s `USERLAND_TREES` IMPORTED, so the push and the pull
   agree that `/etc` and `/home` are new-files-only; `GET /files/<path>`
-  serves only what the manifest names. The kernel is listed twice, ELF
+  serves only what the manifest names (a `/stable` snapshot freezes both
+  at publish time). The kernel is listed twice, ELF
   and gzipped, and the gzipped one only when `build/kernel.media` is not
   older than the ELF (`make all` rebuilds one and not the other). **A
   stale staging tree is refused per request with a 503** naming
   iso_guard's reason, rather than served: a client would otherwise
   install the previous build and report success. Paths are URL-quoted in
   the manifest because some names have spaces. `--print` shows the
-  manifest; `--throttle KIB` slows each file so a progress bar has a
-  middle to watch. Binds `0.0.0.0:8080` by default (the port the dev
-  host's firewall leaves open); a QEMU guest reaches it as `10.0.2.2`.
+  manifest (`--channel stable` for the published one); `--throttle KIB`
+  slows each file so a progress bar has a middle to watch. Binds
+  `0.0.0.0:8080` by default (the port the dev host's firewall leaves
+  open); a QEMU guest reaches it as `10.0.2.2`. The test tools mount one
+  source at the root instead (`make_handler({"": ...})`).
   Unauthenticated, as the command page says.
 
 - **`gui_flow.py`** -- named, composable QMP click-flows on top of

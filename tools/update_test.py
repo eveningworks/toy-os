@@ -67,7 +67,7 @@ class Server:
     def __init__(self):
         self.manifest = update_server.Manifest(os.path.join(ROOT, "seed", "sync"))
         self.tamper = None
-        base = update_server.make_handler(self.manifest)
+        base = update_server.make_handler({"": self.manifest})
         outer = self
 
         class Handler(base):

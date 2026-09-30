@@ -3,5 +3,5 @@ File=/etc/update.conf
 Label=Update server
 Category=System
 Group=Updates
-Default=http://10.0.2.2:8080
+Default=http://10.0.2.2:8080/dev
 Description=The address System Update fetches new builds from

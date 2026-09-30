@@ -1,34 +1,52 @@
 #!/usr/bin/env python3
-"""Serve this checkout's build to toy-os machines running /bin/update.
+"""Serve toy-os builds to machines running /bin/update, on two channels.
 
-    python3 tools/update_server.py                 # 0.0.0.0:8080
-    python3 tools/update_server.py --port 8081 --bind 127.0.0.1
-    python3 tools/update_server.py --print         # the manifest, and exit
-    python3 tools/update_server.py --throttle 300  # 300 KiB/s: watch the progress bar
+    python3 tools/update_server.py                  # both channels, 0.0.0.0:8080
+    python3 tools/update_server.py --publish        # snapshot this build as `stable`
+    python3 tools/update_server.py --list           # published builds; * = current
+    python3 tools/update_server.py --promote NAME   # point `stable` at another one
+    python3 tools/update_server.py --install-service   # run it under systemd --user
+    python3 tools/update_server.py --print [--channel stable]
+    python3 tools/update_server.py --throttle 300   # 300 KiB/s: watch the progress bar
 
 The PULL half of docs/update-design.md: a machine runs `update` (or the
 System Update window) and fetches from here; nothing listens on the
 machine. `remote.py flash` is the PUSH half and still the tool for a
 machine with no network configuration yet.
 
-WHAT IT SERVES
---------------
-    GET /manifest            one line per file:  <crc32> <size> <path> [opts]
-                             (<path> URL-quoted: some names have spaces)
-    GET /files/<path>        that file, and ONLY a file the manifest names
+TWO CHANNELS -- A MACHINE'S `update.server` NAMES ONE
+-----------------------------------------------------
+    http://<host>:8080/dev      this checkout's seed/sync, LIVE: every
+                                `make iso` is at once what a machine gets
+    http://<host>:8080/stable   the published snapshot `current` points at,
+                                under ~/.local/share/toy-os/updates
 
-The manifest is GENERATED from the staging tree `make iso` seeds
-(seed/sync) on every request, never kept beside it -- a list maintained
-by hand is a pointer somebody forgets to update. The trees and the
-new-files-only rule for /etc and /home are `remote.py`'s USERLAND_TREES,
-imported rather than copied, so the push and the pull agree about what a
-machine's own files are. The kernel is offered twice, the ELF and the
-gzipped image, and the client picks by what its GRUB can load.
+`dev` is what a VM wants while a build is being worked on. `stable` is
+what a machine somebody USES wants: a build only arrives there when it is
+published (after preflight, say), and a publish is a COPY, so rebuilding
+the checkout -- or a half-written tree mid-`make iso` -- never reaches it.
+apt's published repository and WSUS's approval step are the shape. The
+last few snapshots are kept, so `--promote` is also the rollback.
 
-A STALE STAGING TREE IS REFUSED PER REQUEST (503 with the reason), not
-served: `make all` without `make iso` leaves seed/sync one build behind,
-and a client would faithfully install the previous build and report
-success. iso_guard's check, and its TOYOS_ALLOW_STALE_ISO bypass.
+Each channel serves
+    GET <channel>/manifest      one line per file:  <crc32> <size> <path> [opts]
+                                (<path> URL-quoted: some names have spaces)
+    GET <channel>/files/<path>  that file, and ONLY a file the manifest names
+
+The `dev` manifest is GENERATED from the staging tree `make iso` seeds on
+every request, never kept beside it -- a list maintained by hand is a
+pointer somebody forgets to update. The trees and the new-files-only rule
+for /etc and /home are `remote.py`'s USERLAND_TREES, imported rather than
+copied, so the push and the pull agree about what a machine's own files
+are. The kernel is offered twice, the ELF and the gzipped image, and the
+client picks by what its GRUB can load. A `stable` snapshot freezes that
+manifest and the files it names at publish time.
+
+A STALE STAGING TREE IS REFUSED (503 with the reason), on `dev` per
+request and by `--publish` outright: `make all` without `make iso` leaves
+seed/sync one build behind, and a client would faithfully install the
+previous build and report success. iso_guard's check, and its
+TOYOS_ALLOW_STALE_ISO bypass.
 
 WHAT IT IS NOT
 --------------
@@ -39,7 +57,10 @@ update server. Bind to a LAN you trust.
 import argparse
 import datetime
 import http.server
+import json
 import os
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -52,6 +73,14 @@ from remote import USERLAND_TREES   # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KERNEL_TARGET = "/boot/boot/kernel.bin"
+STORE = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
+                     "toy-os", "updates")
+UNIT_NAME = "toy-os-update.service"
+UNIT_TEMPLATE = os.path.join(REPO, "tools", "systemd", UNIT_NAME)
+
+
+class Unavailable(Exception):
+    """A channel with nothing to serve right now; the text says why."""
 
 
 class Manifest:
@@ -104,6 +133,12 @@ class Manifest:
                     f"# built {built}"]
             return "\n".join(head + sorted(lines, key=_line_path)) + "\n", files
 
+    def snapshot(self):
+        why = _stale_reason(self.staging)
+        if why:
+            raise Unavailable(f"stale build on the server: {why}")
+        return self.build()
+
     def _add_kernel(self, lines, files):
         elf = os.path.join(REPO, "build", "kernel.bin")
         media = os.path.join(REPO, "build", "kernel.media")
@@ -118,6 +153,145 @@ class Manifest:
             crc, size, _ = self._crc32(media)
             lines.append(f"{crc} {size} {KERNEL_TARGET} kernel-gz,src=/_kernel/kernel.media")
             files["/_kernel/kernel.media"] = media
+
+
+class Published:
+    """The `stable` channel: whatever snapshot `<store>/current` points at.
+
+    Re-read when the link moves, so a --publish or --promote takes effect
+    without restarting the service."""
+
+    def __init__(self, store):
+        self.store = store
+        self._cached = (None, None, None)
+
+    def current(self):
+        link = os.path.join(self.store, "current")
+        return os.path.realpath(link) if os.path.islink(link) else None
+
+    def snapshot(self):
+        cur = self.current()
+        if not cur or not os.path.isfile(os.path.join(cur, "manifest")):
+            raise Unavailable("nothing published yet: run `update_server.py --publish`")
+        if self._cached[0] != cur:
+            with open(os.path.join(cur, "manifest")) as fh:
+                text = fh.read()
+            with open(os.path.join(cur, "index.json")) as fh:
+                index = json.load(fh)
+            files = {key: os.path.join(cur, "files", rel) for key, rel in index.items()}
+            self._cached = (cur, text, files)
+        return self._cached[1], self._cached[2]
+
+
+def _commit():
+    try:
+        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, check=True,
+                             capture_output=True, text=True).stdout.strip()
+        dirty = subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=REPO).returncode != 0
+        return sha + ("-dirty" if dirty else "")
+    except (OSError, subprocess.CalledProcessError):
+        return "nogit"
+
+
+def _set_current(store, name):
+    """Point `current` at builds/<name> ATOMICALLY: a new link beside it,
+    renamed over it, so the server never finds no link at all."""
+    tmp = os.path.join(store, ".current.new")
+    if os.path.lexists(tmp):
+        os.remove(tmp)
+    os.symlink(os.path.join("builds", name), tmp)
+    os.replace(tmp, os.path.join(store, "current"))
+
+
+def publish(staging, store, keep):
+    why = _stale_reason(staging)
+    if why:
+        sys.exit(f"update_server: REFUSING to publish a stale build: {why}\n"
+                 "  run `make iso` first")
+    text, files = Manifest(staging).build()
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    name = f"{stamp}-{_commit()}"
+    builds = os.path.join(store, "builds")
+    os.makedirs(builds, exist_ok=True)
+    part = os.path.join(builds, f".{name}.partial")
+    shutil.rmtree(part, ignore_errors=True)
+    index = {}
+    for key, local in files.items():
+        rel = key.lstrip("/")
+        dst = os.path.join(part, "files", rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(local, dst)
+        index[key] = rel
+    lines = text.split("\n")
+    at = next(i for i, ln in enumerate(lines) if ln.startswith("# built ")) + 1
+    lines.insert(at, f"# commit {name.split('-', 2)[2]}")   # for a person; the client skips it
+    text = "\n".join(lines)
+    with open(os.path.join(part, "manifest"), "w") as fh:
+        fh.write(text)
+    with open(os.path.join(part, "index.json"), "w") as fh:
+        json.dump(index, fh)
+    os.rename(part, os.path.join(builds, name))    # complete, or not there at all
+    _set_current(store, name)
+    size = sum(os.path.getsize(p) for p in files.values())
+    print(f"published {name}: {len(files)} files, {size // (1024 * 1024)} MiB -> stable")
+    names = sorted(n for n in os.listdir(builds) if not n.startswith("."))
+    for old in names[:-keep] if keep > 0 else []:
+        if old != name:
+            shutil.rmtree(os.path.join(builds, old))
+            print(f"pruned {old}")
+    return 0
+
+
+def list_builds(store):
+    builds = os.path.join(store, "builds")
+    cur = Published(store).current()
+    names = sorted(n for n in os.listdir(builds) if not n.startswith(".")) \
+        if os.path.isdir(builds) else []
+    if not names:
+        print(f"nothing published in {store}")
+    for n in names:
+        path = os.path.join(builds, n)
+        info = ""
+        try:
+            with open(os.path.join(path, "manifest")) as fh:
+                hdr = [ln[2:] for ln in fh.read(512).splitlines() if ln.startswith("# ")]
+            info = ", ".join(h for h in hdr if h.startswith(("version", "built")))
+        except OSError:
+            pass
+        print(f"{'*' if cur == os.path.realpath(path) else ' '} {n}   {info}")
+    return 0
+
+
+def promote(store, name):
+    if not os.path.isfile(os.path.join(store, "builds", name, "manifest")):
+        sys.exit(f"update_server: no published build called {name} (see --list)")
+    _set_current(store, name)
+    print(f"stable -> {name}")
+    return 0
+
+
+def install_service(args):
+    """Fill in the tracked unit template and enable it for this user."""
+    with open(UNIT_TEMPLATE) as fh:
+        unit = fh.read()
+    extra = f" --port {args.port} --bind {args.bind}"
+    if args.store != STORE:
+        extra += f" --store {args.store}"
+    unit = unit.replace("@PYTHON@", sys.executable).replace("@REPO@", REPO) \
+               .replace("@ARGS@", extra)
+    dest_dir = os.path.expanduser("~/.config/systemd/user")
+    os.makedirs(dest_dir, exist_ok=True)
+    dest = os.path.join(dest_dir, UNIT_NAME)
+    with open(dest, "w") as fh:
+        fh.write(unit)
+    print(f"wrote {dest}")
+    for cmd in (["systemctl", "--user", "daemon-reload"],
+                ["systemctl", "--user", "enable", "--now", UNIT_NAME],
+                ["systemctl", "--user", "restart", UNIT_NAME]):
+        subprocess.run(cmd, check=True)
+    print(f"running: `systemctl --user status {UNIT_NAME}`, "
+          f"`journalctl --user -u {UNIT_NAME}` for the access log")
+    return 0
 
 
 # A manifest line is space-separated and some names have spaces in them
@@ -145,9 +319,13 @@ def _stale_reason(staging):
     return iso_guard.check_staging_fresh(staging=staging)
 
 
-def make_handler(manifest, throttle_kib=0):
+def make_handler(channels, throttle_kib=0):
+    """`channels` maps a URL prefix ("/dev", "/stable", or "" for a lone
+    source at the root) to anything with snapshot() -> (text, files)."""
+    prefixes = sorted(channels, key=len, reverse=True)
+
     class Handler(http.server.BaseHTTPRequestHandler):
-        server_version = "toy-os-update/1"
+        server_version = "toy-os-update/2"
 
         def log_message(self, fmt, *args):      # the access log is ours, below
             pass
@@ -166,20 +344,40 @@ def make_handler(manifest, throttle_kib=0):
             self.wfile.write(body)
             self._say(status, len(body))
 
+        def _index(self):
+            lines = ["toy-os update server. Channels:"]
+            for p in prefixes:
+                try:
+                    text, files = channels[p].snapshot()
+                    ver = next((ln[2:] for ln in text.splitlines()
+                                if ln.startswith("# built")), "")
+                    lines.append(f"  {p or '/'}  {len(files)} files, {ver}")
+                except Unavailable as e:
+                    lines.append(f"  {p or '/'}  unavailable: {e}")
+            self._send(200, ("\n".join(lines) + "\n").encode())
+
         def do_GET(self):
-            why = _stale_reason(manifest.staging)
-            if why:
-                print(f"update_server: REFUSING, staging is stale: {why}", flush=True)
-                self._send(503, f"stale build on the server: {why}\n".encode())
+            prefix = next((p for p in prefixes if self.path == p + "/manifest"
+                           or self.path.startswith(p + "/files/")), None)
+            if prefix is None:
+                if self.path in ("/", ""):
+                    self._index()
+                else:
+                    self._send(404, ("not found -- the server address names a channel: "
+                                     + " or ".join(p + "/" for p in prefixes if p)
+                                     + "\n").encode())
                 return
-            text, files = manifest.build()
-            if self.path == "/manifest":
+            try:
+                text, files = channels[prefix].snapshot()
+            except Unavailable as e:
+                print(f"update_server: {prefix or '/'} unavailable: {e}", flush=True)
+                self._send(503, f"{e}\n".encode())
+                return
+            rest = self.path[len(prefix):]
+            if rest == "/manifest":
                 self._send(200, text.encode())
                 return
-            if not self.path.startswith("/files/"):
-                self._send(404, b"not found\n")
-                return
-            local = files.get(urllib.parse.unquote(self.path[len("/files"):]))
+            local = files.get(urllib.parse.unquote(rest[len("/files"):]))
             if not local:
                 self._send(404, b"not in the manifest\n")
                 return
@@ -205,33 +403,57 @@ def make_handler(manifest, throttle_kib=0):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--staging", default=os.path.join(REPO, "seed", "sync"))
+    ap.add_argument("--staging", default=os.path.join(REPO, "seed", "sync"),
+                    help="the dev channel's tree (default: this checkout's seed/sync)")
+    ap.add_argument("--store", default=STORE, help=f"published builds (default {STORE})")
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--no-kernel", action="store_true",
-                    help="leave the kernel out of the manifest")
-    ap.add_argument("--print", action="store_true",
-                    help="print the manifest and exit")
+                    help="leave the kernel out of the dev manifest")
+    ap.add_argument("--print", action="store_true", help="print a manifest and exit")
+    ap.add_argument("--channel", choices=("dev", "stable"), default="dev",
+                    help="which one --print shows")
+    ap.add_argument("--publish", action="store_true",
+                    help="snapshot the current build and make it `stable`")
+    ap.add_argument("--keep", type=int, default=5, metavar="N",
+                    help="published builds to keep (default 5)")
+    ap.add_argument("--list", action="store_true", help="list published builds")
+    ap.add_argument("--promote", metavar="NAME", help="point `stable` at a published build")
+    ap.add_argument("--install-service", action="store_true",
+                    help=f"install and start {UNIT_NAME} under systemd --user")
     ap.add_argument("--throttle", type=int, default=0, metavar="KIB",
                     help="send at most KIB KiB/s per file -- to watch progress on a fast link")
     args = ap.parse_args()
 
+    if args.install_service:
+        return install_service(args)
+    if args.list:
+        return list_builds(args.store)
+    if args.promote:
+        return promote(args.store, args.promote)
     if not os.path.isdir(args.staging):
         sys.exit(f"update_server: no {args.staging} -- run `make iso` first")
-    manifest = Manifest(args.staging, kernel=not args.no_kernel)
+    if args.publish:
+        return publish(args.staging, args.store, args.keep)
+
+    dev = Manifest(args.staging, kernel=not args.no_kernel)
+    stable = Published(args.store)
     if args.print:
-        sys.stdout.write(manifest.build()[0])
+        try:
+            sys.stdout.write((dev if args.channel == "dev" else stable).snapshot()[0])
+        except Unavailable as e:
+            sys.exit(f"update_server: {args.channel}: {e}")
         return 0
-    why = _stale_reason(args.staging)
-    if why:
-        print(f"update_server: WARNING, staging is stale ({why}); requests will be "
-              "refused until `make iso` runs", file=sys.stderr)
-    text, files = manifest.build()
-    print(f"manifest: {len(files)} files from {os.path.relpath(args.staging, REPO)}/")
-    srv = http.server.ThreadingHTTPServer((args.bind, args.port),
-                                          make_handler(manifest, args.throttle))
-    print(f"serving http://{args.bind}:{args.port}  (a QEMU guest reaches this host "
-          f"as http://10.0.2.2:{args.port})", flush=True)
+    for name, src in (("dev", dev), ("stable", stable)):
+        try:
+            text, files = src.snapshot()
+            print(f"{name}: {len(files)} files")
+        except Unavailable as e:
+            print(f"{name}: unavailable for now -- {e}")
+    srv = http.server.ThreadingHTTPServer(
+        (args.bind, args.port), make_handler({"/dev": dev, "/stable": stable}, args.throttle))
+    print(f"serving http://{args.bind}:{args.port}/dev and /stable  (a QEMU guest reaches "
+          f"this host as 10.0.2.2)", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

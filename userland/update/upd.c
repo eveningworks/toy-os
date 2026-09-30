@@ -20,7 +20,7 @@
 #define KERNEL_OLD   "/boot/boot/kernel.old"
 #define GRUB_CFG     "/boot/boot/grub/grub.cfg"
 #define GRUB_MODULES "/etc/grub-core.modules"
-#define DEFAULT_SERVER "http://10.0.2.2:8080"
+#define DEFAULT_SERVER "http://10.0.2.2:8080/dev"
 
 static int g_log_fd = -1;
 
@@ -307,9 +307,18 @@ int upd_check(const char *base, struct upd_plan *p, const struct upd_hooks *h) {
     req.sink = grow_sink;
     req.sink_ctx = &b;
     if (uhttp_fetch(&req) != 0 || req.status != 200 || !b.p) {
-        char msg[sizeof req.err + 64];
-        if (req.status && req.status != 200)
-            snprintf(msg, sizeof msg, "the server answered %d for %s", req.status, url);
+        char msg[sizeof req.err + 160];
+        if (req.status && req.status != 200) {
+            // The body says why (a stale build, no channel named): its
+            // first line is worth more than the number.
+            char why[96] = "";
+            if (b.p) {
+                snprintf(why, sizeof why, "%s", b.p);
+                why[strcspn(why, "\r\n")] = '\0';
+            }
+            snprintf(msg, sizeof msg, "the server answered %d for %s%s%s", req.status, url,
+                     why[0] ? ": " : "", why);
+        }
         else
             snprintf(msg, sizeof msg, "could not fetch %s: %s", url,
                      req.err[0] ? req.err : "no data");

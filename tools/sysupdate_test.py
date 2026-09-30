@@ -58,7 +58,7 @@ def finish():
 
 def serve(throttle_kib):
     manifest = update_server.Manifest(os.path.join(os.path.dirname(HERE), "seed", "sync"))
-    base = update_server.make_handler(manifest, throttle_kib)
+    base = update_server.make_handler({"": manifest}, throttle_kib)
 
     class Quiet(base):
         def _say(self, *a):

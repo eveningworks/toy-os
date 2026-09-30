@@ -81,19 +81,33 @@ records `gzio` (`/etc/grub-core.modules`).
 A second `update` before the restart says an update is already staged
 and installs nothing.
 
-## Setting up a server
+## The server, and its two channels
 
-On the development host, after `make iso`:
+The development host runs `tools/update_server.py` as a systemd user
+service (`--install-service` sets it up) on port 8080, with two
+channels, and a machine's server address names one:
 
-    python3 tools/update_server.py              # 0.0.0.0:8080
+| Address | What it serves |
+|---|---|
+| `http://<host>:8080/dev` | the checkout's latest `make iso`, live |
+| `http://<host>:8080/stable` | the last build somebody PUBLISHED |
 
-A QEMU guest reaches the host as `10.0.2.2`, which is the default
-server. A real machine needs the host's LAN address:
+A VM wants `dev` -- `http://10.0.2.2:8080/dev`, QEMU's host, is the
+default. A machine somebody uses wants `stable`:
 
-    update --server http://<host>:8080
+    update --server http://<host>:8080/stable
 
-The server refuses (503) while `seed/sync` is older than the build, so a
-machine cannot install the previous build by accident.
+A build reaches `stable` only when it is published, after its tests:
+
+    python3 tools/update_server.py --publish        # this build -> stable
+    python3 tools/update_server.py --list           # what is published
+    python3 tools/update_server.py --promote <name> # roll stable back or forward
+
+A publish is a COPY (under `~/.local/share/toy-os/updates`), so
+rebuilding the checkout never changes what `stable` serves. `dev`
+refuses (503) while `seed/sync` is older than the build, so a machine
+cannot install the previous build by accident; an error from the server
+is printed with its reason.
 
 ## What it is not
 
@@ -111,5 +125,5 @@ install leaves some files new and some old.
 ## See also
 
 `docs/update-design.md` for the design, `tools/update_server.py` for
-the server, `reboot` to finish a staged update, `sum` for the checksums
+the server (`docs/tools.md`), `reboot` to finish a staged update, `sum` for the checksums
 it compares.

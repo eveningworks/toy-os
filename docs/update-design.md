@@ -213,3 +213,15 @@ the kernel alone would install a userland newer than its kernel, which
 is how a flashed laptop once came up with no network. So nothing is
 installed, and the window says why.
 
+**Two channels, and `stable` is a copy.** The server runs as a systemd
+user service with `/dev` -- the checkout's staging tree, live -- and
+`/stable`, the snapshot a `--publish` copied out and an atomically
+swapped `current` link names. A machine somebody uses tracks `stable`,
+so the sessions rebuilding the checkout all day never reach it, and a
+pull can never land in a half-written `seed/sync` mid-`make iso` (the
+staleness check catches an OLD tree, not a PARTIAL one). Pointing
+`stable` at a directory of the checkout instead would have been one
+line and would have kept both problems. apt's published repository
+(reprepro, aptly) and WSUS's approval step are the shape; the kept
+snapshots make `--promote` the rollback.
+
