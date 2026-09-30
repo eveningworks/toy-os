@@ -2,7 +2,7 @@
 """Serve toy-os builds to machines running /bin/update, on two channels.
 
     python3 tools/update_server.py                  # both channels, 0.0.0.0:8080
-    python3 tools/update_server.py --publish        # snapshot this build as `stable`
+    python3 tools/update_server.py --publish        # this build -> `stable` (preflight-passed)
     python3 tools/update_server.py --list           # published builds; * = current
     python3 tools/update_server.py --promote NAME   # point `stable` at another one
     python3 tools/update_server.py --install-service   # run it under systemd --user
@@ -24,7 +24,10 @@ TWO CHANNELS -- A MACHINE'S `update.server` NAMES ONE
 `dev` is what a VM wants while a build is being worked on. `stable` is
 what a machine somebody USES wants: a build only arrives there when it is
 published (after preflight, say), and a publish is a COPY, so rebuilding
-the checkout -- or a half-written tree mid-`make iso` -- never reaches it.
+the checkout never reaches it. `--publish` refuses a build preflight has
+not passed on this exact tree (tools/preflight_stamp.py; `--force`
+overrides), and `dev` answers 503 while a `make iso` is writing it
+(build/.seeding).
 apt's published repository and WSUS's approval step are the shape. The
 last few snapshots are kept, so `--promote` is also the rollback.
 
@@ -69,12 +72,14 @@ import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import iso_guard          # noqa: E402
+import preflight_stamp    # noqa: E402
 from remote import USERLAND_TREES   # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KERNEL_TARGET = "/boot/boot/kernel.bin"
 STORE = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
                      "toy-os", "updates")
+SEEDING = os.path.join(REPO, "build", ".seeding")   # the Makefile's seed step, while it runs
 UNIT_NAME = "toy-os-update.service"
 UNIT_TEMPLATE = os.path.join(REPO, "tools", "systemd", UNIT_NAME)
 
@@ -89,9 +94,14 @@ class Manifest:
     crc32 is cached per (path, size, mtime), so regenerating on every
     request costs a stat per file after the first."""
 
-    def __init__(self, staging, kernel=True):
+    def __init__(self, staging, kernel=True, kernel_elf=None, kernel_media=None):
         self.staging = staging
         self.kernel = kernel
+        # Overridable so a test can serve a DIFFERENT kernel; "" leaves
+        # the gzipped one out.
+        self.kernel_elf = kernel_elf or os.path.join(REPO, "build", "kernel.bin")
+        self.kernel_media = (os.path.join(REPO, "build", "kernel.media")
+                             if kernel_media is None else kernel_media)
         self._crc = {}
         self._lock = threading.Lock()
 
@@ -134,14 +144,17 @@ class Manifest:
             return "\n".join(head + sorted(lines, key=_line_path)) + "\n", files
 
     def snapshot(self):
+        if os.path.exists(SEEDING) and os.path.realpath(self.staging) == os.path.realpath(
+                os.path.join(REPO, "seed", "sync")):
+            raise Unavailable("a `make iso` is writing this build right now, or one failed "
+                              "part-way -- try again when it has finished")
         why = _stale_reason(self.staging)
         if why:
             raise Unavailable(f"stale build on the server: {why}")
         return self.build()
 
     def _add_kernel(self, lines, files):
-        elf = os.path.join(REPO, "build", "kernel.bin")
-        media = os.path.join(REPO, "build", "kernel.media")
+        elf, media = self.kernel_elf, self.kernel_media
         if not os.path.isfile(elf):
             return
         crc, size, mtime = self._crc32(elf)
@@ -149,7 +162,7 @@ class Manifest:
         files["/_kernel/kernel.bin"] = elf
         # The gzipped image is made by `make iso`, not `make all`: one
         # older than the ELF is the PREVIOUS kernel, so it is left out.
-        if os.path.isfile(media) and os.stat(media).st_mtime >= mtime:
+        if media and os.path.isfile(media) and os.stat(media).st_mtime >= mtime:
             crc, size, _ = self._crc32(media)
             lines.append(f"{crc} {size} {KERNEL_TARGET} kernel-gz,src=/_kernel/kernel.media")
             files["/_kernel/kernel.media"] = media
@@ -203,11 +216,18 @@ def _set_current(store, name):
     os.replace(tmp, os.path.join(store, "current"))
 
 
-def publish(staging, store, keep):
+def publish(staging, store, keep, force=False):
     why = _stale_reason(staging)
     if why:
         sys.exit(f"update_server: REFUSING to publish a stale build: {why}\n"
                  "  run `make iso` first")
+    # A RELEASE IS A TESTED BUILD. preflight stamps the tree it passed on.
+    why = preflight_stamp.why_not()
+    if why and not force:
+        sys.exit(f"update_server: REFUSING to publish: {why}\n"
+                 "  (--force publishes anyway)")
+    if why:
+        print(f"update_server: publishing WITHOUT a preflight pass ({why})")
     text, files = Manifest(staging).build()
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     name = f"{stamp}-{_commit()}"
@@ -415,6 +435,8 @@ def main():
                     help="which one --print shows")
     ap.add_argument("--publish", action="store_true",
                     help="snapshot the current build and make it `stable`")
+    ap.add_argument("--force", action="store_true",
+                    help="with --publish: publish a build preflight has not passed")
     ap.add_argument("--keep", type=int, default=5, metavar="N",
                     help="published builds to keep (default 5)")
     ap.add_argument("--list", action="store_true", help="list published builds")
@@ -434,7 +456,7 @@ def main():
     if not os.path.isdir(args.staging):
         sys.exit(f"update_server: no {args.staging} -- run `make iso` first")
     if args.publish:
-        return publish(args.staging, args.store, args.keep)
+        return publish(args.staging, args.store, args.keep, args.force)
 
     dev = Manifest(args.staging, kernel=not args.no_kernel)
     stable = Published(args.store)

@@ -145,11 +145,19 @@ def scan(path):
     depth = 0
     line = 1
     # An else-if chain is not contiguous text -- each branch's body sits
-    # between the branches -- so runs are grouped by BRACE DEPTH inside a
-    # file. Two separate chains at the same depth in one function would
-    # merge, which overcounts rather than undercounts; that is the safe
-    # direction for a check like this.
+    # between the branches -- so runs are grouped by BRACE DEPTH, and
+    # FLUSHED when the depth returns to 0: at the end of each top-level
+    # body, i.e. per FUNCTION. Two chains at one depth inside a function
+    # still merge, which overcounts, the safe direction. Grouping per
+    # FILE, as this did until 2026-09-30, overcounted across functions:
+    # a new five-branch function tripped a chain that began in another.
     runs = collections.defaultdict(lambda: [0, 0, 0])  # depth -> [count, line, pos]
+
+    def flush():
+        for _, (count, ln, pos) in runs.items():
+            if count:
+                found.append(("if/else", ln, count + 1, pos))
+        runs.clear()
     i = 0
     n = len(src)
     while i < n:
@@ -160,6 +168,8 @@ def scan(path):
             depth += 1
         elif ch == "}":
             depth -= 1
+            if depth == 0:
+                flush()
         elif ch == "e" and re.match(r"else\s+if\s*\(", src[i:i + 40]):
             r = runs[depth]
             if r[0] == 0:
@@ -185,9 +195,7 @@ def scan(path):
                     found.append(("switch", line, cases, i))
         i += 1
 
-    for _, (count, ln, pos) in runs.items():
-        if count:
-            found.append(("if/else", ln, count + 1, pos))
+    flush()
 
     return [(kind, ln, cnt, _waived(raw, pos)) for kind, ln, cnt, pos in found]
 

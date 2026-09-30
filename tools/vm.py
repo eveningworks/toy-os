@@ -833,6 +833,66 @@ def cmd_stop(args):
     return 0
 
 
+def _uptime_s(timeout):
+    """The guest's uptime in seconds, or None. The kernel shell says
+    "up 2 min 30 sec" and /bin/uptime "up 1:02:03", so both are read."""
+    out = _exec_one("sh uptime", timeout=timeout) or ""
+    m = re.search(r"up\s+(?:(\d+)d\s+)?(\d+):(\d+):(\d+)", out)
+    if m:
+        d, h, mi, s = (int(g or 0) for g in m.groups())
+        return ((d * 24 + h) * 60 + mi) * 60 + s
+    unit = {"d": 86400, "day": 86400, "days": 86400, "h": 3600, "hr": 3600, "hour": 3600,
+            "hours": 3600, "min": 60, "mins": 60, "sec": 1, "secs": 1, "s": 1}
+    parts = re.findall(r"(\d+)\s*([a-z]+)", out.split("up", 1)[-1]) if "up" in out else []
+    known = [(int(n), unit[u]) for n, u in parts if u in unit]
+    return sum(n * k for n, k in known) if known else None
+
+
+def cmd_reboot(args):
+    """Reboot the guest and wait until the NEW boot answers.
+
+    "The console answers" is not enough -- the old boot answers too, for
+    the moment before the reset lands -- so this waits for the uptime to
+    go BACKWARDS. A guest started without --reboot has -no-reboot on its
+    QEMU line and would simply exit, so that is refused up front.
+    """
+    pid = _read_pid()
+    if not pid:
+        print("vm: not running (vm.py start first)")
+        return 1
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            if b"-no-reboot" in fh.read().split(b"\0"):
+                print("vm: this guest was started without --reboot, so a reboot would end "
+                      "QEMU -- `vm.py stop`, then `vm.py --reboot start`")
+                return 1
+    except OSError:
+        pass
+    before = _uptime_s(args.timeout)
+    # Sent without waiting for an answer: the old boot never gives one.
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(args.timeout)
+        s.connect(SERIAL_SOCK)
+        s.sendall(b"\n")
+        buf, deadline = "", time.time() + args.timeout
+        while time.time() < deadline and not buf.endswith(PROMPT):
+            buf += s.recv(65536).decode("utf-8", errors="replace")
+        s.sendall(b"sh reboot\n")
+        time.sleep(0.5)
+    deadline = time.time() + args.timeout
+    while time.time() < deadline:
+        time.sleep(0.5)
+        try:
+            now = _uptime_s(3.0)
+        except OSError:
+            continue
+        if now is not None and (before is None or now < before):
+            print(f"vm: rebooted and ready (up {now}s)")
+            return 0
+    print(f"vm: the guest did not come back within {args.timeout}s")
+    return 1
+
+
 def cmd_run(args):
     rc = cmd_start(args)
     if rc:
@@ -957,6 +1017,9 @@ def main():
                         help="SIGTERM straight away, no ACPI shutdown -- for a wedged guest")
     p_stop.set_defaults(func=cmd_stop)
     sub.add_parser("status").set_defaults(func=cmd_status)
+    sub.add_parser("reboot", help="reboot the guest and wait for the new boot "
+                                  "(needs a guest started with --reboot)"
+                   ).set_defaults(func=cmd_reboot)
 
     p_exec = sub.add_parser("exec", help="run shell command(s) and print their output")
     p_exec.add_argument("commands", nargs="+")

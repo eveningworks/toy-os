@@ -2942,3 +2942,13 @@ collide with a parallel `gui_regress` slot, and a tampering subclass of
 the real handler is how "a corrupt transfer is refused" gets its
 positive control.
 
+**2026-09-30, the tooling that came out of it.** `mutate.py` is the
+positive control this file keeps asking for, made safe: edit, build,
+run, restore, REBUILD, and exit 0 only when the test went red. Three
+controls were done by hand with `.bak` copies before it existed.
+`gui_regress.py` now builds a fresh image by default, and `vm.py
+reboot` waits for the new boot (the uptime going backwards) instead of
+a hand-rolled poll -- and `remote.py reboot --wait` already did that for
+the laptop, which went unnoticed four times: read `--help` before
+writing a wait loop.
+

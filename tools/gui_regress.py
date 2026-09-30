@@ -67,6 +67,7 @@ tools drive whatever is already on the image.
 """
 
 import argparse
+import atexit
 import concurrent.futures as cf
 import os
 import queue
@@ -78,6 +79,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+import fresh_disk  # noqa: E402
 
 # How many tools run at once by default. Each one is a QEMU with 256 MB
 # of guest RAM under TCG, so this is bounded by host cores far more than
@@ -573,8 +576,12 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-k", "--only", action="append", metavar="NAME",
                     help="run only these tools (repeatable); matches on the short name")
-    ap.add_argument("--disk", default="disk.img",
-                    help="image to copy for each run (default: disk.img)")
+    ap.add_argument("--disk", default=None,
+                    help="image to copy for each run (default: a FRESH image of this "
+                         "build, made by tools/fresh_disk.py -- not disk.img)")
+    ap.add_argument("--no-fresh", action="store_true",
+                    help="copy disk.img as it is instead of a fresh image: what a "
+                         "test or `make run` left on it reaches every tool")
     ap.add_argument("--timeout", type=int, default=600,
                     help="per-tool timeout in seconds (default: 600). This is a "
                          "HANG GUARD, not a budget: it wants a wide margin over "
@@ -624,10 +631,29 @@ def main():
     if args.host:
         return run_remote_suite(picked, args)
 
-    disk = args.disk if os.path.isabs(args.disk) else os.path.join(REPO, args.disk)
-    if not os.path.exists(disk):
-        print(f"gui_regress: no {disk} -- run `make iso` first")
-        return 2
+    # A FRESH IMAGE BY DEFAULT. `make iso` syncs disk.img rather than
+    # reformatting it, so remembered window positions, a changed setting
+    # or a stray launcher left by an earlier test or a `make run` reach
+    # every copy -- four tools failed that way on 2026-09-30, and
+    # predates.py agreed they were pre-existing because it boots the same
+    # image. Twenty seconds buys a fixture that is the build and nothing
+    # else (tools/fresh_disk.py).
+    fresh_dir = None
+    if args.disk is None and not args.no_fresh:
+        fresh_dir = tempfile.mkdtemp(prefix="gui_regress_fresh.")
+        atexit.register(shutil.rmtree, fresh_dir, True)   # every return path, not just the last
+        disk = os.path.join(fresh_dir, "fresh.img")
+        print("gui_regress: making a fresh image of this build (tools/fresh_disk.py)")
+        fresh_disk.make_fresh(disk)
+    else:
+        disk = args.disk or "disk.img"
+        disk = disk if os.path.isabs(disk) else os.path.join(REPO, disk)
+        if not os.path.exists(disk):
+            print(f"gui_regress: no {disk} -- run `make iso` first")
+            return 2
+        found = fresh_disk.drift(disk)
+        if found:
+            print("gui_regress: " + "\ngui_regress: ".join(fresh_disk.describe(disk, found)) + "\n")
 
     if shutil.which("qemu-system-x86_64") is None:
         print("gui_regress: qemu-system-x86_64 not on PATH")
@@ -642,7 +668,7 @@ def main():
 
     jobs = max(1, min(args.jobs, len(picked)))
     print(f"gui_regress: {len(picked)} tool(s), each on its own copy of "
-          f"{os.path.basename(disk)}, {jobs} at a time\n")
+          f"{'a fresh image' if fresh_dir else os.path.basename(disk)}, {jobs} at a time\n")
 
     # Each concurrent tool gets a VM slot, and the slot is what keeps
     # two of them from sharing a pidfile, a serial socket or a QMP port

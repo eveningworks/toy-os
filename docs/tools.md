@@ -143,6 +143,40 @@ manual steps to be worth automating:
   named prerequisite and `.PRECIOUS` or make deletes it as an
   intermediate, and `linker.ld`'s `.krelocs` must stay after `.data`.
   See `docs/decisions.md`.
+- **`check_dispatch.py`** -- fails the build on an `if/else` chain or
+  `switch` over ~20 branches that should be a table (CLAUDE.md's
+  table; `dispatch-ok: <reason>` waives one in place). Deliberately
+  dumb: it counts `else if` per brace depth. The count is PER FUNCTION
+  -- flushed each time the depth returns to 0 -- since 2026-09-30; it
+  was per FILE before, so a new five-branch function in
+  `fs_syscalls.c` failed a chain that began in another function. Two
+  chains at one depth inside one function still merge, which is the
+  safe direction.
+- **`fresh_disk.py`** -- a PRISTINE image of the current build, and
+  whether an existing one has drifted. `make_fresh(dest)` is `make
+  iso`'s recipe pointed elsewhere -- a sparse image, `seed_disk.py`,
+  `install_grub.py` -- in ~20 s, touching neither `disk.img` nor the
+  Makefile's `.seeded` stamp; `gui_regress.py` uses it by default.
+  `drift(disk)` is check_layout's orphan list: files on the image no
+  build puts there. It is INFORMATION, not a verdict -- a boot writes
+  `/etc/toyos.conf` too, and so does a test that changes a setting, so a
+  name cannot say which. `predates.py` names it beside a PRE-EXISTING
+  verdict, where it could change the answer.
+- **`mutate.py`** -- a positive control done safely: `--edit FILE OLD
+  NEW` (repeatable; OLD must occur exactly once), `--` and a test
+  command. It backs the originals up to `build/.mutate/` before
+  touching anything (`--recover` after a SIGKILL), builds, runs,
+  restores in a `finally` and checks the bytes, then REBUILDS so the
+  artifacts match the source again -- the step a hand-done control
+  forgets. Exit 0 = the control fired (the test sees the break), 1 = it
+  did not, 2 = the mutated tree did not build. `--build` (default `make
+  iso`) for a host-only check.
+- **`preflight_stamp.py`** -- `preflight.sh` writes `build/.preflight-pass`
+  on PASS: the git TREE hash of every tracked and untracked
+  non-ignored file (built in a scratch index; `.claude/` and `.mcp.json`
+  left out). `why_not()` says whether that still covers the working
+  tree AND whether the build has been re-seeded since. It is what
+  `update_server.py --publish` checks, so a release is a tested build.
 - **`check_docs.py`** -- the documentation rules a script can check,
   because the ones that rotted before were the ones nobody checked. A
   pointer to the DELETED changelog, a milestone heading that reintroduces
@@ -719,7 +753,11 @@ manual steps to be worth automating:
   with `remote.py`'s `USERLAND_TREES` IMPORTED, so the push and the pull
   agree that `/etc` and `/home` are new-files-only; `GET /files/<path>`
   serves only what the manifest names (a `/stable` snapshot freezes both
-  at publish time). The kernel is listed twice, ELF
+  at publish time). **Two gates**: `--publish` refuses a build
+  `preflight_stamp.py` does not cover (`--force` overrides and says so),
+  and `/dev` answers 503 while `build/.seeding` exists -- the Makefile's
+  seed step creates it first and removes it last, so a half-written
+  `seed/sync` is never served (a failed seed leaves it, on purpose). The kernel is listed twice, ELF
   and gzipped, and the gzipped one only when `build/kernel.media` is not
   older than the ELF (`make all` rebuilds one and not the other). **A
   stale staging tree is refused per request with a 503** naming
@@ -766,6 +804,12 @@ manual steps to be worth automating:
   later, on something unrelated. `DebugConsole.open_app()` RAISES on
   that now, quoting the guest's own list -- one line instead of a
   debugging round.
+- **`vm.py reboot`** -- reboots the guest and returns when the NEW boot
+  answers, judged by its uptime going BACKWARDS, since the old boot
+  answers the console for a moment after the command. Refuses a guest
+  started without `--reboot`, whose QEMU would simply exit. It replaces
+  the hand-rolled "exec reboot, then poll uptime" loops (four in one
+  session). For the laptop, `remote.py reboot --wait` is the same thing.
 - **`vm.py stop` ASKS THE GUEST TO SHUT DOWN, and only then signals
   QEMU** -- QMP `system_powerdown`, waited for, with SIGTERM as an
   unconditional fallback so stopping a VM can never itself hang.
@@ -4111,7 +4155,7 @@ window without going through it will find its layout polls timing out.
   disabled a brand-new window is frontmost too, so the title-only
   version of that check stayed green through the positive control.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
-  its own freshly-copied disk image and its own VM, and prints one
+  its own copy of a FRESH image and its own VM, and prints one
   pass/fail table (~1.5 minutes; ~300 checks across ~25 tools, a snapshot rather than a maintained count). This is the standard check
   after touching `apps/ui/`, `userland/`, or anything the WM draws.
   Tools are **STARTED longest-first** (`COST_S`/`pick_order()`), because
@@ -4121,6 +4165,12 @@ window without going through it will find its layout polls timing out.
   still printed in declared dependency order; only the start order
   changed, and a tool missing from `COST_S` is assumed SLOW so a new
   one can never become the straggler by omission.
+  **THE IMAGE IS BUILT FRESH BY DEFAULT** (`fresh_disk.py`, ~20 s), not
+  copied from `disk.img`: `make iso` syncs rather than reformats, so a
+  window position, a setting or a launcher an earlier test or a `make
+  run` left there reached every tool, and four failed that way on
+  2026-09-30. `--disk PATH` uses an image as it is, `--no-fresh` uses
+  `disk.img` as it is -- and both print what drifted onto it first.
   `-k NAME` for a subset, `--logs DIR` to keep each tool's full output,
   `--list` to see what's in it. The per-tool fresh image and fresh VM
   are the parts that matter: several tools write files, and every one
@@ -4836,7 +4886,7 @@ window without going through it will find its layout polls timing out.
   `--build` it rebuilds the working tree after restoring, so the tree is
   left as it was found -- including what was built from it.
 
-  **AND ONE TRAP IT CANNOT HANDLE: BOTH SIDES BOOT THE SAME `disk.img`.**
+  **AND ONE TRAP IT CAN ONLY NAME: BOTH SIDES BOOT THE SAME `disk.img`.**
   `make iso` syncs rather than reformats, so state a test left on the
   image -- `/etc/windows.conf`'s remembered window positions,
   `/etc/desktop.conf` -- is there for HEAD's run as much as yours, and a
@@ -4844,7 +4894,9 @@ window without going through it will find its layout polls timing out.
   measured pre-existing that way; after `make clean-disk && make iso`
   three passed and the fourth dropped to the one check already in
   `docs/bugs.md`. Take the fresh image FIRST (CLAUDE.md's rule), then
-  measure what is still red.
+  measure what is still red. A PRE-EXISTING verdict now lists what has
+  drifted onto the image (`fresh_disk.drift()`), and `gui_regress.py`
+  builds a fresh image by default, which removes the trap for it.
 
 - **`check_tool_commands.py`** -- static check that every guest command
   a tool drives still exists, against the same authority `check_docs.py`
@@ -5177,7 +5229,13 @@ window without going through it will find its layout polls timing out.
   the same disk rebooted -- applies it before init; `--server` persists.
   `--positive-control` serves the "corrupted" file intact while still
   expecting the refusal: two checks must go red (measured: 15 of 17).
-  In `ondemand_sweep.py`.
+  **The kernel path** (checks 18-25, skipped without mtools): a copy of
+  this build's kernel with one boot message changed to a same-length
+  twin is served; on the stock image (`set timeout=0`) the update is
+  refused whole and `/boot` untouched; with the timeout raised on the
+  HOST through mtools it installs, keeps `kernel.old`, and the next boot
+  prints the twin message. Its control, by `mutate.py`, was disabling
+  the refusal: 23 of 25. In `ondemand_sweep.py`.
 
 - **`hwdata_test.py`** -- drives `hwdata update` against a plain
   `http.server` on this machine, reached through SLIRP's 10.0.2.2, the

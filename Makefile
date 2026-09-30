@@ -1733,6 +1733,10 @@ EXTRAS ?=
 LICENSE ?=
 seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) $(LIBC_SO) $(LIBUAPP_SO) $(MODULE_KOS) $(MODULE_ALIAS) $(BUILD)/conf.mk $(KERNEL_MEDIA)
 	$(if $(EXTRAS),TOYOS_LICENSE=$(LICENSE) python3 tools/fetch_extras.py,@true)
+	# WHILE THIS EXISTS seed/sync IS HALF WRITTEN, and update_server.py's
+	# /dev channel refuses rather than serve it. A failed seed leaves it
+	# behind on purpose: that tree is half written too.
+	@mkdir -p $(BUILD) && touch $(BUILD)/.seeding
 	mkdir -p $(SEED_DIR)/sync/bin $(SEED_DIR)/sync/tests
 	# The dynamic loader and the shared libraries -- /lib is theirs
 	# (docs/filesystem-layout.md).
@@ -2028,6 +2032,7 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	# wolf on a no-op rebuild -- a guard that false-alarms is a guard
 	# people switch off.
 	@touch $(BUILD)/.seeded
+	@rm -f $(BUILD)/.seeding
 
 # The LIVE ISO is a SEPARATE ARTIFACT, and that is the point.
 #

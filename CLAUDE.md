@@ -340,8 +340,9 @@ mode, and alone blurs the font), `LIVE=1`, `BOOT=cd|disk`, `STRIP=0`,
   the real image: check `ps aux | grep qemu-system` and ASK the user to
   close theirs first (standing request).
 - **BEFORE BELIEVING ANY GUI TEST FAILURE, RE-RUN IT ON A FRESH IMAGE**
-  (`make clean-disk && make iso`, then `--logs DIR`): `make iso` syncs
-  rather than reformats, and apps write. Still red: rebuild `HEAD` to
+  -- `gui_regress.py` builds one by default now (`fresh_disk.py`); a tool
+  run by hand, or `predates.py`, still boots `disk.img` (`make clean-disk
+  && make iso`): `make iso` syncs rather than reformats, and apps write. Still red: rebuild `HEAD` to
   prove it isn't yours. **A test that applies a setting changes the
   machine for every later tool** (`settings_test`'s pointer speed made
   unrelated hover tools fail).
@@ -404,6 +405,7 @@ fix a rederive-from-scratch cost". `--list` on `preflight.sh`,
 | Question | Tool |
 |---|---|
 | Is it MINE, or already broken? | `predates.py "<command>"` -- "it predates me" is a MEASUREMENT |
+| Can my test SEE the break? | `mutate.py --edit FILE OLD NEW -- <test>` -- restores and rebuilds itself |
 | Is it safe to commit? | `preflight.sh` (**stop your `vm.py` guest first**) |
 | Has the on-demand half rotted? | `ondemand_sweep.py` -- the ~30 tools no other runner covers |
 | Drive the BARE-METAL machine | `remote.py` (`exec`/`put`/`get`/`sync`/`flash`/`screenshot`/`shell`) |

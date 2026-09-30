@@ -46,6 +46,10 @@ import sys
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO, "tools"))
+# Imported NOW, not at the verdict: the HEAD run stashes untracked files,
+# and a module written this session would not exist by then.
+import fresh_disk  # noqa: E402
 
 
 def git(*args, check=True):
@@ -262,6 +266,18 @@ def main():
 
     if head_rc == work_rc:
         print(f"predates: PRE-EXISTING -- HEAD fails the same way (exit {head_rc}).")
+        # BOTH SIDES BOOT THE SAME disk.img, so what a test left on it is
+        # in both runs: a dirty fixture measures as pre-existing. Named
+        # here, where it could turn the verdict, rather than as a warning
+        # every run would print (a boot writes some of these files too).
+        found = fresh_disk.drift(os.path.join(REPO, "disk.img"))
+        if found:
+            print(f"predates: BUT both runs booted disk.img, which carries {len(found)} "
+                  "file(s) no build puts there (" + ", ".join(p for p, _ in found[:4])
+                  + (", ..." if len(found) > 4 else "") + ").")
+            print("predates: a leftover setting or window position fails both sides alike: "
+                  "`make clean-disk && make iso`, then measure again (gui_regress uses a "
+                  "fresh image by default).")
         print("predates: note that pre-existing is not the same as unrelated: a "
               "change can make a latent bug reachable without causing it.")
         return 0

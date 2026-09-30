@@ -15,6 +15,12 @@ WHAT IT PROVES, each against an INDEPENDENT reader (`sum`, `cat`,
      unchanged -- until the next boot, whose kernel applies it
      ("update: applied 1 staged file") before init starts.
   5. `update --server` persists the address and records it as recent.
+  6. THE KERNEL, served as a copy of this build's with one boot message
+     changed so the new one can be told from the old: on the stock image,
+     whose GRUB has `set timeout=0`, the update is REFUSED whole and
+     /boot is untouched; with the timeout raised on the HOST (mtools, as
+     fat32_test.py does) it installs, keeps `kernel.old`, and the next
+     boot prints the changed message. Skipped without mtools.
 
 **IT NEVER LEAVES THIS MACHINE.** The server is tools/update_server.py's
 own handler, run in this process on an ephemeral loopback port and
@@ -41,9 +47,14 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 from net_test import launch, kill  # noqa: E402
+from fat32_test import esp_window, mtools_at, mrun  # noqa: E402
 import update_server  # noqa: E402
 
 GATEWAY = "10.0.2.2"
+# A message every boot prints, and a same-length twin: a kernel carrying
+# the twin is a different kernel that boots identically and says so.
+BOOT_MSG = b"toy-os: kernel heap initialized"
+TWIN_MSG = b"toy-os: KERNEL heap initialized"
 
 
 class Check:
@@ -98,6 +109,59 @@ class Server:
             if len(f) >= 3 and f[2] == path:
                 return int(f[0])
         return None
+
+
+def patched_kernel(tmp):
+    with open(os.path.join(ROOT, "build", "kernel.bin"), "rb") as fh:
+        data = fh.read()
+    if data.count(BOOT_MSG) != 1:
+        return None
+    out = os.path.join(tmp, "kernel.twin")
+    with open(out, "wb") as fh:
+        fh.write(data.replace(BOOT_MSG, TWIN_MSG))
+    return out
+
+
+def raise_grub_timeout(disk):
+    """`set timeout=0` -> 1 in the image's grub.cfg, from the host."""
+    start, _ = esp_window(disk)
+    at = mtools_at(disk, start)
+    r = mrun(["mtype", "-i", at, "::/boot/grub/grub.cfg"])
+    if r.returncode or "set timeout=0" not in r.stdout:
+        return False
+    local = disk + ".grub.cfg"
+    with open(local, "w") as fh:
+        fh.write(r.stdout.replace("set timeout=0", "set timeout=1"))
+    return mrun(["mcopy", "-o", "-i", at, local, "::/boot/grub/grub.cfg"]).returncode == 0
+
+
+def kernel_checks(c, sh, pidfile, disk, tmp, srv, url):
+    twin = patched_kernel(tmp)
+    if not c.ok("a twin kernel can be made (one boot message changed)", twin):
+        return sh, pidfile
+    srv.manifest.kernel_elf, srv.manifest.kernel_media = twin, ""
+    before = summed(sh, "/boot/boot/kernel.bin")
+    out = sh.run(f"update --from {url}", timeout=600)
+    c.ok("with no GRUB menu a kernel update is refused whole",
+         "cannot update" in out and "nothing" in out.lower(), out.strip()[-200:])
+    c.ok("...and /boot/boot/kernel.bin is untouched",
+         before is not None and summed(sh, "/boot/boot/kernel.bin") == before)
+
+    sh.run("sync")
+    kill(pidfile)
+    c.ok("the image's GRUB timeout can be raised from the host", raise_grub_timeout(disk))
+    sh, pidfile = launch(disk, tmp, "upd3", "e1000")
+    out = sh.run(f"update --from {url}", timeout=600)
+    c.ok("with a menu the kernel installs", "kernel: installed" in out, out.strip()[-200:])
+    c.ok("...keeping the running one as kernel.old", "kernel.old" in sh.run("ls /boot/boot"))
+    sh.run("sync")
+    kill(pidfile)
+    sh, pidfile = launch(disk, tmp, "upd4", "e1000")
+    c.ok("the next boot runs the NEW kernel",
+         TWIN_MSG.decode() in sh.run("dmesg"))
+    c.ok("...and is up to date against it",
+         "up to date" in sh.run(f"update --from {url} --check", timeout=600))
+    return sh, pidfile
 
 
 def summed(sh, path):
@@ -198,6 +262,12 @@ def main():
         c.ok("--server persists the address",
              f"server={url}" in sh.run("cat /etc/update.conf"))
         c.ok("...and records it as recent", f"recent: {url}" in sh.run("update --server"))
+
+        # 6. the kernel
+        if not shutil.which("mtype") or not shutil.which("mcopy"):
+            print("  skip  the kernel checks -- no mtools on the host")
+        else:
+            sh, pidfile = kernel_checks(c, sh, pidfile, disk, tmp, srv, url)
     finally:
         if pidfile and not args.keep:
             kill(pidfile)

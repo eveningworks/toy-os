@@ -284,6 +284,7 @@ else
 fi
 
 echo
+python3 tools/preflight_stamp.py --write || true   # what update_server.py --publish checks
 echo "preflight: PASS -- build, iso, boot smoke test, ktest and the"
 echo "preflight: ring-3 /tests diagnostics all clean."
 if [ -z "$(git config user.name 2>/dev/null)" ]; then

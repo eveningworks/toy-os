@@ -14,6 +14,10 @@ KTEST("update", "a pending list is applied, skips what it must, and is removed")
     // A REAL list belongs to the next boot; running it now would apply
     // somebody's update under a live desktop.
     if (fs_exists(UPDATE_PENDING_PATH)) KTEST_SKIP("a real update is pending");
+    // Created only if absent, and REMOVED at the end if this test made
+    // it: a directory left on the image is a layout change every later
+    // check_layout run reports.
+    int made_dir = !fs_exists("/var/lib/update");
     fs_mkdir("/var");
     fs_mkdir("/var/lib");
     fs_mkdir("/var/lib/update");
@@ -39,4 +43,5 @@ KTEST("update", "a pending list is applied, skips what it must, and is removed")
 
     fs_delete("/.ktest_pr_a");
     fs_delete("/.ktest_pr_b");
+    if (made_dir) fs_delete("/var/lib/update");
 }

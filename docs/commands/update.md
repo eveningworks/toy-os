@@ -104,10 +104,12 @@ A build reaches `stable` only when it is published, after its tests:
     python3 tools/update_server.py --promote <name> # roll stable back or forward
 
 A publish is a COPY (under `~/.local/share/toy-os/updates`), so
-rebuilding the checkout never changes what `stable` serves. `dev`
-refuses (503) while `seed/sync` is older than the build, so a machine
-cannot install the previous build by accident; an error from the server
-is printed with its reason.
+rebuilding the checkout never changes what `stable` serves, and it is
+refused unless `tools/preflight.sh` passed on exactly this tree
+(`--force` overrides). `dev` refuses (503) while `seed/sync` is older
+than the build or a `make iso` is still writing it, so a machine cannot
+install the previous build, or half of the next one, by accident; an
+error from the server is printed with its reason.
 
 ## What it is not
 
