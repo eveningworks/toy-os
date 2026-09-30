@@ -472,7 +472,10 @@ def service_status(sh, timeout=30.0):
     deadline = time.time() + timeout
     out = ""
     while time.time() < deadline:
-        out = sh.run("spawn /bin/service", timeout=20.0)
+        # The BARE NAME, which the kernel shell spawns and waits on with
+        # its output on this console; `spawn` returns at once and the
+        # table goes to the screen, so this read got nothing.
+        out = sh.run("service", timeout=20.0)
         if "NAME" in out and "EXEC" in out:
             return out
         time.sleep(0.5)
@@ -1646,12 +1649,12 @@ def phase_inetd(r, disk, tmp):
         kill(pidfile)
         sh.close()
 
-    # --- 2. concurrency: inetd -p 80 /bin/httpd -1 /tmp ----------------
+    # --- 2. concurrency: inetd -p 80 /bin/httpd -1 /var/tmp ---------------
     sh, pidfile = launch(disk, tmp, "inetd-httpd", "e1000", None, netdev_extra=extra)
     hanging = None
     try:
         sh.drain_start()
-        sh.s.sendall(b"sh inetd -p 80 /bin/httpd -1 /tmp\n")
+        sh.s.sendall(b"sh inetd -p 80 /bin/httpd -1 /var/tmp\n")
         time.sleep(3.0)
 
         # A works normally: the spawned handler serves a real request.

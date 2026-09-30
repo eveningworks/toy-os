@@ -1,4 +1,5 @@
 // <uhttp.h> -- the HTTP/1.0 client, over a plain socket or a TLS session.
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -252,7 +253,10 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
     }
 
     if (sys_connect(t.fd, ip, u.port, 0) < 0) {
-        fail(req, "cannot connect to %s port %u", u.host, (unsigned)u.port);
+        // The REASON, as wget and curl print it: refused and timed out
+        // are different faults with different fixes.
+        fail(req, "cannot connect to %s port %u: %s", u.host, (unsigned)u.port,
+             strerror(errno));
         close(t.fd);
         return ATTEMPT_NO_CONNECT;
     }

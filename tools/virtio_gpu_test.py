@@ -205,8 +205,11 @@ def run(dbg, qmp, tmp, res):
     ib = Image.open(mv_b).convert("RGB")
     w, h = ia.size
     # Crop the taskbar off: its clock legitimately ticks between frames.
-    ca = ia.crop((0, 0, w, h - 24)).tobytes()
-    cb = ib.crop((0, 0, w, h - 24)).tobytes()
+    # ITS REAL HEIGHT, not a guess -- it is a setting (48 by default), and
+    # a fixed 24 left the clock's top half in the comparison.
+    band = st.get("taskbar_h") or 48
+    ca = ia.crop((0, 0, w, h - band)).tobytes()
+    cb = ib.crop((0, 0, w, h - band)).tobytes()
     res.check("a pointer move repaints NOTHING (the plane carries the cursor)",
               ca == cb,
               "framebuffer changed on pure motion -- software sprite still drawing?")

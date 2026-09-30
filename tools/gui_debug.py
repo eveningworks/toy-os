@@ -184,9 +184,14 @@ class DebugConsole:
 
     def _sync(self):
         """Land on a fresh prompt. Anything printed before we connected is
-        gone (the socket is nowait), so synchronise rather than assume."""
-        self._s.sendall(b"\n")
-        self._read_to_prompt()
+        gone (the socket is nowait), so synchronise rather than assume.
+
+        ON THE MARKER, NOT THE FIRST PROMPT: one newline can be answered
+        by TWO prompts just after boot, and stopping at the first left
+        the second to answer the first command -- an empty reply, then
+        every reply one command late, each still ending on a prompt so
+        nothing marked it stale (usb_test lost 20 checks to it)."""
+        self._resync()
 
     def reconnect(self, timeout=90.0):
         """Re-open this console after the GUEST went away.

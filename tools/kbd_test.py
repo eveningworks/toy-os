@@ -248,12 +248,12 @@ def check_live(dbg, qmp, label):
           "on" in (dbg.send("sh config get kernel.kbdtap") or "").lower())
 
     def state_of_newest_kbd():
-        # THE STATE, NOT THE NAME. Earlier runs leave reaped-but-unwaited
-        # `kbd` zombies in the table (the kernel shell's `spawn` does not
-        # reap), so asking whether the string "kbd" appears answers yes
-        # forever and this check would pass with live mode wholly broken.
+        # THE STATE, NOT THE NAME: asking whether the string "kbd" appears
+        # would pass with live mode wholly broken if any earlier copy were
+        # still in the table. `gone` when `ps` answered and listed no kbd
+        # -- a `spawn`ed program is init's child, and init reaps it.
         out = dbg.send("sh ps") or ""
-        newest = None
+        newest = "gone" if "PID" in out else None
         for line in out.splitlines():
             f = line.split()
             if len(f) >= 7 and f[-1] == "kbd":
@@ -269,11 +269,11 @@ def check_live(dbg, qmp, label):
     st = None
     for _ in range(15):
         st = state_of_newest_kbd()
-        if st and st[1].startswith("block"):
+        if isinstance(st, tuple) and st[1].startswith("block"):
             break
         time.sleep(0.3)
     if not check(f"{label}: live mode starts and parks between polls",
-                 st is not None and st[1].startswith("block"),
+                 isinstance(st, tuple) and st[1].startswith("block"),
                  f"ps says {st}"):
         return
     pid = st[0]
@@ -288,10 +288,10 @@ def check_live(dbg, qmp, label):
     for _ in range(20):
         time.sleep(0.4)
         st2 = state_of_newest_kbd()
-        if st2 and st2[0] == pid and st2[1] == "zombie":
+        if st2 == "gone" or (st2 and st2[0] == pid and st2[1] == "zombie"):
             break
     check(f"{label}: Esc twice quits it -- from the LOG, with no read of fd 0",
-          st2 is not None and st2[0] == pid and st2[1] == "zombie",
+          st2 == "gone" or (st2 is not None and st2[0] == pid and st2[1] == "zombie"),
           f"ps says {st2}")
 
     # AND DISARMS ON THE WAY OUT. A tool that leaves a keystroke recorder
@@ -306,9 +306,15 @@ def check_live(dbg, qmp, label):
     # monotonic clock stands still -- a poll loop there spins forever and
     # takes the machine with it. The assertion is not the message; it is
     # that the machine still answers afterwards.
-    out = dbg.send("sh kbd") or ""
+    #
+    # `run`, NOT the bare name: a bare name at the kernel's prompt is
+    # spawned with a slot now (apps/shell_path.c). And a DYNAMIC kbd is
+    # refused by that loader before its own guard runs (PT_INTERP), so
+    # either refusal counts; live mode starting is the failure.
+    out = dbg.send("sh run /bin/kbd") or ""
     check(f"{label}: live mode refuses the legacy loader instead of hanging",
-          "scheduler slot" in out, out.replace("\n", " / ")[:90])
+          ("scheduler slot" in out or "isn't a valid ELF64 executable" in out)
+          and "Press keys" not in out, out.replace("\n", " / ")[:90])
     check(f"{label}: ...and the machine still answers after that refusal",
           "PID" in (dbg.send("sh ps") or ""))
 

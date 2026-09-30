@@ -124,6 +124,19 @@ def type_line(qmp, text, delay=0.045):
     time.sleep(0.9)
 
 
+def ls_root_until(d, names, timeout=15.0):
+    """`sh ls /` once every name in `names` is listed, or the last listing
+    when `timeout` runs out. Each `touch` is an ELF load, which under TCG
+    lands seconds after Enter -- one read at a fixed delay missed files
+    that appeared a moment later."""
+    deadline = time.monotonic() + timeout
+    while True:
+        out = d.send("sh ls /") or ""
+        if all(n in out for n in names) or time.monotonic() > deadline:
+            return out
+        time.sleep(0.5)
+
+
 def phase_keyboard(instance, kvm=False):
     """The controller, the device, and a keystroke that reaches the shell."""
     print("\nphase 1: keyboard")
@@ -174,14 +187,18 @@ def phase_keyboard(instance, kvm=False):
               "QEMU USB Keyboard" in dump)
         # QEMU reports boot format regardless, so this asserts the
         # REQUEST was issued, which is the only observable difference.
-        check("SET_PROTOCOL(boot) was actually issued",
-              "1 set-protocol(boot) accepted" in dump or
-              "set-protocol(boot) accepted" in dump and
-              " 0 set-protocol(boot)" not in dump)
+        # EITHER protocol: the driver asks for REPORT when it understands
+        # the HID descriptor and falls back to SET_PROTOCOL(boot) when it
+        # does not (input_usbhid.c), so either request counts.
+        log = d.send("sh dmesg") or ""
+        check("SET_PROTOCOL was actually issued (report, or boot as the fallback)",
+              "if 0: report protocol --" in log or
+              ("set-protocol(boot) accepted" in dump and
+               " 0 set-protocol(boot)" not in dump))
 
         # The keystroke itself. Nothing but the USB path can deliver it.
         type_line(qmp, "touch /usb_one.txt")
-        names = d.send("sh ls /") or ""
+        names = ls_root_until(d, ["usb_one.txt"])
         check("a keystroke on the USB keyboard reaches the shell",
               "usb_one.txt" in names,
               "" if "usb_one.txt" in names else f"saw {sorted(n for n in names.split() if n.endswith('.txt'))}")
@@ -245,7 +262,7 @@ def phase_ring_wrap(instance, kvm=False):
             if i % 3 == 2:
                 d.send("")      # cheap: a bare newline, read to the prompt
 
-        names = d.send("sh ls /") or ""
+        names = ls_root_until(d, [f"r{i:02d}.txt" for i in range(WRAP_FILES)])
         missing = [i for i in range(WRAP_FILES) if f"r{i:02d}.txt" not in names]
         if missing:
             print("    saw:", sorted(n for n in names.split() if n.startswith("r") and n.endswith(".txt")))
@@ -448,7 +465,7 @@ def phase_hub(instance, kvm=False):
         # it, since QEMU gives the usb-kbd the keyboard the moment it is
         # attached (the tool's self-controlling property, unchanged).
         type_line(qmp, "touch /hub_one.txt")
-        names = d.send("sh ls /") or ""
+        names = ls_root_until(d, ["hub_one.txt"])
         check("a keystroke through the hub reaches the shell",
               "hub_one.txt" in names)
         return True

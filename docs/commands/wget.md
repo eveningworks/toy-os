@@ -173,7 +173,8 @@ is. Other failures:
 |---|---|
 | `no nameserver configured` | run `netd`, or set one in `/etc/resolv.conf` |
 | `not found` | DNS answered, and the name does not exist |
-| `cannot connect to <host> port <n>` | nothing is listening, or the interface has no address yet |
+| `cannot connect to <host> port <n>: connection refused` | the host answered, and nothing is listening on that port |
+| `cannot connect to <host> port <n>: <other reason>` | no answer at all -- the host is down or filtered, or the interface has no address yet |
 | `cannot parse '<url>' as a URL` | a scheme this does not speak, or a host/path too long to hold |
 
 ## See also
