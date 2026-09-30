@@ -5538,6 +5538,11 @@ window without going through it will find its layout polls timing out.
   dependency the machine might not have is a check that silently stops
   running.
 
+  The TCP phase also runs `speedtest --url` against its host server (a
+  rate over two parallel connections, and more than one request served)
+  and checks in the pcap that the guest's SYN offers window scaling --
+  the one TCP option whose absence changes nothing a KTEST can see.
+
   The e1000 (the card QEMU's default machine has always
   had, so it needs no flag); **virtio-net, which is the only thing here
   that reaches `kernel/drivers/virtio/virtio_net.c`**; two cards at

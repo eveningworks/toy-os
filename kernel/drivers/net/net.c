@@ -32,7 +32,7 @@
 
 // driver-none: the net class registry itself
 
-#define NET_RX_QUEUE 64
+#define NET_RX_QUEUE 256
 
 static struct net_device *g_devs[NET_MAX_DEVS];
 static int g_count;

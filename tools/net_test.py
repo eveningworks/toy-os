@@ -110,6 +110,7 @@ THE PHASES, and what a broken build would still pass
 
 import argparse
 import os
+import re
 import shutil
 import socket
 import struct
@@ -1376,6 +1377,18 @@ def phase_tcp(r, disk, tmp):
                 f"wire {wire} bytes, want {len(HTTP_GZIP_BODY)} on disk: "
                 f"{size.strip()[-200:]}")
 
+        # speedtest's --url mode against the same server: several
+        # parallel connections, each re-requesting until the clock runs
+        # out. A rate proves bytes moved on more than one connection; the
+        # served count proves it was not one request measured twice.
+        before = state["served"]
+        out = sh.run(f"speedtest --url http://{GATEWAY}:{HTTP_PORT}/f -n 2 -t 3",
+                     timeout=60.0)
+        m = re.search(r"Download: ([0-9.]+) Mbit/s\s*$", out.replace("\r", "\n"), re.M)
+        r.check("[tcp] speedtest --url measures a rate over parallel streams",
+                m is not None and float(m.group(1)) > 0 and state["served"] - before >= 2,
+                f"served {state['served'] - before}: {out.strip()[-200:]}")
+
         # Nothing listens on port 9. A RST must become "refused" rather
         # than a timeout -- different codes, different fixes.
         out = sh.run(f"wget http://{GATEWAY}:9/nope", timeout=40.0)
@@ -1401,6 +1414,7 @@ def phase_tcp(r, disk, tmp):
             "src": struct.unpack(">I", f[26:30])[0],
             "flags": tcp[13],
             "ok": tcp_checksum_ok(f),
+            "opts": tcp[20:(tcp[12] >> 4) * 4],
         })
 
     ours = [x for x in segs if x["src"] == ipv4(GUEST_IP)]
@@ -1412,6 +1426,25 @@ def phase_tcp(r, disk, tmp):
             any(x["flags"] == 0x02 for x in ours) and
             any(x["flags"] & 0x01 for x in ours),
             str(sorted({x["flags"] for x in ours})))
+    # RFC 7323: our SYN offers a window-scale shift (kind 3, length 3),
+    # or no window can exceed 64 KiB whatever the buffer.
+    def offers_wscale(opts):
+        i = 0
+        while i < len(opts):
+            if opts[i] == 0:
+                break
+            if opts[i] == 1:
+                i += 1
+                continue
+            if i + 1 >= len(opts) or opts[i + 1] < 2:
+                break
+            if opts[i] == 3 and opts[i + 1] == 3:
+                return True
+            i += opts[i + 1]
+        return False
+    r.check("[tcp] the guest's SYN offers window scaling",
+            any(x["flags"] == 0x02 and offers_wscale(x["opts"]) for x in ours),
+            str([x["opts"].hex() for x in ours if x["flags"] == 0x02][:3]))
     r.check("[tcp] the peer answered SYN+ACK",
             any(x["src"] != ipv4(GUEST_IP) and x["flags"] == 0x12 for x in segs),
             str(sorted({x["flags"] for x in segs if x["src"] != ipv4(GUEST_IP)})))

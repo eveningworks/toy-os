@@ -1152,6 +1152,9 @@ EXTRA_OBJS_taskmgr = taskmgr/tm_procs taskmgr/tm_perf taskmgr/tm_services
 
 EXTRA_OBJS_cjson_test = ports/cjson/cJSON
 EXTRA_OBJS_cjson_bench = ports/cjson/cJSON
+# speedtest parses speedtest.net's server list: the vendored parser's
+# first shipped caller, linked in per-binary like the two above.
+EXTRA_OBJS_speedtest = ports/cjson/cJSON
 
 # The extras for one binary, as real object paths.
 uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
@@ -1162,6 +1165,7 @@ uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
 # programs use it.
 ULIB_SO_sum = $(BUILD)/lib/libhash.so
 ULIB_SO_wget = $(LIBHTTP_SO) $(LIBSSL_SO)
+ULIB_SO_speedtest = $(LIBHTTP_SO) $(LIBSSL_SO)
 ULIB_SO_hwdata = $(LIBHTTP_SO) $(LIBSSL_SO)
 
 ulibso = $(ULIB_SO_$(notdir $(1)))

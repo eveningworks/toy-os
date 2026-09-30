@@ -3601,7 +3601,9 @@ lost fragment loses the whole datagram**, and a 64 KiB one is a burst of
 - **A RECEIVE RING SMALLER THAN THE BURST DROPS THE TAIL, SILENTLY.**
   `e1000.c` had 32 descriptors and QEMU's SLIRP writes a whole reply at
   once, so pings over ~46000 bytes got no answer with nothing counted
-  as dropped. It has 64 now, and `net.c`'s `NET_RX_QUEUE` 64 behind it.
+  as dropped. It has 64 now. `net.c`'s `NET_RX_QUEUE` behind it is 256:
+  at 64, four scaled TCP windows arriving at once overflowed it 1753
+  times in one ten-second speedtest on the ASUS (43 at 256).
 
 Bigger is still not free: a sender choosing a size weighs fewer round
 trips against a whole datagram per lost frame. That is why `tftpd`

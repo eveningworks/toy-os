@@ -56,7 +56,7 @@ that turned out wrong. It boots on real hardware and under QEMU.
   sectors.
   It **installs itself** onto another disk and that disk boots.
 - **Networking** — ARP, IPv4 (with fragmentation), ICMP, UDP and client-side TCP over six NIC
-  drivers, with DHCP, DNS, `ping`, `wget` and an `httpd` that serves this
+  drivers, with DHCP, DNS, `ping`, `wget`, `speedtest` and an `httpd` that serves this
   machine's own filesystem.
 - **A desktop, and it is not in the kernel** — the window manager is a
   ring-3 process and so is every app: a file manager, a terminal with tabs,
