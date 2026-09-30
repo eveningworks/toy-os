@@ -4836,6 +4836,16 @@ window without going through it will find its layout polls timing out.
   `--build` it rebuilds the working tree after restoring, so the tree is
   left as it was found -- including what was built from it.
 
+  **AND ONE TRAP IT CANNOT HANDLE: BOTH SIDES BOOT THE SAME `disk.img`.**
+  `make iso` syncs rather than reformats, so state a test left on the
+  image -- `/etc/windows.conf`'s remembered window positions,
+  `/etc/desktop.conf` -- is there for HEAD's run as much as yours, and a
+  dirty FIXTURE measures as PRE-EXISTING. On 2026-09-30 four GUI tools
+  measured pre-existing that way; after `make clean-disk && make iso`
+  three passed and the fourth dropped to the one check already in
+  `docs/bugs.md`. Take the fresh image FIRST (CLAUDE.md's rule), then
+  measure what is still red.
+
 - **`check_tool_commands.py`** -- static check that every guest command
   a tool drives still exists, against the same authority `check_docs.py`
   uses (the seeded `/bin` tree plus both shells' builtins).

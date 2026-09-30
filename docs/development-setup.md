@@ -69,6 +69,14 @@ python3 tools/gui_regress.py --logs /tmp/gui   # every GUI tool, as one table
 
 # 7. gh, only for releases and `gh workflow run` -- not for push
 gh auth login                                  # choose SSH as the protocol
+
+# 8. Optional: the update server, so toy-os machines can PULL builds
+#    (docs/commands/update.md). A systemd USER service on port 8080:
+#    /dev serves this checkout's latest `make iso`, /stable the last
+#    build you published. Open 8080 to your LAN in the firewall.
+make iso && python3 tools/update_server.py --publish
+python3 tools/update_server.py --install-service
+curl -s localhost:8080/                        # lists both channels
 ```
 
 **What you do not copy.** `disk.img` is gitignored and reseeded by

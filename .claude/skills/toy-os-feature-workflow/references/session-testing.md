@@ -2916,3 +2916,29 @@ every read on a test connection sends a window-update ACK: outside a
 capture it reaches SLIRP, whose RST resets the connection later in the
 same test. Measured with `flake_hunt.py ktest -n 10` twice (1/10 each,
 different tests), then 20/20 after both fixes.
+
+**2026-09-30 (System Update): A DIRTY `disk.img` MEASURES AS
+PRE-EXISTING, BECAUSE BOTH SIDES OF `predates.py` BOOT IT.** Four GUI
+tools failed deterministically (popup, shot, smooth, icons), stayed red
+alone, and `predates.py` called them pre-existing with identical counts
+-- and `docs/bugs.md` already carried an entry saying so. Preflight had
+printed the cause in passing: files on the image (`/etc/windows.conf`,
+`/etc/desktop.conf`) that nothing in `seed/sync` places any more.
+`make clean-disk && make iso` turned three green; only the check with
+its own bugs entry stayed red. Order matters: FRESH IMAGE, THEN
+MEASURE. A measurement is only as clean as the fixture both sides share.
+
+**A progress bar needs a MIDDLE to test.** An update in QEMU finished in
+under three seconds, so every capture showed empty or full.
+`update_server.py --throttle` made "part-filled mid-install" a real
+assertion (accent pixels across the bar's reported rect, between 2% and
+98%), which a bar that jumps from 0 to 100 fails. Slow the producer on
+purpose when the thing under test is the in-between state.
+
+**Test the server in-process on port 0.** `update_test.py` and
+`sysupdate_test.py` import the real handler and bind `127.0.0.1:0`; the
+guest reaches whatever port the OS picked through 10.0.2.2. No port to
+collide with a parallel `gui_regress` slot, and a tampering subclass of
+the real handler is how "a corrupt transfer is refused" gets its
+positive control.
+

@@ -2466,3 +2466,13 @@ ladder.
 `timeout=0`, so the rescue entry is unreachable, so `update` refuses
 everything). Test the kernel and staged paths on `make iso MENU=1`, and
 remember the next `make iso` puts the default back.
+
+**Serve what was RELEASED, not what was BUILT.** The first update server
+served the checkout's `seed/sync` directly -- one line, and wrong for a
+machine somebody uses: every session's experiment reaches it, and a pull
+can land in a tree half-written by `make iso` (the staleness check sees
+an OLD tree, never a PARTIAL one). The answer was two channels: `/dev`
+live for VMs, `/stable` a COPIED snapshot behind an atomically swapped
+link, with `--promote` as rollback (apt's published repo, WSUS
+approval). The maintainer picked "both" over either alone.
+
