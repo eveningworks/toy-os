@@ -4,8 +4,8 @@
 // were about to be three copies of a URL parser and a header scan --
 // this, /bin/httpd, and the /bin/update that docs/update-design.md
 // designs -- and the part that is easy to get wrong is invisible in all
-// three (a socket read returns at most 1472 bytes, so the blank line
-// ending the headers can straddle any two reads).
+// three (a stream read returns at most SYS_NET_STREAM_READ_MAX bytes,
+// so the blank line ending the headers can straddle any two reads).
 //
 // What is left here is the FRONT END: arguments, where the body goes,
 // and how a failure is worded.

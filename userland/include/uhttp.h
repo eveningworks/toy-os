@@ -8,7 +8,7 @@
 // /bin/httpd has its own request-line parser; and docs/update-design.md
 // designs a /bin/update that fetches an HTTP manifest. The part that is
 // easy to get wrong is invisible in all three: a socket read returns at
-// most SYS_NET_MSG_MAX (1472) bytes whatever buffer it is handed, so the
+// most SYS_NET_STREAM_READ_MAX bytes whatever buffer it is handed, so the
 // blank line ending the headers can straddle any two reads.
 //
 // **NOT IN userland/lib/.** That directory is globbed into libuapp,

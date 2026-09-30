@@ -67,9 +67,9 @@ struct utls *utls_connect(int fd, const struct utls_config *cfg,
 
 // Both return the byte count, 0 at clean end of stream, or negative on
 // error. A short return is normal and is NOT an error: one TLS record
-// is what it is, and the kernel caps a socket read at SYS_NET_MSG_MAX
-// (1472) regardless of the buffer handed down, so a 16 KiB record
-// arrives over a dozen reads.
+// is what it is, and the kernel caps a stream read at
+// SYS_NET_STREAM_READ_MAX regardless of the buffer handed down, so a
+// 16 KiB record arrives over a dozen reads.
 long utls_read(struct utls *t, void *buf, size_t n);
 long utls_write(struct utls *t, const void *buf, size_t n);
 

@@ -1,11 +1,11 @@
-// IPv4: the 20-byte header, the checksum, and one routing decision.
+// IPv4: the 20-byte header, the checksum, fragmentation, and one
+// routing decision.
 //
-// NO FRAGMENTATION, IN EITHER DIRECTION. A datagram arriving with MF
-// set or a non-zero offset is DROPPED rather than reassembled, and
-// nothing here ever emits one -- every sender above is capped at the
-// device MTU. That is a real limitation and it is stated where it
-// happens: reassembly needs a timer, a hole list and a memory budget
-// that an attacker chooses, which is a subsystem rather than a branch.
+// FRAGMENTS ARE REASSEMBLED (ipv4_frag.c) AND AN OVER-MTU DATAGRAM IS
+// SPLIT HERE, so a datagram up to IP_DATAGRAM_MAX travels either way.
+// DF is never set and never honoured on the way out: setting it only
+// pays with Path MTU Discovery behind it, which this stack does not do
+// -- and TCP never needs to fragment, its MSS being MTU-sized.
 //
 // ROUTING IS TWO RULES, not a table: an address inside a device's own
 // subnet goes straight to it, anything else goes to that device's
@@ -16,6 +16,7 @@
 #include "netdev.h"
 #include "string.h"
 #include "errno.h"
+#include "clocksource.h"   // a fragment's arrival time
 
 struct ipv4_header {
     uint8_t  version_ihl;     // 0x45 for a 20-byte header
@@ -32,8 +33,6 @@ struct ipv4_header {
 
 _Static_assert(sizeof(struct ipv4_header) == 20, "IPv4 header is 20 bytes on the wire");
 
-#define IP_FLAG_MF     0x2000
-#define IP_FRAG_MASK   0x1FFF
 #define IP_DEFAULT_TTL 64
 
 static uint8_t g_datagram[NET_MTU];
@@ -106,16 +105,27 @@ void ipv4_input(struct net_device *dev, const uint8_t *pkt, uint32_t len) {
     uint32_t total = net_ntohs(h.total_len);
     if (total < ihl || total > len) return;    // trailing padding is fine; a lie is not
 
-    uint16_t frag = net_ntohs(h.flags_frag);
-    if ((frag & IP_FLAG_MF) || (frag & IP_FRAG_MASK)) return;  // see the file comment
-
     uint32_t dst = net_ntohl(h.dst);
     // Our own address, or a broadcast. A device with NO address still
     // accepts broadcasts, which is the only way a DHCP offer can reach
     // the client that asked for one.
     if (dst != IP_BROADCAST && (!dev->ip || dst != dev->ip)) return;
 
+    // Checked AFTER the address, so nobody else's fragments cost memory.
+    uint16_t frag = net_ntohs(h.flags_frag);
+    if ((frag & IP_FLAG_MF) || (frag & IP_FRAG_MASK)) {
+        ipv4_frag_input(dev, pkt, ihl, total, clocksource_now_ns());
+        return;
+    }
+    ipv4_deliver(dev, pkt, ihl, total);
+}
+
+void ipv4_deliver(struct net_device *dev, const uint8_t *pkt,
+                  uint32_t ihl, uint32_t total) {
+    struct ipv4_header h;
+    k_memcpy(&h, pkt, sizeof h);
     uint32_t src = net_ntohl(h.src);
+    uint32_t dst = net_ntohl(h.dst);
     const uint8_t *payload = pkt + ihl;
     uint32_t plen = total - ihl;
 
@@ -137,7 +147,7 @@ void ipv4_input(struct net_device *dev, const uint8_t *pkt, uint32_t len) {
         // most. NEVER for a broadcast -- answering one would have every
         // host on the segment reply to a datagram sent to all of them.
         if (dst != IP_BROADCAST && dst == dev->ip)
-            icmp_send_port_unreachable(dev, src, pkt, total);
+            icmp_send_error(dev, src, ICMP_DEST_UNREACHABLE, ICMP_CODE_PORT, pkt, total);
     }
 }
 
@@ -154,7 +164,8 @@ int ipv4_output(struct net_device *dev, uint32_t dst_ip, uint8_t proto,
     // the literal state a DHCP client is in until it has a lease.
     if (!dev->ip && dst_ip != IP_BROADCAST) return -ENODEV;
     if (!next_hop) return -ENODEV;
-    if (len + sizeof(struct ipv4_header) > dev->mtu) return -EINVAL;
+    if (len + sizeof(struct ipv4_header) > IP_DATAGRAM_MAX) return -EINVAL;
+    if (dev->mtu <= sizeof(struct ipv4_header) + 8) return -EINVAL;
 
     uint8_t mac[NET_MAC_LEN];
     if (dst_ip == IP_BROADCAST) {
@@ -163,19 +174,36 @@ int ipv4_output(struct net_device *dev, uint32_t dst_ip, uint8_t proto,
         return -EAGAIN;  // request sent; retry
     }
 
-    struct ipv4_header *h = (struct ipv4_header *)g_datagram;
-    h->version_ihl = 0x45;
-    h->dscp_ecn = 0;
-    h->total_len = net_htons((uint16_t)(sizeof *h + len));
-    h->id = net_htons(g_next_id++);
-    h->flags_frag = 0;
-    h->ttl = IP_DEFAULT_TTL;
-    h->proto = proto;
-    h->checksum = 0;
-    h->src = net_htonl(dev->ip);
-    h->dst = net_htonl(dst_ip);
-    h->checksum = net_htons(net_checksum(h, sizeof *h));
-    k_memcpy(g_datagram + sizeof *h, payload, len);
+    // Every fragment but the last carries a whole number of 8-byte
+    // blocks, which is the unit the offset field counts in. A datagram
+    // that fits is the one-fragment case of the same loop.
+    uint32_t chunk = (dev->mtu - (uint32_t)sizeof(struct ipv4_header)) & ~7u;
+    uint16_t id = g_next_id++;
+    const uint8_t *src = payload;
+    uint32_t off = 0;
+    do {
+        uint32_t n = len - off < chunk ? len - off : chunk;
+        int more = off + n < len;
 
-    return eth_output(dev, mac, ETH_TYPE_IPV4, g_datagram, sizeof *h + len);
+        // Rebuilt whole for each fragment, so a sender preempted
+        // BETWEEN fragments finds nothing of its own left in g_datagram.
+        struct ipv4_header *h = (struct ipv4_header *)g_datagram;
+        h->version_ihl = 0x45;
+        h->dscp_ecn = 0;
+        h->total_len = net_htons((uint16_t)(sizeof *h + n));
+        h->id = net_htons(id);
+        h->flags_frag = net_htons((uint16_t)((more ? IP_FLAG_MF : 0) | (off / 8)));
+        h->ttl = IP_DEFAULT_TTL;
+        h->proto = proto;
+        h->checksum = 0;
+        h->src = net_htonl(dev->ip);
+        h->dst = net_htonl(dst_ip);
+        h->checksum = net_htons(net_checksum(h, sizeof *h));
+        if (n) k_memcpy(g_datagram + sizeof *h, src + off, n);
+
+        int rc = eth_output(dev, mac, ETH_TYPE_IPV4, g_datagram, sizeof *h + n);
+        if (rc < 0) return rc;
+        off += n;
+    } while (off < len);
+    return 0;
 }

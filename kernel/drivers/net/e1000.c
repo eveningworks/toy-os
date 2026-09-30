@@ -33,7 +33,7 @@ DRIVER_DECLARE("e1000", "net", "Intel 8254x gigabit Ethernet");
 
 #include "e1000_regs.h"
 
-#define RX_DESCS   32
+#define RX_DESCS   64
 #define TX_DESCS   16
 #define BUF_SIZE   2048
 

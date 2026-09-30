@@ -3067,10 +3067,11 @@ driver never learns what a packet means.
   found). Linux calls the same state INCOMPLETE and retransmits about
   once a second. `tools/net_test.py`'s last phase is the regression
   test.
-- **NO FRAGMENTATION, IN EITHER DIRECTION.** A datagram with MF set or a
-  non-zero offset is DROPPED, and nothing here emits one. Reassembly
-  needs a timer, a hole list and a memory budget an attacker chooses,
-  which is a subsystem rather than a branch.
+- **FRAGMENTS ARE REASSEMBLED, AND AN OVER-MTU DATAGRAM IS SPLIT.**
+  `ipv4_frag.c` holds at most four datagrams in progress, each a 64 KiB
+  buffer and a bitmap of 8-byte blocks, for 30 s; a partial overlap
+  drops the whole datagram. DF is never set: there is no Path MTU
+  Discovery to make it pay. `docs/decisions/kernel.md` has the why.
 - **A SOCKET IS A PING SOCKET, NOT A RAW ONE.** `AF_INET` +
   `SOCK_DGRAM` + `IPPROTO_ICMP` is the whole supported set, and THE
   KERNEL OWNS THE ICMP HEADER -- an app sends and receives payload. That
@@ -3572,16 +3573,26 @@ the query rather than raised to match.
 a future NFS, a TCP window, a bulk USB pipe feeding a socket. The
 question to ask before sending N of anything is what happens to N+1.
 
-## AN MTU-SIZED DATAGRAM IS THE CEILING, BECAUSE NOTHING FRAGMENTS
+## A DATAGRAM MAY BE 64 KiB, AND EVERY ONE OF ITS FRAGMENTS MUST ARRIVE
 
-`kernel/net/ipv4.c` neither fragments outbound nor reassembles inbound
--- a datagram arriving with MF set or a non-zero offset is DROPPED. So
-`SYS_NET_MSG_MAX` (1472 = 1500 - 20 - 8) is a hard limit, not a
-suggestion, and a payload over it does not go slowly, it does not go.
+`SYS_NET_MSG_MAX` is 65507 -- the largest IPv4 datagram less its IP and
+UDP headers -- and anything past one MTU travels as fragments. **One
+lost fragment loses the whole datagram**, and a 64 KiB one is a burst of
+45 frames, so every queue on the path has to take that burst:
 
-This is why `tftpd` clamps `blksize` to 1428 rather than accepting what
-a client asks for: a client requesting 8192 that got 8192 would stall
-completely, where one that gets 1428 transfers. **Clamp and say so in
+- **A DRIVER WITH A TRANSMIT RING REAPS ITS COMPLETIONS BEFORE IT SAYS
+  `-ENOSPC`.** `net_tx()` waits a few milliseconds on a full ring, and
+  on the USB adapters nothing frees a slot during that wait unless the
+  transmit op calls `xhci_service()` itself -- a 65507-byte ping from
+  the ASUS failed with `no space left` until `rtl_usb.c` did.
+- **A RECEIVE RING SMALLER THAN THE BURST DROPS THE TAIL, SILENTLY.**
+  `e1000.c` had 32 descriptors and QEMU's SLIRP writes a whole reply at
+  once, so pings over ~46000 bytes got no answer with nothing counted
+  as dropped. It has 64 now, and `net.c`'s `NET_RX_QUEUE` 64 behind it.
+
+Bigger is still not free: a sender choosing a size weighs fewer round
+trips against a whole datagram per lost frame. That is why `tftpd`
+clamps `blksize` to 8192 rather than 65464, and **clamps and says so in
 the reply** -- RFC 2348's OACK names the value actually chosen, which is
 what lets a client find out it did not get what it asked for.
 
@@ -4223,7 +4234,7 @@ https. A program opts in with `ULIB_SO_<name>` in the Makefile.
   is wrong" into "let us use plaintext instead". It is ANNOUNCED, since
   a downgrade nobody asked for should not be silent. An explicit port
   cancels the guess unless it is 443, which is also Chrome's rule.
-- **A SOCKET READ RETURNS AT MOST `SYS_NET_MSG_MAX` (1472) BYTES**
+- **A STREAM READ RETURNS AT MOST `SYS_NET_STREAM_READ_MAX` BYTES**
   whatever buffer it is handed, so a 16 KiB TLS record arrives over a
   dozen reads and the blank line ending HTTP headers can straddle any
   two of them. `uhttp.c` carries a three-byte tail across reads for

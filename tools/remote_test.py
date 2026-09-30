@@ -196,10 +196,12 @@ def main():
         #    break silently, because a transfer that quietly drops to
         #    512/lockstep still succeeds and only looks slow.
         #
-        #    The sizes straddle a 1428-byte block so the short final
-        #    block and the exact-multiple case are both exercised at the
-        #    negotiated size, not just at 512.
-        for size in (1428 * 3, 1428 * 3 + 17):
+        #    The sizes straddle the negotiated block so the short final
+        #    block and the exact-multiple case are both exercised at that
+        #    size, not just at 512. Past 1468 each block is fragmented,
+        #    so this is also the end-to-end check on reassembly.
+        blk = rmod.WANT_BLKSIZE
+        for size in (blk * 3, blk * 3 + 17):
             src = os.path.join(tmp, f"opt{size}.bin")
             back = os.path.join(tmp, f"optback{size}.bin")
             data = bytes(((i * 11 + (i >> 7) * 29) & 0xFF) for i in range(size))
@@ -217,7 +219,7 @@ def main():
         # the options existed.
         log = remote("exec", "dmesg").stdout
         r.check("the server negotiated a big block and a window",
-                "blksize 1428, window 3" in log,
+                f"blksize {blk}, window 3" in log,
                 [l for l in log.splitlines() if "tftpd: wrote" in l][-3:])
 
         # AND THE FALLBACK, driven by asking for nothing. A client that

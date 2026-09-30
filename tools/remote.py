@@ -370,16 +370,17 @@ def do_exec(host, port, commands, timeout):
 # being true; the measurement above (~280 KB/s) is the CURRENT rate and
 # already includes it.
 #
-# 1428 IS THE CEILING, and it is the guest's, not a convention:
-# kernel/net/ipv4.c does not fragment or reassemble, so a block that
-# does not fit the MTU is DROPPED rather than split. A server that does
-# not answer with an OACK gets the RFC 1350 defaults and everything
-# still works -- which is what makes this safe against a stock tftpd.
+# 8192 IS THE GUEST'S CEILING (tftpd.c's BLKSIZE_MAX), and past 1468 a
+# block crosses the wire as IPv4 fragments that the guest reassembles.
+# A server that answers with less gets less, and one that does not
+# answer with an OACK gets the RFC 1350 defaults and everything still
+# works -- which is what makes this safe against a stock tftpd, and
+# against a guest built before fragmentation (it agrees to 1428).
 
 OP_OACK = 6
 
 BLKSIZE = 512            # RFC 1350's default, and the fallback
-WANT_BLKSIZE = 1428      # see above
+WANT_BLKSIZE = 8192      # see above
 WANT_WINDOW = 3          # the guest's socket holds 3 datagrams -- see
                          # userland/bin/tftpd.c's WINDOW_MAX. Asking for
                          # more is answered with 3 anyway (the OACK says

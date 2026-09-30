@@ -25,15 +25,16 @@
 // and ~22 ms of filesystem transaction, because every block was its own
 // write(). A 4.7 MB kernel took five minutes.
 //
-// So all three are addressed: bigger blocks (2.8x fewer round trips AND
+// So all three are addressed: bigger blocks (fewer round trips AND
 // writes), a window (one round trip per N blocks instead of per block),
 // and a 64 KiB write buffer (9,272 transactions become ~72).
 //
-// **1428 IS THE CEILING AND IT IS NOT ARBITRARY.** kernel/net/ipv4.c
-// does NOT fragment or reassemble -- a fragmented datagram is DROPPED --
-// so a block that does not fit the MTU does not go slowly, it does not
-// go at all. SYS_NET_MSG_MAX is 1472, so 1468 is the true maximum and
-// 1428 is what RFC 2348 names, leaving room for a tunnel in the path.
+// **8192 IS THE CEILING**, and past 1468 a block travels in IPv4
+// fragments -- six of them at a 1500-byte MTU. Bigger is not free: one
+// lost fragment loses the whole block, and the kernel reassembles at
+// most four datagrams at once, which a window of WINDOW_MAX stays
+// under. A client that asks for less gets less; 1428 (RFC 2348's
+// tunnel-safe size) never fragments at all.
 //
 // `netascii` is accepted as a synonym for `octet` rather than
 // translating: every caller here moves binaries, and a silent CRLF
@@ -94,18 +95,18 @@ static void logf(const char *fmt, ...) {
 #define OP_OACK  6
 
 // The default a client that negotiates nothing still gets (RFC 1350),
-// and the most we will agree to. See the file comment for why 1428 and
-// not 1468.
+// and the most we will agree to -- see the file comment.
 #define BLKSIZE_DEFAULT 512
-#define BLKSIZE_MAX     1428
+#define BLKSIZE_MAX     8192
 #define BLKSIZE_MIN     8       // RFC 2348's floor
 
 // RFC 7440, AND THE CEILING IS THE RECEIVER'S SOCKET QUEUE, not a
 // number picked for speed.
 //
-// kernel/net/socket.c holds SOCK_QUEUE (4) datagrams per socket and
-// leaves one slot unused, so three arrive and the rest of a window is
-// DROPPED ON ARRIVAL -- not lost in the network, discarded at the door.
+// kernel/net/socket.c holds SOCK_QUEUE (4) datagrams per socket, and
+// SOCK_RCVBUF bytes, and leaves one slot unused, so three arrive and
+// the rest of a window is DROPPED ON ARRIVAL -- not lost in the
+// network, discarded at the door.
 // A window of 16 measured 611 seconds for 1 MiB against 66 for plain
 // lock-step, because every round trip delivered three blocks and
 // retransmitted thirteen. A window larger than the receiver can hold is
@@ -119,6 +120,10 @@ static void logf(const char *fmt, ...) {
 #define WINDOW_MAX      3
 
 #define PKT_MAX   (4 + BLKSIZE_MAX)
+// Three recognised options and their values fit in well under this; a
+// client repeating one gets the rest dropped. Its own bound, not
+// PKT_MAX, because the OACK is copied onto the STACK twice.
+#define OACK_MAX  128
 #define RETRIES   5
 #define TIMEOUT_MS 2000
 
@@ -165,7 +170,7 @@ static uint32_t g_blksize = BLKSIZE_DEFAULT;
 static uint32_t g_window  = WINDOW_DEFAULT;
 
 // The send window, so a retransmit does not have to seek the file back.
-// WINDOW_MAX * BLKSIZE_MAX is ~23 KB of .bss, which costs nothing in
+// WINDOW_MAX * BLKSIZE_MAX is ~24 KB of .bss, which costs nothing in
 // the image and keeps the resend path a memcpy rather than an lseek --
 // the latter being a syscall that can fail halfway through recovering
 // from a failure.
@@ -319,7 +324,7 @@ static void do_write(uint32_t ip, uint16_t port, const char *path,
     // THE OACK REPLACES THE FIRST ACK, and only the first (RFC 2347): a
     // client that negotiated waits for it and answers with DATA 1, so
     // sending ACK 0 as well would look like a duplicate.
-    uint8_t first[PKT_MAX];
+    uint8_t first[OACK_MAX];
     uint32_t first_len;
     if (oack_len) {
         memcpy(first, g_tx, oack_len);
@@ -440,7 +445,7 @@ static void do_read(uint32_t ip, uint16_t port, const char *path,
 
     // The OACK is acknowledged by an ACK 0 before any data flows.
     if (oack_len) {
-        uint8_t oack[PKT_MAX];
+        uint8_t oack[OACK_MAX];
         memcpy(oack, g_tx, oack_len);
         int ready = 0;
         for (int try = 0; try < RETRIES && !ready; try++) {
@@ -595,7 +600,7 @@ static uint32_t parse_options(const uint8_t *p, uint32_t n, uint32_t start,
 
         uint32_t ol = (uint32_t)strlen(opt) + 1;
         uint32_t al = (uint32_t)strlen(ack) + 1;
-        if (out + ol + al > PKT_MAX) continue;
+        if (out + ol + al > OACK_MAX) continue;
         memcpy(g_tx + out, opt, ol);  out += ol;
         memcpy(g_tx + out, ack, al);  out += al;
     }

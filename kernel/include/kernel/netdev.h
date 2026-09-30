@@ -71,8 +71,10 @@ struct net_device {
 
     // Put ONE complete Ethernet frame (destination MAC first, no FCS --
     // the hardware appends that) on the wire. Returns 0, or a negative
-    // errno; -ENOSPC when the transmit ring is full, which the caller
-    // treats as a drop rather than an error worth reporting.
+    // errno; -ENOSPC when the transmit ring is full, which net_tx()
+    // retries for a few milliseconds and then counts as a drop. A ring
+    // whose completions arrive by interrupt must REAP them itself before
+    // saying full (rtl_usb.c), or that retry never sees a slot free.
     int (*transmit)(struct net_device *dev, const void *frame, uint32_t len);
 
     // Optional. Drain the receive ring, calling net_rx() per frame.

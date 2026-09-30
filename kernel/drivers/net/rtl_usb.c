@@ -294,16 +294,24 @@ static void tx_done(void *ctx, uint64_t phys, uint32_t bytes, int ok) {
         if (d->tx_phys[i] == phys) { d->tx_busy[i] = 0; return; }
 }
 
+static int rtl_tx_slot(struct rtl_usb *d) {
+    for (int i = 0; i < RTL_BUFS; i++) {
+        int at = (d->tx_next + i) % RTL_BUFS;
+        if (!d->tx_busy[at]) return at;
+    }
+    return -1;
+}
+
 static int rtl_transmit(struct net_device *dev, const void *frame, uint32_t len) {
     struct rtl_usb *d = dev->drv;
     if (!d->in_use) return -ENODEV;
     if (len > NET_FRAME_MAX) return -EINVAL;
 
-    int slot = -1;
-    for (int i = 0; i < RTL_BUFS; i++) {
-        int at = (d->tx_next + i) % RTL_BUFS;
-        if (!d->tx_busy[at]) { slot = at; break; }
-    }
+    int slot = rtl_tx_slot(d);
+    // Full: reap completions before saying so. tx_done() runs from the
+    // event ring, and a caller waiting on a full ring (net_tx()) may be
+    // where no interrupt reaches -- a fragment burst outruns the ring.
+    if (slot < 0) { xhci_service(); slot = rtl_tx_slot(d); }
     if (slot < 0) return -ENOSPC;
 
     usb_r8153_tx_desc(d->tx[slot], len);

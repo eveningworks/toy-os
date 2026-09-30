@@ -4837,13 +4837,14 @@ window without going through it will find its layout polls timing out.
   requiring either.
 
 - **`remote_test.py`** gained TFTP OPTION coverage (2026-09-01): both
-  directions at a negotiated 1428-byte block, and the fallback when a
-  client asks for nothing.
+  directions at the negotiated block (`remote.py`'s `WANT_BLKSIZE`, 8192
+  -- so each block is fragmented and this is also reassembly's
+  end-to-end check), and the fallback when a client asks for nothing.
 
   **The fallback is the half that breaks silently.** A transfer that
   quietly drops to 512-byte lockstep still succeeds and only looks slow,
   so a round-trip check cannot see it -- which is why one check reads
-  the server's own log for `blksize 1428, window 3` rather than
+  the server's own log for `blksize <WANT_BLKSIZE>, window 3` rather than
   inferring agreement from the bytes arriving.
 
 - **`check_config_size.py`** -- no shipped `data/etc/**` or

@@ -6112,8 +6112,8 @@ looked at file-specific state.
 The honest cost is that protocol parsing of hostile input runs in ring
 0. That is the same call this kernel already made for TrueType fonts,
 and it is bounded the same way: every read is length-checked against the
-frame, a fragment is refused rather than reassembled, and nothing in the
-receive path allocates.
+frame, and what the receive path allocates is capped (reassembly's slots
+and each socket's byte budget -- see the fragmentation entry below).
 
 **Why a ping socket and not a raw socket.** `AF_INET` + `SOCK_DGRAM` +
 `IPPROTO_ICMP` is the whole supported set, and the kernel builds the
@@ -6153,6 +6153,60 @@ A `uint32_t` is the same type in either order, so a missed conversion
 compiles perfectly and produces a packet nobody answers. Converting only
 at the wire edge (`kernel/net/`) leaves exactly one place where the
 mistake can be made, and `/bin/ping` never calls `htonl` at all.
+
+## IPv4 fragments are reassembled in a bitmap, four at a time, and DF is never set
+
+**What real systems do.** Linux keys an in-progress datagram on
+(source, destination, id, protocol), holds its fragments in an
+offset-ordered tree under a per-namespace memory ceiling
+(`ipfrag_high_thresh`) and a 30 s timeout (`ipfrag_time`), evicts the
+oldest under pressure, sends ICMP Time Exceeded (code 1) when a datagram
+with its first fragment times out, and -- since FragmentSmack
+(CVE-2018-5391) -- discards the whole datagram on any overlap. It
+fragments UDP locally when a datagram exceeds the path MTU, and sets DF
+on TCP so Path MTU Discovery can find that MTU. NT and the BSDs have the
+same shape with a fixed slot count.
+
+**What toy-os does, and where it differs.** The key, the timeout, the
+eviction and the overlap rule are Linux's. The storage is not: each
+datagram in progress is ONE 64 KiB buffer and a bitmap with a bit per
+8-byte block (the unit the offset field counts in), allocated on its
+first fragment and freed on completion or timeout, and at most four
+exist. RFC 815's hole list and Linux's fragment tree both pay for
+memory proportional to what arrived; the bitmap pays the maximum per
+datagram and buys "have I got this range" as a bit test and
+completeness as a byte count. Four slots bound what an attacker who
+sends only first fragments can pin to 256 KiB; the obvious alternative,
+a static pool, would cost that on every machine that never sees a
+fragment.
+
+**Exact duplicates are ignored, partial overlaps drop the datagram.** A
+fragment whose blocks are already all held changes nothing -- the first
+copy stands, so there is no ambiguity to exploit. One that partly
+overlaps is either corruption or an attack on whoever reads the
+datagram differently, and a parser here REJECTS rather than guesses.
+
+**DF is never set, and there is no PMTUD.** Setting DF only pays with
+Path MTU Discovery behind it -- without it, a smaller link on the path
+turns every full-size packet into an unanswered ICMP Frag Needed and a
+silent black hole. TCP does not need fragmentation (its MSS is
+MTU-sized), and UDP falls back on routers fragmenting. Revisit when a
+path with a smaller MTU (a VPN, PPPoE) shows up in testing.
+
+**The socket queue became a byte budget.** A datagram can be 1 byte or
+64 KiB, so four fixed 1472-byte slots per socket became four slots of
+kmalloc'd messages under a 64 KiB budget per socket -- Linux's
+`SO_RCVBUF`, which counts bytes for the same reason. The first datagram
+into an empty queue is always taken, so a maximal one fits whatever the
+budget says.
+
+**A burst of fragments exposed two queues that never mattered before.**
+A 64 KiB datagram is 45 frames. `e1000.c`'s 32-descriptor receive ring
+lost the tail of every such burst from QEMU's SLIRP, and the USB
+adapters' 16-slot transmit rings reported full with no completion ever
+reaped while `net_tx()` waited. Both are fixed (a 64-descriptor ring;
+the transmit op calling `xhci_service()` before it says full), and the
+rule they add is in `docs/conventions/kernel.md`.
 
 ## UDP's port demux is the kernel's; DHCP and DNS are not
 

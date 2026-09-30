@@ -22,6 +22,7 @@
 #include "errno.h"
 #include "ktest.h"
 #include "kfmt.h"   // klog_printf, for the line the fallback prints
+#include "clocksource.h" // a reassembly timeout, aged by hand
 
 // Frames live here rather than on the stack: the ring-0 frame budget is
 // 1 KiB and these are close enough to it to be worth not testing.
@@ -38,9 +39,18 @@ static uint32_t g_sent_len;
 static int g_sent_count;
 static int (*g_real_transmit)(struct net_device *, const void *, uint32_t);
 
+// Every frame of a burst, for a datagram that leaves in fragments.
+#define TXLOG_MAX 4
+static uint8_t g_txlog[TXLOG_MAX][NET_FRAME_MAX];
+static uint32_t g_txlog_len[TXLOG_MAX];
+
 static int capture_transmit(struct net_device *dev, const void *frame, uint32_t len) {
     (void)dev;
     if (len > sizeof g_sent) len = sizeof g_sent;
+    if (g_sent_count < TXLOG_MAX) {
+        k_memcpy(g_txlog[g_sent_count], frame, len);
+        g_txlog_len[g_sent_count] = len;
+    }
     k_memcpy(g_sent, frame, len);
     g_sent_len = len;
     g_sent_count++;
@@ -396,26 +406,36 @@ KTEST("net", "an echo request is answered with an echo REPLY") {
     KTEST_ASSERT_EQ(seq, 1);
 }
 
-KTEST("net", "a fragment, a bad checksum and somebody else's address are all dropped") {
+KTEST("net", "a lone fragment is held, not answered; a bad checksum and somebody else's address are dropped") {
     struct net_device *dev = addressed_device();
     if (!dev) KTEST_SKIP("no network device with an address");
 
     uint32_t len = arp_request(dev, dev->ip, 0);
     eth_input(dev, g_frame, len);   // same precondition as above
+    ipv4_frag_flush();
 
     capture_begin(dev);
-    // More-fragments set. Reassembly is deliberately not implemented
-    // (kernel/net/ipv4.c), so this must be dropped rather than treated
-    // as a whole datagram that happens to parse.
+    // More-fragments set: the start of a datagram, not a whole one that
+    // happens to parse, so it is HELD rather than answered.
     len = icmp_echo(dev, dev->ip, 0x2000, 0);
     eth_input(dev, g_frame, len);
     int mf = g_sent_count;
+    int mf_held = ipv4_frag_pending();
+    ipv4_frag_flush();
 
     // A non-zero fragment offset, which is the other half of the same
     // rule and would pass a check that only looked at the MF bit.
     len = icmp_echo(dev, dev->ip, 0x0001, 0);
     eth_input(dev, g_frame, len);
     int offset = g_sent_count;
+    int offset_held = ipv4_frag_pending();
+    ipv4_frag_flush();
+
+    // Somebody else's fragment costs nothing: the address is checked
+    // before reassembly is.
+    len = icmp_echo(dev, peer_ip(dev) - 1, 0x2000, 0);
+    eth_input(dev, g_frame, len);
+    int foreign_held = ipv4_frag_pending();
 
     len = icmp_echo(dev, dev->ip, 0, 1);   // corrupted header checksum
     eth_input(dev, g_frame, len);
@@ -427,9 +447,315 @@ KTEST("net", "a fragment, a bad checksum and somebody else's address are all dro
     capture_end(dev);
 
     KTEST_ASSERT_EQ(mf, 0);
+    KTEST_ASSERT_EQ(mf_held, 1);
     KTEST_ASSERT_EQ(offset, 0);
+    KTEST_ASSERT_EQ(offset_held, 1);
+    KTEST_ASSERT_EQ(foreign_held, 0);
     KTEST_ASSERT_EQ(bad_sum, 0);
     KTEST_ASSERT_EQ(not_ours, 0);
+}
+
+// --- fragmentation -----------------------------------------------------
+
+// One UDP datagram, whole, which the fragment builder below slices.
+// Byte i of the payload is i % 251: a prime, so a fragment placed one
+// fragment-length off is wrong in its VALUES, not just its length.
+static uint8_t g_dgram[4096];
+static uint32_t g_dgram_len;
+
+static void udp_datagram(struct net_device *dev, uint16_t dport, uint32_t payload) {
+    uint32_t src = peer_ip(dev);
+    uint32_t udp_len = 8 + payload;
+    uint8_t *u = g_dgram;
+    u[0] = 0xC0; u[1] = 0x00;
+    u[2] = (uint8_t)(dport >> 8); u[3] = (uint8_t)dport;
+    u[4] = (uint8_t)(udp_len >> 8); u[5] = (uint8_t)udp_len;
+    u[6] = u[7] = 0;
+    for (uint32_t i = 0; i < payload; i++) u[8 + i] = (uint8_t)(i % 251);
+    uint8_t pseudo[12] = {
+        (uint8_t)(src >> 24), (uint8_t)(src >> 16), (uint8_t)(src >> 8), (uint8_t)src,
+        (uint8_t)(dev->ip >> 24), (uint8_t)(dev->ip >> 16), (uint8_t)(dev->ip >> 8), (uint8_t)dev->ip,
+        0, IP_PROTO_UDP, (uint8_t)(udp_len >> 8), (uint8_t)udp_len };
+    uint16_t c = net_checksum_two(pseudo, sizeof pseudo, u, udp_len);
+    if (!c) c = 0xFFFF;
+    u[6] = (uint8_t)(c >> 8); u[7] = (uint8_t)c;
+    g_dgram_len = udp_len;
+}
+
+// Bytes [off, off + n) of g_dgram as one fragment from the peer.
+static uint32_t frag_frame(struct net_device *dev, uint16_t id, uint32_t off,
+                           uint32_t n, int more) {
+    uint32_t h = eth_frame(dev, 0, ETH_TYPE_IPV4);
+    uint8_t *ip = g_frame + h;
+    uint32_t src = peer_ip(dev);
+    uint16_t ff = (uint16_t)((more ? IP_FLAG_MF : 0) | (off / 8));
+    k_memset(ip, 0, 20);
+    ip[0] = 0x45;
+    ip[2] = (uint8_t)((20 + n) >> 8); ip[3] = (uint8_t)(20 + n);
+    ip[4] = (uint8_t)(id >> 8); ip[5] = (uint8_t)id;
+    ip[6] = (uint8_t)(ff >> 8); ip[7] = (uint8_t)ff;
+    ip[8] = 64;
+    ip[9] = IP_PROTO_UDP;
+    ip[12] = (uint8_t)(src >> 24); ip[13] = (uint8_t)(src >> 16);
+    ip[14] = (uint8_t)(src >> 8);  ip[15] = (uint8_t)src;
+    ip[16] = (uint8_t)(dev->ip >> 24); ip[17] = (uint8_t)(dev->ip >> 16);
+    ip[18] = (uint8_t)(dev->ip >> 8);  ip[19] = (uint8_t)dev->ip;
+    uint16_t sum = net_checksum(ip, 20);
+    ip[10] = (uint8_t)(sum >> 8); ip[11] = (uint8_t)sum;
+    k_memcpy(ip + 20, g_dgram + off, n);
+    return h + 20 + n;
+}
+
+static void send_frag(struct net_device *dev, uint16_t id, uint32_t off, uint32_t n, int more) {
+    uint32_t len = frag_frame(dev, id, off, n, more);
+    eth_input(dev, g_frame, len);
+}
+
+// 1 when `buf` holds exactly the payload udp_datagram() built.
+static int payload_matches(const uint8_t *buf, uint32_t n) {
+    if (n != g_dgram_len - 8) return 0;
+    for (uint32_t i = 0; i < n; i++) if (buf[i] != (uint8_t)(i % 251)) return 0;
+    return 1;
+}
+
+static uint8_t g_rxbuf[4096];
+
+// Three fragments of a 4000-byte datagram: [0,1480) [1480,2960) [2960,4008).
+#define FRAG_A 1480u
+
+KTEST("net", "three fragments in order reassemble into one UDP datagram") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    ipv4_frag_flush();
+    int sock = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT(sock >= 0);
+    KTEST_ASSERT_EQ(net_sock_bind(sock, 0, 7790, 0), 7790);
+
+    udp_datagram(dev, 7790, 4000);
+    send_frag(dev, 0x4101, 0, FRAG_A, 1);
+    send_frag(dev, 0x4101, FRAG_A, FRAG_A, 1);
+    int early = net_sock_recvfrom(sock, g_rxbuf, sizeof g_rxbuf, 0, 0);
+    send_frag(dev, 0x4101, 2 * FRAG_A, g_dgram_len - 2 * FRAG_A, 0);
+
+    int got = net_sock_recvfrom(sock, g_rxbuf, sizeof g_rxbuf, 0, 0);
+    int ok = got > 0 && payload_matches(g_rxbuf, (uint32_t)got);
+    int left = ipv4_frag_pending();
+    net_sock_close(sock);
+
+    KTEST_ASSERT_EQ(early, 0);              // nothing until the last one
+    KTEST_ASSERT_EQ(got, 4000);
+    KTEST_ASSERT(ok);
+    KTEST_ASSERT_EQ(left, 0);               // the slot is given back
+}
+
+KTEST("net", "fragments in reverse order, with a duplicate, deliver once") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    ipv4_frag_flush();
+    int sock = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT(sock >= 0);
+    KTEST_ASSERT_EQ(net_sock_bind(sock, 0, 7791, 0), 7791);
+
+    udp_datagram(dev, 7791, 4000);
+    send_frag(dev, 0x4102, 2 * FRAG_A, g_dgram_len - 2 * FRAG_A, 0);
+    send_frag(dev, 0x4102, FRAG_A, FRAG_A, 1);
+    send_frag(dev, 0x4102, FRAG_A, FRAG_A, 1);   // a duplicate is not an overlap
+    send_frag(dev, 0x4102, 0, FRAG_A, 1);
+
+    int got = net_sock_recvfrom(sock, g_rxbuf, sizeof g_rxbuf, 0, 0);
+    int ok = got > 0 && payload_matches(g_rxbuf, (uint32_t)got);
+    int again = net_sock_recvfrom(sock, g_rxbuf, sizeof g_rxbuf, 0, 0);
+    net_sock_close(sock);
+
+    KTEST_ASSERT_EQ(got, 4000);
+    KTEST_ASSERT(ok);
+    KTEST_ASSERT_EQ(again, 0);
+}
+
+KTEST("net", "a partial overlap drops the whole datagram") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    ipv4_frag_flush();
+    int sock = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT(sock >= 0);
+    KTEST_ASSERT_EQ(net_sock_bind(sock, 0, 7792, 0), 7792);
+
+    udp_datagram(dev, 7792, 4000);
+    send_frag(dev, 0x4103, 0, FRAG_A, 1);
+    send_frag(dev, 0x4103, FRAG_A - 8, FRAG_A, 1);   // one block into the first
+    int after_overlap = ipv4_frag_pending();
+    // The rest arriving must not complete it: fragment zero went with it.
+    send_frag(dev, 0x4103, 2 * FRAG_A - 8, g_dgram_len - (2 * FRAG_A - 8), 0);
+    send_frag(dev, 0x4103, FRAG_A, FRAG_A, 1);
+    int got = net_sock_recvfrom(sock, g_rxbuf, sizeof g_rxbuf, 0, 0);
+    ipv4_frag_flush();
+    net_sock_close(sock);
+
+    KTEST_ASSERT_EQ(after_overlap, 0);
+    KTEST_ASSERT_EQ(got, 0);
+}
+
+KTEST("net", "a last fragment that ends before held data drops the datagram") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    ipv4_frag_flush();
+    int sock = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT(sock >= 0);
+    KTEST_ASSERT_EQ(net_sock_bind(sock, 0, 7793, 0), 7793);
+
+    // Held: [2960, 4008). Then a "last" fragment claiming the datagram
+    // ends at 2960, and the first two fragments -- whose byte count
+    // alone would add up to that claimed end and look complete.
+    udp_datagram(dev, 7793, 4000);
+    send_frag(dev, 0x4104, 2 * FRAG_A, g_dgram_len - 2 * FRAG_A, 1);
+    send_frag(dev, 0x4104, FRAG_A, FRAG_A, 0);
+    int after_lie = ipv4_frag_pending();
+    send_frag(dev, 0x4104, 0, FRAG_A, 1);
+    int got = net_sock_recvfrom(sock, g_rxbuf, sizeof g_rxbuf, 0, 0);
+    ipv4_frag_flush();
+    net_sock_close(sock);
+
+    KTEST_ASSERT_EQ(after_lie, 0);
+    KTEST_ASSERT_EQ(got, 0);
+}
+
+KTEST("net", "a stalled datagram times out with ICMP only if fragment zero arrived") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    uint32_t len = arp_request(dev, dev->ip, 0);   // the peer must resolve
+    eth_input(dev, g_frame, len);
+    ipv4_frag_flush();
+
+    udp_datagram(dev, 7794, 4000);
+    uint64_t now = clocksource_now_ns();
+    capture_begin(dev);
+    send_frag(dev, 0x4105, 0, FRAG_A, 1);
+    ipv4_frag_expire(now + 1000000000ull);           // too soon
+    int early = ipv4_frag_pending();
+    ipv4_frag_expire(now + 31ull * 1000000000ull);
+    int sent = g_sent_count;
+    const uint8_t *icmp = sent_transport();
+    uint8_t itype = icmp ? icmp[0] : 0xFF;
+    uint8_t icode = icmp ? icmp[1] : 0xFF;
+    uint16_t quoted_id = icmp ? net_ntohs(*(const uint16_t *)(icmp + 8 + 4)) : 0;
+    int left = ipv4_frag_pending();
+
+    // Without fragment zero there is no header to quote, so it goes
+    // quietly (RFC 1122 3.3.2).
+    g_sent_count = 0;
+    send_frag(dev, 0x4106, FRAG_A, FRAG_A, 1);
+    ipv4_frag_expire(now + 31ull * 1000000000ull);
+    int sent_headless = g_sent_count;
+    int left_headless = ipv4_frag_pending();
+    capture_end(dev);
+
+    KTEST_ASSERT_EQ(early, 1);
+    KTEST_ASSERT_EQ(sent, 1);
+    KTEST_ASSERT_EQ(itype, 11);             // time exceeded
+    KTEST_ASSERT_EQ(icode, 1);              // fragment reassembly
+    KTEST_ASSERT_EQ(quoted_id, 0x4105);
+    KTEST_ASSERT_EQ(left, 0);
+    KTEST_ASSERT_EQ(sent_headless, 0);
+    KTEST_ASSERT_EQ(left_headless, 0);
+}
+
+KTEST("net", "a fifth datagram evicts the oldest, which then cannot complete") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    ipv4_frag_flush();
+    int sock = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT(sock >= 0);
+    KTEST_ASSERT_EQ(net_sock_bind(sock, 0, 7795, 0), 7795);
+
+    udp_datagram(dev, 7795, 4000);
+    for (uint16_t i = 0; i < 5; i++) send_frag(dev, (uint16_t)(0x4200 + i), 0, FRAG_A, 1);
+    int pending = ipv4_frag_pending();
+    // The first is gone, so its remaining fragments start a new slot
+    // missing fragment zero...
+    send_frag(dev, 0x4200, FRAG_A, FRAG_A, 1);
+    send_frag(dev, 0x4200, 2 * FRAG_A, g_dgram_len - 2 * FRAG_A, 0);
+    int evicted = net_sock_recvfrom(sock, g_rxbuf, sizeof g_rxbuf, 0, 0);
+    // ...while the newest is still whole-able.
+    send_frag(dev, 0x4204, FRAG_A, FRAG_A, 1);
+    send_frag(dev, 0x4204, 2 * FRAG_A, g_dgram_len - 2 * FRAG_A, 0);
+    int newest = net_sock_recvfrom(sock, g_rxbuf, sizeof g_rxbuf, 0, 0);
+    ipv4_frag_flush();
+    net_sock_close(sock);
+
+    KTEST_ASSERT_EQ(pending, 4);
+    KTEST_ASSERT_EQ(evicted, 0);
+    KTEST_ASSERT_EQ(newest, 4000);
+}
+
+KTEST("net", "a datagram over the MTU leaves in fragments that rebuild it") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    if (dev->mtu != NET_MTU) KTEST_SKIP("the fixture assumes a 1500-byte MTU");
+    uint32_t len = arp_request(dev, dev->ip, 0);
+    eth_input(dev, g_frame, len);
+
+    static uint8_t payload[4000];
+    for (uint32_t i = 0; i < sizeof payload; i++) payload[i] = (uint8_t)(i % 251);
+
+    capture_begin(dev);
+    int rc = udp_output(dev, peer_ip(dev), 9, 7796, payload, sizeof payload);
+    int sent = g_sent_count;
+    capture_end(dev);
+    KTEST_ASSERT_EQ(rc, 0);
+    KTEST_ASSERT_EQ(sent, 3);               // 4008 bytes of UDP in 1480s
+
+    // Put the pieces back by their OFFSETS and compare with what was
+    // sent, header by header: same id, MF on all but the last, a valid
+    // checksum, nothing over the MTU.
+    static uint8_t rebuilt[4008];
+    uint32_t covered = 0;
+    uint16_t id0 = 0;
+    for (int f = 0; f < 3; f++) {
+        const uint8_t *ip = g_txlog[f] + ETH_HDR_LEN;
+        uint32_t total = (uint32_t)(ip[2] << 8 | ip[3]);
+        uint16_t ff = (uint16_t)(ip[6] << 8 | ip[7]);
+        uint16_t id = (uint16_t)(ip[4] << 8 | ip[5]);
+        uint32_t off = (uint32_t)(ff & IP_FRAG_MASK) * 8;
+        if (f == 0) id0 = id;
+        KTEST_ASSERT(total <= NET_MTU);
+        KTEST_ASSERT_EQ(net_checksum(ip, 20), 0);
+        KTEST_ASSERT_EQ(id, id0);
+        KTEST_ASSERT_EQ((ff & IP_FLAG_MF) != 0, f < 2);
+        KTEST_ASSERT(off + (total - 20) <= sizeof rebuilt);
+        k_memcpy(rebuilt + off, ip + 20, total - 20);
+        covered += total - 20;
+    }
+    KTEST_ASSERT_EQ(covered, 4008);
+    KTEST_ASSERT_EQ(rebuilt[2] << 8 | rebuilt[3], 9);        // the UDP header, first
+    KTEST_ASSERT_EQ(k_memcmp(rebuilt + 8, payload, sizeof payload), 0);
+}
+
+KTEST("net", "a socket's queue takes one maximal datagram, and bytes bound the rest") {
+    struct net_device *dev = addressed_device();
+    if (!dev) KTEST_SKIP("no network device with an address");
+    int sock = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT(sock >= 0);
+    KTEST_ASSERT_EQ(net_sock_bind(sock, 0, 7797, 0), 7797);
+
+    static uint8_t big[SYS_NET_MSG_MAX];
+    for (uint32_t i = 0; i < sizeof big; i++) big[i] = (uint8_t)(i % 251);
+    // Delivery reports the PORT matched, not the queue's verdict -- a
+    // full queue is no reason for a port-unreachable -- so what was
+    // kept is read back rather than taken from the return.
+    static uint8_t out[SYS_NET_MSG_MAX];
+    net_sock_deliver_udp(dev, peer_ip(dev), 1, 7797, big, sizeof big);
+    net_sock_deliver_udp(dev, peer_ip(dev), 1, 7797, big, 1024); // over budget
+    int first = net_sock_recvfrom(sock, out, sizeof out, 0, 0);
+    int intact = first == (int)sizeof big && k_memcmp(out, big, sizeof big) == 0;
+    int second = net_sock_recvfrom(sock, out, sizeof out, 0, 0);
+    net_sock_deliver_udp(dev, peer_ip(dev), 1, 7797, big, 1024); // room again
+    int third = net_sock_recvfrom(sock, out, sizeof out, 0, 0);
+    net_sock_close(sock);
+
+    KTEST_ASSERT_EQ(first, (int)sizeof big);   // an empty queue takes anything
+    KTEST_ASSERT(intact);
+    KTEST_ASSERT_EQ(second, 0);                 // the budget dropped it
+    KTEST_ASSERT_EQ(third, 1024);               // reading gave the bytes back
 }
 
 KTEST("net", "routing picks an on-link device over a gateway") {

@@ -264,6 +264,14 @@ static void ecm_poll(struct net_device *dev) {
     }
 }
 
+static int ecm_tx_slot(struct ecm_dev *e) {
+    for (int i = 0; i < NET_BUFS; i++) {
+        int at = (e->tx_next + i) % NET_BUFS;
+        if (!e->tx_busy[at]) return at;
+    }
+    return -1;
+}
+
 static int ecm_transmit(struct net_device *dev, const void *frame, uint32_t len) {
     struct ecm_dev *e = dev->drv;
     if (!e->in_use) return -ENODEV;
@@ -271,11 +279,9 @@ static int ecm_transmit(struct net_device *dev, const void *frame, uint32_t len)
 
     // A free buffer, or the caller is told to drop -- netdev.h's
     // contract for a full ring, and the reason this does not block.
-    int slot = -1;
-    for (int i = 0; i < NET_BUFS; i++) {
-        int at = (e->tx_next + i) % NET_BUFS;
-        if (!e->tx_busy[at]) { slot = at; break; }
-    }
+    int slot = ecm_tx_slot(e);
+    // Full: reap completions first, as rtl_usb.c does and for its reason.
+    if (slot < 0) { xhci_service(); slot = ecm_tx_slot(e); }
     if (slot < 0) return -ENOSPC;
 
     k_memcpy(e->tx[slot], frame, len);

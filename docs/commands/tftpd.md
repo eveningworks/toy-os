@@ -94,27 +94,27 @@ protocol rather than an implementation choice — RFC 1350 calls it the
 TID — and answering from port 69 would work once and then collide with
 the next client's request.
 
-**Options are negotiated** (RFC 2347): `blksize` up to **1428**
+**Options are negotiated** (RFC 2347): `blksize` up to **8192**
 (RFC 2348), `windowsize` up to **3** (RFC 7440), and `tsize` on a read.
 A client that asks for nothing gets RFC 1350's defaults — 512-byte
 blocks, one round trip each — and still works, which is what keeps a
 boot ROM able to talk to this. The server's log line names what was
 actually agreed:
 
-    tftpd: wrote /bin/ls, 150336 bytes (blksize 1428, window 3)
+    tftpd: wrote /bin/ls, 150336 bytes (blksize 8192, window 3)
 
 A lost packet is retried five times at a two-second timeout before the
 transfer is abandoned.
 
 **Why those two numbers**, since neither was chosen for speed:
 
-**1428 is the MTU's**, not a preference. `kernel/net/ipv4.c` does not
-fragment or reassemble — a fragmented datagram is *dropped* — so a
-block that does not fit an Ethernet frame does not transfer slowly, it
-does not transfer at all. `SYS_NET_MSG_MAX` is 1472, making 1468 the
-true ceiling; 1428 is what RFC 2348 names, leaving room for a tunnel in
-the path. A client asking for more is answered with 1428, and the OACK
-says so.
+**8192 is a trade**, not the protocol's limit (65464). Past 1468 a block
+crosses the wire as IPv4 fragments -- six at a 1500-byte MTU -- and one
+lost fragment loses the whole block. Measured on the ASUS against a
+Linux host, 8 MiB reads in 0.66 s at 8192 against 1.92 s at 1428, and
+writes in a median 0.85 s against 2.09 s. A client asking for more is
+answered with 8192, and the OACK says so; one asking for 1428 (RFC
+2348's tunnel-safe size) never fragments at all.
 
 **3 is the RECEIVER'S SOCKET QUEUE.** `kernel/net/socket.c` holds
 `SOCK_QUEUE` (4) datagrams per socket and leaves one slot unused, so

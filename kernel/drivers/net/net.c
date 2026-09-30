@@ -16,6 +16,7 @@
 // costs a memcpy per frame and buys the driver its DMA buffer back
 // immediately, which is what stops a slow consumer stalling the ring.
 #include "clocksource.h"
+#include "barrier.h"      // cpu_relax(), in net_tx()'s wait
 #include "clockevent.h" // clockevent_idle_wake_by() -- polled devices and TCP timers
 #include "netdev.h"
 #include "net.h"   // eth_input(), tcp_tick()
@@ -31,7 +32,7 @@
 
 // driver-none: the net class registry itself
 
-#define NET_RX_QUEUE 32
+#define NET_RX_QUEUE 64
 
 static struct net_device *g_devs[NET_MAX_DEVS];
 static int g_count;
@@ -253,11 +254,25 @@ void net_rx(struct net_device *dev, const void *frame, uint32_t len) {
     scheduler_wake(net_wait_chan(), SYS_RETRY);
 }
 
+// How long a full transmit ring is waited on before the frame is dropped.
+// A fragmented datagram is a burst of up to 45 frames, which outruns a
+// 16-slot ring, and one fragment lost loses the whole datagram. Linux
+// queues behind a stopped driver (the qdisc); this waits for the ring,
+// which the device's completion interrupt drains in well under this.
+#define NET_TX_FULL_WAIT_NS 5000000ull
+
 int net_tx(struct net_device *dev, const void *frame, uint32_t len) {
     if (!dev || !frame) return -EINVAL;
     if (len < ETH_HDR_LEN || len > dev->mtu + ETH_HDR_LEN) return -EINVAL;
 
     int rc = dev->transmit(dev, frame, len);
+    if (rc == -ENOSPC) {
+        uint64_t until = clocksource_now_ns() + NET_TX_FULL_WAIT_NS;
+        while (rc == -ENOSPC && clocksource_now_ns() < until) {
+            cpu_relax();
+            rc = dev->transmit(dev, frame, len);
+        }
+    }
     if (rc < 0) { dev->tx_dropped++; return rc; }
     dev->tx_packets++;
     dev->tx_bytes += len;
@@ -285,6 +300,7 @@ void net_poll(void) {
     // a process woken by its own retransmit deadline does the work it
     // woke up for even when no frame arrived.
     tcp_tick();
+    ipv4_frag_expire(now);   // lazily -- see ipv4_frag.c
     // An ORPHANED connection has no process parked on its deadline, so
     // the idle loop is what has to wake for it.
     uint64_t tcp_due = tcp_next_deadline();

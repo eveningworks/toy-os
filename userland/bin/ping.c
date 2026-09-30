@@ -27,6 +27,7 @@
 #include <unistd.h>
 
 #define PAYLOAD_BYTES 56      // what every other ping sends
+#define PAYLOAD_MAX   65507   // SYS_NET_MSG_MAX; past ~1472 it goes in fragments
 #define REPLY_WAIT_MS 1000
 #define POLL_MS       10
 
@@ -47,22 +48,33 @@ static int parse_ip(const char *s, uint32_t *out) {
     return 1;
 }
 
+#define USAGE "ping [-c count] [-s size] <address>"
+
 int main(int argc, char **argv) {
     int count = 4;
+    int size = PAYLOAD_BYTES;
     const char *target = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-c") && i + 1 < argc) {
             count = atoi(argv[++i]);
             if (count < 1) count = 1;
+        } else if (!strcmp(argv[i], "-s") && i + 1 < argc) {
+            size = atoi(argv[++i]);
+            // Not 0, unlike Linux: recvfrom() returns 0 for "nothing
+            // yet", so an empty reply could never be told from none.
+            if (size < 1 || size > PAYLOAD_MAX) {
+                printf("ping: -s takes 1 to %d bytes\n", PAYLOAD_MAX);
+                return 1;
+            }
         } else if (argv[i][0] == '-') {
-            cmd_usage("ping [-c count] <address>");
+            cmd_usage(USAGE);
             return 1;
         } else {
             target = argv[i];
         }
     }
-    if (!target) { cmd_usage("ping [-c count] <address>"); return 1; }
+    if (!target) { cmd_usage(USAGE); return 1; }
 
     // A name is resolved through the same library `host` uses, so the
     // two cannot disagree about what a name means.
@@ -90,11 +102,15 @@ int main(int argc, char **argv) {
     }
 
     char line[128];
-    snprintf(line, sizeof line, "PING %s: %d data bytes\n", target, PAYLOAD_BYTES);
+    snprintf(line, sizeof line, "PING %s: %d data bytes\n", target, size);
     sys_print(line);
 
-    uint8_t payload[PAYLOAD_BYTES];
-    for (int i = 0; i < PAYLOAD_BYTES; i++) payload[i] = (uint8_t)('a' + (i % 26));
+    // The reply buffer has room for one byte MORE than was sent, so a
+    // reply that came back longer is seen rather than truncated to fit.
+    uint8_t *payload = malloc((size_t)size + 1);
+    uint8_t *buf = malloc((size_t)size + 1);
+    if (!payload || !buf) { sys_print("ping: out of memory\n"); return 1; }
+    for (int i = 0; i < size; i++) payload[i] = (uint8_t)('a' + (i % 26));
 
     int sent = 0, received = 0;
     for (int seq = 1; seq <= count; seq++) {
@@ -103,7 +119,7 @@ int main(int argc, char **argv) {
         // rather than a lost packet.
         int64_t rc = -1;
         for (int waited = 0; waited < REPLY_WAIT_MS; waited += POLL_MS) {
-            rc = sys_sendto(fd, payload, sizeof payload, dst, 0);
+            rc = sys_sendto(fd, payload, (uint32_t)size, dst, 0);
             if (rc >= 0 || sys_errno() != EAGAIN) break;
             sys_sleep_ms(POLL_MS);
         }
@@ -129,9 +145,8 @@ int main(int argc, char **argv) {
         // to deliver the reply inside the sending syscall -- and that
         // number is now honest rather than an artefact of polling.
         uint64_t start = sys_monotonic_ns();
-        uint8_t buf[PAYLOAD_BYTES + 16];
         uint32_t src = 0;
-        int64_t n = sys_recvfrom(fd, buf, sizeof buf, &src, 0, REPLY_WAIT_MS);
+        int64_t n = sys_recvfrom(fd, buf, (uint32_t)size + 1, &src, 0, REPLY_WAIT_MS);
         if (n > 0) {
             uint64_t us = (sys_monotonic_ns() - start) / 1000;
             snprintf(line, sizeof line,
@@ -140,6 +155,21 @@ int main(int argc, char **argv) {
                      (src >> 8) & 0xFF, src & 0xFF, seq,
                      (unsigned long long)(us / 1000), (unsigned long long)(us % 1000));
             sys_print(line);
+            // The echo must be the REQUEST, byte for byte -- which for a
+            // large one is also the check that reassembly put every
+            // fragment where it belonged. Linux's ping says the same.
+            if (n != size) {
+                snprintf(line, sizeof line, "ping: reply was %lld bytes, sent %d\n",
+                         (long long)n, size);
+                sys_print(line);
+            } else if (memcmp(buf, payload, (size_t)size) != 0) {
+                int at = 0;
+                while (buf[at] == payload[at]) at++;
+                snprintf(line, sizeof line,
+                         "ping: wrong data byte #%d should be 0x%02x but was 0x%02x\n",
+                         at, payload[at], buf[at]);
+                sys_print(line);
+            }
             received++;
         } else {
             snprintf(line, sizeof line, "no reply from %s: icmp_seq=%d\n", target, seq);

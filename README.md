@@ -55,7 +55,7 @@ that turned out wrong. It boots on real hardware and under QEMU.
   over IDE, AHCI, NVMe or virtio-blk -- including disks with 4096-byte
   sectors.
   It **installs itself** onto another disk and that disk boots.
-- **Networking** — ARP, IPv4, ICMP, UDP and client-side TCP over six NIC
+- **Networking** — ARP, IPv4 (with fragmentation), ICMP, UDP and client-side TCP over six NIC
   drivers, with DHCP, DNS, `ping`, `wget` and an `httpd` that serves this
   machine's own filesystem.
 - **A desktop, and it is not in the kernel** — the window manager is a

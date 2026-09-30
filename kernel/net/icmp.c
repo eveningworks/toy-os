@@ -1,5 +1,6 @@
 // ICMP: echo request answered, echo reply delivered to a socket, and
-// "nothing is listening there" sent when UDP has nobody to deliver to.
+// error reports sent -- "nothing is listening there" when UDP has
+// nobody to deliver to, "gave up reassembling" when fragments stall.
 //
 // An unreachable message ARRIVING is still dropped rather than reported
 // upward: a socket has no error queue to put it on, so a client sees a
@@ -16,6 +17,7 @@
 #include "net.h"
 #include "netdev.h"
 #include "string.h"
+#include "heap.h"
 
 struct icmp_header {
     uint8_t  type;
@@ -27,10 +29,9 @@ struct icmp_header {
 
 _Static_assert(sizeof(struct icmp_header) == 8, "ICMP echo header is 8 bytes on the wire");
 
-#define ICMP_MAX 1400
-
-#define ICMP_DEST_UNREACHABLE 3
-#define ICMP_CODE_PORT        3
+// An error report's buffer: 8 bytes of ICMP, a header of up to 60 and
+// the 8-byte quote.
+#define ICMP_ERR_MAX (8 + 60 + 8)
 
 // What a report carries back: the offending IPv4 header plus the first
 // 8 bytes after it, which for UDP is the whole header -- so the sender
@@ -38,22 +39,28 @@ _Static_assert(sizeof(struct icmp_header) == 8, "ICMP echo header is 8 bytes on 
 // and every stack sends exactly this much.
 #define UNREACH_QUOTE 8
 
-static uint8_t g_msg[ICMP_MAX];
+static uint8_t g_msg[ICMP_ERR_MAX];
 
 void icmp_input(struct net_device *dev, uint32_t src_ip, const uint8_t *pkt, uint32_t len) {
-    if (len < sizeof(struct icmp_header) || len > ICMP_MAX) return;
+    if (len < sizeof(struct icmp_header)) return;
     if (net_checksum(pkt, len) != 0) return;
 
     struct icmp_header h;
     k_memcpy(&h, pkt, sizeof h);
 
     if (h.type == ICMP_ECHO_REQUEST) {
-        k_memcpy(g_msg, pkt, len);
-        struct icmp_header *r = (struct icmp_header *)g_msg;
+        // As large as the request, which reassembly lets reach 64 KiB --
+        // so from the heap, and a reply that cannot be allocated is not
+        // sent (the sender sees a lost ping, which is what it is).
+        uint8_t *msg = kmalloc(len);
+        if (!msg) return;
+        k_memcpy(msg, pkt, len);
+        struct icmp_header *r = (struct icmp_header *)msg;
         r->type = ICMP_ECHO_REPLY;
         r->checksum = 0;
-        r->checksum = net_htons(net_checksum(g_msg, len));
-        ipv4_output(dev, src_ip, IP_PROTO_ICMP, g_msg, len);
+        r->checksum = net_htons(net_checksum(msg, len));
+        ipv4_output(dev, src_ip, IP_PROTO_ICMP, msg, len);
+        kfree(msg);
         return;
     }
 
@@ -61,8 +68,8 @@ void icmp_input(struct net_device *dev, uint32_t src_ip, const uint8_t *pkt, uin
         net_sock_deliver(IP_PROTO_ICMP, src_ip, pkt, len);
 }
 
-void icmp_send_port_unreachable(struct net_device *dev, uint32_t src_ip,
-                                const uint8_t *ip_datagram, uint32_t ip_len) {
+void icmp_send_error(struct net_device *dev, uint32_t dst_ip, uint8_t type,
+                     uint8_t code, const uint8_t *ip_datagram, uint32_t ip_len) {
     // The report quotes the datagram AS IT ARRIVED -- header included,
     // options and all -- because what the sender matches against is the
     // header it sent, not one rebuilt from its fields.
@@ -72,11 +79,11 @@ void icmp_send_port_unreachable(struct net_device *dev, uint32_t src_ip,
     uint32_t after = ip_len - ihl;
     uint32_t quote = after < UNREACH_QUOTE ? after : UNREACH_QUOTE;
     uint32_t body = ihl + quote;
-    if (sizeof(struct icmp_header) + body > ICMP_MAX) return;
+    if (sizeof(struct icmp_header) + body > sizeof g_msg) return;
 
     struct icmp_header *h = (struct icmp_header *)g_msg;
-    h->type = ICMP_DEST_UNREACHABLE;
-    h->code = ICMP_CODE_PORT;
+    h->type = type;
+    h->code = code;
     h->checksum = 0;
     h->id = 0;      // "unused" in RFC 792, and it must be zero
     h->seq = 0;
@@ -84,5 +91,5 @@ void icmp_send_port_unreachable(struct net_device *dev, uint32_t src_ip,
 
     uint32_t total = (uint32_t)sizeof *h + body;
     h->checksum = net_htons(net_checksum(g_msg, total));
-    ipv4_output(dev, src_ip, IP_PROTO_ICMP, g_msg, total);
+    ipv4_output(dev, dst_ip, IP_PROTO_ICMP, g_msg, total);
 }

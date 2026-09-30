@@ -23,7 +23,7 @@
 // on its way back in.
 static int stream_read(struct syscall_ctx *c, int sock, uint64_t ubuf,
                        uint32_t cap, uint32_t timeout_ms, int nonblock) {
-    if (cap > SYS_NET_MSG_MAX) cap = SYS_NET_MSG_MAX;
+    if (cap > SYS_NET_STREAM_READ_MAX) cap = SYS_NET_STREAM_READ_MAX;
     net_poll();
 
     uint8_t *kbuf = kmalloc(cap ? cap : 1);

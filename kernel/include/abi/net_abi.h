@@ -31,11 +31,16 @@
 // smaller.
 #define NET_ABI_HOST_MAX 64
 
-// The largest datagram either direction. One IPv4 datagram inside a
-// 1500-byte MTU, minus the IP and transport headers -- a bigger one
-// would need fragmentation, which kernel/net/ipv4.c does not do. Both
-// transports have an 8-byte header, so one number serves both.
-#define SYS_NET_MSG_MAX 1472
+// The largest datagram either direction: the largest IPv4 datagram,
+// minus the IP and transport headers. Past one MTU it travels in
+// fragments. Both transports have an 8-byte header, so one number
+// serves both.
+#define SYS_NET_MSG_MAX 65507
+
+// The most ONE stream read returns, whatever buffer it is handed. Not
+// tied to the datagram limit above; it was the same number once, and
+// raising it is a separate change with its own callers to check.
+#define SYS_NET_STREAM_READ_MAX 1472
 
 // Ephemeral ports -- what SYS_BIND allocates when asked for port 0.
 // IANA's range; Linux uses 32768-60999 and nothing here wants the

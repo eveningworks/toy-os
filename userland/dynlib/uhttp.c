@@ -113,7 +113,7 @@ int uhttp_parse_url(const char *url, struct uhttp_url *out) {
 //
 // It keeps the last three bytes seen ACROSS calls, because "\r\n\r\n"
 // can straddle any two reads and a socket read here returns at most
-// SYS_NET_MSG_MAX (1472) bytes whatever buffer it is handed -- so on a
+// SYS_NET_STREAM_READ_MAX bytes whatever buffer it is handed -- so on a
 // response with more than about 1.4 KB of headers the boundary lands
 // mid-sequence routinely rather than rarely.
 struct hdr_scan {

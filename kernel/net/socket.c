@@ -23,10 +23,17 @@
 #include "conn_log.h"
 #include "string.h"
 #include "errno.h"
+#include "heap.h"
+#include "scheduler.h"   // the queue's preemption guard
 
 #define SOCK_MAX      8
-#define SOCK_MSG_MAX  1472   // one datagram inside a 1500-byte MTU
-#define SOCK_QUEUE    4      // datagrams held per socket
+#define SOCK_MSG_MAX  SYS_NET_MSG_MAX
+#define SOCK_QUEUE    4      // datagrams held per socket, one slot unused
+// Payload bytes a socket may hold queued -- Linux's SO_RCVBUF, which
+// counts bytes because datagrams now range from 1 byte to 64 KiB. The
+// FIRST datagram into an empty queue is always taken, so one maximal
+// datagram fits whatever this says.
+#define SOCK_RCVBUF   (64u * 1024u)
 
 // ICMP identifiers start high enough to be recognisable in a packet
 // capture and low enough to stay clear of anything a real host uses.
@@ -36,7 +43,7 @@ struct sock_msg {
     uint32_t src;
     uint16_t port;    // UDP: the sender's. Zero for ICMP.
     uint32_t len;
-    uint8_t data[SOCK_MSG_MAX];
+    uint8_t *data;    // kmalloc'd, exactly `len`; freed when read or closed
 };
 
 struct socket {
@@ -58,6 +65,7 @@ struct socket {
     char dev[NET_NAME_MAX]; // bound device, empty for any
     struct sock_msg q[SOCK_QUEUE];
     int head, tail;   // tail == head means empty; one slot is left unused
+    uint32_t queued;  // payload bytes in q[], against SOCK_RCVBUF
 };
 
 static struct socket g_socks[SOCK_MAX];
@@ -69,8 +77,6 @@ struct icmp_echo {
     uint16_t id, seq;
 } __attribute__((packed));
 
-static uint8_t g_out[sizeof(struct icmp_echo) + SOCK_MSG_MAX];
-
 static struct socket *sock_at(int sock) {
     if (sock < 0 || sock >= SOCK_MAX || !g_socks[sock].in_use) return 0;
     return &g_socks[sock];
@@ -79,18 +85,52 @@ static struct socket *sock_at(int sock) {
 // One datagram onto a socket's queue. Full means the NEW one is
 // dropped, never the oldest: a queue that discards what it already
 // accepted turns a burst into a silent reorder.
+//
+// Under the preemption guard, as its reader is: net_poll() pushes while
+// a preempted recvfrom() may be half way through a pop, and `queued` is
+// shared between them.
 static int queue_push(struct socket *s, uint32_t src, uint16_t port,
                       const uint8_t *data, uint32_t len) {
+    if (len > SOCK_MSG_MAX) return 0;
+    scheduler_preempt_disable();
     int next = (s->tail + 1) % SOCK_QUEUE;
-    if (next == s->head) return 0;
-    struct sock_msg *m = &s->q[s->tail];
-    if (len > SOCK_MSG_MAX) len = SOCK_MSG_MAX;
-    m->src = src;
-    m->port = port;
-    m->len = len;
-    if (len) k_memcpy(m->data, data, len);
-    s->tail = next;
-    return 1;
+    int full = next == s->head ||
+               (s->head != s->tail && s->queued + len > SOCK_RCVBUF);
+    uint8_t *copy = full ? 0 : kmalloc(len ? len : 1);
+    if (copy) {
+        struct sock_msg *m = &s->q[s->tail];
+        m->src = src;
+        m->port = port;
+        m->len = len;
+        m->data = copy;
+        if (len) k_memcpy(copy, data, len);
+        s->queued += len;
+        s->tail = next;
+    }
+    scheduler_preempt_enable();
+    return copy != 0;
+}
+
+// The oldest datagram off the queue, copied out and freed. 0 when empty.
+static int queue_pop(struct socket *s, void *buf, uint32_t cap,
+                     uint32_t *out_src, uint16_t *out_port) {
+    scheduler_preempt_disable();
+    if (s->head == s->tail) { scheduler_preempt_enable(); return 0; }
+    struct sock_msg *m = &s->q[s->head];
+    uint32_t n = m->len < cap ? m->len : cap;
+    if (buf && n) k_memcpy(buf, m->data, n);
+    if (out_src) *out_src = m->src;
+    if (out_port) *out_port = m->port;
+    s->queued -= m->len;
+    kfree(m->data);
+    m->data = 0;
+    s->head = (s->head + 1) % SOCK_QUEUE;
+    scheduler_preempt_enable();
+    return (int)n;
+}
+
+static void queue_drain(struct socket *s) {
+    while (s->head != s->tail) queue_pop(s, 0, 0, 0, 0);
 }
 
 // A port is taken per PROTOCOL: UDP 80 and TCP 80 are different ports,
@@ -148,6 +188,7 @@ void net_sock_close(int sock) {
     // tcp_close() keeps the connection block alive long enough to send
     // it and see it acknowledged.
     if (g_socks[sock].tcp >= 0) tcp_close(g_socks[sock].tcp);
+    queue_drain(&g_socks[sock]);
     k_memset(&g_socks[sock], 0, sizeof g_socks[sock]);
     g_socks[sock].tcp = -1;
 }
@@ -308,18 +349,20 @@ static int send_icmp(struct socket *s, uint32_t dst_ip, const void *buf, uint32_
     // shows a ping starting at 4 and every seq skipping unpredictably.
     uint16_t seq = (uint16_t)(s->seq + 1);
 
-    struct icmp_echo *h = (struct icmp_echo *)g_out;
+    uint32_t total = (uint32_t)sizeof(struct icmp_echo) + len;
+    uint8_t *out = kmalloc(total);
+    if (!out) return -ENOMEM;
+    struct icmp_echo *h = (struct icmp_echo *)out;
     h->type = ICMP_ECHO_REQUEST;
     h->code = 0;
     h->checksum = 0;
     h->id = net_htons(s->id);
     h->seq = net_htons(seq);
-    if (len) k_memcpy(g_out + sizeof *h, buf, len);
+    if (len) k_memcpy(out + sizeof *h, buf, len);
+    h->checksum = net_htons(net_checksum(out, total));
 
-    uint32_t total = (uint32_t)sizeof *h + len;
-    h->checksum = net_htons(net_checksum(g_out, total));
-
-    int rc = ipv4_output(0, dst_ip, IP_PROTO_ICMP, g_out, total);
+    int rc = ipv4_output(0, dst_ip, IP_PROTO_ICMP, out, total);
+    kfree(out);
     if (rc < 0) return rc;
     s->seq = seq;
     log_flow(s, IP_PROTO_ICMP, dst_ip, 0);
@@ -356,15 +399,7 @@ int net_sock_recvfrom(int sock, void *buf, uint32_t cap,
                       uint32_t *out_src, uint16_t *out_port) {
     struct socket *s = sock_at(sock);
     if (!s) return -EBADF;
-    if (s->head == s->tail) return 0;   // nothing queued; never blocks
-
-    struct sock_msg *m = &s->q[s->head];
-    uint32_t n = m->len < cap ? m->len : cap;
-    if (buf && n) k_memcpy(buf, m->data, n);
-    if (out_src) *out_src = m->src;
-    if (out_port) *out_port = m->port;
-    s->head = (s->head + 1) % SOCK_QUEUE;
-    return (int)n;
+    return queue_pop(s, buf, cap, out_src, out_port);   // never blocks
 }
 
 uint64_t net_wait_deadline(uint64_t caller_deadline) {

@@ -18,6 +18,7 @@
 #include "netdev.h"
 #include "string.h"
 #include "errno.h"
+#include "heap.h"
 
 struct udp_header {
     uint16_t src_port;
@@ -27,8 +28,6 @@ struct udp_header {
 } __attribute__((packed));
 
 _Static_assert(sizeof(struct udp_header) == 8, "UDP header is 8 bytes on the wire");
-
-static uint8_t g_out[sizeof(struct udp_header) + NET_UDP_MAX];
 
 // The pseudo-header, summed into the running total before the datagram
 // itself. Laid out as the twelve bytes RFC 768 describes rather than
@@ -77,21 +76,28 @@ int udp_output(struct net_device *dev, uint32_t dst_ip, uint16_t dst_port,
     if (len > NET_UDP_MAX) return -EINVAL;
 
     uint32_t next_hop = 0;
-    struct net_device *out = dev ? dev : ipv4_route(dst_ip, &next_hop);
-    if (!out) return -ENODEV;
+    struct net_device *out_dev = dev ? dev : ipv4_route(dst_ip, &next_hop);
+    if (!out_dev) return -ENODEV;
 
+    // From the heap: a datagram can be 64 KiB now that ipv4_output()
+    // fragments, and a static that size would sit idle for every DNS
+    // query.
     uint32_t total = (uint32_t)sizeof(struct udp_header) + len;
-    struct udp_header *h = (struct udp_header *)g_out;
+    uint8_t *out = kmalloc(total);
+    if (!out) return -ENOMEM;
+    struct udp_header *h = (struct udp_header *)out;
     h->src_port = net_htons(src_port);
     h->dst_port = net_htons(dst_port);
     h->length = net_htons((uint16_t)total);
     h->checksum = 0;
-    if (len) k_memcpy(g_out + sizeof *h, payload, len);
+    if (len) k_memcpy(out + sizeof *h, payload, len);
 
-    uint16_t sum = udp_checksum(out->ip, dst_ip, g_out, total);
+    uint16_t sum = udp_checksum(out_dev->ip, dst_ip, out, total);
     // An all-ones sum is written as 0xFFFF, because 0 on the wire means
     // "no checksum" -- the one value the field cannot carry.
     h->checksum = net_htons(sum ? sum : 0xFFFF);
 
-    return ipv4_output(dev, dst_ip, IP_PROTO_UDP, g_out, total);
+    int rc = ipv4_output(dev, dst_ip, IP_PROTO_UDP, out, total);
+    kfree(out);
+    return rc;
 }

@@ -6,12 +6,17 @@
 
 ## Synopsis
 
-    ping [-c count] <address>
+    ping [-c count] [-s size] <address>
 
 ## Options
 
 - `-c <count>` -- how many echo requests to send; the default is four,
   and a value below 1 is raised to 1.
+- `-s <size>` -- payload bytes per request, 1 to 65507; the default is
+  56. Past 1472 the request leaves in IPv4 fragments and the reply comes
+  back in them, so `ping -s 4000 10.0.2.2` exercises fragmentation and
+  reassembly both ways. Not 0, unlike Linux: a receive returns 0 for
+  "nothing yet", so an empty reply could not be told from none.
 
 ## Description
 
@@ -21,9 +26,13 @@ network works, and that is what it is for: one command exercises the NIC
 driver, ARP, the IPv4 header and checksum, ICMP, the socket layer and
 the scheduler's idle receive path. A reply means all of them are right.
 
-Each request carries 56 bytes of payload, which is what every other
-`ping` sends, so a capture taken on the host looks like the traffic
-anyone would expect.
+Each request carries 56 bytes of payload by default, which is what every
+other `ping` sends, so a capture taken on the host looks like the traffic
+anyone would expect. Every reply is compared with its request byte for
+byte, as Linux's `ping` does -- for a fragmented one that is also the
+check that each fragment landed where it belonged:
+
+    ping: wrong data byte #1480 should be 0x76 but was 0x61
 
 The exit status is the assertion worth scripting against: **0 if
 anything replied, 1 if nothing did.**
@@ -36,10 +45,9 @@ cannot disagree about what a name means. What that costs is one DNS
 round trip before the first echo, and a different failure to report
 when the name is the problem rather than the network.
 
-**Not a flood or a latency benchmark.** There is no `-f`, no `-i`, and
-no `-s`. The reply is waited for in 10 ms polls (the socket does not
-block — see `abi/syscall_abi.h`'s `SYS_RECVFROM`), so the reported time
-is quantised to that and is not a measurement of the network.
+**Not a flood or a latency benchmark.** There is no `-f` and no `-i`.
+The reply is waited for in one blocking receive, so the time is a real
+round trip -- but a single one, with no averaging or deviation.
 
 **Not a raw socket.** The ICMP header is the kernel's; this program
 supplies a payload and nothing else. A program here cannot emit an

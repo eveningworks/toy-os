@@ -5,16 +5,16 @@
 #include "netdev.h"
 #include "net_abi.h"   // the ephemeral range, and the syscall structs
 
-// The protocol stack: Ethernet, ARP, IPv4, ICMP. It sits ABOVE the
-// net_device class and never touches hardware -- one layer per file in
-// kernel/net/, the split Linux makes between net/ and drivers/net/.
+// The protocol stack: Ethernet, ARP, IPv4, ICMP, UDP, TCP. It sits
+// ABOVE the net_device class and never touches hardware -- one layer
+// per file in kernel/net/, the split Linux makes between net/ and
+// drivers/net/.
 //
-// WHAT THIS DELIBERATELY IS NOT. No fragmentation (a fragmented
-// datagram is dropped, not reassembled -- see ipv4.c), no IP options
-// on transmit, no routing table beyond "on my subnet, or via the
-// gateway", no TCP, no UDP, no IPv6, no multicast beyond broadcast
-// ARP. Each of those is a roadmap item, and each would be a file
-// beside these rather than a change to them.
+// WHAT THIS DELIBERATELY IS NOT. No IP options on transmit, no Path
+// MTU Discovery, no routing table beyond "on my subnet, or via the
+// gateway", no IPv6, no multicast beyond broadcast ARP. Each of those
+// is a roadmap item, and each would be a file beside these rather than
+// a change to them.
 //
 // ADDRESSES ARE HOST BYTE ORDER EVERYWHERE IN THIS API, and are
 // converted at the wire edge by the ntoh/hton helpers below. The trap
@@ -84,7 +84,31 @@ void arp_flush_device(const struct net_device *dev);
 // may send to -- which is exactly the state a DHCP client starts in.
 #define IP_BROADCAST 0xFFFFFFFFu
 
+// The largest datagram the 16-bit total length can describe, header
+// included. Output fragments anything over the MTU up to this.
+#define IP_DATAGRAM_MAX 65535
+#define IP_FLAG_MF      0x2000
+#define IP_FRAG_MASK    0x1FFF   // the offset, in 8-byte blocks
+
 void ipv4_input(struct net_device *dev, const uint8_t *pkt, uint32_t len);
+
+// One whole, validated datagram to its protocol -- what ipv4_input()
+// does with an unfragmented one and reassembly with a completed one.
+void ipv4_deliver(struct net_device *dev, const uint8_t *pkt,
+                  uint32_t ihl, uint32_t total);
+
+// --- IPv4 reassembly (ipv4_frag.c) -------------------------------------
+
+// One fragment, already checked for checksum and address. `now_ns` is
+// a parameter so a KTEST can age a datagram without waiting.
+void ipv4_frag_input(struct net_device *dev, const uint8_t *pkt,
+                     uint32_t ihl, uint32_t total, uint64_t now_ns);
+// Drop what has waited too long, reporting ICMP Time Exceeded where
+// fragment zero arrived. From net_poll().
+void ipv4_frag_expire(uint64_t now_ns);
+// Datagrams in progress, and forgetting them all -- for the KTESTs.
+int ipv4_frag_pending(void);
+void ipv4_frag_flush(void);
 
 // Route, resolve and transmit one datagram. Returns 0, or a negative
 // errno -- notably -EAGAIN when the next hop's MAC is not cached yet,
@@ -108,22 +132,27 @@ uint16_t net_checksum_two(const void *a, uint32_t a_len,
 
 // --- ICMP (icmp.c) ----------------------------------------------------
 
-#define ICMP_ECHO_REPLY   0
-#define ICMP_ECHO_REQUEST 8
+#define ICMP_ECHO_REPLY       0
+#define ICMP_DEST_UNREACHABLE 3
+#define ICMP_ECHO_REQUEST     8
+#define ICMP_TIME_EXCEEDED    11
+#define ICMP_CODE_PORT        3   // with DEST_UNREACHABLE
+#define ICMP_CODE_REASSEMBLY  1   // with TIME_EXCEEDED
 
 void icmp_input(struct net_device *dev, uint32_t src_ip, const uint8_t *pkt, uint32_t len);
 
-// "Nothing is listening on that port" -- type 3 code 3. Takes the WHOLE
-// offending IPv4 datagram, because what it must quote back is that
-// header plus the first 8 bytes after it, and only a caller holding the
-// header knows how long it was.
-void icmp_send_port_unreachable(struct net_device *dev, uint32_t src_ip,
-                                const uint8_t *ip_datagram, uint32_t ip_len);
+// An error report to `dst_ip` -- port unreachable, reassembly timed
+// out. Takes the offending IPv4 datagram (or as much as is held),
+// because what it must quote back is that header plus the first 8 bytes
+// after it, and only a caller holding the header knows how long it was.
+void icmp_send_error(struct net_device *dev, uint32_t dst_ip, uint8_t type,
+                     uint8_t code, const uint8_t *ip_datagram, uint32_t ip_len);
 
 // --- UDP (udp.c) ------------------------------------------------------
 
-// One datagram's payload, the IP and UDP headers taken off the MTU.
-#define NET_UDP_MAX 1472
+// One datagram's payload: the largest IPv4 datagram, less the IP and
+// UDP headers. Anything over the MTU leaves in fragments.
+#define NET_UDP_MAX (IP_DATAGRAM_MAX - 20 - 8)
 
 // Returns 1 when a socket took the datagram and 0 when no port
 // matched. The CALLER answers the miss, because the port-unreachable
