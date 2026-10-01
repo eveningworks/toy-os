@@ -729,9 +729,12 @@ static void cmd_menu(struct dbg_out *o, int json) {
                      first, listed, start_menu_description());
         int sbx, sby, sbw, sbh, sbty, sbth, sbwide;
         if (start_menu_scrollbar(&sbx, &sby, &sbw, &sbh, &sbty, &sbth, &sbwide))
+            // cx/cy like every row: a tool walking the rows moves to each.
             dbg_out_printf(o, "{\"label\":\"\",\"kind\":\"scrollbar\",\"x\":%d,\"y\":%d,\"w\":%d,"
-                              "\"h\":%d,\"thumb_y\":%d,\"thumb_h\":%d,\"wide\":%s,\"grow\":%d}%s",
-                           sbx, sby, sbw, sbh, sbty, sbth, sbwide ? "true" : "false",
+                              "\"h\":%d,\"cx\":%d,\"cy\":%d,\"thumb_y\":%d,\"thumb_h\":%d,"
+                              "\"wide\":%s,\"grow\":%d}%s",
+                           sbx, sby, sbw, sbh, sbx + sbw / 2, sby + sbh / 2, sbty, sbth,
+                           sbwide ? "true" : "false",
                            start_menu_scrollbar_grow(),
                            total ? "," : "");
         for (int i = 0; i < total; i++) {
