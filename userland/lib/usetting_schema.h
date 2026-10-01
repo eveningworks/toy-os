@@ -217,6 +217,11 @@ void uschema_choice_label(const struct uschema *s, const char *value,
 // get their description and their widget from exactly the same code.
 struct setting_msg;
 void uschema_text_for(const char *ns, const char *name, struct setting_msg *m);
+// One presentation word from <ns>.<name>'s text file -- a key no ABI
+// field carries, read by the client that understands it (System
+// Settings' `Preview=`). 1 with `out` filled, 0 when absent.
+int uschema_text_word(const char *ns, const char *name, const char *key,
+                      char *out, uint32_t cap);
 void uschema_text(const struct uschema *s, struct setting_msg *m);
 
 // The display name for one choice -- `Choice.<value>` -- and a page's

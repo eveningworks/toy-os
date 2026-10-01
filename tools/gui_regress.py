@@ -154,6 +154,7 @@ TOOLS = [
     ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
     ("osk", "osk_test.py", "the on-screen keyboard types into the focused client"),
     ("settings", "settings_test.py", "the settings registry, in ring 3"),
+    ("galleryset", "settings_gallery_test.py", "System Settings' cursor theme gallery: cards, preview, stage, apply"),
     ("smooth", "smooth_scroll_test.py", "smooth scrolling glides, and desktop.smooth_scroll turns it off"),
     ("shadow", "shadow_test.py", "drop shadows under windows and menus, and desktop.shadows turns them off"),
     ("anim", "animation_test.py", "open/close/minimize/restore ghosts, and desktop.animations turns them off"),
@@ -263,6 +264,7 @@ COST_S = {
     "singleinst": 16,  # six launches, each waiting out a client's first frame
     "scrollbar": 15,
     "settings": 20,   # +4 scroll checks, incl. a resize and a wheel
+    "galleryset": 14, # one page, one settled frame, an Apply
     "smooth": 10,      # three glides waited out, a drag, and a fixture of 40 files
     "shadow": 8,       # two apps, two drags, four screenshots
     "anim": 12,        # eight state changes waited out, three frames each

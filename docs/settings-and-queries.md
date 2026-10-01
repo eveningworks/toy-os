@@ -354,7 +354,8 @@ Choice.high=High
 | Key | Meaning |
 |---|---|
 | `Description` | One line, shown under the label. Not a paragraph — `uui_label` does not wrap yet, so a long one is clipped. |
-| `Widget` | `auto` (default), `radio`, `dropdown`, `slider`. A **hint**: a client without that control still shows the setting some other way. |
+| `Widget` | `auto` (default), `radio`, `dropdown`, `slider`, `gallery`. A **hint**: a client without that control still shows the setting some other way. |
+| `Preview` | With `gallery`: what each card's picture shows -- System Settings knows `cursor` (the theme's shapes). Read by the client, not carried in the ABI. |
 | `Applies` | `now` (default) or `reboot`. `reboot` is the thing `SETTING_OP_SET`'s result cannot say — `system.default_target` persists perfectly and visibly does nothing until you restart. |
 | `Advanced` | `1` keeps it off the page behind a "Show advanced settings" toggle. |
 | `Order` | Lower first within a page; ties keep registration order. |

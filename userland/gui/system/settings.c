@@ -431,6 +431,13 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
         ulogf("settings: control %d %s %d %d %d %d rows %d kind %s\n", i, nm,
               x, y, w, hh, sl->choice_count, slot_kind_name(sl));
         ulogf("settings: enabled %d %s %d\n", i, nm, slot_disabled(sl) ? 0 : 1);
+        // A gallery's CARDS, each with its label: what a test clicks.
+        for (int c = 0; sl->kind == CTRL_GALLERY && c < sl->gallery.count; c++) {
+            int cx, cy, cw, ch;
+            uui_gallery_card_rect(&sl->gallery, c, &cx, &cy, &cw, &ch);
+            ulogf("settings: gallery %d %s card %d %d %d %d %d tile %d shown %s\n", i, nm, c,
+                  cx, cy, cw, ch, sl->gallery.draw_tile != 0, sl->choice[c]);
+        }
         // What is stored and what is shown, side by side; `shown` LAST,
         // since it may contain spaces.
         if (sl->kind != CTRL_SPIN && sl->kind != CTRL_TEXT && sl->kind != CTRL_KEYCAP &&

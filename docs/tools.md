@@ -3935,6 +3935,14 @@ window without going through it will find its layout polls timing out.
   first version asserted only absence and passed with the filter
   disabled outright, because `write` truncates and the check was racing
   the transient invalid file. In `gui_regress.py`.
+- **`settings_gallery_test.py`** -- System Settings' cursor theme
+  gallery (5 checks), from the app's own `settings: gallery` lines: a
+  card per theme with a painter, the Amber tile carrying amber ink while
+  Classic's carries none (the control), a click STAGING without writing,
+  the arrow keys moving it like a radio group, and Apply writing it to
+  `/etc/toyos.conf` (read with `cat`) with the compositor's own `cursor:
+  theme "amber"` line. **The card rects are CONTENT-relative**; the tool
+  adds the window's content origin. In `gui_regress.py`.
 - **`settings_test.py`** -- the ring-3 System Settings app and, through
   it, the settings registry. Run it after touching
   `kernel/lib/setting.c`, `SYS_SETTING`/`SYS_SYSINFO`, or

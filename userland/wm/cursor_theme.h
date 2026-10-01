@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "wm_internal.h" // enum wm_cursor_kind
+#include "lib/ucursor.h"
 
 // Cursor THEMES: the pointer's shapes, as data files rather than code.
 //
@@ -34,40 +35,8 @@
 #define CURSOR_SHAPE_COUNT 10
 const char *cursor_shape_name(int index); // "arrow", "resize-h", ...
 
-// The authored size cap AT 1x, for both kinds -- an image's shadow
-// margin is inside it -- and the bound on the masks' static storage.
-#define CURSOR_SHAPE_MAX 32
-// The largest size setting, and so the largest pre-rendered scale.
-#define CURSOR_SCALE_MAX 3
-// An image file's name as the descriptor gives it: "arrow@2x.qoi".
-#define CURSOR_IMAGE_NAME_MAX 32
-
-struct cursor_shape {
-    int loaded;              // 0 means "use the built-in fallback"
-    int w, h;                // AT 1x, whichever kind
-    int hot_x, hot_y;        // the pixel that IS the pointer position, at 1x
-    unsigned char outline[CURSOR_SHAPE_MAX][CURSOR_SHAPE_MAX];
-    unsigned char fill[CURSOR_SHAPE_MAX][CURSOR_SHAPE_MAX];
-
-    // An IMAGE shape: `image[k-1]` names the k-x file ("" if absent);
-    // the loader decodes ONE of them into `px` -- w*baked by h*baked
-    // straight-alpha 0xAARRGGBB, malloc'd and owned by cursor_theme.c.
-    int is_image;
-    char image[CURSOR_SCALE_MAX][CURSOR_IMAGE_NAME_MAX];
-    int baked;               // the scale `px` was rendered at, 1..3
-    uint32_t *px;
-};
-
-// Parses one shape DESCRIPTOR. An image shape only NAMES its files here
-// (the loader decodes them), so this stays pure and needs no filesystem.
-// Returns 1 on success, 0 on any malformation -- and REJECTS rather than
-// guessing, per this repo's parser convention: a half-parsed cursor is a
-// shape that draws wrong forever, where a refusal falls back to the
-// built-in and is visible in the log.
-//
-// TRAP: it overwrites `out` wholesale, `px` included -- release an image
-// shape's pixels before handing it here, or they leak.
-int cursor_shape_parse(const char *text, uint32_t len, struct cursor_shape *out);
+// The shape format itself -- struct cursor_shape, its parser, decoding
+// an image -- is lib/ucursor.h, shared with System Settings' gallery.
 
 // Loads every shape of `theme` from /usr/share/cursors/<theme>/, an
 // image shape at the rendering for the current size setting. Missing

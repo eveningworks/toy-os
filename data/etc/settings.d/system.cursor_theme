@@ -7,9 +7,11 @@ Default=default
 ChoiceDir=/usr/share/cursors
 ChoiceDirMode=subdir
 Description=Which set of pointer shapes to draw
-# A dropdown, as Windows' pointer "Scheme" is: the list is every
-# directory under /usr/share/cursors, so it grows with the themes.
-Widget=dropdown
+# A gallery of cards, each drawing the theme's own shapes -- KDE's
+# Cursors page. The list is every directory under /usr/share/cursors, so
+# it grows with the themes.
+Widget=gallery
+Preview=cursor
 Choice.default=Classic
 Choice.bold=Classic bold
 Choice.graphite=Graphite
