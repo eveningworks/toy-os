@@ -7,6 +7,14 @@ Default=default
 ChoiceDir=/usr/share/cursors
 ChoiceDirMode=subdir
 Description=Which set of pointer shapes to draw
-# Appearance first, then behaviour -- which is NOT registration
-# order, since cursor_config registers before mouse_config.
+# A dropdown, as Windows' pointer "Scheme" is: the list is every
+# directory under /usr/share/cursors, so it grows with the themes.
+Widget=dropdown
+Choice.default=Classic
+Choice.bold=Classic bold
+Choice.graphite=Graphite
+Choice.accent=Accent
+Choice.amber=Amber
+Choice.aurora=Aurora
+# Appearance first, then behaviour, within the Mouse group.
 Order=10

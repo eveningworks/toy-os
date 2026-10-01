@@ -479,6 +479,60 @@ mechanism moves to ring 3 with the WM, and it is independent of the
 hardware cursor (which is switched off everywhere -- see the entry
 above).
 
+## A cursor theme may carry its own colours: an IMAGE shape beside the masks
+
+The entry above made colour the compositor's and nothing else's. That
+holds for what it was written about -- a theme that is a SHAPE set, where
+one set should serve a light desktop and a dark one -- and it stopped
+holding the day the maintainer asked for coloured, modern pointers
+(2026-10-01, chosen from mockups: Graphite, Accent, Amber, Aurora). Those
+are themes people pick BECAUSE of how they look: a gradient fill, a rim
+in a different colour from the fill, a soft drop shadow, a busy ring
+whose arc is the accent. None of that is expressible as two coverage
+masks the compositor paints white and black, and a "fill colour" key
+would have bought flat colours only -- Amber and Aurora are gradients.
+
+So a shape is now one of TWO kinds, which is the split every real system
+has:
+
+- **X11's Xcursor** has both a mask cursor (bitmap + mask, the server
+  colours it) and the ARGB cursor that every modern theme uses, one
+  image per nominal size plus a hotspot. Breeze, Adwaita and Bibata are
+  all ARGB.
+- **Windows' `.cur`/`.ani`** carry 32-bit ARGB per size; the old
+  monochrome AND/XOR cursor survives beside it. Windows 11's "pointer
+  colour" setting is the compositor recolouring a WHITE arrow -- the
+  mask idea -- and it is offered beside the ARGB schemes, not instead.
+- **Wayland** ships pixels in a `wl_buffer` (`wl_pointer.set_cursor`);
+  with `cursor-shape-v1` the compositor loads an Xcursor theme, ARGB.
+
+toy-os copies that shape. A **mask** shape (`default`, `bold`) is
+unchanged and still coloured by the compositor. An **image** shape names
+straight-alpha QOI files beside its descriptor -- `image=` at 1x and
+`image2=`/`image3=` rendered natively for the size setting -- and its
+colours are the theme's own; the compositor only composites it. What
+did NOT change is the layering above: an app still NAMES a shape and
+never supplies pixels, and the theme still lives with the compositor.
+
+Three decisions inside that:
+
+- **QOI, not a new grid format.** A 25x25 ARGB grid in hex is ~5 KiB of
+  text per scale, past the descriptor's 4 KiB read; QOI is lossless,
+  has alpha, is already decoded in ring 3 (`lib/uimg`, the icon cache)
+  and is ENCODED by Pillow, a foreign implementation, so the decoder is
+  checked by real files -- the same reason `gen_icons.py` uses it.
+- **Pre-rendered sizes, not a scaled 1x.** Doubling a soft-edged
+  anti-aliased image with nearest-neighbour doubles its blur; Xcursor
+  and `.cur` both carry a picture per size for that reason. The loader
+  decodes ONLY the size in use, so a size change reloads the theme.
+- **One accessor for both kinds** (`cursor_shape_argb()`), read by the
+  software sprite and by the hardware plane's sprite builder, so the two
+  paths cannot disagree about what a shape looks like.
+
+The cost, measured under TCG: a theme load decodes ten QOIs and takes
+~110 ms, once per settings change. Revisit if the shape count grows a
+lot, or if a theme switch is ever on a hot path.
+
 ## A whole-file read is not re-entrant, and the VFS refuses the second one
 
 `fs_read()` returns a pointer into the backend's own staging buffer.

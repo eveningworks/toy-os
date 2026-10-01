@@ -104,6 +104,42 @@ def set_setting(dbg, key, value):
     time.sleep(0.8)
 
 
+CURSOR_DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "cursors")
+
+
+def image_themes():
+    """The themes whose arrow is an IMAGE shape, read from the data the
+    image is built from -- so a new image theme is tested with no edit."""
+    out = []
+    for t in sorted(os.listdir(CURSOR_DATA)):
+        p = os.path.join(CURSOR_DATA, t, "arrow")
+        if os.path.exists(p) and "image=" in open(p).read():
+            out.append(t)
+    return out
+
+
+def own_colours(theme):
+    """The arrow's fully opaque colours, from its own 1x QOI.
+
+    An opaque pixel composites to exactly itself, so counting screen
+    pixels that EQUAL one of these is a check on what the sprite path
+    painted -- no tolerance for a background or a blend to satisfy.
+    """
+    im = Image.open(os.path.join(CURSOR_DATA, theme, "arrow.qoi")).convert("RGBA")
+    px = im.load()
+    return {px[x, y][:3] for y in range(im.height) for x in range(im.width)
+            if px[x, y][3] == 255}
+
+
+def colour_hits(qmp, tag, colours):
+    path = os.path.join(tempfile.gettempdir(), f"cursor_{tag}.png")
+    qmp.screenshot(path)
+    im = Image.open(path).convert("RGB")
+    return sum(1 for y in range(PARK_Y - 8, PARK_Y + 80)
+               for x in range(PARK_X - 8, PARK_X + 80)
+               if im.getpixel((x, y)) in colours)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     port_guard.add_instance_args(ap)   # --instance N, or the legacy --sock/--qmp-port
@@ -189,6 +225,55 @@ def main():
     ink_back = cursor_ink(qmp, "back")
     check("returning to normal restores the original pointer exactly",
           ink_back == ink_default, f"{ink_back} vs {ink_default}")
+
+    # --- every IMAGE theme loads, and paints its OWN colours ----------
+    #
+    # Only the SOFTWARE sprite is in a screendump -- the hardware plane
+    # is not (docs/conventions/gui.md) -- so this needs a guest whose
+    # display has no cursor plane, and says so rather than passing.
+    state = dbg.state() or {}
+    hw = bool(state.get("hwcursor"))
+    check("the pointer is the software sprite (pixel checks are meaningful)",
+          not hw, "hwcursor on -- boot with a VGA that has no cursor plane" if hw else "")
+    themes = image_themes()
+    check("image themes are installed", len(themes) >= 1, ", ".join(themes))
+    # The CONTROL first: the mask default must show none of an image
+    # theme's colours, or a hit below proves nothing.
+    DebugConsole.warp_cursor(dbg, qmp, PARK_X, PARK_Y)
+    time.sleep(0.5)
+    for t in themes:
+        stray = colour_hits(qmp, f"control_{t}", own_colours(t) - {(0, 0, 0), (255, 255, 255)})
+        check(f"control: the default pointer shows none of {t}'s colours", stray == 0,
+              f"{stray} px")
+    for t in themes:
+        set_setting(dbg, "cursor_theme", t)
+        theme, n = loaded_count(dbg)
+        check(f"the {t} theme loads every shape", theme == t and n == want,
+              f'theme="{theme}" loaded={n} of {want}')
+        DebugConsole.warp_cursor(dbg, qmp, PARK_X, PARK_Y)
+        time.sleep(0.5)
+        hits = colour_hits(qmp, f"img_{t}", own_colours(t) - {(0, 0, 0), (255, 255, 255)})
+        check(f"the {t} pointer paints its own colours", hits >= 20, f"{hits} px")
+        # large reloads the 2x RENDERING; its ink grows about fourfold
+        ink1 = cursor_ink(qmp, f"img1_{t}")
+        set_setting(dbg, "cursor_size", "large")
+        DebugConsole.warp_cursor(dbg, qmp, PARK_X, PARK_Y)
+        time.sleep(0.5)
+        ink2 = cursor_ink(qmp, f"img2_{t}")
+        r = ink2 / max(1, ink1)
+        check(f"{t} at large is about four times the area",
+              3.0 <= r <= 5.0, f"normal={ink1} large={ink2} ratio={r:.2f}")
+        # ...and it is the 2x FILE, not the 1x one doubled -- the area
+        # cannot tell those apart, the loader's own report can.
+        rep = [line for line in dbg.logs() if "rendered for" in line]
+        m = re.search(r"(\d+) of (\d+) images rendered for 2x", rep[-1]) if rep else None
+        check(f"{t} at large loaded its 2x renderings",
+              bool(m) and m.group(1) == m.group(2) and int(m.group(1)) == want,
+              rep[-1].strip() if rep else "no report")
+        set_setting(dbg, "cursor_size", "normal")
+    bad = [line for line in dbg.logs() if "did not decode" in line or "-- refused" in line]
+    check("no image file failed to decode or was refused", not bad, bad[0] if bad else "")
+    set_setting(dbg, "cursor_theme", "default")
 
     # --- a theme nobody installed is REFUSED --------------------------
     #

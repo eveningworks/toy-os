@@ -142,6 +142,7 @@ TOOLS = [
     ("screen", "screen_surface_test.py", "a ring-3 compositor's screen surface"),
     ("compdeath", "compositor_death_test.py", "the compositor death path (R7)"),
     ("cursor", "cursor_theme_test.py", "cursor themes: shapes as data files, size, fallback"),
+    ("cursorshp", "cursor_shapes_test.py", "hand over a link, move, not-allowed on a refused drop"),
     ("saver", "screensaver_test.py", "the idle clock, and the savers it spawns"),
     ("shot", "screenshot_test.py", "screen capture: the command, the app, the region band"),
     ("crash", "crashtest_test.py", "fault paths: ring-3 crashes, and the gate on kernel panics"),

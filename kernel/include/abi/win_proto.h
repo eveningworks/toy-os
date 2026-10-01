@@ -881,7 +881,10 @@ struct win_event {
 #define WIN_CURSOR_WAIT     2 // busy: this window is working, wait for it
 #define WIN_CURSOR_RESIZE_H 3 // a divider that moves left/right
 #define WIN_CURSOR_RESIZE_V 4 // a divider that moves up/down
-#define WIN_CURSOR_COUNT    5
+#define WIN_CURSOR_HAND     5 // a link: cursor-shape-v1's `pointer`
+#define WIN_CURSOR_MOVE     6 // this thing moves where you drag it
+#define WIN_CURSOR_NOT_ALLOWED 7 // a drop or action is refused here
+#define WIN_CURSOR_COUNT    8
 
 // THE CLIPBOARD IS NOT HERE ANY MORE. It was a buffer in
 // kernel/proc/win_server.c reached by SYS_WIN_CLIP, holding untrusted

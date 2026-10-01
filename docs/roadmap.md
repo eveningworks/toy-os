@@ -663,6 +663,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Desktop icons are a letter in a tile~~ DONE 2026-08-23 -- real artwork, composited, on the desktop, the Start menu and the taskbar
 - [ ] Per-size icon art (freedesktop's `16x16/`, `48x48/`), if one 64px master ever looks mushy at menu-row size
 - [ ] A switchable icon theme, the way cursor themes switch -- needs a second set of artwork first
+- [ ] An animated busy pointer -- the colour themes' `wait` ring is one still frame; frames need a format key and a WM tick
 - [x] ~~Per-icon context menus (Rename/Properties)~~ DONE 2026-10-01 -- Rename in place (F2), Properties (Alt+Enter)
 - [x] ~~The Start menu's app column does not scroll~~ it does, past `SM_MAX_ROWS` -- the entry was stale (2026-10-01)
 - [x] ~~Modern menus and desktop~~ DONE 2026-10-01 -- Windows 11's card for every menu, glass selection and hover, Open > by category

@@ -7,11 +7,10 @@
 // (QEMU + virtio-gpu) motion is host-latency and the window edge has
 // nothing to cross.
 //
-// THE SPRITE IS BUILT FROM THE SAME MASKS THE SOFTWARE PATH DRAWS --
-// cursor_theme.h has said since it was written that the mask pair
-// exists so a hardware plane can consume it. Colours are composited
-// here once per shape change (outline under fill, over transparency)
-// instead of per pixel per frame.
+// THE SPRITE IS BUILT FROM THE SAME PIXELS THE SOFTWARE PATH DRAWS --
+// cursor_shape_argb() answers both, so a mask theme's rim and fill and
+// an image theme's own colours reach the plane exactly as the sprite
+// would paint them, once per shape change instead of per frame.
 //
 // WHEN THE PLANE CANNOT SHOW A SHAPE, THE SOFTWARE SPRITE DOES: no
 // plane on this driver, a themed shape scaled past the plane's 64x64
@@ -65,10 +64,20 @@ static void hwc_hide(void) {
     g_kind = -1;
 }
 
-// Outline (black) under fill (the theme's white), over transparency --
-// the same two passes draw_cursor_normal() makes per frame, folded
-// into straight ARGB once. `sc` is nearest-neighbour, matching the
-// software path's scaled draw.
+// A theme shape, either kind, at the size setting's scale.
+static void build_from_shape(const struct cursor_shape *s, int sc,
+                              int *out_w, int *out_h) {
+    int dw = s->w * sc, dh = s->h * sc;
+    for (int y = 0; y < dh; y++)
+        for (int x = 0; x < dw; x++)
+            g_sprite[y * dw + x] = cursor_shape_argb(s, x, y, UTHEME_WHITE);
+    *out_w = dw;
+    *out_h = dh;
+}
+
+// The BUILT-IN arrow's masks: outline (black) under fill (the theme's
+// white), over transparency -- the two passes draw_cursor_normal()
+// makes per frame, folded into straight ARGB once.
 static void build_sprite(const unsigned char *outline, const unsigned char *fill,
                           int w, int h, int stride, int sc, int *out_w, int *out_h) {
     uint32_t fill_rgb = UTHEME_WHITE;
@@ -106,14 +115,15 @@ int wm_hwcursor_sync(enum wm_cursor_kind kind) {
     const struct cursor_shape *s = cursor_theme_shape(kind);
     int sc = cursor_theme_scale();
 
-    const unsigned char *outline, *fill;
-    int w, h, stride, hot_x, hot_y;
+    const unsigned char *outline = 0, *fill = 0;
+    int w, h, stride = 0, hot_x, hot_y;
     if (s) {
-        outline = &s->outline[0][0];
-        fill = &s->fill[0][0];
-        w = s->w; h = s->h; stride = CURSOR_SHAPE_MAX;
+        w = s->w; h = s->h;
         hot_x = s->hot_x; hot_y = s->hot_y;
-    } else if (kind == WM_CURSOR_NORMAL) {
+    } else if (kind == WM_CURSOR_NORMAL || kind == WM_CURSOR_HAND ||
+               kind == WM_CURSOR_MOVE || kind == WM_CURSOR_NOT_ALLOWED) {
+        // No theme arrow either: the three arrow-backed shapes show the
+        // built-in arrow, as the software path does.
         wm_builtin_arrow_masks(&outline, &fill, &w, &h, &stride);
         hot_x = 0; hot_y = 0;
         sc = 1; // the built-in arrow was never scaled by the setting
@@ -129,7 +139,8 @@ int wm_hwcursor_sync(enum wm_cursor_kind kind) {
 
     if ((int)kind != g_kind || g_stale) {
         int dw, dh;
-        build_sprite(outline, fill, w, h, stride, sc, &dw, &dh);
+        if (s) build_from_shape(s, sc, &dw, &dh);
+        else build_sprite(outline, fill, w, h, stride, sc, &dw, &dh);
         uint64_t up = (uint64_t)(uintptr_t)g_sprite;
         int32_t d = (int32_t)(((uint32_t)dw << 24) | ((uint32_t)dh << 16) |
                                ((uint32_t)(hot_x * sc) << 8) | (uint32_t)(hot_y * sc));
