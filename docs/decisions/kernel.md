@@ -8675,6 +8675,30 @@ NT's STATUS_PENDING, the wake writes RAX -- which is the contract the
 `sys_do_*` helpers already had, so each op keeps its own check-and-park
 under the preemption guard rather than having one imposed.
 
+## A file a release stops shipping is removed -- by dpkg's rule, not by mirroring
+
+System Update keeps the manifest it last applied and, on the next run,
+removes what that listed and the new one does not -- **only if the file
+still has the crc it was shipped with**, and only in the managed trees.
+That is dpkg's and rpm's shape (a package's recorded file list; an
+edited conffile kept, rpm's `.rpmsave`), and the reason is what it
+cannot do: delete a file nobody shipped, or one the owner edited.
+
+The obvious alternative, MIRRORING the shipped directories (delete
+whatever in `/bin` or `/etc/settings.d` the manifest lacks), was
+declined because it deletes the owner's own additions -- a screensaver
+dropped in, a settings declaration written by hand. An explicit
+"obsolete" list per release was declined because it needs somebody to
+remember to write it, which is exactly the step that was missed when
+`desktop.week_start` was retired and lingered on the laptop.
+
+The old objection -- deleting on the strength of an unauthenticated list
+promises more than updating -- does not survive the rule: a hostile
+manifest can only remove files an earlier manifest delivered and nobody
+touched, which it could already have replaced with anything. A stale
+LIBRARY waits for the boot like a changed one (`-<path>` in
+`/var/lib/update/pending`), because a process may still map it.
+
 ## An update that touches a library or the kernel is applied BY THE KERNEL, at the next boot
 
 **The problem.** `/bin/update` (and the System Update window) replace

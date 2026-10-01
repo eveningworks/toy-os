@@ -15,6 +15,10 @@ WHAT IT PROVES, each against an INDEPENDENT reader (`sum`, `cat`,
      unchanged -- until the next boot, whose kernel applies it
      ("update: applied 1 staged file") before init starts.
   5. `update --server` persists the address and records it as recent.
+  7. STALE FILES: a manifest that stops listing a file removes it, once
+     a record of the previous manifest exists -- unless it was edited
+     here, which keeps it. A stale LIBRARY waits for the boot like a
+     changed one ("-/lib/..." in the pending list).
   6. THE KERNEL, served as a copy of this build's with one boot message
      changed so the new one can be told from the old: on the stock image,
      whose GRUB has `set timeout=0`, the update is REFUSED whole and
@@ -67,6 +71,7 @@ class Server:
     def __init__(self):
         self.manifest = update_server.Manifest(os.path.join(ROOT, "seed", "sync"))
         self.tamper = None
+        self.hide = set()      # paths the served manifest leaves out
         base = update_server.make_handler({"": self.manifest})
         outer = self
 
@@ -78,6 +83,12 @@ class Server:
                 pass
 
             def do_GET(self):
+                if outer.hide and self.path == "/manifest":
+                    text, _ = outer.manifest.build()
+                    keep = [ln for ln in text.splitlines()
+                            if len(ln.split(" ")) < 3 or ln.split(" ")[2] not in outer.hide]
+                    self._send(200, ("\n".join(keep) + "\n").encode(), "text/plain")
+                    return
                 if outer.tamper and self.path == "/files" + outer.tamper:
                     _, files = outer.manifest.build()
                     with open(files[outer.tamper], "rb") as fh:
@@ -245,6 +256,45 @@ def main():
              got is not None and got[0] == srv.crc("/lib/libhello.so"), f"sum {got}")
         c.ok("...and the pending list is gone",
              "no such file" in sh.run("cat /var/lib/update/pending"))
+
+        # 7. stale files: removed when unedited, kept when edited, and a
+        # library's removal waits for the boot. The record exists by now:
+        # every successful run above wrote one.
+        c.ok("a successful run records the manifest it applied",
+             "/bin/hello" in sh.run("cat /var/lib/update/installed"))
+        edited = "/usr/share/doc/guide/kernel.md"
+        sh.run(f"truncate -s 64 {edited}")
+        srv.hide = {"/bin/hello", edited}
+        out = sh.run(f"update --from {url}", timeout=600)
+        c.ok("a file the manifest stopped listing is removed",
+             "/bin/hello: removed" in out and "hello" not in sh.run("ls /bin"),
+             out.strip()[-240:])
+        c.ok("...but one edited here is kept, and said so",
+             "changed on this machine -- kept" in out and summed(sh, edited) is not None,
+             out.strip()[-240:])
+        srv.hide = {"/lib/libhello.so"}
+        out = sh.run(f"update --from {url}", timeout=600)
+        c.ok("a stale library is staged for the boot, not removed under the system",
+             "staged" in out and summed(sh, "/lib/libhello.so") is not None, out.strip()[-200:])
+        c.ok("...as a `-` line in the pending list",
+             "-/lib/libhello.so" in sh.run("cat /var/lib/update/pending"))
+        sh.run("sync")
+        kill(pidfile)
+        pidfile = None
+        sh, pidfile = launch(disk, tmp, "upd3", "e1000")
+        c.ok("the next boot removes it", "removed 1" in sh.run("dmesg")
+             and summed(sh, "/lib/libhello.so") is None)
+        # Serving it again brings it back -- a library, so after a boot.
+        srv.hide = set()
+        out = sh.run(f"update --from {url}", timeout=600)
+        if "restart" in out:
+            sh.run("sync")
+            kill(pidfile)
+            pidfile = None
+            sh, pidfile = launch(disk, tmp, "upd5", "e1000")
+        c.ok("serving them again puts them back",
+             all(summed(sh, f) is not None for f in ("/bin/hello", "/lib/libhello.so")),
+             out.strip()[-200:])
 
         # 5. the address
         sh.run(f"update --server {url}")

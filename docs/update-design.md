@@ -122,11 +122,15 @@ than a substitute for them.
 
 ## What this is NOT
 
-**Not a package manager.** There are no packages, no dependencies and no
-removal. The unit is a file and the manifest is the whole world; a file
-absent from the manifest is left alone rather than deleted, because
-deleting on the strength of an unauthenticated list is a much larger
-promise than updating.
+**Not a package manager.** There are no packages and no dependencies.
+The unit is a file and the manifest is the whole world. A file a release
+STOPS shipping is removed (2026-10-01; this section used to rule removal
+out), but only by dpkg's rule: it must be listed in the manifest last
+applied (`/var/lib/update/installed`) and still carry the crc it was
+shipped with. That bounds what a hostile manifest can delete to files an
+earlier manifest delivered and nobody has touched since -- files it
+could already have replaced with anything -- so removal promises no more
+than updating does. A file never listed, or edited here, stays.
 
 **Not an atomic update.** A machine interrupted halfway has some new
 files and some old ones. That is acceptable for a development machine

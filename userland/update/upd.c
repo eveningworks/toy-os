@@ -252,6 +252,75 @@ static int parse_manifest(struct upd_plan *p, char *text, const struct upd_hooks
     return p->count ? 0 : -1;
 }
 
+// ---- the record of what was applied ----------------------------------------
+
+static char *read_whole(const char *path) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
+    struct growbuf b = { 0 };
+    char chunk[4096];
+    size_t n;
+    while ((n = fread(chunk, 1, sizeof chunk, fp)) > 0) {
+        if (grow_sink(&b, chunk, n) != 0) { free(b.p); fclose(fp); return 0; }
+    }
+    fclose(fp);
+    return b.p;
+}
+
+static int listed(const struct upd_plan *p, int n, const char *path) {
+    for (int i = 0; i < n; i++) if (!strcmp(p->files[i].path, path)) return 1;
+    return 0;
+}
+
+// What the last applied manifest listed and this one does not, appended
+// as UPD_REMOVE rows. Only the managed trees: a new-only file (/etc,
+// /home) is the machine's own once installed, and the kernel has its
+// own two-name dance. NO RECORD, NO REMOVALS -- the first update after
+// this existed only writes one.
+static void find_stale(struct upd_plan *p, const struct upd_hooks *h) {
+    char *old = read_whole(UPD_INSTALLED_PATH);
+    if (!old) { say(h, "no record of an earlier update, so nothing is removed this time"); return; }
+    int lines = 0;
+    for (char *c = old; *c; c++) if (*c == '\n') lines++;
+    struct upd_file *grown = realloc(p->files, ((size_t)p->count + (size_t)lines + 1) * sizeof *grown);
+    if (!grown) { free(old); return; }
+    p->files = grown;
+    int n = p->count;
+    char *save = 0;
+    for (char *l = strtok_r(old, "\n", &save); l; l = strtok_r(0, "\n", &save)) {
+        if (l[0] == '#' || !l[0]) continue;
+        struct upd_file f;
+        if (parse_line(l, &f) != 0) continue;
+        if (f.flags & (UPD_F_KERNEL | UPD_F_KERNEL_GZ | UPD_F_NEW_ONLY)) continue;
+        if (listed(p, n, f.path)) continue;
+        uint64_t size = 0;
+        if (exists(f.path, &size) != 1) continue;          // gone already, or a directory
+        uint32_t crc;
+        if (size != f.size || file_crc(f.path, &crc) != 0 || crc != f.crc) {
+            say(h, "%s: no longer shipped, but changed on this machine -- kept", f.path);
+            p->kept_edited++;
+            continue;
+        }
+        f.change = UPD_REMOVE;
+        p->files[p->count++] = f;
+        p->removals++;
+    }
+    free(old);
+    if (p->removals)
+        say(h, "%d stale file%s to remove", p->removals, p->removals == 1 ? "" : "s");
+}
+
+static void write_record(struct upd_plan *p, const struct upd_hooks *h) {
+    if (!p->manifest) return;
+    mkdir_parents(UPD_INSTALLED_PATH);
+    int fd = open(UPD_INSTALLED_PATH, O_WRONLY | O_CREAT | O_TRUNC);
+    size_t len = strlen(p->manifest);
+    if (fd < 0 || write(fd, p->manifest, len) != (long)len)
+        say(h, "could not record the manifest in %s -- the next update removes nothing",
+            UPD_INSTALLED_PATH);
+    if (fd >= 0) close(fd);
+}
+
 // ---- deciding -------------------------------------------------------------
 
 static void compare_kernel(struct upd_plan *p, const struct upd_hooks *h) {
@@ -326,6 +395,7 @@ int upd_check(const char *base, struct upd_plan *p, const struct upd_hooks *h) {
         set_error(p, h, msg);
         return -1;
     }
+    p->manifest = strdup(b.p);   // parse_manifest() cuts the text up
     int rc = parse_manifest(p, b.p, h);
     free(b.p);
     if (rc != 0) { set_error(p, h, "the manifest lists no files"); return -1; }
@@ -358,6 +428,11 @@ int upd_check(const char *base, struct upd_plan *p, const struct upd_hooks *h) {
         if ((i & 31) == 31) progress(h, p, -1);
     }
     say(h, "compared %d files: %d to fetch", p->count, p->changed);
+    find_stale(p, h);
+    // ALREADY AT THIS MANIFEST: it becomes the record, which is how a
+    // machine with none (or an older one) gets its baseline.
+    if (!p->changed && !p->removals && !p->staged_for_boot && !p->kernel_blocked)
+        write_record(p, h);
     progress(h, p, -1);
     return 0;
 }
@@ -495,8 +570,10 @@ static int write_pending(struct upd_plan *p, const struct upd_hooks *h) {
     if (fd < 0) { say(h, "cannot write %s", UPDATE_PENDING_PATH); return -1; }
     for (int i = 0; i < p->count; i++) {
         struct upd_file *f = &p->files[i];
-        if (!wanted(f) || is_kernel(f)) continue;
-        if (write(fd, f->path, strlen(f->path)) < 0 || write(fd, "\n", 1) != 1) {
+        if ((!wanted(f) && f->change != UPD_REMOVE) || is_kernel(f)) continue;
+        char minus = UPDATE_REMOVE_PREFIX;
+        if ((f->change == UPD_REMOVE && write(fd, &minus, 1) != 1) ||
+            write(fd, f->path, strlen(f->path)) < 0 || write(fd, "\n", 1) != 1) {
             close(fd);
             unlink(UPDATE_PENDING_PATH);
             say(h, "cannot write %s", UPDATE_PENDING_PATH);
@@ -529,6 +606,8 @@ int upd_apply(struct upd_plan *p, const struct upd_hooks *h) {
     int kernel = -1, libs = 0;
     for (int i = 0; i < p->count; i++) {
         struct upd_file *f = &p->files[i];
+        // A stale LIBRARY waits for the boot too: something may map it.
+        if (f->change == UPD_REMOVE && !strncmp(f->path, "/lib/", 5)) libs++;
         if (!wanted(f)) continue;
         f->status = UPD_QUEUED;
         f->got = 0;
@@ -563,7 +642,8 @@ int upd_apply(struct upd_plan *p, const struct upd_hooks *h) {
             return -1;
         }
         for (int i = 0; i < p->count; i++)
-            if (wanted(&p->files[i]) && !is_kernel(&p->files[i])) p->files[i].status = UPD_AT_BOOT;
+            if ((wanted(&p->files[i]) || p->files[i].change == UPD_REMOVE) &&
+                !is_kernel(&p->files[i])) p->files[i].status = UPD_AT_BOOT;
         p->at_boot = 1;
         say(h, "staged %d file%s for the next boot (%s)", p->changed - (kernel >= 0),
             p->changed - (kernel >= 0) == 1 ? "" : "s",
@@ -580,6 +660,19 @@ int upd_apply(struct upd_plan *p, const struct upd_hooks *h) {
                 f->status = UPD_FAILED;
                 p->failed = 1;
                 say(h, "%s: could not rename into place (%s kept)", f->path, tmp);
+            }
+            progress(h, p, i);
+        }
+        for (int i = 0; i < p->count; i++) {
+            struct upd_file *f = &p->files[i];
+            if (f->change != UPD_REMOVE) continue;
+            if (unlink(f->path) == 0) {
+                f->status = UPD_REMOVED;
+                say(h, "%s: removed -- no longer shipped", f->path);
+            } else {
+                f->status = UPD_FAILED;
+                p->failed = 1;
+                say(h, "%s: could not remove", f->path);
             }
             progress(h, p, i);
         }
@@ -602,11 +695,13 @@ int upd_apply(struct upd_plan *p, const struct upd_hooks *h) {
         }
         progress(h, p, kernel);
     }
+    if (!p->failed) write_record(p, h);
     sys_sync();
     if (kernel >= 0) boot_mount(0);
 
-    say(h, "done: %d file%s %s%s", p->changed, p->changed == 1 ? "" : "s",
-        p->at_boot ? "staged, restart to finish" : "updated",
+    say(h, "done: %d file%s %s, %d stale %s%s", p->changed, p->changed == 1 ? "" : "s",
+        p->at_boot ? "staged, restart to finish" : "updated", p->removals,
+        p->at_boot ? "to remove at the restart" : "removed",
         p->failed ? ", with FAILURES (see above)" : "");
     progress(h, p, -1);
     if (g_log_fd >= 0) { close(g_log_fd); g_log_fd = -1; }
@@ -615,6 +710,8 @@ int upd_apply(struct upd_plan *p, const struct upd_hooks *h) {
 
 void upd_plan_free(struct upd_plan *p) {
     free(p->files);
+    free(p->manifest);
+    p->manifest = 0;
     p->files = 0;
     p->count = 0;
 }

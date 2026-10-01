@@ -14,6 +14,12 @@
 //
 // A line names the TARGET only: the source is always the target plus
 // the suffix, so the list cannot move an arbitrary file anywhere.
+//
+// A line `-<target>` REMOVES that file: one an update no longer ships,
+// whose removal waits for the boot with the rest of the set (a library
+// still mapped must not vanish under its process). A directory is never
+// removed. A kernel that predates this skips the line as malformed.
+#define UPDATE_REMOVE_PREFIX '-'
 #define UPDATE_PENDING_PATH  "/var/lib/update/pending"
 #define UPDATE_STAGED_SUFFIX ".upd"
 

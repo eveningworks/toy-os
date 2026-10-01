@@ -37,6 +37,21 @@ static int apply_line(const char *target, char *staged, int *applied, int *faile
     return 1;
 }
 
+// A `-<target>` line: the file an update stopped shipping. Gone already
+// is done, as for a rename; a directory is refused, not emptied.
+static int remove_line(const char *target, int *removed, int *failed) {
+    if (target[0] != '/') return 0;
+    if (!fs_exists(target)) return 1;
+    if (fs_is_dir(target)) return 0;
+    if (fs_delete(target)) {
+        (*removed)++;
+    } else {
+        (*failed)++;
+        klog_printf(KLOG_ERR "update: could not remove %s\n", target);
+    }
+    return 1;
+}
+
 void fs_apply_pending_replacements(void) {
     uint64_t size = fs_size(UPDATE_PENDING_PATH);
     if (!size) return;
@@ -52,7 +67,7 @@ void fs_apply_pending_replacements(void) {
         kfree(buf); kpath_put(staged); return;
     }
 
-    int applied = 0, failed = 0, bad = 0;
+    int applied = 0, removed = 0, failed = 0, bad = 0;
     char *line = buf;
     while (*line) {
         char *end = line;
@@ -60,7 +75,9 @@ void fs_apply_pending_replacements(void) {
         char next = *end;
         *end = '\0';
         if (end > line && end[-1] == '\r') end[-1] = '\0';
-        if (line[0] && !apply_line(line, staged, &applied, &failed)) bad++;
+        int ok = line[0] == UPDATE_REMOVE_PREFIX ? remove_line(line + 1, &removed, &failed)
+               : !line[0] || apply_line(line, staged, &applied, &failed);
+        if (!ok) bad++;
         if (!next) break;
         line = end + 1;
     }
@@ -75,7 +92,8 @@ void fs_apply_pending_replacements(void) {
         klog_printf(KLOG_ERR "update: applied %d staged files at boot, %d FAILED (%s kept)\n",
                     applied, failed, UPDATE_PENDING_PATH);
     else
-        klog_printf("update: applied %d staged file%s at boot\n", applied, applied == 1 ? "" : "s");
+        klog_printf("update: applied %d staged file%s at boot, removed %d\n", applied,
+                    applied == 1 ? "" : "s", removed);
     if (bad) klog_printf(KLOG_WARN "update: ignored %d malformed line%s in %s\n", bad,
                          bad == 1 ? "" : "s", UPDATE_PENDING_PATH);
 }

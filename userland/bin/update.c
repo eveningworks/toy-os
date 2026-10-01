@@ -57,10 +57,15 @@ static void list_changes(const struct upd_plan *p, int verbose) {
     int shown = 0;
     for (int i = 0; i < p->count; i++) {
         const struct upd_file *f = &p->files[i];
-        if (f->change != UPD_CHANGED && f->change != UPD_NEW) continue;
+        if (f->change != UPD_CHANGED && f->change != UPD_NEW && f->change != UPD_REMOVE) continue;
         if (!verbose && shown == 10) {
-            printf("  ... %d more (update --check -v)\n", p->changed - shown);
+            printf("  ... %d more (update --check -v)\n", p->changed + p->removals - shown);
             return;
+        }
+        if (f->change == UPD_REMOVE) {
+            printf("  %-34s %7s  remove (no longer shipped)\n", f->path, "");
+            shown++;
+            continue;
         }
         char sz[16];
         human_size(sz, sizeof sz, f->size);
@@ -123,14 +128,16 @@ int main(int argc, char **argv) {
     if (p.kernel_blocked)
         printf("update: nothing can be installed until GRUB shows a menu "
                "(docs/commands/update.md)\n");
-    if (!p.changed) {
+    if (!p.changed && !p.removals) {
         printf("update: up to date\n");
         upd_plan_free(&p);
         return 0;
     }
     char total[16];
     human_size(total, sizeof total, p.bytes);
-    printf("%d file%s to fetch, %s:\n", p.changed, p.changed == 1 ? "" : "s", total);
+    printf("%d file%s to fetch, %s", p.changed, p.changed == 1 ? "" : "s", total);
+    if (p.removals) printf("; %d stale to remove", p.removals);
+    printf(":\n");
     list_changes(&p, verbose || !check_only);
     if (check_only || p.staged_for_boot) { upd_plan_free(&p); return 0; }
 

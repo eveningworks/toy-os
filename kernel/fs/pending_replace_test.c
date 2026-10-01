@@ -45,3 +45,28 @@ KTEST("update", "a pending list is applied, skips what it must, and is removed")
     fs_delete("/.ktest_pr_b");
     if (made_dir) fs_delete("/var/lib/update");
 }
+
+KTEST("update", "a `-` line removes a file, and never a directory") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    if (fs_exists(UPDATE_PENDING_PATH)) KTEST_SKIP("a real update is pending");
+    int made_dir = !fs_exists("/var/lib/update");
+    fs_mkdir("/var");
+    fs_mkdir("/var/lib");
+    fs_mkdir("/var/lib/update");
+    fs_delete("/.ktest_pr_gone");
+    fs_delete("/.ktest_pr_dir");
+    KTEST_ASSERT(fs_write("/.ktest_pr_gone", "stale", 0) == 1);
+    KTEST_ASSERT(fs_mkdir("/.ktest_pr_dir"));
+    // The file goes, the directory is refused, an absent one is done.
+    KTEST_ASSERT(fs_write(UPDATE_PENDING_PATH,
+                          "-/.ktest_pr_gone\n-/.ktest_pr_dir\n-/.ktest_pr_never\n", 0) == 1);
+
+    fs_apply_pending_replacements();
+
+    KTEST_ASSERT_EQ(fs_exists("/.ktest_pr_gone"), 0);
+    KTEST_ASSERT(fs_is_dir("/.ktest_pr_dir"));
+    KTEST_ASSERT_EQ(fs_exists(UPDATE_PENDING_PATH), 0);
+
+    fs_delete("/.ktest_pr_dir");
+    if (made_dir) fs_delete("/var/lib/update");
+}

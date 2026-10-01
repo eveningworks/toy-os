@@ -52,8 +52,18 @@ to the host.
 **Size and crc32, never dates.** A machine whose clock is wrong would
 otherwise refuse every update or take every one. `/etc` and `/home` are
 this machine's own: a file there is installed only if it is **absent**,
-as `remote.py flash` does. A file the manifest does not list is left
-alone -- nothing is ever deleted.
+as `remote.py flash` does.
+
+**A file a release stops shipping is removed** -- dpkg's rule. Each
+successful run keeps the manifest it applied in
+`/var/lib/update/installed`; the next run removes what that listed and
+the new one does not, from the managed trees only (`/bin`, `/lib`,
+`/usr`, `/tests`, `/install`, `/etc/settings.d`), and only while the
+file still has the crc it was shipped with. A file edited here is kept
+and the log says so; a file no manifest listed is never touched. With
+no record yet (the first run after this existed) nothing is removed and
+the record is written. A stale library waits for the restart like a
+changed one.
 
 ## When it waits for a restart
 

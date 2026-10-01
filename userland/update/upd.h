@@ -26,6 +26,11 @@
 #define UPD_SETTING   "update.server"
 #define UPD_RECENT_PATH "/var/lib/update/servers"
 #define UPD_RECENT_MAX 5
+// The manifest this machine last applied -- dpkg's file list. What it
+// listed and the next manifest does not is STALE and removed, provided
+// it still has the crc it was shipped with: an edited file is kept and
+// said so, and a file no manifest ever listed is never touched.
+#define UPD_INSTALLED_PATH "/var/lib/update/installed"
 
 // What the manifest says to do with a file. KERNEL lines come in two
 // forms, the ELF and the gzipped image, and the machine's own GRUB
@@ -34,15 +39,18 @@
 #define UPD_F_KERNEL    0x2   // the ELF kernel image
 #define UPD_F_KERNEL_GZ 0x4   // the same kernel, gzipped, for a GRUB with gzio
 
-enum upd_change { UPD_SAME = 0, UPD_CHANGED, UPD_NEW, UPD_IGNORED };
+// UPD_REMOVE: shipped last time, no longer -- a row upd_check() appends
+// after the manifest's own (see UPD_INSTALLED_PATH).
+enum upd_change { UPD_SAME = 0, UPD_CHANGED, UPD_NEW, UPD_IGNORED, UPD_REMOVE };
 
 enum upd_status {
     UPD_QUEUED = 0,
     UPD_FETCHING,
     UPD_STAGED,        // downloaded and verified, as <path>.upd
     UPD_INSTALLED,     // renamed into place
-    UPD_AT_BOOT,       // will be renamed into place by the next boot
+    UPD_AT_BOOT,       // will be renamed into place (or removed) by the next boot
     UPD_FAILED,
+    UPD_REMOVED,       // a stale file, deleted
 };
 
 struct upd_file {
@@ -66,6 +74,9 @@ struct upd_plan {
     // Filled by upd_check().
     int      changed;             // files to fetch
     uint64_t bytes;               // their total size
+    int      removals;            // stale files to remove (UPD_REMOVE rows)
+    int      kept_edited;         // stale, but edited here, so kept
+    char    *manifest;            // the raw text, recorded once applied
     int      staged_for_boot;     // an earlier run already staged an update (restart pending)
     int      kernel_blocked;      // the kernel changed and may not be installed: nothing will be
 

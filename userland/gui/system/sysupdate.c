@@ -222,8 +222,10 @@ static const char *status_word(const struct upd_file *f) {
     case UPD_STAGED:    return "Downloaded";
     case UPD_INSTALLED: return "Installed";
     case UPD_AT_BOOT:   return "At restart";
+    case UPD_REMOVED:   return "Removed";
     case UPD_FAILED:    return g_view == V_CANCELLED ? "Stopped" : "Failed";
-    default:            return f->change == UPD_NEW ? "New" : "Queued";
+    default:            return f->change == UPD_NEW ? "New"
+                             : f->change == UPD_REMOVE ? "To remove" : "Queued";
     }
 }
 
@@ -233,7 +235,7 @@ static void cell(void *ctx, int row, int col, char *out, int cap) {
     if (row < 0 || row >= g_row_count) return;
     const struct upd_file *f = &g_plan.files[g_rows[row]];
     if (col == 0) snprintf(out, (size_t)cap, "%s", f->path);
-    else if (col == 1) human_size(out, (unsigned long)cap, f->size);
+    else if (col == 1 && f->change != UPD_REMOVE) human_size(out, (unsigned long)cap, f->size);
     else snprintf(out, (size_t)cap, "%s", status_word(f));
 }
 
@@ -248,7 +250,7 @@ static void collect_rows(void) {
     g_row_count = 0;
     for (int i = 0; i < g_plan.count && g_row_count < UUI_TABLE_MAX_ROWS; i++) {
         int c = g_plan.files[i].change;
-        if (c == UPD_CHANGED || c == UPD_NEW) g_rows[g_row_count++] = i;
+        if (c == UPD_CHANGED || c == UPD_NEW || c == UPD_REMOVE) g_rows[g_row_count++] = i;
     }
     uui_table_set_rows(&g_table, g_row_count);
 }
@@ -268,7 +270,10 @@ static void refresh(struct uapp *a) {
     human_size(done, sizeof done, g_plan.done_bytes);
     const char *title = "";
     g_detail_text[0] = g_amount_text[0] = g_rate_text[0] = '\0';
-    char built[96] = "";
+    char built[96] = "", removals[48] = "";
+    if (g_plan.removals)
+        snprintf(removals, sizeof removals, ", %d stale file%s %s", g_plan.removals,
+                 g_plan.removals == 1 ? "" : "s", g_view == V_INSTALLED ? "removed" : "to remove");
     if (g_plan.built[0])
         snprintf(built, sizeof built, ", build of %s%s%s%s", g_plan.built,
                  g_plan.version[0] ? " (" : "", g_plan.version, g_plan.version[0] ? ")" : "");
@@ -281,15 +286,15 @@ static void refresh(struct uapp *a) {
         break;
     case V_AVAILABLE:
         title = "Updates available";
-        snprintf(g_detail_text, sizeof g_detail_text, "%d of %d files changed, %s%s",
-                 g_plan.changed, g_plan.count, total, built);
+        snprintf(g_detail_text, sizeof g_detail_text, "%d of %d files changed, %s%s%s",
+                 g_plan.changed, g_plan.count - g_plan.removals, total, removals, built);
         uui_progress_set(&g_bar, 0);
         snprintf(g_amount_text, sizeof g_amount_text, "%s to download", total);
         break;
     case V_UPTODATE:
         title = "Up to date";
         snprintf(g_detail_text, sizeof g_detail_text, "All %d files match the server%s",
-                 g_plan.count, built);
+                 g_plan.count - g_plan.removals, built);
         uui_progress_set(&g_bar, 1000);
         break;
     case V_INSTALLING:
@@ -314,8 +319,8 @@ static void refresh(struct uapp *a) {
         break;
     case V_INSTALLED:
         title = "Updates installed";
-        snprintf(g_detail_text, sizeof g_detail_text, "%d file%s updated%s", g_plan.changed,
-                 g_plan.changed == 1 ? "" : "s", built);
+        snprintf(g_detail_text, sizeof g_detail_text, "%d file%s updated%s%s", g_plan.changed,
+                 g_plan.changed == 1 ? "" : "s", removals, built);
         uui_progress_set(&g_bar, 1000);
         snprintf(g_amount_text, sizeof g_amount_text, "%s", total);
         break;
@@ -389,15 +394,15 @@ static void job_done(struct uapp *a, int job) {
         if (g_job_rc != 0) g_view = g_cancel ? V_CANCELLED : V_FAILED;
         else if (g_plan.staged_for_boot) g_view = V_RESTART;
         else if (g_plan.kernel_blocked) g_view = V_BLOCKED;
-        else g_view = g_plan.changed ? V_AVAILABLE : V_UPTODATE;
+        else g_view = (g_plan.changed || g_plan.removals) ? V_AVAILABLE : V_UPTODATE;
     } else {
         if (g_job_rc != 0) g_view = g_cancel ? V_CANCELLED : V_FAILED;
         else if (g_plan.at_boot || g_plan.kernel_installed) g_view = V_RESTART;
         else g_view = V_INSTALLED;
     }
     // What a test reads: the view, and the counts it was drawn from.
-    ulogf("sysupdate: view %d changed %d staged %d installed %s\n", (int)g_view, g_plan.changed,
-          g_plan.at_boot, g_job_rc == 0 ? "ok" : "failed");
+    ulogf("sysupdate: view %d changed %d removals %d staged %d installed %s\n", (int)g_view,
+          g_plan.changed, g_plan.removals, g_plan.at_boot, g_job_rc == 0 ? "ok" : "failed");
     refresh(a);
 }
 

@@ -628,10 +628,15 @@ def check_features(dbg, qmp, tmp, res, content):
     # THE SLIDESHOW is full screen: the picture's box is the whole window,
     # and Esc brings the chrome back.
     before = dbg.window(TITLE_VIEWER)
-    key(0xB1)   # F11
-    lay_s, _ = wait_layout(dbg, content, lambda l: l.has("image")
-                           and l.rect("image")[0] == 0 and l.rect("image")[1] == 0, timeout=20)
     st = dbg.json("gui state --json")
+    screen = (st["screen"]["w"], st["screen"]["h"])
+    key(0xB1)   # F11
+    # The wait asks for the SIZE too: the chrome goes (the picture at
+    # 0,0) a frame before the window has grown to the screen, and a
+    # wait that stopped there read the window-sized frame as a failure.
+    lay_s, _ = wait_layout(dbg, content, lambda l: l.has("image")
+                           and l.rect("image")[:2] == (0, 0)
+                           and l.rect("image")[2:] == screen, timeout=20)
     full = lay_s.has("image") and lay_s.rect("image")[2:] == (st["screen"]["w"], st["screen"]["h"])
     res.check("the slideshow fills the screen", full,
               f"image box {lay_s.rect('image') if lay_s.has('image') else None}")

@@ -5329,6 +5329,12 @@ window without going through it will find its layout polls timing out.
   CORRUPTS in transit is refused with the old file and no `.upd` left;
   a damaged LIBRARY is staged, not replaced, and the SECOND guest --
   the same disk rebooted -- applies it before init; `--server` persists.
+  **Stale files**: the server's manifest can HIDE paths, so a file a
+  release stopped shipping is removed (`/bin/hello`), one edited on the
+  guest is kept and said so, and a stale library is staged as a `-` line
+  and removed by the next boot -- then served again to put the guest
+  back. Removing the "edited here" crc guard by `mutate.py` takes the
+  run to 31 of 32.
   `--positive-control` serves the "corrupted" file intact while still
   expecting the refusal: two checks must go red (measured: 15 of 17).
   **The kernel path** (checks 18-25, skipped without mtools): a copy of
