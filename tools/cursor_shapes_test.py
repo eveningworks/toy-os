@@ -181,10 +181,24 @@ def main():
             src = (px, py)
             break
     check("a desktop icon is clear of every window", src is not None, str(src))
+    # The CONTROL point must be bare desktop as well: a fresh image opens
+    # Help at the cascade's first slot, right over src + (30, 10), and
+    # the refusal there was the correct answer to the wrong question.
+    def bare(px, py):
+        return all(not (ww["x"] - margin <= px < ww["x"] + ww["w"] + margin and
+                        ww["y"] - margin <= py < ww["y"] + ww["h"] + margin)
+                   for ww in dbg.windows())
+    desk = None
     if src:
+        for ddx, ddy in ((30, 10), (0, 40), (30, 40), (0, 80), (30, 120)):
+            if bare(src[0] + ddx, src[1] + ddy) and abs(ddx) + abs(ddy) > 9:
+                desk = (src[0] + ddx, src[1] + ddy)
+                break
+    check("a bare-desktop control point past the drag slop", desk is not None, str(desk))
+    if src and desk:
         press_at(dbg, qmp, *src)
         time.sleep(0.2)
-        drag_to(dbg, qmp, src[0] + 30, src[1] + 10)   # past the slop: a drag now
+        drag_to(dbg, qmp, *desk)   # past the slop: a drag now
         s_desk = dbg.cursor_shape()
         drag_to(dbg, qmp, w["x"] + w["w"] // 2, w["y"] + 8)
         s_title = dbg.cursor_shape()
