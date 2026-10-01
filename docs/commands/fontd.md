@@ -20,19 +20,28 @@ only to see what it says.
 
 It takes no options.
 
-It reads two settings and republishes whenever either moves:
+It reads three settings and republishes whenever one moves:
 
 | setting | meaning |
 |---|---|
-| `system.font_face` | the face's filename without the extension, or `builtin` |
-| `system.font_size` | the em size in pixels |
+| `system.font_face` | the UI face (menus, labels, titles): the filename without the extension, or `builtin` |
+| `system.font_mono` | the monospace face (terminals, code), the same way |
+| `system.font_size` | the em size in pixels, shared by both |
 
 Ask it what it is doing with `diag font` at the serial console:
 
     # diag font
-    face dejavu-sans-mono at 14px, generation 2
+    size 14px, generation 4
+    ui: liberation-sans
+      regular  14x15 cell, line 13, 101 glyphs, proportional
+      bold     14x15 cell, line 13, 101 glyphs, proportional
+    mono: dejavu-sans-mono
       regular  8x16 cell, line 14, 101 glyphs, monospace
-      bold     9x16 cell, line 14, 101 glyphs, monospace, synthesized
+      bold     8x16 cell, line 14, 101 glyphs, monospace
+
+The generation is bumped once every weight of a republish is in place
+(and when a family goes `builtin`); a client re-maps when it sees it
+move, so it is what anything waiting on a font change should wait on.
 
 ## Why it is a program and not part of the kernel
 

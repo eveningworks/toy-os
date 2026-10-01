@@ -2219,11 +2219,15 @@ window without going through it will find its layout polls timing out.
   so init cannot restart it mid-check, without restoring it (there is
   nothing in the guest to copy it back from; `make iso` re-seeds it).
   On demand, not in `gui_regress.py`.
-- **`font_test.py`** -- runtime fonts end to end (~20 checks): a `.ttf`
-  under `/usr/share/fonts` rasterizes, switching faces reaches the
-  screen with NO restart (the compositor is told through `WIN_EV_FONT`),
-  a size nobody baked works, and the baked font still draws when no face
-  is selected. Its second half opens **Font Demo** (now a font
+- **`font_test.py`** -- runtime fonts end to end (~33 checks): `/bin/fontd`
+  rasterizes and publishes a `.ttf` from `/usr/share/fonts`, switching
+  faces reaches the screen with NO restart, a size change re-rasterizes,
+  and the baked font still draws when the face is `builtin`. **EVERY WAIT
+  IS ON fontd's GENERATION** (`diag font`), and then on the compositor's
+  `font_gen` in `gui state --json` reaching it -- the `wm: font changed`
+  line fires on `WIN_EV_FONT`, before fontd republishes, and a capture
+  timed by it measured the previous face. It restores the settings it
+  changed and closes Font Demo, so consecutive runs agree. Its second half opens **Font Demo** (now a font
   previewer) and asserts on the numbers that app measures for itself:
   that bold is distinct from regular and that kerning TIGHTENS a sample
   rather than loosening it (both on the SESSION face) -- and the

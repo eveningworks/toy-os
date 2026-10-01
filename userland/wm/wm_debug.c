@@ -1143,6 +1143,10 @@ static void cmd_state(struct dbg_out *o, int json) {
         // window list -- which is capped at WIN_DEBUG_REPLY_MAX and
         // truncates past about twenty-five windows (docs/bugs.md).
         // -1 when there are no windows at all.
+        // The fontd generation this compositor has mapped and repainted
+        // with -- what a test waits on after a font change, since fontd
+        // republishing is not the desktop having caught up.
+        dbg_out_printf(o, "\"font_gen\":%u,", (unsigned)ugfx_font_generation());
         dbg_out_printf(o, "\"windows\":%d,\"front_pid\":%d,",
                      window_count,
                      wm_focus_index() >= 0 ? windows[wm_focus_index()].client_pid : -1);

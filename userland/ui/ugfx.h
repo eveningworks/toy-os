@@ -265,6 +265,17 @@ int ugfx_font_init(void);
 // app may ask every frame; uapp does. See abi/font_shm.h's beacon.
 int ugfx_font_recheck(void);
 
+// The face /bin/fontd published for the session's regular UI font, or
+// NULL when this client draws the kernel's baked tables instead (no
+// fontd, or a `builtin` face). /bin/font uses it to tell "different
+// fonts, by design" from a mapping that disagrees with its source.
+const char *ugfx_font_session_face(void);
+
+// The fontd beacon generation this process has mapped, 0 before any.
+// Compared with `diag font`'s, it says whether a client has caught up
+// with a republish -- fontd bumping is not the screen having changed.
+uint32_t ugfx_font_generation(void);
+
 // Font metrics, valid once ugfx_font_init() has succeeded. Both are 0
 // before that, which is what makes a forgotten init show up as text
 // that doesn't draw rather than as a wild pointer.

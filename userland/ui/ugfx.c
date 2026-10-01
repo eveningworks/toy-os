@@ -530,6 +530,15 @@ static int map_session_font(int slot, struct ugfx_font *out) {
 // It exists because WIN_EV_FONT arrives when the SETTING changes and
 // fontd republishes on its own poll a moment later -- so an app that
 // only re-mapped on the event would map the OLD atlas again and keep it.
+const char *ugfx_font_session_face(void) {
+    const struct font_shm *h =
+        (const struct font_shm *)g_map_base[UGFX_FONT_SLOT_UI_REGULAR];
+    if (!g_from_fontd[UGFX_FONT_SLOT_UI_REGULAR] || !h || !h->face[0]) return 0;
+    return h->face;
+}
+
+uint32_t ugfx_font_generation(void) { return g_seen_beacon; }
+
 int ugfx_font_recheck(void) {
     beacon_map();
     if (!g_beacon) return 0;

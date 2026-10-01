@@ -21,13 +21,14 @@
 //
 // TWO VIEWS, AND THE DISAGREEMENT IS THE DIAGNOSIS
 // ------------------------------------------------
-// A GUI client draws from its own read-only mapping of the atlas
-// (WIN_REQ_FONT); ring 0 draws from the atlas itself. Those are
-// different pieces of memory, and the reported bug is exactly the case
-// where they disagree -- so this reads BOTH and says whether they
-// match. The comparison is a hash over the coverage bytes rather than a
-// picture, because "these two bitmaps are identical" is a question a
-// person should not have to answer by eye.
+// Ring 0 draws from its baked tables. A GUI client draws from its own
+// read-only mapping of the session font: /bin/fontd's atlas, or the
+// baked tables through WIN_REQ_FONT when fontd has published none. In
+// the second case the two are the same font in different memory, the
+// reported bug is exactly where they disagree, and this says whether
+// they match -- a hash over the coverage bytes, because "these two
+// bitmaps are identical" should not be answered by eye. In the first
+// they are different fonts by design, and it says that instead.
 //
 // The two pictures are deliberately different depths, and that is not a
 // shortcut. The CLIENT view prints 8-bit coverage as a grayscale ramp,
@@ -158,10 +159,25 @@ static void print_ink_map(const struct query_fontglyph *g) {
 
 static void print_client_facts(const struct ugfx_font *f, int slot) {
     char line[160];
+    const char *face = ugfx_font_session_face();
+    if (face) snprintf(line, sizeof line, "  client   %s, from fontd\n", face);
+    else      snprintf(line, sizeof line, "  client   the baked font, through the compositor\n");
+    put(line);
+
+    // Ink below line_h is a descender the line box does not hold -- the
+    // same note the kernel block makes, asked of the bitmap this client
+    // actually draws.
+    const unsigned char *cell = f->glyphs + (size_t)slot * (size_t)f->char_w
+                                          * (size_t)f->char_h;
+    int below = 0;
+    for (int y = f->line_h; y < f->char_h && !below; y++)
+        for (int x = 0; x < f->char_w; x++)
+            if (cell[(size_t)y * (size_t)f->char_w + x]) { below = 1; break; }
     snprintf(line, sizeof line,
-             "  client   cell %dx%d  line_h %d  advance %d\n",
+             "           cell %dx%d  line_h %d  advance %d%s\n",
              f->char_w, f->char_h, f->line_h,
-             f->advances ? (int)f->advances[slot] : f->char_w);
+             f->advances ? (int)f->advances[slot] : f->char_w,
+             below ? "  (paints below its line)" : "");
     put(line);
     // No baseline here on purpose: WIN_REQ_FONT does not carry one, so
     // reporting the kernel's beside a client label would be inventing
@@ -243,20 +259,25 @@ static int glyph(int c, int want_kernel, int want_both) {
                 "           (a `text` boot, or the desktop is down)\n");
     }
 
-    // THE COMPARISON IS THE POINT OF READING BOTH. Same coverage bytes,
-    // same hash -- computed here with the same FNV-1a the provider uses
-    // over the same cell, so a mismatch is decisive rather than
-    // suggestive.
+    // THE COMPARISON IS THE POINT OF READING BOTH -- when both read the
+    // SAME font. Same coverage bytes, same hash, computed with the
+    // provider's FNV-1a, so a mismatch is decisive. A client drawing
+    // fontd's atlas is drawing a different font from ring 0's baked
+    // tables ON PURPOSE (fontd.c), and saying DISAGREE there sent
+    // readers hunting a bug that is the design.
     if (f) {
-        char line[160];
+        char line[200];
         uint32_t ch = fnv1a(f->glyphs + (size_t)slot * (size_t)f->char_w
                                        * (size_t)f->char_h,
                             (uint32_t)(f->char_w * f->char_h));
         int same_cell = (f->char_w == (int)g.cell_w && f->char_h == (int)g.cell_h);
+        const char *verdict =
+            ugfx_font_session_face()
+                ? "different fonts -- ring 0 draws its baked tables, the desktop fontd's"
+            : !same_cell ? "DIFFERENT CELL SIZE -- not comparable"
+            : ch == g.hash ? "agree" : "DISAGREE";
         snprintf(line, sizeof line, "  hash     kernel %08x   client %08x   %s\n",
-                 (unsigned)g.hash, (unsigned)ch,
-                 !same_cell ? "DIFFERENT CELL SIZE -- not comparable"
-                            : (ch == g.hash ? "agree" : "DISAGREE"));
+                 (unsigned)g.hash, (unsigned)ch, verdict);
         put(line);
     }
 

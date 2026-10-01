@@ -27,24 +27,25 @@ coverage map, its line box, and whether there is any ink in it at all.
 
     $ font glyph g
     g  U+0067  slot 71
-      kernel   a loaded face 14px regular
-               cell 8x16  line_h 14  baseline 12  advance 8
-               ink  yes, peak 255/255   box x 0..7  y 4..14  (paints below its line)
-      client   cell 8x16  line_h 14  advance 8
-      hash     kernel 741af8e9   client 741af8e9   agree
+      kernel   the baked font 14px regular
+               cell 8x16  line_h 16  baseline 0  advance 8
+               ink  yes, peak 255/255   box x 1..7  y 5..15
+      client   liberation-sans, from fontd
+               cell 14x15  line_h 13  advance 8  (paints below its line)
+      hash     kernel 77f0762b   client b0c44e9e   different fonts -- ring 0 draws its baked tables, the desktop fontd's
 
-      coverage (client, 8x16, 8 bit):
-              =##-#.
-             +@=-%@:
-             @=  =@:
-            .@:  :@:
-            .@:  :@:
-            .@=  -@:
-             *%:.%@:
-             .*@@+@.
-                 -@.
-             :-..#*
-             -%@@*.
+      coverage (client, 14x15, 8 bit):
+             .=+-:=
+             #%+##%
+            :@:  #%
+            -@   +%
+            =%   =%
+            -@.  +%
+            .@= :%%
+             =@@#+%
+                 *#
+            .@+.-@=
+             :#%#+.
       ramp .:-=+*#%@  (1 -> 255; a space is no ink at all)
 
 ## Why it exists
@@ -64,16 +65,20 @@ which no yes/no flag can express:
 
 ## Two views, and the disagreement is the diagnosis
 
-A GUI client draws from its own read-only mapping of the atlas
-(`WIN_REQ_FONT`); ring 0 draws from the atlas itself. Those are
-different pieces of memory, and a glyph that is present in one and blank
-in the other is exactly the case worth catching — so this reads **both**
-and compares them.
+Ring 0 draws its console from the baked tables compiled into the
+kernel. A GUI client draws from its own read-only mapping of the
+session font: `/bin/fontd`'s atlas (see `fontd`), or -- when the UI
+face is `builtin` and fontd publishes nothing -- the same baked tables,
+mapped through the compositor (`WIN_REQ_FONT`). The `client` line says
+which.
 
-The comparison is an FNV-1a hash over the coverage bytes rather than two
-pictures, because "these two bitmaps are identical" is not a question a
-person should answer by eye. `agree`, `DISAGREE`, or `DIFFERENT CELL
-SIZE` if the two are not even comparable.
+Only the second case is one font in two places, and that is where a
+glyph present in one and blank in the other is worth catching, so the
+hash compares them: an FNV-1a hash over the coverage bytes, because
+"these two bitmaps are identical" is not a question a person should
+answer by eye. `agree`, `DISAGREE`, or `DIFFERENT CELL SIZE` if they
+are not even comparable. With a face from fontd the two are different
+fonts on purpose, and the line says `different fonts` instead.
 
 **The two pictures are deliberately different depths.** The client view
 prints 8-bit coverage as a grayscale ramp, because how dark the ink is

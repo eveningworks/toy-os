@@ -4,9 +4,10 @@ proportional advance widths actually reaching the screen.
 
 The glyphs the desktop draws with come from one of two places: the
 tables tools/genttf.py baked into the kernel image, or a .ttf under
-/usr/share/fonts rasterized at runtime (userland/lib/ttf.c). Switching
-between them is a setting, and WIN_EV_FONT tells every client its cached
-metrics went stale.
+/usr/share/fonts that /bin/fontd rasterizes and publishes (ring 3,
+userland/lib/ttf.c). Switching between them is a setting; fontd bumps
+its beacon's generation once it has republished, and that -- read back
+through `diag font` -- is what every wait here is on.
 
 WHAT THIS TEST IS SHAPED AROUND. "Text is on screen" proves nothing --
 the baked font is a complete, working fallback, so a rasterizer that
@@ -88,12 +89,6 @@ def set_band(line_h):
     TEXT_Y0 = TEXT_Y1 - 2 - LINE_H
 
 
-def cell_h_from(log_line):
-    """The line pitch out of `wm: font changed -- WxH cell`, or None."""
-    m = re.search(r"--\s*(\d+)x(\d+)\s*cell", log_line or "")
-    return int(m.group(2)) if m else None
-
-
 def _text_left_once(qmp, tag):
     """One measurement of the right-aligned version text.
 
@@ -144,46 +139,84 @@ def text_left(qmp, tag, differs_from=None, timeout=8.0):
     return last
 
 
-def set_font_setting(dbg, key, value, timeout=8.0):
-    """Change a font setting, and WAIT for the compositor to say so.
+def fontd(dbg):
+    """`diag font`, parsed: what /bin/fontd itself says it published.
 
-    It slept 1.2s instead, and that is a race rather than a slow path:
-    the setting is written by a short-lived ring-3 process, applied in
-    the kernel, and only then does the client repaint and log its new
-    cell -- three hops whose total is load-dependent. When the
-    ESTABLISHING switch's line landed after the 1.2s, it survived the
-    drain that follows and the next wait_log() returned the PREVIOUS
-    face's cell, so two genuinely different faces compared equal. Seen
-    3 runs in 5 once the desktop had a little more repainting to do.
-
-    Waits for a font-changed line that is NEW since the spawn, and
-    returns it. Setting the face it already holds does nothing, by
-    design, so nothing is logged and this falls back to the timeout --
-    which is why callers establish a state they know differs.
+    {'px', 'gen', 'ui': {'face', 'regular': (w, h, line, kind), 'bold':
+    ...}, 'mono': {...}}. ASKED OF fontd, NOT THE COMPOSITOR: the
+    compositor's `wm: font changed` fires on WIN_EV_FONT, when the
+    SETTING moves, and fontd republishes on its own poll after that -- so
+    the cell in that line was the PREVIOUS face's often enough to make
+    two different faces compare equal.
     """
-    needle = "wm: font changed"
-    before = len([l for l in dbg.logs(clear=False) if needle in l])
+    out = dbg.send("diag font") or ""
+    r = {"raw": out.strip()}
+    m = re.search(r"size (\d+)px, generation (\d+)", out)
+    if m:
+        r["px"], r["gen"] = int(m.group(1)), int(m.group(2))
+    fam = None
+    for line in out.splitlines():
+        line = line.strip()
+        m = re.match(r"(ui|mono): (\S+)", line)
+        if m:
+            fam = m.group(1)
+            r[fam] = {"face": m.group(2)}
+            continue
+        m = re.match(r"(regular|bold)\s+(\d+)x(\d+) cell, line (\d+), \d+ glyphs, (\w+)", line)
+        if m and fam:
+            r[fam][m.group(1)] = (int(m.group(2)), int(m.group(3)),
+                                  int(m.group(4)), m.group(5))
+    return r
+
+
+def ui_regular(rep):
+    """The UI family's regular (w, h, line, kind), or None."""
+    return (rep.get("ui") or {}).get("regular")
+
+
+def config_get(dbg, key):
+    out = dbg.send(f"sh config get {key}") or ""
+    return out.split()[-1] if out.split() else ""
+
+
+def set_font_setting(dbg, key, value, timeout=10.0):
+    """Change a font setting and WAIT FOR fontd TO REPUBLISH, returning
+    its fontd() report.
+
+    The wait is on fontd's GENERATION, which it bumps after every weight
+    of a republish (and on unpublishing a `builtin` family) -- the beacon
+    clients re-map on. Setting the value a key already holds changes
+    nothing and bumps nothing, so that returns at once rather than
+    waiting out the timeout.
+    """
+    if config_get(dbg, key) == str(value):
+        return fontd(dbg)
+    before = fontd(dbg).get("gen", 0)
     dbg.send(f"gui spawn /bin/config set {key} {value}")
     deadline = time.time() + timeout
+    rep = {}
     while time.time() < deadline:
-        lines = [l for l in dbg.logs(clear=False) if needle in l]
-        if len(lines) > before:
-            return lines[-1].strip()
+        rep = fontd(dbg)
+        if rep.get("gen", 0) > before:
+            break
+        time.sleep(0.3)
+    # ...AND THEN FOR THE DESKTOP. fontd having republished is not the
+    # compositor having re-mapped and repainted: a capture taken in
+    # between measured the PREVIOUS face, one switch behind, and the
+    # proportional-vs-monospace check came out reversed.
+    while time.time() < deadline:
+        if dbg.json("gui state --json").get("font_gen", 0) >= rep.get("gen", 0):
+            break
         time.sleep(0.2)
-    return ""
+    dbg.settle()
+    return rep
 
 
-def set_face(dbg, name, timeout=8.0):
+def set_face(dbg, name, timeout=10.0):
     return set_font_setting(dbg, "system.font_face", name, timeout)
 
 
-def set_size(dbg, px, timeout=8.0):
-    # SAME WAIT AS set_face, and for a sharper reason than tidiness: a
-    # size change still in flight is a font-changed line that lands
-    # inside the NEXT call's wait, which then returns having observed
-    # somebody else's change. `set_size(14); set_face("builtin")` failed
-    # exactly that way -- the capture measured the previous face and
-    # read as "switching to builtin did nothing".
+def set_size(dbg, px, timeout=10.0):
     return set_font_setting(dbg, "system.font_size", px, timeout)
 
 
@@ -192,31 +225,14 @@ def set_setting(dbg, key, value):
     time.sleep(0.8)
 
 
-def wait_log(dbg, needle, timeout=8.0):
-    """The most recent COMPOSITOR log line containing `needle`, waited for.
-
-    Note what this can and cannot see: DebugConsole.logs() is the
-    compositor's own buffer, so `wm: font changed -- WxH cell` is here
-    and the kernel's `font: <face> at <n>px` line (which goes to klog)
-    is NOT. That turns out to be the better source anyway -- the cell the
-    CLIENT ended up with is the thing under test, and reading the
-    kernel's intention would prove one hop less.
-
-    A POLL, not a sleep. The setting is written by a short-lived ring-3
-    process, applied in the kernel and logged there, and the client
-    repaint that follows is a third hop -- so "how long does that take"
-    is a load-dependent question with no good fixed answer. Reads
-    without clearing so several waits can look at the same buffer.
-    """
-    deadline = time.time() + timeout
-    while True:
-        lines = [l for l in dbg.logs(clear=False) if needle in l]
-        if lines:
-            return lines[-1].strip()
-        if time.time() > deadline:
-            return ""
-        time.sleep(0.3)
-
+def close_font_demo(dbg):
+    """Kill any Font Demo window. A copy left by an earlier run answers
+    the next open with ITS state -- no boot report, and the family the
+    last run picked -- so three checks failed on every second run."""
+    for w in dbg.json("gui windows --json").get("windows", []):
+        if "Font Demo" in w.get("title", "") and w.get("client_pid"):
+            dbg.send(f"sh kill {w['client_pid']}")
+    dbg.settle()
 
 
 def demo_report(dbg, timeout=10.0):
@@ -525,16 +541,21 @@ def check_glyph_probe(dbg):
     # mean anything -- a run where the client half quietly failed would
     # still print a kernel block and look healthy.
     check("...and reports the kernel view", "kernel " in g)
-    check("...and the client's own mapping of the same atlas",
-          "client   cell" in g,
-          "client half missing -- no compositor?" if g else "no output")
-    check("...and the two agree byte for byte",
-          "agree" in g and "DISAGREE" not in g,
-          next((ln.strip() for ln in g.splitlines() if "hash" in ln), "no hash line"))
+    client = next((ln.strip() for ln in g.splitlines() if ln.strip().startswith("client")), "")
+    check("...and the client's own mapping, naming fontd's face",
+          f"{PROP}, from fontd" in client,
+          client or ("client half missing -- no compositor?" if g else "no output"))
+    hashline = next((ln.strip() for ln in g.splitlines() if "hash" in ln), "no hash line")
+    # DIFFERENT FONTS BY DESIGN: ring 0 draws its baked tables and the
+    # desktop fontd's atlas, so a hash here can only say so -- never
+    # DISAGREE, which is reserved for the same font in two places.
+    check("...and says the two are different fonts, not a disagreement",
+          "different fonts" in hashline and "DISAGREE" not in hashline, hashline)
 
     # 'g' has a DESCENDER, so its ink reaches below the line box. That
     # is ordinary rather than a defect (font_face.h), and it is the one
     # glyph property here that a wrong cell_h/line_h split would hide.
+    # Asked of the CLIENT's bitmap: Liberation's tail falls below its line.
     check("...and notices that 'g' paints below its line",
           "paints below its line" in g)
 
@@ -570,6 +591,17 @@ def check_glyph_probe(dbg):
           "ink map (kernel" in inked and "#" in inked,
           next((ln.strip() for ln in inked.splitlines() if "ink " in ln), "no ink line"))
 
+    # THE CASE WHERE A HASH MEANS SOMETHING. With the UI face `builtin`
+    # fontd publishes nothing, the client maps the kernel's baked tables
+    # through the compositor, and the two views are one font in two
+    # places -- the mapping bug this command was written for.
+    set_face(dbg, "builtin")
+    g = font_glyph(dbg, "g")
+    hashline = next((ln.strip() for ln in g.splitlines() if "hash" in ln), "no hash line")
+    check("with a `builtin` face, client and kernel agree byte for byte",
+          hashline.endswith("agree"), hashline)
+    set_face(dbg, PROP)
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -594,6 +626,7 @@ def main():
     # repairs the state it looks for by setting a face and a size. It
     # only means anything on a fresh image, which is what
     # `make clean-disk && make iso` gives the suite.
+    close_font_demo(dbg)
     dbg.open_app("Font Demo")
     dbg.settle()
     check_boot_face_is_live(dbg)
@@ -610,31 +643,40 @@ def main():
     # a patch of desktop, so a wallpaper puts "ink" in every column and
     # every measurement collapses to the patch's own edge. Same class as
     # the face and size below -- establish the state, do not inherit it.
+    # WHAT IT WAS, so the end can put it back: a run that left its last
+    # face behind was why consecutive runs failed more and more checks
+    # (docs/bugs.md).
+    orig = {k: config_get(dbg, k) for k in
+            ("system.font_face", "system.font_size", "desktop.wallpaper")}
     set_setting(dbg, "desktop.wallpaper", "none")
     set_size(dbg, 14)
     set_face(dbg, PROP)
-    dbg.logs()  # drain, so every wait below sees only what IT caused
-    set_face(dbg, MONO)
-    mono_cell = wait_log(dbg, "wm: font changed")
-    check("a face rasterizes from /usr/share/fonts and reaches the compositor",
-          "cell" in mono_cell, mono_cell)
+    mono_rep = set_face(dbg, MONO)
+    mono_cell = ui_regular(mono_rep)
+    check("a face rasterizes from /usr/share/fonts and fontd publishes it",
+          (mono_rep.get("ui") or {}).get("face") == MONO and mono_cell is not None,
+          mono_rep.get("raw", "")[:120])
 
-    set_band(cell_h_from(mono_cell) or LINE_H)
+    set_band(mono_cell[2] if mono_cell else LINE_H)
     mono_left, mono_ink = text_left(qmp, "mono")
     check("the desktop draws text with it", mono_ink > 200,
           f"left={mono_left} ink={mono_ink}")
 
     # --- a live face switch reaches the screen -------------------------
     # No restart: WIN_EV_FONT tells the compositor its metrics moved.
-    dbg.logs()
-    set_face(dbg, PROP)
-    prop_cell = wait_log(dbg, "wm: font changed")
-    check("switching face tells the compositor a new cell", "cell" in prop_cell,
-          prop_cell)
+    prop_rep = set_face(dbg, PROP)
+    prop_cell = ui_regular(prop_rep)
+    check("switching face makes fontd republish, under a new generation",
+          (prop_rep.get("ui") or {}).get("face") == PROP
+          and prop_rep.get("gen", 0) > mono_rep.get("gen", 0),
+          f"gen {mono_rep.get('gen')} -> {prop_rep.get('gen')}")
     check("the two faces do not have the same cell", prop_cell != mono_cell,
-          f"{mono_cell!r} -> {prop_cell!r}")
+          f"{mono_cell} -> {prop_cell}")
+    check("...and only the monospace one is published as monospace",
+          mono_cell and prop_cell and mono_cell[3] == "monospace"
+          and prop_cell[3] == "proportional", f"{mono_cell} / {prop_cell}")
 
-    set_band(cell_h_from(prop_cell) or LINE_H)
+    set_band(prop_cell[2] if prop_cell else LINE_H)
     # **WAIT FOR THE PROPORTIONAL FACE TO ACTUALLY ARRIVE.** The
     # compositor logging "font changed" is not the screen having
     # repainted in the new face -- fontd republishes on its own poll
@@ -657,27 +699,24 @@ def main():
           prop_left > mono_left + 4,
           f"right-aligned text starts at {prop_left} vs {mono_left}")
 
-    # --- an arbitrary size, which is only possible with a rasterizer ---
-    dbg.logs()
-    set_size(dbg, 13)
-    size13 = wait_log(dbg, "wm: font changed")
-    check("a size nobody baked is rasterized", "cell" in size13 and size13 != prop_cell,
-          f"{prop_cell!r} -> {size13!r}")
+    # --- a size change re-rasterizes ----------------------------------
+    # A loaded face has no bitmaps until fontd rasterizes it, so a new
+    # size is a new atlas at THAT size. (An off-ladder size like 13 is
+    # refused by the setting itself -- docs/bugs.md.)
+    big = set_size(dbg, 18)
+    big_cell = ui_regular(big)
+    check("a size change makes fontd re-rasterize at that size",
+          big.get("px") == 18 and big_cell is not None and prop_cell is not None
+          and big_cell[1] > prop_cell[1], f"{prop_cell} -> {big.get('px')}px {big_cell}")
 
     # --- and the baked font is still there -----------------------------
     set_size(dbg, 14)
-    set_face(dbg, "builtin")
-    # WAIT FOR THE COMPOSITOR TO SAY IT CHANGED, rather than sleeping.
-    # This was a fixed 1.0s and it became a flake the moment a font
-    # change got more expensive: every client now re-maps TWO atlases
-    # (regular and bold) on WIN_EV_FONT instead of one, and the extra
-    # round trip was enough to land the capture on the previous face --
-    # which reads exactly like "switching to builtin did nothing".
-    #
-    # stable_pixels() below cannot save it: two identical reads of a
-    # frame that has not started repainting are still identical. A
-    # settled frame is not the same thing as the RIGHT frame.
-    wait_log(dbg, "font changed")
+    builtin_rep = set_face(dbg, "builtin")
+    check("a `builtin` face is unpublished, not rasterized",
+          (builtin_rep.get("ui") or {}).get("face") == "builtin",
+          builtin_rep.get("raw", "")[:120])
+    # fontd has unpublished; the desktop re-maps on its next frame, so
+    # the capture waits to differ (a settled frame is not the RIGHT one).
     builtin_left, builtin_ink = text_left(qmp, "builtin", differs_from=prop_left)
     check("the baked font still draws when no face is selected",
           builtin_ink > 200, f"left={builtin_left} ink={builtin_ink}")
@@ -697,19 +736,21 @@ def main():
     # it -- equal is equal.
     set_face(dbg, PROP)
     set_size(dbg, 14)
-    time.sleep(1.0)
     check_weights_and_kerning(dbg, qmp)
 
-    # Put the machine back the way a fresh image boots.
-    set_face(dbg, MONO)
-    set_size(dbg, 14)
-    time.sleep(1.0)
-
-    # LAST, and on the restored default face on purpose: every
-    # assertion below names a slot, a cell size or an ink flag of the
-    # font a fresh image boots with, so running it mid-sequence would
-    # pin whatever the previous case happened to leave selected.
+    # LAST, on PROP at 14 -- a TTF face fontd publishes, which is what a
+    # fresh image boots with -- and then on `builtin`, the one case where
+    # the client and ring 0 draw the same font and a hash can agree.
     check_glyph_probe(dbg)
+
+    # Put back what was there.
+    close_font_demo(dbg)
+    if orig["desktop.wallpaper"]:
+        set_setting(dbg, "desktop.wallpaper", orig["desktop.wallpaper"])
+    if orig["system.font_size"]:
+        set_size(dbg, orig["system.font_size"])
+    if orig["system.font_face"]:
+        set_face(dbg, orig["system.font_face"])
 
     passed = sum(1 for _, ok in checks if ok)
     failed = len(checks) - passed
