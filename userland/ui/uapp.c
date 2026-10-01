@@ -218,6 +218,11 @@ struct uapp {
     // no-op -- an app calls it on every motion event.
     int cursor;
     int cursor_before_busy;
+    // While a motion is being dispatched: the cursor it has settled on so
+    // far, sent once when it ends. -1 when not in a motion. Without it the
+    // tree's arrow and an app's I-beam over the same spot were BOTH sent
+    // on every move.
+    int motion_cursor;
     int fullscreen;    // as last asked for -- the compositor's proposal follows
     // The lease (WIN_EV_SCANOUT): the toplevel draws into the display's
     // buffer at WIN_FB_VADDR + lease_back * WIN_FB_BUFFER_STRIDE and
@@ -1093,6 +1098,7 @@ const struct uui_drag *uapp_drag(struct uapp *a) {
 
 void uapp_set_cursor(struct uapp *a, int cursor) {
     if (cursor < 0 || cursor >= WIN_CURSOR_COUNT) return;
+    if (a->motion_cursor >= 0) { a->motion_cursor = cursor; return; }
     if (a->cursor == cursor) return;
     // Either way: a server that refuses this (one built before the
     // request existed) must not be asked again on every motion.
@@ -1684,11 +1690,18 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
                                 : uui_button_group_hover(d->buttons, ev->a, ev->b);
             if (changed) a->dirty = 1;
         }
-        // The widget tree answers first; on_motion below overrides.
+        // The widget tree answers first; on_motion below overrides, and
+        // only the final answer is sent (motion_cursor).
+        a->motion_cursor = a->cursor;
         if (a->router.count) {
             uapp_set_cursor(a, uui_router_cursor(&a->router, ev->a, ev->b));
         }
         if (d->on_motion) d->on_motion(a, ev->a, ev->b, ev->mods);
+        {
+            int want = a->motion_cursor;
+            a->motion_cursor = -1;
+            uapp_set_cursor(a, want);
+        }
         break;
 
     case WIN_EV_MOUSE_UP:
@@ -1763,6 +1776,7 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     // event to say so -- see wm_client.c's on_window_created().
     a->focused = 1;
     a->status = 0;
+    a->motion_cursor = -1;   // not in a motion; 0 is WIN_CURSOR_DEFAULT
 
     // The font FIRST: on_size derives the window size from the metrics,
     // and WIN_REQ_FONT needs a registered server rather than a window,

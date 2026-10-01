@@ -66,6 +66,7 @@ sys.path.insert(0, os.path.join(REPO, "tools"))
 from gui_debug import DebugConsole, enter_gui                 # noqa: E402
 from qmp_test import QMPSession                               # noqa: E402
 import port_guard  # noqa: E402
+from harness import copy_disk  # noqa: E402
 
 # Characters `gui key` wants as a hex code rather than as themselves.
 # `gui key` takes a hex code for anything the console will not pass
@@ -101,14 +102,48 @@ class Terminal:
 
     def __init__(self, dbg, qmp):
         self.dbg, self.qmp = dbg, qmp
+        dbg.send("sh config set desktop.layout_log on")
+        dbg.settle()
         dbg.open_app("Terminal")        # capital T -- trap 3
         time.sleep(3)
         w = dbg.window("Terminal")
         if not w:
             raise RuntimeError("no Terminal window after open_app")
+        # THE WHOLE GRID ON SCREEN, above the taskbar. A restored saved
+        # position may sit over it (wm_geometry.c clamps to the screen on
+        # purpose), and the pager's status line is the grid's LAST row:
+        # under the taskbar it is never drawn where a capture can see it.
+        st = dbg.json("gui state --json")
+        floor = st["screen"]["h"] - st.get("taskbar_h", 0)
+        over = w["y"] + w["h"] - floor
+        if over > 0:
+            gx, gy = w["x"] + 120, w["y"] + 10
+            dbg.drag(gx, gy, gx, max(10, gy - over))
+            dbg.settle()
+            w = dbg.window("Terminal")
+            if w["y"] + w["h"] > floor:
+                raise RuntimeError(f"could not lift the Terminal above the "
+                                   f"taskbar: {w['y']}+{w['h']} > {floor}")
         c = w["content"]
-        # The CONTENT rect, from the WM -- trap 2.
-        self.box = (c["x"], c["y"], c["x"] + c["w"], c["y"] + c["h"])
+        # The GRID, not the content rect (trap 2's WM rect, cut down): the
+        # menu bar and tab strip above it are a light full-width band
+        # that read as a pager's status bar, and the scrollbar beside it
+        # is not background. Both edges are the app's own layout line.
+        chrome, bar_x = None, None
+        for _ in range(20):
+            for l in reversed(dbg.logs("uterm: layout", clear=False)):
+                f = l.split()
+                if chrome is None and "chrome" in f:
+                    chrome = int(f[f.index("chrome") + 1])
+                if bar_x is None and l.split("uterm: layout ")[-1].startswith("bar "):
+                    bar_x = int(f[f.index("bar") + 1])
+            if chrome is not None and bar_x is not None:
+                break
+            dbg.settle()
+        if chrome is None or bar_x is None:
+            raise RuntimeError("the Terminal reported no layout line -- "
+                               "is desktop.layout_log on?")
+        self.box = (c["x"], c["y"] + chrome, c["x"] + bar_x, c["y"] + c["h"])
 
     def key(self, k):
         self.dbg.send(f"gui key {k}")
@@ -447,14 +482,19 @@ def main():
     port_guard.resolve_instance(args, "terminal_probe")
     both = not (args.keys or args.pixels)
 
-    r = subprocess.run([sys.executable, "tools/vm.py", "start"], cwd=REPO,
+    # A COPY on the slot asked for: the probe types into a shell and
+    # turns a setting on, neither of which belongs on the real image.
+    tmp = tempfile.mkdtemp(prefix="termprobe-")
+    disk = copy_disk(os.path.join(REPO, "disk.img"), os.path.join(tmp, "disk.img"))
+    vm_args = [sys.executable, "tools/vm.py", "--disk", disk,
+               "--instance", str(args.qmp_port - port_guard.QMP_BASE)]
+    r = subprocess.run(vm_args + ["start"], cwd=REPO,
                        capture_output=True, text=True)
     if "started" not in (r.stdout + r.stderr) and r.returncode != 0:
         print("terminal_probe: could not start the VM\n" + r.stdout + r.stderr)
         return 2
     time.sleep(1)
 
-    tmp = tempfile.mkdtemp(prefix="termprobe-")
     try:
         qmp = QMPSession(port=args.qmp_port)
         enter_gui(qmp, args.sock)
@@ -467,8 +507,9 @@ def main():
             print("paging, scrolling and clearing, through pixels")
             probe_pixels(t, tmp)
     finally:
-        subprocess.run([sys.executable, "tools/vm.py", "stop"], cwd=REPO,
+        subprocess.run(vm_args + ["stop"], cwd=REPO,
                        capture_output=True, text=True)
+        os.unlink(disk)
 
     failed = [n for n, ok in results if not ok]
     print(f"\nterminal_probe: {len(results) - len(failed)}/{len(results)} passed")

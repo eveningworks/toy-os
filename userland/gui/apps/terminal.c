@@ -2240,6 +2240,15 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     struct session *ses = active();
     if (!ses) return;
 
+    // THE I-BEAM OVER THE GRID, named on every motion: uapp sets the
+    // widget tree's answer first (the arrow, for the menu bar and the
+    // tab strip) and that overwrote the one on_open named. Not while a
+    // menu is down -- its rows lie over the grid.
+    int sbx, sby, sbw, sbh;
+    bar_rect(uapp_width(a), uapp_height(a), &sbx, &sby, &sbw, &sbh);
+    if (y >= chrome_h() && x >= 0 && x < sbx && !uui_menubar_is_open(&g_menu))
+        uapp_set_cursor(a, WIN_CURSOR_TEXT);
+
     if (g_bar_grab >= 0) {
         int bx, by, bw, bh;
         bar_rect(uapp_width(a), uapp_height(a), &bx, &by, &bw, &bh);
@@ -2291,9 +2300,9 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
 }
 
 static void on_open_cb(struct uapp *a) {
-    // The whole grid is text, so this is named ONCE rather than tracked
-    // from motion -- which is why this app needs no on_motion at all.
-    // xterm does the same, scrollbar included.
+    // The grid is text. Named here for a window that opens under a still
+    // pointer; on_motion keeps it named, since the widget tree answers
+    // the arrow for the chrome on every move.
     uapp_set_cursor(a, WIN_CURSOR_TEXT);
     g_app = a;
 

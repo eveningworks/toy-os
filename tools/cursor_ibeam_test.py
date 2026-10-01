@@ -292,22 +292,45 @@ def main():
     check("its status bar keeps the arrow", is_arrow(b), shape(b))
 
     # --- 4. a modal covering the document -----------------------------
-    # Ctrl-S opens Notepad's own Save-as dialog, whose filename field is
-    # the only text in reach. The document is still THERE, underneath --
-    # so this fails if the app answers from the document's rect.
+    # Ctrl-S opens the Save-as chooser, a dialog WINDOW of its own
+    # (ui/uui_filedialog.h) whose File name field is the only text in
+    # reach. The document is still THERE, underneath -- so this fails if
+    # the answer comes from the document's rect. Both rects are the
+    # chooser's own `filedialog: layout` lines, never a derived offset.
     dbg.send("gui key 0x13")
     dbg.settle()
-    time.sleep(0.5)
-    # dialog_field_rect(): x+10, y+10+char_h+8, w-20, char_h+4 with
-    # x = y = 40 and w = content width - 80. Probed at its middle, which
-    # is well inside it for any font size.
-    fx = c["x"] + 40 + 10
-    fy = c["y"] + 40 + 10 + 16 + 8 + 8
-    b = pr.sprite(fx + 100, fy)
-    check("the Save-as field shows an I-beam", is_ibeam(b), shape(b))
-    # The dialog's own panel, below the field: same modal, no text.
-    b = pr.sprite(fx + 100, c["y"] + c["h"] - 80)
-    check("the dialog's panel does not", is_arrow(b), shape(b))
+    dlg = None
+    for _ in range(30):
+        dlg = next((w for w in reversed(dbg.json("gui windows --json")
+                                        .get("windows", []))
+                    if w.get("dialog")), None)
+        if dlg:
+            break
+        time.sleep(0.2)
+    dbg.settle()
+
+    def fd_rect(name):
+        for line in reversed(dbg.logs(f"filedialog: layout {name} ", clear=False)):
+            try:
+                return tuple(int(v) for v in line.split()[-4:])
+            except ValueError:
+                return None
+        return None
+    # The control is the empty LEFT end of the button row -- no hover, no
+    # text, and two rows clear of the field: the probe diffs a box 40 px
+    # each way, and the label beside the field caught its caret's blink.
+    field, label = fd_rect("name"), fd_rect("buttons")
+    if dlg and field and label:
+        dc = dlg["content"]
+        x, y, w, h = field
+        b = pr.sprite(dc["x"] + x + w // 2, dc["y"] + y + h // 2)
+        check("the Save-as field shows an I-beam", is_ibeam(b), shape(b))
+        x, y, w, h = label
+        b = pr.sprite(dc["x"] + x + 12, dc["y"] + y + h // 2)
+        check("the dialog's own panel does not", is_arrow(b), shape(b))
+    else:
+        check("the Save-as chooser opened and reported its field", False,
+              f"dialog={bool(dlg)} name={field} buttons={label}")
     dbg.send("gui key 27")  # Esc closes the dialog
     dbg.settle()
     close_all(dbg)
