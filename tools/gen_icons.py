@@ -820,6 +820,92 @@ def icon_tb_delete():
     return im
 
 
+# --- Image Viewer's command bar ---------------------------------------
+#
+# Drawn in TB_INK like the rest, and SYMBOLIC in use: the viewer tints
+# each by its group (uui_toolbar_item.tint), so only the alpha matters.
+
+def _tb_lens(d):
+    d.ellipse([6, 6, 42, 42], outline=TB_INK, width=7)
+    d.line([38, 38, 56, 56], fill=TB_INK, width=10)
+
+
+def icon_tb_zoom_in():
+    im, d = _tb()
+    _tb_lens(d)
+    d.rectangle([15, 21, 33, 27], fill=TB_INK)
+    d.rectangle([21, 15, 27, 33], fill=TB_INK)
+    return im
+
+
+def icon_tb_zoom_out():
+    im, d = _tb()
+    _tb_lens(d)
+    d.rectangle([15, 21, 33, 27], fill=TB_INK)
+    return im
+
+
+def icon_tb_fit():
+    # Four corners pointing out: the picture fills the frame.
+    im, d = _tb()
+    def bar(x0, y0, x1, y1):
+        d.rectangle([min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)], fill=TB_INK)
+    for (x, y, dx, dy) in ((6, 6, 1, 1), (58, 6, -1, 1), (6, 58, 1, -1), (58, 58, -1, -1)):
+        bar(x, y, x + dx * 20, y + dy * 6)    # the corner's arm along x
+        bar(x, y, x + dx * 6, y + dy * 20)    # ...and along y
+    return im
+
+
+def icon_tb_actual():
+    # "1:1" -- two strokes and a colon, the label every viewer uses.
+    im, d = _tb()
+    for x in (8, 44):
+        d.rectangle([x + 4, 12, x + 11, 52], fill=TB_INK)
+        d.polygon([(x + 4, 12), (x + 11, 12), (x, 20), (x - 2, 16)], fill=TB_INK)
+    d.rectangle([28, 22, 35, 29], fill=TB_INK)
+    d.rectangle([28, 38, 35, 45], fill=TB_INK)
+    return im
+
+
+def _tb_rotate(mirror):
+    im, d = _tb()
+    d.arc([10, 12, 54, 56], start=200, end=500, fill=TB_INK, width=8)
+    d.polygon([(4, 18), (24, 14), (14, 34)], fill=TB_INK)
+    return im.transpose(Image.FLIP_LEFT_RIGHT) if mirror else im
+
+
+def icon_tb_rotate_left():
+    return _tb_rotate(False)
+
+
+def icon_tb_rotate_right():
+    return _tb_rotate(True)
+
+
+def icon_tb_wallpaper():
+    # A monitor on its stand, with a hill in it.
+    im, d = _tb()
+    d.rounded_rectangle([4, 8, 60, 46], radius=4, outline=TB_INK, width=6)
+    d.polygon([(12, 40), (26, 24), (36, 34), (42, 28), (54, 40)], fill=TB_INK)
+    d.rectangle([28, 46, 36, 54], fill=TB_INK)
+    d.rectangle([18, 54, 46, 60], fill=TB_INK)
+    return im
+
+
+def icon_tb_slideshow():
+    im, d = _tb()
+    d.polygon([(16, 8), (56, 32), (16, 56)], fill=TB_INK)
+    return im
+
+
+def icon_tb_info():
+    im, d = _tb()
+    d.ellipse([4, 4, 60, 60], outline=TB_INK, width=6)
+    d.rectangle([28, 27, 36, 48], fill=TB_INK)
+    d.ellipse([27, 14, 37, 23], fill=TB_INK)
+    return im
+
+
 def icon_properties():
     """The Properties window's own icon: a sheet with an information
     mark. Not a `tb-` glyph -- it names a WINDOW, so it is drawn like
@@ -1257,6 +1343,15 @@ ICONS = {
     "folder": icon_folder,
     "file": icon_file,
     "tb-up": icon_tb_up,
+    "tb-zoom-in": icon_tb_zoom_in,
+    "tb-zoom-out": icon_tb_zoom_out,
+    "tb-fit": icon_tb_fit,
+    "tb-actual": icon_tb_actual,
+    "tb-rotate-left": icon_tb_rotate_left,
+    "tb-rotate-right": icon_tb_rotate_right,
+    "tb-wallpaper": icon_tb_wallpaper,
+    "tb-slideshow": icon_tb_slideshow,
+    "tb-info": icon_tb_info,
     "tb-back": icon_tb_back,
     "tb-forward": icon_tb_forward,
     "tb-refresh": icon_tb_refresh,

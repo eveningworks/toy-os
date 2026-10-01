@@ -57,18 +57,18 @@ static char g_speed_text[16];
 // the View menu first. KEEP_SHOWN is how many must always fit -- the
 // window's minimum width is measured from it (on_size).
 static const struct uui_toolbar_item TOOLBAR[] = {
-    { 0, "2D shapes (1)", CMD_2D,     "2D",     0, "1" },
-    { 0, "Cube (2)",      CMD_CUBE,   "Cube",   0, "2" },
-    { 0, "Teapot (3)",    CMD_TEAPOT, "Teapot", 0, "3" },
+    { 0, "2D shapes (1)", CMD_2D,     "2D",     0, "1", 0 },
+    { 0, "Cube (2)",      CMD_CUBE,   "Cube",   0, "2", 0 },
+    { 0, "Teapot (3)",    CMD_TEAPOT, "Teapot", 0, "3", 0 },
     UUI_TOOLBAR_SEP,
-    { 0, "Slower (-)",    CMD_SLOWER, "-",      0, "-" },
-    { 0, 0,               0,          g_speed_text, UUI_TB_TEXT, 0 },
-    { 0, "Faster (+)",    CMD_FASTER, "+",      0, "+" },
+    { 0, "Slower (-)",    CMD_SLOWER, "-",      0, "-", 0 },
+    { 0, 0,               0,          g_speed_text, UUI_TB_TEXT, 0, 0 },
+    { 0, "Faster (+)",    CMD_FASTER, "+",      0, "+", 0 },
     UUI_TOOLBAR_SEP,
-    { 0, "Reset speed and angle (R)", CMD_RESET, "Reset", 0, "R" },
-    { 0, "Anti-aliased lines (A)", CMD_AA,  "Smooth edges", UUI_TB_END, "A" },
-    { 0, "Filled and lit (F)",     CMD_SHADE, "Shaded",     0, "F" },
-    { 0, "Textured (T)",           CMD_TEX,   "Textured",   0, "T" },
+    { 0, "Reset speed and angle (R)", CMD_RESET, "Reset", 0, "R", 0 },
+    { 0, "Anti-aliased lines (A)", CMD_AA,  "Smooth edges", UUI_TB_END, "A", 0 },
+    { 0, "Filled and lit (F)",     CMD_SHADE, "Shaded",     0, "F", 0 },
+    { 0, "Textured (T)",           CMD_TEX,   "Textured",   0, "T", 0 },
 };
 #define TOOLBAR_N ((int)(sizeof TOOLBAR / sizeof TOOLBAR[0]))
 #define KEEP_SHOWN 7

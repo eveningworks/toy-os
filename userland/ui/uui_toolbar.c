@@ -46,7 +46,7 @@ void uui_toolbar_init(struct uui_toolbar *t,
     t->border = ugfx_rgb(200, 200, 208);
     t->tip_bg = ugfx_rgb(255, 252, 220); // the tooltip cream every desktop uses
     t->tip_fg = ugfx_rgb(20, 20, 20);
-    t->more = (struct uui_toolbar_item){ "tb-more", "See more", -1, 0, UUI_TB_MENU, 0 };
+    t->more = (struct uui_toolbar_item){ "tb-more", "See more", -1, 0, UUI_TB_MENU, 0, 0 };
     uui_menubar_init(&t->menu, 0, 0);
 }
 
@@ -230,6 +230,18 @@ int uui_toolbar_tick(struct uui_toolbar *t) {
     return 1;
 }
 
+// The item's icon: its own ink, or its tint as a symbolic icon -- in the
+// accent's text colour when latched in the accent, where a coloured
+// glyph on the accent fill would lose its contrast.
+static void draw_icon(struct ugfx_surface *s, const struct uui_toolbar_item *it,
+                      const struct uimg *ico, int x, int y, int accent) {
+    if (it->tint)
+        ugfx_blit_tinted(s, x, y, ico->w, ico->h, ico->px, ico->w,
+                         accent ? UTHEME_ACCENT_TEXT : it->tint);
+    else
+        ugfx_blit_alpha(s, x, y, ico->w, ico->h, ico->px, ico->w);
+}
+
 static void tb_draw(struct ugfx_surface *s, const struct uui_toolbar *t) {
     ugfx_fill_rect(s, t->x, t->y, t->w, t->h, t->bg);
     if (!t->compact) ugfx_fill_rect(s, t->x, t->y + t->h - 1, t->w, 1, t->border);
@@ -277,7 +289,7 @@ static void tb_draw(struct ugfx_surface *s, const struct uui_toolbar *t) {
             int cx = x + 6;
             const struct uimg *li = it->icon ? icon_get(it->icon, icon_px(t)) : 0;
             if (li) {
-                ugfx_blit_alpha(s, cx, y + (h - li->h) / 2, li->w, li->h, li->px, li->w);
+                draw_icon(s, it, li, cx, y + (h - li->h) / 2, accent);
                 cx += icon_px(t) + 6;
             }
             if (it->label) {
@@ -296,8 +308,7 @@ static void tb_draw(struct ugfx_surface *s, const struct uui_toolbar *t) {
         if (ico) {
             // No greying pass for a disabled icon -- the wash under it
             // is the state signal, one rule for every control here.
-            ugfx_blit_alpha(s, x + (w - ico->w) / 2, y + (h - ico->h) / 2,
-                             ico->w, ico->h, ico->px, ico->w);
+            draw_icon(s, it, ico, x + (w - ico->w) / 2, y + (h - ico->h) / 2, accent);
         } else {
             // The icon cache's missing-file rule: a letter, never an error.
             char c[2] = { it->tip ? it->tip[0] : '?', 0 };

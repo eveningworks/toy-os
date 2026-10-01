@@ -202,6 +202,32 @@ int main(int argc, char **argv) {
        ha_a >= 120 && ha_a <= 136 && ha_r >= 250 && ha_g == 0 && ha_b == 0, d3);
     if (rc == 0) uimg_free(&hb);
 
+    // --- rotation: every corner lands where a clockwise turn puts it ----
+    //
+    // A 3x2 image with six DIFFERENT pixels, so a transposition, a mirror
+    // and a true turn all give different answers -- a square or symmetric
+    // fixture would pass a mirror as a rotation.
+    static uint32_t six[6] = { 1, 2, 3, 4, 5, 6 };   // rows: 1 2 3 / 4 5 6
+    struct uimg r6 = { .w = 3, .h = 2, .px = six, .has_alpha = 0 }, rq;
+    static const uint32_t want1[6] = { 4, 1, 5, 2, 6, 3 };   // 2x3
+    static const uint32_t want2[6] = { 6, 5, 4, 3, 2, 1 };   // 3x2
+    static const uint32_t want3[6] = { 3, 6, 2, 5, 1, 4 };   // 2x3
+    const uint32_t *wants[3] = { want1, want2, want3 };
+    int rot_ok = 1;
+    for (int q = 1; q <= 3 && rot_ok; q++) {
+        if (uimg_rotate(&r6, q, &rq) != 0) { rot_ok = 0; break; }
+        int ew = (q & 1) ? 2 : 3, eh = (q & 1) ? 3 : 2;
+        if (rq.w != ew || rq.h != eh) rot_ok = 0;
+        for (int i = 0; i < 6 && rot_ok; i++)
+            if (rq.px[i] != wants[q - 1][i]) rot_ok = 0;
+        uimg_free(&rq);
+    }
+    ok("a quarter, half and three-quarter turn put every pixel where clockwise says",
+       rot_ok, "a corner landed on the wrong side");
+    int back_ok = uimg_rotate(&r6, -1, &rq) == 0 && rq.w == 2 && rq.px[0] == 3;
+    if (back_ok) uimg_free(&rq);
+    ok("and a negative turn is anticlockwise", back_ok, "-1 is not 3");
+
     // --- the ENCODERS, round-tripped -----------------------------------
     //
     // **THE ROUND TRIP IS THE WEAK HALF AND IT IS HERE ANYWAY.** An

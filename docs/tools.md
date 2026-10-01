@@ -3022,8 +3022,12 @@ window without going through it will find its layout polls timing out.
   in between -- and the control beside it is that the same samples must
   NOT match the other wallpaper. Then Image Viewer: it lists a directory
   by PROBING its files, decodes, reports where the picture landed, and
-  the fit modes are asserted by geometry and by pixels (letterbox bars
-  must be one flat colour, which a cropped picture cannot satisfy).
+  the fit modes are asserted by geometry and by pixels (the letterbox
+  bars are the stage's radial ground, so points mirrored about its
+  middle column match -- which a cropped picture breaks; the bars are on
+  whichever axis the window's shape leaves them). The second picture is
+  chosen by clicking the filmstrip's `strip.cell 1`, where the widget
+  reports it.
   Finally "Set as wallpaper" is followed across a process boundary --
   the viewer writes `/etc/desktop.conf`, the desktop notices through the
   filesystem generation counter, and the background becomes the other

@@ -175,7 +175,7 @@ class Layout:
                     break
             if not ok or not nums:
                 continue
-            if len(nums) == 1:            # a scalar part: list.selected, menu.open
+            if len(nums) == 1:            # a scalar part: strip.selected, menu.open
                 self.r[what] = nums[0]
                 continue
             if len(nums) < 4:
@@ -337,7 +337,7 @@ def run(dbg, qmp, tmp, res):
               f"client_pid {win.get('client_pid')} -- 0 would mean ring 0 drew it")
 
     lay, lines = wait_layout(dbg, content,
-                             lambda l: l.has("image.picture") and l.has("list"))
+                             lambda l: l.has("image.picture") and l.has("strip"))
     listed = [l for l in lines if "imgview: listing" in l]
     # The COUNT is not asserted as a literal. It used to be "2 image(s)",
     # which silently went stale the day three more wallpapers were seeded
@@ -384,24 +384,34 @@ def run(dbg, qmp, tmp, res):
     ix, iy, iw, ih = lay.rect("image")
     pxr, pyr, pwr, phr = lay.rect("image.picture")
     res.check("Fit to window letterboxes rather than cropping",
-              pwr <= iw and phr < ih and pwr > 0,
+              0 < pwr <= iw and 0 < phr <= ih and (pwr < iw or phr < ih),
               f"picture {pwr}x{phr} in a {iw}x{ih} box -- a fitted 16:9 "
-              "picture in a taller box must leave bars")
-    # THE TWO BARS MUST BE THE SAME COLOUR AS EACH OTHER, which is the
-    # assertion a cropped picture cannot satisfy: this image is a
-    # gradient, so its top and its bottom are far apart. "The bar differs
-    # from the picture centre" was the first version of this check and
-    # it passed with letterboxing disabled entirely -- the top of the
-    # picture differs from its middle too.
+              "picture in a box of another shape must leave bars on one axis")
+    # THE BARS ARE THE STAGE'S GROUND, NOT THE PICTURE. The ground is a
+    # radial tint symmetric about the stage's middle column (imgview.c's
+    # stage_paint), so two points mirrored about it in the bars are the
+    # same colour. Which axis has the bars depends on the window's shape:
+    # top and bottom in a tall stage, left and right in a wide one -- a
+    # cropped picture would put the wave in the bars and break the pair.
     cx0, cy0 = content["x"], content["y"]
-    top = im.getpixel((cx0 + ix + iw // 2, cy0 + iy + (ih - phr) // 4))
-    bot = im.getpixel((cx0 + ix + iw // 2, cy0 + iy + ih - (ih - phr) // 4))
-    mid = im.getpixel((cx0 + pxr + pwr // 2, cy0 + pyr + phr // 2))
-    res.check("the letterbox bars are one flat background colour",
-              top == bot and max(abs(top[i] - mid[i]) for i in range(3)) > 20,
-              f"top bar {top}, bottom bar {bot}, picture centre {mid}")
+    mirror = []
+    if pyr > iy:                          # bars above and below
+        bar_y = cy0 + iy + (pyr - iy) // 2
+        for k in (iw // 5, iw // 3):
+            mirror.append((im.getpixel((cx0 + ix + iw // 2 - k, bar_y)),
+                           im.getpixel((cx0 + ix + iw - iw // 2 + k - 1, bar_y))))
+    elif pxr > ix:                        # bars to the left and right
+        k = (pxr - ix) // 2
+        for fy in (0.3, 0.6):
+            y = cy0 + iy + int(ih * fy)
+            mirror.append((im.getpixel((cx0 + ix + k, y)),
+                           im.getpixel((cx0 + ix + iw - 1 - k, y))))
+    sym = bool(mirror) and all(max(abs(a[i] - b[i]) for i in range(3)) <= 3
+                               for a, b in mirror)
+    res.check("the letterbox bars are the stage's ground, not the picture", sym,
+              f"picture at {pxr},{pyr} in a box at {ix},{iy}, mirrored pairs {mirror}")
 
-    open_menu_item(dbg, content, 1, 1)    # View > Actual size
+    open_menu_item(dbg, content, 1, 6)    # View > Actual size
     lay2, _ = wait_layout(dbg, content,
                           lambda l: l.has("image.picture") and l.rect("image.picture")[3] >= ih)
     res.check("Actual size fills the box and crops",
@@ -410,22 +420,21 @@ def run(dbg, qmp, tmp, res):
               f"picture {lay2.rect('image.picture') if lay2.has('image.picture') else None} "
               f"in a {iw}x{ih} box -- a 1280x720 image at 1:1 must fill it")
 
-    open_menu_item(dbg, content, 1, 0)    # View > Fit to window
+    open_menu_item(dbg, content, 1, 5)    # View > Fit to window
     wait_layout(dbg, content, lambda l: l.has("image.picture") and l.rect("image.picture")[3] < ih)
 
     # --- 5. selecting the other image ---------------------------------
-    lx, ly, lw, lh = lay.screen_rect("list")
-    row_h = 0
-    # Row 1's centre, derived from the listbox's own row height: ask the
-    # app rather than assuming a font size (docs/gui-guidelines.md).
-    # The listbox draws rows of uui_listbox_row_h(); one row down from
-    # the top is a safe click for a two-item list.
-    row_h = max(12, int(lh / 20))
-    dbg.click(lx + lw // 2, ly + row_h + row_h // 2)
+    # The filmstrip's second cell, where the strip SAYS it is
+    # (uui_thumbstrip's describe), never a derived offset.
+    lay_s, _ = wait_layout(dbg, content, lambda l: l.has("strip.cell 1"))
+    if not lay_s.has("strip.cell 1"):
+        res.check("the filmstrip reports its cells", False, "no `strip.cell 1` line")
+        return
+    dbg.click(*lay_s.centre("strip.cell 1"))
     lay3, lines3 = wait_layout(dbg, content,
-                               lambda l: l.r.get("list.selected") == 1, timeout=20)
-    res.check("clicking the second row selects it", lay3.r.get("list.selected") == 1,
-              f"selected {lay3.r.get('selected')}")
+                               lambda l: l.r.get("strip.selected") == 1, timeout=20)
+    res.check("clicking the second thumbnail selects it", lay3.r.get("strip.selected") == 1,
+              f"selected {lay3.r.get('strip.selected')}")
     res.check("and it decodes the other file",
               any("imgview: shown dusk.jpg" in l for l in lines3),
               f"shown lines: {[l for l in lines3 if 'shown' in l]}")
@@ -467,6 +476,7 @@ def run(dbg, qmp, tmp, res):
     res.check("the second picture is dusk.jpg", ok,
               f"worst channel difference {worst} at {at}")
 
+    check_features(dbg, qmp, tmp, res, content)
     check_resize_never_blanks(dbg, qmp, tmp, res, win)
     check_auto_resize_falls_back(dbg, res)
 
@@ -549,6 +559,81 @@ def run(dbg, qmp, tmp, res):
               any("tide.jpg" in l for l in shown),
               f"shown lines since the launch: {shown[-4:]} -- aurora.jpg "
               "here means the argument only picked the folder")
+
+
+def check_features(dbg, qmp, tmp, res, content):
+    """The redesign's controls (2026-10-01): wheel zoom about the pointer,
+    a drag that pans, rotation, the Properties panel and the slideshow.
+    Each restores what it changed, since the wallpaper checks after it
+    read the window as they found it."""
+    def key(k):
+        dbg.send(f"gui key {k}")
+        dbg.settle()
+
+    def zooms():
+        return [int(m.group(1)) for m in
+                (re.search(r"imgview: zoom (\d+)%", l) for l in poll_logs(dbg)) if m]
+
+    lay, _ = wait_layout(dbg, content, lambda l: l.has("image") and l.has("image.picture"))
+    ix, iy, iw, ih = lay.screen_rect("image")
+    fit_pct = (zooms() or [0])[-1]
+
+    # THE WHEEL ZOOMS, about the pointer -- so the real pointer goes over
+    # the stage first (an injected `gui move` lasts one WM iteration).
+    dbg.warp_cursor(qmp, ix + iw // 3, iy + ih // 3)
+    before = len(zooms())
+    dbg.send("gui wheel 1")
+    dbg.settle()
+    time.sleep(0.5)
+    z = zooms()
+    res.check("the wheel zooms in from fit", len(z) > before and z[-1] > fit_pct,
+              f"zoom lines {z[before:]} after fit at {fit_pct}%")
+
+    # A DRAG PANS a picture bigger than the stage: at 100% a 1280x720
+    # picture outgrows any stage here, so the stage's pixels must move.
+    key(ord("1"))
+    wait_layout(dbg, content, lambda l: l.has("image.picture")
+                and l.rect("image.picture")[2:] == lay.rect("image")[2:])
+    box = (ix + iw // 4, iy + ih // 4, ix + 3 * iw // 4, iy + 3 * ih // 4)
+    a_png = shot(qmp, tmp, "pan-a.png").crop(box).tobytes()
+    dbg.drag_real(qmp, ix + iw // 2, iy + ih // 2, ix + iw // 2 - 120, iy + ih // 2 - 60)
+    dbg.settle()
+    time.sleep(0.5)
+    b_png = shot(qmp, tmp, "pan-b.png").crop(box).tobytes()
+    res.check("a drag pans the zoomed picture", a_png != b_png,
+              "the stage did not change under a drag at 100%")
+    key(ord("0"))
+
+    # ROTATE: a landscape picture turned a quarter fits as a portrait.
+    key(ord("r"))
+    lay_r, _ = wait_layout(dbg, content, lambda l: l.has("image.picture")
+                           and l.rect("image.picture")[3] > l.rect("image.picture")[2])
+    pr = lay_r.rect("image.picture") if lay_r.has("image.picture") else None
+    res.check("rotating turns the picture a quarter", pr is not None and pr[3] > pr[2],
+              f"picture {pr}")
+    key(ord("l"))
+
+    # PROPERTIES: the panel's wallpaper buttons appear with it, and go.
+    key(ord("i"))
+    lay_p, _ = wait_layout(dbg, content, lambda l: l.has("wpfill") and l.has("wpfit"))
+    res.check("Properties opens its panel", lay_p.has("wpfill") and lay_p.has("wpfit"),
+              "no `wpfill`/`wpfit` in the layout")
+    key(ord("i"))
+
+    # THE SLIDESHOW is full screen: the picture's box is the whole window,
+    # and Esc brings the chrome back.
+    key(0xB1)   # F11
+    lay_s, _ = wait_layout(dbg, content, lambda l: l.has("image")
+                           and l.rect("image")[0] == 0 and l.rect("image")[1] == 0, timeout=20)
+    st = dbg.json("gui state --json")
+    full = lay_s.has("image") and lay_s.rect("image")[2:] == (st["screen"]["w"], st["screen"]["h"])
+    res.check("the slideshow fills the screen", full,
+              f"image box {lay_s.rect('image') if lay_s.has('image') else None}")
+    key(27)     # Esc
+    lay_e, _ = wait_layout(dbg, content, lambda l: l.has("image") and l.rect("image")[1] > 0,
+                           timeout=20)
+    res.check("Esc leaves the slideshow", lay_e.has("image") and lay_e.rect("image")[1] > 0,
+              f"image box {lay_e.rect('image') if lay_e.has('image') else None}")
 
 
 def check_resize_never_blanks(dbg, qmp, tmp, res, win):

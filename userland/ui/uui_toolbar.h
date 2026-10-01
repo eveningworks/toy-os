@@ -61,6 +61,11 @@ struct uui_toolbar_item {
     // has overflowed into the menu ("A", "Ctrl+R"). A label only, as
     // uui_menu_item's is: the app binds the key.
     const char *accel;
+    // THE ICON'S COLOUR, drawn as a symbolic icon (ugfx_blit_tinted()):
+    // 0 keeps the icon's own ink. A colour-coded command bar -- Image
+    // Viewer's zoom in teal, rotate in violet -- sets one per item. A
+    // latched accent button draws it in the accent's text colour instead.
+    uint32_t tint;
 };
 
 // A chevron after the label: the button opens a menu. The toolbar only
@@ -74,7 +79,7 @@ struct uui_toolbar_item {
 // the app rewrites ("speed 3"); the strip re-measures every draw.
 #define UUI_TB_TEXT 0x04
 
-#define UUI_TOOLBAR_SEP { 0, 0, 0, 0, 0, 0 }
+#define UUI_TOOLBAR_SEP { 0, 0, 0, 0, 0, 0, 0 }
 
 // Rows the overflow menu can hold. Past it, the last items are unreachable.
 #define UUI_TOOLBAR_MENU_MAX 24

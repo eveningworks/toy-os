@@ -9188,3 +9188,44 @@ compositor that is behind can handle a present after the client has
 started on that buffer again -- only a handback closes the window.
 `tools/half_frame_test.py` is the check, its positive control a
 `surf_back()` that ignores the busy flags (81 frames in 240).
+
+## Image Viewer is a filmstrip over a stage tinted by the picture, and its thumbnails are the File Manager's
+
+The viewer was a filename list beside the picture. It is now Windows
+Photos' and Gwenview's shape, chosen from mockups (2026-10-01): a
+toolbar over a stage, the folder's thumbnails along a filmstrip below
+it, a status bar with the zoom. Three things in it are decisions rather
+than layout.
+
+**The thumbnails are the File Manager's cache, moved into
+`lib/uthumb.h`.** The File Manager already had a lookup that never
+decodes on the draw path, one worker thread for the process's life and a
+copy on disk under `/var/cache/thumbnails`. A second implementation in
+the viewer would have been a second cache for the same files, filling
+the disk twice and disagreeing about staleness. So the cache moved
+verbatim and both apps adapt it: a `wake` callback stands in for each
+app's own post, and a `stored` hook lets the File Manager claim the
+filesystem generation its own cache write moved. The viewer is the
+second real caller the toolkit's rule asks for. The strip itself is a
+widget, `uui_thumbstrip`, that owns no pictures and asks a callback per
+cell, so it is not tied to that cache either.
+
+**The stage is tinted from the picture**, YouTube's "ambient mode": a
+radial ground from the picture's darkened average to a deep shade of
+its darkest quarter, a dark strip of the same, and a faint wash on the
+chrome. It is computed from a 16x9 sample when a decode lands and
+cached as a bitmap per stage size, so a frame costs a blit. The
+alternative, a fixed dark grey, is what every viewer does and what made
+this one read as unfinished. The chrome wash is kept faint on purpose:
+dark text has to keep its contrast.
+
+**The wheel zooms, about the pointer**, as Windows Photos does by
+default. Gwenview steps through the folder on the wheel instead; here
+Left/Right and the strip already do that, and zoom had no gesture of its
+own. Above 100% only the visible part of the source is magnified,
+nearest neighbour, straight from the decoded image (`uui_image`'s zoom),
+so a 1600% view is never a copy 256 times the picture's size; below
+100% the cached bilinear scale serves. Rotation is on screen only, an
+exact quarter-turn copy (`uimg_rotate()`); writing it back to the file
+would mean re-encoding a JPEG, which loses quality for a viewer's
+convenience.

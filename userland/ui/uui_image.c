@@ -42,18 +42,96 @@ static void drawn_size(const struct uui_image *im, int *dw, int *dh) {
     uimg_fit_size(im->img->w, im->img->h, im->w, im->h, im->fit, dw, dh);
 }
 
-int uui_image_drawn_rect(const struct uui_image *im, int *x, int *y, int *w, int *h) {
-    if (!im->img || !im->img->px || im->w <= 0 || im->h <= 0) return 0;
+// WHERE THE WHOLE PICTURE SITS, content coordinates, possibly larger than
+// the view: (ox, oy) its top-left, dw x dh its size on screen. A fit mode
+// centres it (a COVER wallpaper crops evenly); a zoom centres an axis that
+// fits and scrolls one that does not.
+static void placement(const struct uui_image *im, int *ox, int *oy, int *dw, int *dh) {
+    if (im->zoom > 0) {
+        *dw = (int)((long)im->img->w * im->zoom / 100); if (*dw < 1) *dw = 1;
+        *dh = (int)((long)im->img->h * im->zoom / 100); if (*dh < 1) *dh = 1;
+        *ox = *dw <= im->w ? im->x + (im->w - *dw) / 2 : im->x - im->pan_x;
+        *oy = *dh <= im->h ? im->y + (im->h - *dh) / 2 : im->y - im->pan_y;
+        return;
+    }
+    drawn_size(im, dw, dh);
+    *ox = im->x + (im->w - *dw) / 2;
+    *oy = im->y + (im->h - *dh) / 2;
+}
+
+static void clamp_pan(struct uui_image *im) {
+    if (!im->img || im->zoom <= 0) { im->pan_x = im->pan_y = 0; return; }
+    int dw = (int)((long)im->img->w * im->zoom / 100);
+    int dh = (int)((long)im->img->h * im->zoom / 100);
+    int mx = dw - im->w, my = dh - im->h;
+    if (mx < 0) mx = 0;
+    if (my < 0) my = 0;
+    if (im->pan_x > mx) im->pan_x = mx;
+    if (im->pan_y > my) im->pan_y = my;
+    if (im->pan_x < 0) im->pan_x = 0;
+    if (im->pan_y < 0) im->pan_y = 0;
+}
+
+void uui_image_set_zoom(struct uui_image *im, int pct, int ax, int ay) {
+    if (!im->img || !im->img->w || !im->img->h) return;
+    if (pct <= 0) { im->zoom = 0; im->pan_x = im->pan_y = 0; return; }
+    if (pct < 5) pct = 5;
+    if (pct > 1600) pct = 1600;
+    if (ax < 0 || ay < 0) { ax = im->x + im->w / 2; ay = im->y + im->h / 2; }
+
+    // The picture point under the anchor, as a fraction of the picture
+    // (16.16), before and after -- so it stays under the pointer.
+    int ox, oy, dw, dh;
+    placement(im, &ox, &oy, &dw, &dh);
+    long fx = ((long)(ax - ox) << 16) / dw, fy = ((long)(ay - oy) << 16) / dh;
+    if (fx < 0) fx = 0;
+    if (fx > 65536) fx = 65536;
+    if (fy < 0) fy = 0;
+    if (fy > 65536) fy = 65536;
+
+    im->zoom = pct;
+    int nw = (int)((long)im->img->w * pct / 100), nh = (int)((long)im->img->h * pct / 100);
+    im->pan_x = (int)((fx * nw) >> 16) - (ax - im->x);
+    im->pan_y = (int)((fy * nh) >> 16) - (ay - im->y);
+    clamp_pan(im);
+}
+
+int uui_image_zoom_pct(const struct uui_image *im) {
+    if (!im->img || !im->img->w) return 0;
+    if (im->zoom > 0) return im->zoom;
     int dw, dh;
     drawn_size(im, &dw, &dh);
-    // Cropped when it is larger than the box (COVER always is, NONE is
-    // whenever the picture is bigger than the window).
-    int vw = dw < im->w ? dw : im->w;
-    int vh = dh < im->h ? dh : im->h;
-    *x = im->x + (im->w - vw) / 2;
-    *y = im->y + (im->h - vh) / 2;
-    *w = vw;
-    *h = vh;
+    return (int)((long)dw * 100 / im->img->w);
+}
+
+int uui_image_pan(struct uui_image *im, int dx, int dy) {
+    int px = im->pan_x, py = im->pan_y;
+    im->pan_x -= dx;
+    im->pan_y -= dy;
+    clamp_pan(im);
+    return px != im->pan_x || py != im->pan_y;
+}
+
+int uui_image_can_pan(const struct uui_image *im) {
+    if (!im->img || im->zoom <= 0) return 0;
+    return (long)im->img->w * im->zoom / 100 > im->w ||
+           (long)im->img->h * im->zoom / 100 > im->h;
+}
+
+int uui_image_drawn_rect(const struct uui_image *im, int *x, int *y, int *w, int *h) {
+    if (!im->img || !im->img->px || im->w <= 0 || im->h <= 0) return 0;
+    // The part of the picture inside the view: cropped when it is larger
+    // (COVER always is, NONE and a zoom whenever the picture outgrows it).
+    int ox, oy, dw, dh;
+    placement(im, &ox, &oy, &dw, &dh);
+    int x0 = ox > im->x ? ox : im->x, y0 = oy > im->y ? oy : im->y;
+    int x1 = ox + dw < im->x + im->w ? ox + dw : im->x + im->w;
+    int y1 = oy + dh < im->y + im->h ? oy + dh : im->y + im->h;
+    if (x1 <= x0 || y1 <= y0) return 0;
+    *x = x0;
+    *y = y0;
+    *w = x1 - x0;
+    *h = y1 - y0;
     return 1;
 }
 
@@ -64,7 +142,7 @@ static const struct uimg *ensure_scaled(struct uui_image *im, int dw, int dh) {
     if (!im->img || !im->img->px) return NULL;
     if (dw == im->img->w && dh == im->img->h) return im->img;
     if (im->scaled.px && im->cache_src == im->img &&
-        im->cache_w == dw && im->cache_h == dh && im->cache_fit == (int)im->fit)
+        im->cache_w == dw && im->cache_h == dh)
         return &im->scaled;
     if (im->cache_failed) return NULL;
 
@@ -91,22 +169,44 @@ void uui_image_draw(struct ugfx_surface *s, const struct uui_image *im) {
     struct uui_image *m = (struct uui_image *)im;
     if (im->w <= 0 || im->h <= 0) return;
 
-    ugfx_fill_rect(s, im->x, im->y, im->w, im->h, im->bg);
+    if (!im->transparent) ugfx_fill_rect(s, im->x, im->y, im->w, im->h, im->bg);
     if (!im->img || !im->img->px) return;
 
-    int dw, dh;
-    drawn_size(im, &dw, &dh);
-    const struct uimg *src = ensure_scaled(m, dw, dh);
-    if (!src) return;
-
+    int px, py, dw, dh;
+    placement(im, &px, &py, &dw, &dh);
     int vx, vy, vw, vh;
     if (!uui_image_drawn_rect(im, &vx, &vy, &vw, &vh)) return;
 
-    // When the picture is larger than its box the blit starts partway
-    // into it -- centred, so a COVER wallpaper crops evenly rather than
-    // losing everything on one side.
-    int ox = (src->w - vw) / 2;
-    int oy = (src->h - vh) / 2;
+    // MAGNIFIED: only the visible part of the SOURCE, nearest neighbour --
+    // pixels a viewer at 400% is expected to show as squares. The source
+    // rect is rounded outward and the blit clipped to the view, so the
+    // edge cells are whole rather than shifted. That blit ignores the
+    // source's alpha, so a transparent PNG shows its colour channels here.
+    if (im->zoom >= 100) {
+        int z = im->zoom;
+        int sx0 = (int)((long)(vx - px) * 100 / z), sy0 = (int)((long)(vy - py) * 100 / z);
+        int sx1 = (int)(((long)(vx + vw - px) * 100 + z - 1) / z);
+        int sy1 = (int)(((long)(vy + vh - py) * 100 + z - 1) / z);
+        if (sx1 > im->img->w) sx1 = im->img->w;
+        if (sy1 > im->img->h) sy1 = im->img->h;
+        if (sx1 <= sx0 || sy1 <= sy0) return;
+        struct ugfx_clip c;
+        ugfx_clip_save(s, &c);
+        ugfx_clip_intersect(s, vx, vy, vw, vh);
+        ugfx_blit_scaled_alpha(s, px + (int)((long)sx0 * z / 100), py + (int)((long)sy0 * z / 100),
+                               (int)((long)(sx1 - sx0) * z / 100), (int)((long)(sy1 - sy0) * z / 100),
+                               im->img->px + (size_t)sy0 * im->img->w + sx0,
+                               sx1 - sx0, sy1 - sy0, im->img->w, 255);
+        ugfx_clip_restore(s, &c);
+        return;
+    }
+
+    const struct uimg *src = ensure_scaled(m, dw, dh);
+    if (!src) return;
+    // Where the view starts inside the (scaled) picture: the centred crop
+    // of a COVER wallpaper, or the pan of a zoom.
+    int ox = vx - px;
+    int oy = vy - py;
     if (ox < 0) ox = 0;
     if (oy < 0) oy = 0;
     // COMPOSITED only when the image actually has transparency. An

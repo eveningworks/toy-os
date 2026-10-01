@@ -47,6 +47,18 @@ struct uui_image {
     // uui_layout has no mechanism to talk it down (it overflows instead
     // -- see CLAUDE.md). An app showing arbitrary files sets these.
     int max_w, max_h;
+    // ZOOM AND PAN. `zoom` 0 is the fit mode above; otherwise a percentage
+    // of the image's own size, with `pan_x`/`pan_y` the view's top-left
+    // inside the zoomed picture (clamped; 0 on an axis that fits). Above
+    // 100% only the VISIBLE part of the source is magnified, nearest
+    // neighbour, straight from `img` -- a 400% photograph is never a copy
+    // sixteen times its size. Below it the cached scale serves, which is
+    // never bigger than the source.
+    int zoom;
+    int pan_x, pan_y;
+    // Paint nothing behind the picture: the app has drawn its own ground
+    // (Image Viewer's ambient stage) before the widget draws.
+    int transparent;
 
     // The cache, and the four things it is keyed on. Private.
     struct uimg scaled;
@@ -67,6 +79,18 @@ void uui_image_set_fit(struct uui_image *im, enum uimg_fit fit);
 
 // Frees the scaled copy. The source image is the caller's.
 void uui_image_release(struct uui_image *im);
+
+// Zoom to `pct` percent (0 = back to the fit mode), keeping the picture
+// point under (ax, ay) -- content coordinates, the wheel's pointer -- where
+// it is; ax < 0 anchors on the view's centre. Clamped to 5..1600.
+void uui_image_set_zoom(struct uui_image *im, int pct, int ax, int ay);
+// The zoom actually on screen, in percent, whatever mode produced it.
+int uui_image_zoom_pct(const struct uui_image *im);
+// Moves the view by (dx, dy) screen pixels -- a drag's delta, so the
+// picture follows the pointer. 1 when anything moved.
+int uui_image_pan(struct uui_image *im, int dx, int dy);
+// Whether the zoomed picture is larger than the view on either axis.
+int uui_image_can_pan(const struct uui_image *im);
 
 // The rect the picture is actually drawn in, content-relative -- what a
 // test asserts on, and what an app needs to map a click back to a pixel

@@ -347,6 +347,42 @@ static void resample_axis(const uint32_t *src, uint32_t *dst,
     }
 }
 
+int uimg_rotate(const struct uimg *src, int quarters, struct uimg *out) {
+    memset(out, 0, sizeof *out);
+    if (!src->px || src->w <= 0 || src->h <= 0) {
+        uimg_set_error("nothing to rotate");
+        return -EINVAL;
+    }
+    int q = ((quarters % 4) + 4) % 4;
+    int w = src->w, h = src->h;
+    int ow = (q & 1) ? h : w, oh = (q & 1) ? w : h;
+    uint32_t *px = malloc((size_t)ow * oh * sizeof *px);
+    if (!px) {
+        uimg_set_error("not enough memory to rotate the image");
+        return -ENOMEM;
+    }
+    // Each source pixel's destination; the loops walk the SOURCE in
+    // order, which is the cache-friendly side for the larger read.
+    for (int y = 0; y < h; y++) {
+        const uint32_t *row = src->px + (size_t)y * w;
+        for (int x = 0; x < w; x++) {
+            int dx, dy;
+            switch (q) {
+            case 1:  dx = h - 1 - y; dy = x;         break;
+            case 2:  dx = w - 1 - x; dy = h - 1 - y; break;
+            case 3:  dx = y;         dy = w - 1 - x; break;
+            default: dx = x;         dy = y;         break;
+            }
+            px[(size_t)dy * ow + dx] = row[x];
+        }
+    }
+    out->w = ow;
+    out->h = oh;
+    out->px = px;
+    out->has_alpha = src->has_alpha;
+    return 0;
+}
+
 int uimg_scale(const struct uimg *src, int dw, int dh, struct uimg *out) {
     memset(out, 0, sizeof *out);
     if (!src->px || src->w <= 0 || src->h <= 0 || dw <= 0 || dh <= 0) {

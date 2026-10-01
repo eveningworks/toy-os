@@ -24,11 +24,11 @@ enum {
 enum { FOCUS_BAR, FOCUS_PATH, FOCUS_PLACES, FOCUS_VIEW, FOCUS_NAME, FOCUS_TYPE, FOCUS_COUNT };
 
 static const struct uui_toolbar_item g_tools[] = {
-    { "tb-up",      "Up",      CMD_UP, 0, 0, 0 },
-    { "tb-refresh", "Refresh", CMD_REFRESH, 0, 0, 0 },
+    { "tb-up",      "Up",      CMD_UP, 0, 0, 0, 0 },
+    { "tb-refresh", "Refresh", CMD_REFRESH, 0, 0, 0, 0 },
     UUI_TOOLBAR_SEP,
-    { "tb-details", "Details", CMD_DETAILS, 0, 0, 0 },
-    { "tb-icons",   "Icons",   CMD_ICONS, 0, 0, 0 },
+    { "tb-details", "Details", CMD_DETAILS, 0, 0, 0, 0 },
+    { "tb-icons",   "Icons",   CMD_ICONS, 0, 0, 0, 0 },
 };
 
 // THE ONE INSTANCE THE TOOLBAR'S FLAGS CALLBACK CAN SEE. `item_flags`

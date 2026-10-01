@@ -201,6 +201,11 @@ void uimg_fit_size(int sw, int sh, int bw, int bh, enum uimg_fit mode,
 // normalised once per output pixel.
 int uimg_scale(const struct uimg *src, int dw, int dh, struct uimg *out);
 
+// `src` turned `quarters` quarter turns CLOCKWISE (any integer; taken mod
+// 4) into a freshly allocated `out` -- a 90-degree turn swaps w and h.
+// Exact, no resampling: a viewer's "rotate" must not soften the picture.
+int uimg_rotate(const struct uimg *src, int quarters, struct uimg *out);
+
 // --- codecs -----------------------------------------------------------
 //
 // Two rows in uimg.c's table, and the pair is the point: JPEG is what a

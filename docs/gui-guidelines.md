@@ -26,6 +26,7 @@ REAL CALLER, not a plausible one.
 | `uui_slider` | An ORDERED enum, where "more" and "less" is the point |
 | `uui_listbox`, `uui_table` | Rows; rows with columns, a header and sorting |
 | `uui_tree` | Rows at a DEPTH, with collapsible parents -- navigation |
+| `uui_thumbstrip` | A filmstrip: one row of thumbnails, one selected (the pictures come from `lib/uthumb.h`) |
 | `uui_label` | A line of text the LAYOUT reserves a row for |
 | `uui_textbox`, `utext` | One line of editable text; a document |
 | `uui_menubar`, `uui_statusbar` | Menus with submenus; status panes |
