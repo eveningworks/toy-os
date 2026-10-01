@@ -40,6 +40,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from private_tmp import private_tmp  # noqa: E402
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
@@ -549,8 +552,12 @@ def run_one(entry, timeout, logdir):
 
     t0 = time.time()
     try:
-        r = subprocess.run([sys.executable, path, *extra], cwd=REPO,
-                           capture_output=True, text=True, timeout=timeout)
+        # A PRIVATE TMPDIR, removed after (private_tmp.py): the leftovers
+        # of many runs once filled /tmp and ended a sweep with ENOSPC.
+        with private_tmp(name) as env:
+            r = subprocess.run([sys.executable, path, *extra], cwd=REPO,
+                               capture_output=True, text=True, timeout=timeout,
+                               env=env)
         out, rc = r.stdout + r.stderr, r.returncode
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")

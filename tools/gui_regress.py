@@ -82,6 +82,7 @@ REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import fresh_disk  # noqa: E402
 from harness import copy_disk  # noqa: E402
+from private_tmp import private_tmp  # noqa: E402
 
 # How many tools run at once by default. Each one is a QEMU with 256 MB
 # of guest RAM under TCG, so this is bounded by host cores far more than
@@ -357,10 +358,13 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot, kvm=False):
         # pipe, so Python block-buffers it: a tool killed by the guard
         # has flushed nothing, and the timeout branch reports "NO
         # output at all" for a tool that had printed thirty checks.
-        r = subprocess.run([sys.executable, "-u", tool,
-                            "--instance", str(slot)],
-                           cwd=REPO, capture_output=True, text=True,
-                           timeout=timeout)
+        # A PRIVATE TMPDIR, removed after: tools leave disk copies and
+        # screenshots under tempfile, and /tmp is a tmpfs (private_tmp.py).
+        with private_tmp(name) as env:
+            r = subprocess.run([sys.executable, "-u", tool,
+                                "--instance", str(slot)],
+                               cwd=REPO, capture_output=True, text=True,
+                               timeout=timeout, env=env)
         out = r.stdout + r.stderr
         rc = r.returncode
     except subprocess.TimeoutExpired as e:
@@ -503,9 +507,10 @@ def run_one_remote(name, script, host, timeout, keep_logs):
     env["TOYOS_REMOTE_HOST"] = host
     started = time.time()
     try:
-        r = subprocess.run([sys.executable, "-u", tool],
-                           cwd=REPO, capture_output=True, text=True,
-                           timeout=timeout, env=env)
+        with private_tmp(name, env) as env:
+            r = subprocess.run([sys.executable, "-u", tool],
+                               cwd=REPO, capture_output=True, text=True,
+                               timeout=timeout, env=env)
         out = r.stdout + r.stderr
         rc = r.returncode
     except subprocess.TimeoutExpired as e:

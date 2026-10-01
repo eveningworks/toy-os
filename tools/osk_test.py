@@ -41,6 +41,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -126,7 +127,7 @@ def main():
         print("osk_test: no free VM slot")
         return 2
 
-    img = os.path.join("/tmp", f"osk_test_{n}.img")
+    img = os.path.join(tempfile.gettempdir(), f"osk_test_{n}.img")
     copy_disk("disk.img", img, cwd=REPO)
     subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
                     "--instance", str(n), "stop"], capture_output=True)

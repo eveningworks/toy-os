@@ -865,18 +865,18 @@ static void fv_empty_press(struct uui_fileview *fv, int cx, int cy, unsigned mod
     rb_begin(&fv->band, cx, cy, add ? RB_ADD : RB_REPLACE);
 }
 
-static int fv_apply_mods(struct uui_fileview *fv, int row, unsigned mods);
+static int fv_apply_mods(struct uui_fileview *fv, int prev, int row, unsigned mods);
 
 // The press half of fv_apply_mods(): a PLAIN press on a row already in
 // the marked set leaves the set alone until the release says it was a
 // click (see `deferred_clear`), so a drag from it carries the set.
-static int fv_press_mods(struct uui_fileview *fv, int row, unsigned mods) {
+static int fv_press_mods(struct uui_fileview *fv, int prev, int row, unsigned mods) {
     if (!(mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT)) &&
         uui_fileview_is_marked(fv, row)) {
         fv->deferred_clear = 1;
         return 0;
     }
-    return fv_apply_mods(fv, row, mods);
+    return fv_apply_mods(fv, prev, row, mods);
 }
 
 // A staged cut's artwork, taken HALFWAY TO THE BACKGROUND -- Explorer's
@@ -911,7 +911,7 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
     int last = first + (vis + 2) * cols; // +2: a partial row at each end
     if (last > rows) last = rows;
 
-    int sel_x = -1, sel_y = -1; // the selected cell, for the focus ring
+    int cursor_drawn = 0;       // the cursor cell carried the focus edge
 
     for (int view = first; view < last; view++) {
         int src = uui_table_source_row(t, view);
@@ -921,16 +921,19 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
         // Same precedence as the table's rows: selection, hover, tint.
         uint32_t bg = uui_table_c_bg(t);
         int selected = (src == t->selected);
-        if (selected) { bg = uui_table_c_sel_bg(t); sel_x = x; sel_y = y; }
+        int marked = uui_fileview_is_marked(fv, src);
+        if (selected || marked) bg = UUI_COLOR(fv->mark_bg, uui_table_c_sel_bg(t));
         else if (src == t->hovered) bg = uui_state_bg(uui_table_c_bg(t), UUI_STATE_HOVER);
-        else if (uui_fileview_is_marked(fv, src))
-            bg = UUI_COLOR(fv->mark_bg, uui_table_c_sel_bg(t));
-        // ROUNDED CELLS, the selected one edged in the accent and its
-        // label a pill -- the colour-coded File Manager's icons view
-        // (2026-10-01), where the selection reads at a glance.
-        if (selected) {
-            uui_fill_round_rect(s, x, y, cw - 2, chh - 2, 8, UTHEME_ACCENT);
-            uui_fill_round_rect(s, x + 1, y + 1, cw - 4, chh - 4, 7, bg);
+        // A SELECTED CELL IS A SOFT FILL WITH A 1px EDGE, the label plain
+        // -- Windows 11 Explorer's shape, chosen from mockups 2026-10-01.
+        // The cursor's edge is the full accent in a focused pane: that is
+        // the focus ring, rounded, so no square ring is drawn over it.
+        if (selected || marked) {
+            int cur = selected && t->focused;
+            uint32_t edge = cur ? UTHEME_ACCENT : ugfx_blend(UTHEME_WHITE, UTHEME_ACCENT, 130);
+            uui_fill_round_rect(s, x, y, cw - 2, chh - 2, 6, edge);
+            uui_fill_round_rect(s, x + 1, y + 1, cw - 4, chh - 4, 5, bg);
+            if (cur) cursor_drawn = 1;
         } else if (bg != uui_table_c_bg(t)) {
             uui_fill_round_rect(s, x, y, cw - 2, chh - 2, 8, bg);
         }
@@ -998,14 +1001,7 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
             if (tw > avail) tw = avail;
             int lx = x + 3 + (max_w - (tw + (cut ? ell : 0))) / 2;
             if (lx < x + 3) lx = x + 3;
-            uint32_t lfg = selected ? UTHEME_ACCENT_TEXT : uui_table_c_fg(t), lbg = bg;
-            if (selected) {
-                int pw = tw + (cut ? ell : 0) + 10;
-                if (pw > cw - 4) pw = cw - 4;
-                uui_fill_round_rect(s, x + (cw - 2 - pw) / 2, ly - 1, pw, ugfx_char_h() + 2,
-                                    UUI_CAPSULE, UTHEME_ACCENT);
-                lbg = UTHEME_ACCENT;
-            }
+            uint32_t lfg = uui_table_c_fg(t), lbg = bg;
             ugfx_draw_string_clipped(s, lx, ly, avail, line, lfg, lbg);
             if (cut) ugfx_draw_string_clipped(s, lx + tw, ly, ell, "..", lfg, lbg);
         }
@@ -1028,10 +1024,9 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
     if (rb_rect(&fv->band, &bx, &by, &bw, &bh))
         ugfx_draw_rect(s, bx, by, bw, bh, uui_table_c_fg(t));
 
-    if (t->focused) {
-        if (sel_x >= 0) uui_focus_ring(s, sel_x, sel_y, cw - 2, chh - 2);
-        else            uui_focus_ring(s, t->x, t->y, t->w, t->h);
-    }
+    // No cursor cell on screen (none, or scrolled away): the ring goes
+    // round the pane instead.
+    if (t->focused && !cursor_drawn) uui_focus_ring(s, t->x, t->y, t->w, t->h);
 
     ugfx_clear_clip_rect(s);
 }
@@ -1081,10 +1076,11 @@ static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
 
     int src = uui_table_source_row(t, view);
     fv->press_row = src;
-    int changed = (t->selected != src);
+    int prev = t->selected;
+    int changed = (prev != src);
     t->selected = src;
 
-    fv_press_mods(fv, src, mods);
+    fv_press_mods(fv, prev, src, mods);
     if (mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT)) {
         if (changed) fv_report_select(fv);
         fv->last_click_row = -1;
@@ -1349,15 +1345,22 @@ int uui_fileview_hover(struct uui_fileview *fv, int cx, int cy) {
 // row, Shift takes the range from the anchor. `row` is a SOURCE row;
 // the range is walked in VIEW order, because what a person means by
 // "everything between these two" is what they can see, not what the
-// unsorted array happens to hold.
+// unsorted array happens to hold. `prev` is the cursor BEFORE this
+// press moved it (-1 when there was none).
 //
 // Returns 1 if anything changed. The ".." row is never markable -- it
 // is not a file, and an operation over a set containing it would act on
 // the parent directory.
-static int fv_apply_mods(struct uui_fileview *fv, int row, unsigned mods) {
+static int fv_apply_mods(struct uui_fileview *fv, int prev, int row, unsigned mods) {
     if (fv_is_up_row(fv, row)) { fv->anchor = -1; return 0; }
 
     if (mods & KEY_MOD_CTRL) {
+        // A LONE SELECTION IS THE CURSOR, UNMARKED, and Ctrl ADDS to the
+        // selection -- so the cursor joins the set before the new row.
+        // Without this the first Ctrl+click dropped the item selected
+        // before it.
+        if (fv->mark_count == 0 && prev >= 0 && prev != row)
+            uui_fileview_toggle_mark(fv, prev);
         uui_fileview_toggle_mark(fv, row);
         fv->anchor = row;
         return 1;
@@ -1414,6 +1417,7 @@ int uui_fileview_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
     if (uui_table_press(&fv->table, cx, cy)) return 1; // the scrollbar
 
     int row = uui_table_hit(&fv->table, cx, cy);
+    int prev = fv->table.selected;   // before the click moves the cursor
     int changed = uui_table_click(&fv->table, cx, cy);
     if (row < 0) {
         // The header sorts; anywhere else inside is empty space.
@@ -1427,7 +1431,7 @@ int uui_fileview_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
     // The modifiers act on the SET; the click still moves the cursor.
     // Ctrl+click deliberately does NOT count toward a double click --
     // toggling a row twice is not an "open".
-    int set_changed = fv_press_mods(fv, row, mods);
+    int set_changed = fv_press_mods(fv, prev, row, mods);
     if (mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT)) {
         if (changed) fv_report_select(fv);
         fv->last_click_row = -1;
@@ -1598,7 +1602,7 @@ static int fv_ops_release(void *w, int cx, int cy) {
     // The press was a click after all: the deferred plain-click clear.
     if (fv->deferred_clear && fv->press_row >= 0) {
         fv->deferred_clear = 0;
-        return fv_apply_mods(fv, fv->press_row, 0);
+        return fv_apply_mods(fv, -1, fv->press_row, 0);
     }
     fv->deferred_clear = 0;
     return 0;

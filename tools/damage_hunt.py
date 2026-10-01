@@ -70,6 +70,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -105,7 +106,7 @@ def run_seed(seed, slot, count, keep_logs):
     a PASS -- the exact "green because it tested nothing" failure this
     repo's testing notes warn about most.
     """
-    disk = f"/tmp/damage_hunt_{slot}.img"
+    disk = os.path.join(tempfile.gettempdir(), f"damage_hunt_{slot}.img")
     copy_disk(os.path.join(REPO, "disk.img"), disk)
 
     def vm(*args):

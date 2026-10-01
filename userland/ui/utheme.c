@@ -23,6 +23,7 @@ void utheme_default(struct utheme *out) {
     out->control_bg  = ugfx_rgb(220, 220, 226);
     out->field_bg    = ugfx_rgb(255, 255, 255);
     out->bar_bg      = ugfx_rgb(226, 226, 229);
+    out->chrome      = ugfx_rgb(232, 232, 234);
     out->text        = ugfx_rgb(20, 20, 20);
     out->border      = ugfx_rgb(60, 60, 60);
     // The selection blue the desktop and widgets already draw with

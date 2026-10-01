@@ -54,6 +54,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -152,7 +153,7 @@ def main():
         return 2
     sock = os.path.join(REPO, ".vm.serial" if n == 0 else f".vm.{n}.serial")
 
-    img = os.path.join("/tmp", f"msi_test_{n}.img")
+    img = os.path.join(tempfile.gettempdir(), f"msi_test_{n}.img")
     copy_disk("disk.img", img, cwd=REPO)
     subprocess.run([sys.executable, os.path.join(HERE, "vm.py"),
                     "--instance", str(n), "stop"], capture_output=True)

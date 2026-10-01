@@ -15,7 +15,7 @@ said, because the reason is the useful part.
 and the File Manager (`files.c`, `userland/fm/`) the second example**
 -- agreed 2026-10-01 as the look for every new app and every redesign.
 It is Windows 11 and KDE Breeze in SHAPE (Photos, Gwenview, Dolphin;
-Mica's tinted chrome), drawn with this theme's roles. Mock a redesign
+Mica's quiet chrome), drawn with this theme's roles. Mock a redesign
 up on a Design canvas first, in this palette and with real data.
 
 **Anatomy, top to bottom:** menu bar, command bar, the content, an
@@ -23,11 +23,13 @@ optional strip (thumbnails, a timeline), status bar. A side panel
 (Properties, details) opens on the RIGHT, toggled from the bar and a
 key, and the content gives it room rather than being covered.
 
-- **Chrome is TINTED, never flat grey and never saturated.** The menu
-  and command bars sit on a light blend of the accent (the File
-  Manager) or of the content itself (the viewer's ambient colours from
-  the picture), with a hairline in a deeper blend of the same colour.
-  Derive both from `utheme`, so a theme change follows.
+- **Chrome is a light NEUTRAL GREY, `UTHEME_CHROME`, never saturated.**
+  The menu, command and status bars sit on it, with a hairline a step
+  darker and a side pane a step lighter. An app whose content has a
+  colour may wash the grey faintly with it (the viewer's ambient colours
+  from the picture). The File Manager's first pass blended the accent
+  in and read as blue-grey beside the viewer; one grey keeps the apps
+  alike. Derive every step from `utheme`, so a theme change follows.
 - **The command bar is symbolic icons, coloured by WHAT THEY DO** (the
   action roles under "Colours" below), grouped by separators. A latched
   toggle -- full screen, a panel that is open, the current view mode --
@@ -38,10 +40,14 @@ key, and the content gives it room rather than being covered.
   (radial, lighter in the middle); documents and lists on the plain
   background. The default window is sized from the font and leaves the
   desktop visible around it.
-- **Selection is FILLED IN THE ACCENT**, not washed grey: a selected
-  cell is a rounded accent ring with a pale fill and its label in an
-  accent pill. The current breadcrumb chip is the accent too. Hover is a
-  quieter rounded fill, and selection outranks it.
+- **A selected item is a SOFT ACCENT FILL with a 1px edge**, label in
+  plain text -- Windows 11 Explorer's shape (chosen from mockups over a
+  ring-plus-label-pill, which read as two highlights on one item). The
+  fill is `UTHEME_SELECTION`, the edge a mid blend of the accent, and
+  the item the keyboard is on wears the full accent edge: that rounded
+  edge IS its focus ring. A latched CONTROL is still filled solid in
+  the accent, as is the current breadcrumb chip. Hover is a quieter
+  rounded grey fill, and selection outranks it.
 - **Shapes are rounded**: capsule chips (`UUI_CAPSULE`), rounded cells
   and pills, through the `uui_fill_round_rect()` wrappers.
 - **Colour carries meaning, not decoration.** Folders and places are

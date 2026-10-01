@@ -32,6 +32,8 @@ struct utheme {
     uint32_t control_bg;   // button / control face, a step below panel_bg
     uint32_t field_bg;     // editable field / display background (white today)
     uint32_t bar_bg;       // menu bar / status bar: chrome, a step below panel_bg
+    uint32_t chrome;       // a redesigned app's menu, command and status bars
+                           // (docs/gui-guidelines.md's design language)
     uint32_t text;         // body text
     uint32_t border;       // window / menu / control border lines
     uint32_t accent;       // selection / highlight / focus / checkmark
@@ -98,6 +100,7 @@ void utheme_default(struct utheme *out);
 #define UTHEME_BUTTON_BG  (utheme_current()->control_bg)
 #define UTHEME_WHITE      (utheme_current()->field_bg)
 #define UTHEME_BAR_BG     (utheme_current()->bar_bg)
+#define UTHEME_CHROME     (utheme_current()->chrome)
 #define UTHEME_TEXT       (utheme_current()->text)
 #define UTHEME_BORDER     (utheme_current()->border)
 #define UTHEME_ACCENT     (utheme_current()->accent)

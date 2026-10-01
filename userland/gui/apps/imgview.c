@@ -114,9 +114,9 @@ static void ambient_default(void) {
     g_amb.centre = ugfx_rgb(52, 52, 58);
     g_amb.edge   = ugfx_rgb(22, 22, 26);
     g_amb.strip  = ugfx_rgb(38, 38, 43);
-    g_amb.chrome = UTHEME_BAR_BG;
-    g_amb.chrome_line = UTHEME_SEPARATOR;
-    g_amb.panel  = UTHEME_PANEL_BG;
+    g_amb.chrome = UTHEME_CHROME;
+    g_amb.chrome_line = ugfx_blend(UTHEME_CHROME, ugfx_rgb(0, 0, 0), 34);
+    g_amb.panel  = ugfx_blend(UTHEME_CHROME, ugfx_rgb(255, 255, 255), 110);
 }
 
 static int lum(uint32_t c) {
@@ -156,7 +156,7 @@ static void ambient_from(const struct uimg *im) {
     g_amb.edge   = ugfx_blend(dark, black, 140);
     g_amb.strip  = ugfx_blend(avg, black, 170);
     // A FAINT wash on light chrome: dark text has to keep its contrast.
-    g_amb.chrome = ugfx_blend(ugfx_rgb(232, 232, 234), avg, 26);
+    g_amb.chrome = ugfx_blend(UTHEME_CHROME, avg, 26);
     g_amb.chrome_line = ugfx_blend(g_amb.chrome, black, 34);
     g_amb.panel  = ugfx_blend(g_amb.chrome, white, 110);
 }

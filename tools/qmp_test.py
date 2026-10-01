@@ -593,6 +593,7 @@ class QMPSession:
         settled frame is the wrong question; `settle` is the post-dump
         sleep on that raw path only.
         """
+        derived = ppm_path is None   # ours to delete once converted
         ppm_path = ppm_path or (png_path.rsplit(".", 1)[0] + ".ppm")
         # QEMU resolves `filename` relative to ITS OWN working directory,
         # and launch_qemu_cmd() passes -daemonize, which leaves the
@@ -624,6 +625,13 @@ class QMPSession:
                 "pip install pillow --break-system-packages"
             ) from e
         Image.open(ppm_path).save(png_path)
+        # Only an INTERMEDIATE: a caller asking for "x.ppm" gets it as the
+        # output too (pager_test does), and that file is not ours to drop.
+        if derived and os.path.abspath(png_path) != ppm_path:
+            try:
+                os.unlink(ppm_path)
+            except OSError:
+                pass
         return png_path
 
     def stable_pixels(self, png_path, box=None, tries=12, settle=0.15):

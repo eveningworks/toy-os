@@ -2720,10 +2720,13 @@ def run(dbg, qmp, tmp, res):
               f"aimed={aimed} marked={lay and lay.marked} "
               f"selected={lay and lay.selected} misses={aim_misses}")
 
+    # Ctrl ADDS TO THE SELECTION, and the plainly clicked row is in it:
+    # two marked, not one (Explorer, Dolphin). The widget used to start
+    # the set at the Ctrl-clicked row and drop the first.
     mod_click(2, "ctrl")
-    lay = wait_layout(dbg, win, lambda l: l.marked[0] == 1) or lay
-    res.check("Ctrl+click adds one to the set",
-              lay is not None and lay.marked[0] == 1, f"marked={lay and lay.marked}")
+    lay = wait_layout(dbg, win, lambda l: l.marked[0] == 2) or lay
+    res.check("Ctrl+click adds to the selection, the first row included",
+              lay is not None and lay.marked[0] == 2, f"marked={lay and lay.marked}")
     # NOT CHECKED HERE: a SECOND Ctrl+click and the Shift range, both of
     # which need the pointer aimed at a different row and confirmed. The
     # first aim in this section lands; later ones read no layout block at

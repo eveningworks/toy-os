@@ -4925,6 +4925,18 @@ window without going through it will find its layout polls timing out.
   deepest-first unlink ordering: reverse it and `rm -r` leaves every
   directory behind, which is the one check that reddens.
 
+- **`private_tmp.py`** -- a private `TMPDIR` per test tool, deleted
+  when the tool returns: systemd's `PrivateTmp=`, for a runner.
+  `gui_regress.py` and `ondemand_sweep.py` run every tool inside one.
+  It exists because tools copy disk images and keep screenshot
+  directories under `tempfile` and mostly never remove them. `/tmp` is
+  a RAM-backed tmpfs here, and the leftovers of many runs filled
+  it and ended a sweep at tool 83 of 91 with ENOSPC. **A tool's OUTPUT
+  is what a runner keeps**; anything meant to outlive the run goes to a
+  path the caller names (`--logs`, `--shot`). A tool run BY HAND still
+  leaves its temp files behind; `QMPSession.screenshot()` now deletes
+  the `.ppm` it derives itself, and the hardcoded `/tmp` images in
+  `osk_test`, `msi_test` and `damage_hunt` follow `TMPDIR`.
 - **`predates.py`** -- answers "did this failure exist before my
   changes?" by measuring rather than guessing: stashes the tree,
   rebuilds at HEAD, runs the command you name, restores, and prints

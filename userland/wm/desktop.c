@@ -239,9 +239,8 @@ static int is_desktop_file(const char *name) {
     size_t n = k_strlen(name);
     return n > 8 && k_strcmp(name + n - 8, ".desktop") == 0;
 }
-// Re-reads every launcher file. Only when the set of names changed, or
-// on Refresh: a same-name edit is not seen until then, the trade the
-// application database's fingerprint makes too.
+// Re-reads every launcher file: when the set of names changed, when a
+// launcher's size or mtime did (desktop_files_reload), and on Refresh.
 static void desktop_files_parse(void) {
     for (int i = 0; i < g_file_count; i++) {
         g_launch[i].name[0] = '\0';
@@ -274,7 +273,26 @@ static int desktop_files_reload(void) {
     for (int i = 0; !changed && i < n; i++)
         if (k_strcmp(fresh[i].name, g_files[i].name) != 0 || fresh[i].is_dir != g_files[i].is_dir)
             changed = 1;
-    if (!changed) return 0;
+    if (!changed) {
+        // SAME NAMES, EDITED LAUNCHER: re-parse, but keep the positions.
+        // A launcher written in pieces (`write`, then `append`) is listed
+        // after its first line, with no Name= yet, and only this notices
+        // the rest arrive -- KDE's desktop re-reads a modified file too.
+        int edited = 0;
+        for (int i = 0; i < n; i++)
+            if (is_desktop_file(fresh[i].name) &&
+                (fresh[i].size != g_files[i].size ||
+                 k_memcmp(&fresh[i].modified, &g_files[i].modified, sizeof fresh[i].modified) != 0)) {
+                g_files[i] = fresh[i];
+                edited = 1;
+            }
+        if (edited) {
+            desktop_files_parse();
+            redraw_pending = 1;
+            wm_damage_rect(0, 0, screen_w, screen_h);
+        }
+        return 0;
+    }
     for (int i = 0; i < n; i++) g_files[i] = fresh[i];
     g_file_count = n;
     desktop_files_parse();

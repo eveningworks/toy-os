@@ -189,8 +189,8 @@ this the obvious way), not from how much history it accumulated.
     measured at one indent and drawn at another is the bug that shape
     invites.
 - **A NEW OR REDESIGNED APP FOLLOWS THE APP DESIGN LANGUAGE** at the top
-  of `docs/gui-guidelines.md`: tinted chrome, a command bar coloured by
-  action role, the content as the hero, accent-filled selection, rounded
+  of `docs/gui-guidelines.md`: neutral grey chrome, a command bar coloured by
+  action role, the content as the hero, soft accent selection, rounded
   shapes, colour by meaning, a full screen with floating controls. The
   Image Viewer is the reference; mock a redesign up before coding it.
 - **A HELD BUTTON FREEZES THE HOVERED WINDOW: no leave, no enter, until

@@ -18,9 +18,11 @@ static int toolbar_h(void) { return uui_toolbar_height(&g_toolbar); }
 // 2026-10-01): the bars at one strength, the places pane lighter, a line
 // between them. Derived from the theme, never fixed, so another accent
 // carries through.
-static uint32_t chrome(void)      { return ugfx_blend(UTHEME_WHITE, UTHEME_ACCENT, 45); }
-static uint32_t chrome_line(void) { return ugfx_blend(UTHEME_WHITE, UTHEME_ACCENT, 85); }
-static uint32_t places_bg(void)   { return ugfx_blend(UTHEME_WHITE, UTHEME_ACCENT, 26); }
+// The Image Viewer's neutral chrome (the design language), without its
+// picture wash: a darker step for the hairlines, a lighter one for places.
+static uint32_t chrome(void)      { return UTHEME_CHROME; }
+static uint32_t chrome_line(void) { return ugfx_blend(UTHEME_CHROME, ugfx_rgb(0, 0, 0), 34); }
+static uint32_t places_bg(void)   { return ugfx_blend(UTHEME_CHROME, UTHEME_WHITE, 110); }
 static int statusbar_h(void) { return uui_statusbar_height(&g_status); }
 
 // The top row: Back/Forward/Up beside the breadcrumb and the search box,

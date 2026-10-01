@@ -9238,7 +9238,7 @@ convenience.
 ## The File Manager is colour-coded by what things do and what folders hold
 
 Chosen from mockups (2026-10-01) over a navy places pane and a
-wallpaper-tinted chrome: the chrome is a light wash of the accent, the
+wallpaper-tinted chrome: the chrome is the viewer's neutral grey, the
 command bar's icons are coloured by what each command does, the places
 are coloured tiles, a drive's usage bar is coloured by what the drive
 is, the breadcrumb is chips with the current folder in the accent, and
@@ -9262,10 +9262,12 @@ folder's contents to guess would be I/O on the draw path, which
 ufiletype already refuses for files. The table lives in the shared
 lookup, so the file chooser shows the same folders the same way.
 
-**The chrome wash is derived from the accent, never fixed**, so another
-accent recolours the bars with it; the places pane is a lighter step of
-the same, and the pane of files stays white, where the colour that
-matters is the icons'.
+**The chrome is the Image Viewer's neutral grey (`UTHEME_CHROME`)**, the
+places pane a lighter step of it and the pane of files white, where the
+colour that matters is the icons'. It began as a light wash of the
+accent, and beside the viewer that read as blue-grey against grey: two
+apps of one design language with two chrome colours. The colour lives
+in the command bar's icons, not in the bars.
 
 ## A held button keeps the pointer's window: no leave until the release
 
@@ -9301,8 +9303,8 @@ re-derived per app: its colours started as RGB in the app until the
 action roles moved into the theme.
 
 **One language, not per-app styling**, because what made the two apps
-read as modern was shared structure, not ornament: tinted chrome, a
-command bar coloured by what commands do, accent-filled selection,
+read as modern was shared structure, not ornament: quiet grey chrome, a
+command bar coloured by what commands do, a soft accent selection,
 rounded shapes, colour that carries meaning, and full screen with
 floating controls. Windows 11 (Photos, Explorer) and KDE (Gwenview,
 Dolphin) each get their consistency the same way, from one set of
