@@ -2981,3 +2981,28 @@ that had never worked.**
   `poll_logs()`) makes "what happened since" a slice from a `len()`
   taken before the action. Without that, the check reported two
   slideshow steps that had happened before the drag.
+
+**2026-10-01, later: the sweep, a full /tmp, and checks that aimed by position.**
+
+- **A SWEEP THAT DIES OF ENOSPC LOOKS LIKE A RUN OF REDS.** `/tmp` is a
+  16 GB tmpfs. Many sessions of tool leftovers (130 MB disk copies,
+  screenshot folders) filled it, so the sweep stopped at tool 83 of 91
+  and the last few "failures" were the disk. Even the harness's own
+  output was lost (the tool runner writes to `/tmp` too). The runners
+  now give each tool a private `TMPDIR` (`tools/private_tmp.py`); a tool
+  run by hand still leaks, so `df -h /tmp` when anything fails oddly.
+- **A HELPER THAT DELETES ITS INTERMEDIATE MUST NOT DELETE ITS OUTPUT.**
+  `screenshot()` began removing the `.ppm` it converts from, and
+  `pager_test` names its output `x.ppm` -- the same path. Compare the
+  paths before unlinking.
+- **A CHECK THAT AIMS AT "ROW 1" BREAKS WHEN THE LAYOUT GAINS A ROW.**
+  The tree checks clicked row 1 as "/'s first child"; with the places
+  in the tree it was Desktop, and "it navigated" still passed for the
+  wrong reason. Aim by what the app REPORTS (`files: layout treerow N
+  <path>`), never by position.
+- **ONE RUN PER SIDE CANNOT ATTRIBUTE A FLAKE**: the View-menu tick
+  miss went 2 in 7 across builds with and without the change under
+  suspicion, and is filed with that rate rather than blamed.
+- **`check_text_measure.py` flags `ugfx_char_w() * n` as a WIDTH** even
+  for a bar: `ugfx_char_w()` is the widest advance. Reserve with
+  `ugfx_char_advance('0') * n`.

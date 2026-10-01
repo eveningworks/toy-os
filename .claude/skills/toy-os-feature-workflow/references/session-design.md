@@ -2476,3 +2476,15 @@ live for VMs, `/stable` a COPIED snapshot behind an atomically swapped
 link, with `--promote` as rollback (apt's published repo, WSUS
 approval). The maintainer picked "both" over either alone.
 
+
+**2026-10-01 (the design language, and the File Manager to it).** The
+maintainer adopted the Image Viewer's look for every new or redesigned
+app; it is written at the top of `docs/gui-guidelines.md`. Three
+follow-ups were each chosen from a mockup canvas in one round: S1 soft
+selection (over a pill, a hugging frame and solid accent), the viewer's
+neutral grey chrome (`UTHEME_CHROME`) for every app, and T1, one
+navigation tree (over Dolphin's sections and Thunar's switch). What
+worked: mockups with the real `/etc` and `/usr/share` listings and the
+real icons converted from `data/icons/*.qoi`, and naming the real
+system each option copies. The maintainer answers within minutes, so a
+canvas is cheap, while building the wrong layout first is not.

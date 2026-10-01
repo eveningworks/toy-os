@@ -669,3 +669,23 @@ Wayland's implicit grab. **When an app drag "does nothing", log its
 `on_motion` arguments first**: one probe line showed `-1,-1 b=0` where
 held motion should have been, and that pointed at the WM rather than
 the app.
+
+## A square focus ring over a rounded selection (2026-10-01)
+
+The icons view drew its selection rounded, then `uui_focus_ring()` drew
+a SQUARE accent rect over the same cell when the pane had focus. The
+corners poked out and the maintainer read it as "doesn't look good"
+without knowing why. When a selection's own edge can carry focus (the
+cursor's edge in the full accent), draw THAT and skip the ring. Look for
+a second highlight drawn over the first before redesigning the first.
+
+## Places and volumes as rows of one tree (2026-10-01)
+
+The File Manager's side column is one `uui_tree` built by `fm_tree.c`,
+with `uui_places` kept only as its data source. Rows the head
+contributes must be told apart from inserted folders by something other
+than INDEX: a volume's children are inserted inside the head, and a
+loop that skipped "index < head" left two folders with no label.
+`UUI_TREE_HEADER` is a row every input path (hover, click, keys, drop)
+steps over: add a new non-node row kind to ALL of them, not only to
+draw.
