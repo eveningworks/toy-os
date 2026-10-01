@@ -28,6 +28,10 @@ struct uui_gallery {
     int selected;
     int hovered;                 // OWNED, from motion
     int focused;                 // OWNED, from the focus ring
+    // OWNED: draw the focus ring. Set by Tab or an arrow key, cleared by a
+    // click -- Windows' focus-visible rule: a pointer user sees the soft
+    // selection alone, a keyboard user also sees where the keys will act.
+    int ring;
     int disabled;
     int armed_prev;              // the selection before the press in flight, -1 none
 

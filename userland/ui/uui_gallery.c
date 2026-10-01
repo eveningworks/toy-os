@@ -87,11 +87,11 @@ static void draw(struct ugfx_surface *s, const void *w) {
         int sel = i == g->selected, hot = i == g->hovered && !g->disabled;
         uint32_t fill = bg;
         if (sel) {
-            // The soft accent selection with its 1px mid-accent edge.
+            // The soft accent fill alone: a card is big enough to read as
+            // chosen without an edge, and the edge beside the focus ring
+            // read as two outlines on one card.
             fill = UTHEME_SELECTION;
-            uui_fill_round_rect(s, x, y, cw, ch, radius(),
-                                ugfx_blend(UTHEME_SELECTION, UTHEME_ACCENT, 110));
-            uui_fill_round_rect(s, x + 1, y + 1, cw - 2, ch - 2, radius() - 1, fill);
+            uui_fill_round_rect(s, x, y, cw, ch, radius(), fill);
         } else if (hot) {
             fill = uui_state_bg(bg, UUI_STATE_HOVER);
             uui_fill_round_rect(s, x, y, cw, ch, radius(), fill);
@@ -114,7 +114,7 @@ static void draw(struct ugfx_surface *s, const void *w) {
         uint32_t fg = g->disabled ? ugfx_blend(UTHEME_TEXT, fill, 140) : UTHEME_TEXT;
         ugfx_draw_string_elided(s, lx, ly, avail, label, fg, fill);
         if (sel) ugfx_set_font(was);
-        if (sel && g->focused) uui_focus_ring(s, x - 2, y - 2, cw + 4, ch + 4);
+        if (sel && g->focused && g->ring) uui_focus_ring(s, x - 2, y - 2, cw + 4, ch + 4);
     }
 }
 
@@ -149,6 +149,7 @@ static int press(void *w, int cx, int cy, unsigned mods) {
     if (i < 0) return 0;
     g->armed_prev = g->selected;
     g->selected = i;
+    g->ring = 0;
     return 1;   // on ANY card, the current one too: the grab is what brings the release
 }
 
@@ -172,10 +173,18 @@ static int motion(void *w, int cx, int cy, unsigned buttons) {
 static int key(void *w, int k, unsigned mods) {
     (void)mods;
     struct uui_gallery *g = w;
-    return g->disabled ? 0 : uui_gallery_key(g, k);
+    if (g->disabled) return 0;
+    g->ring = 1;
+    return uui_gallery_key(g, k);
 }
 
-static void set_focused(void *w, int f) { ((struct uui_gallery *)w)->focused = f; }
+// Focus that arrives while a press is armed is a CLICK's; any other
+// (Tab) shows the ring at once.
+static void set_focused(void *w, int f) {
+    struct uui_gallery *g = w;
+    g->focused = f;
+    if (f && g->armed_prev < 0) g->ring = 1;
+}
 
 static int accepts_focus(const void *w) {
     const struct uui_gallery *g = w;
