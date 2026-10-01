@@ -4,6 +4,7 @@
 #include "gfx.h" // WM_TITLEBAR_H depends on ugfx_char_h(), which can change
                  // at runtime now (see gfx_set_font_size()) -- this used
                  // to be a plain compile-time constant.
+#include "win_proto.h" // WIN_CLIENT_BUFS: the client_px[] tables below
 
 // The window manager's public, app-facing API -- everything a GUI app
 // (Notepad, About, Calculator, ...) is allowed to use. Implemented
@@ -159,16 +160,16 @@ struct window {
     // not-responding check -- is unchanged: the only code that knows
     // there are two buffers is the present handler that moves this.
     uint32_t *client_buf;
-    // The two buffers as this process mapped them, and WHICH OBJECT
+    // The buffers as this process mapped them, and WHICH OBJECT
     // each mapping is of. A client replaces the object behind a name on
     // a resize; the present that first shows it carries a higher
     // generation, and that is when the name is re-opened. The old
     // mapping stays readable until then -- it holds the old object
     // alive by itself, which is wl_buffer.release.
-    uint32_t *client_px[2];
-    uint64_t  client_bytes[2];   // what was mapped, page-rounded
-    uint32_t  client_gen[2];     // 0 until the buffer has been opened
-    int client_mapped[2];        // client_px[b] may legitimately be 0
+    uint32_t *client_px[WIN_CLIENT_BUFS];
+    uint64_t  client_bytes[WIN_CLIENT_BUFS];   // what was mapped, page-rounded
+    uint32_t  client_gen[WIN_CLIENT_BUFS];     // 0 until the buffer has been opened
+    int client_mapped[WIN_CLIENT_BUFS];        // client_px[b] may legitimately be 0
     int client_front;
     // THE FRONT BUFFER'S SIZE, which is the size of the pixels on
     // screen. A client that has accepted a new size has not necessarily

@@ -25,7 +25,7 @@
 // identifies the slot; the object in it is replaced on a resize, and
 // the old one stays alive under whoever still maps it until they let go
 // (docs/winserver-ring3-design.md, stage 5).
-#define UAPP_BUFS 2
+#define UAPP_BUFS WIN_CLIENT_BUFS
 
 // ONE SURFACE THE COMPOSITOR SHOWS: the toplevel window in slot 0, a
 // popup (ui/uui_popup.h) in any other. Indexed by SLOT, which is also
@@ -53,6 +53,16 @@ struct uapp_surf {
     // always points at the OTHER one -- see present(). 0 until the first
     // present, and 0 forever for a single-buffered surface.
     int front;
+    // WHICH BUFFERS THE COMPOSITOR MAY STILL BE READING: presented and
+    // not yet handed back by WIN_EV_BUF_RELEASE (wl_buffer.release).
+    // Drawing into one of those put half-painted frames on screen. `back`
+    // is the one drawn into, chosen when a frame starts (surf_back()),
+    // -1 between frames -- choosing at present time would always find
+    // the previous front still busy and take the third buffer.
+    int busy[UAPP_BUFS];
+    unsigned long long busy_seq[UAPP_BUFS];  // present order
+    int back;
+    unsigned long long stall_ms;  // when no buffer was free; 0 otherwise
     int w, h;
     struct ugfx_surface surface;  // the back buffer, sized w x h
     int dirty;                    // a popup: drawn into since its last present
@@ -139,15 +149,20 @@ static int buf_make(struct uapp_surf *s, int buf, int w, int h) {
 
 static void bufs_release(struct uapp_surf *s);
 
-// Claims slot `slot` for a surface of w x h and makes both its buffers.
+// Claims slot `slot` for a surface of w x h and makes two of its
+// buffers; the third is made the first time both others are busy.
 static int bufs_create(struct uapp_surf *s, int w, int h) {
     if (w <= 0 || h <= 0 || s->used) return 0;
     s->used = 1;
     s->front = 0;
+    s->back = -1;
+    s->stall_ms = 0;
     s->w = w;
     s->h = h;
     s->dirty = 0;
-    for (int b = 0; b < UAPP_BUFS; b++)
+    for (int b = 0; b < UAPP_BUFS; b++) { s->busy[b] = 0; s->busy_seq[b] = 0; }
+    s->busy[0] = 1;   // the compositor shows buffer 0 from the create on
+    for (int b = 0; b < 2; b++)
         if (!buf_make(s, b, w, h)) { bufs_release(s); return 0; }
     return 1;
 }
@@ -175,6 +190,37 @@ static int buf_ensure(struct uapp_surf *s, int buf, int w, int h) {
     s->px_w[buf] = w;
     s->px_h[buf] = h;
     return 1;
+}
+
+static unsigned long long g_present_seq;
+
+// The buffer to draw this frame into, sized and wrapped as s->surface;
+// 0 when every one is busy, and the caller leaves its frame dirty for
+// the release to wake. Prefers the lowest free index, so with prompt
+// releases two buffers alternate and the third is never made.
+static struct ugfx_surface *surf_back(struct uapp_surf *s) {
+    if (s->back < 0) {
+        int pick = -1;
+        for (int b = 0; b < UAPP_BUFS && pick < 0; b++)
+            if (b != s->front && !s->busy[b]) pick = b;
+        if (pick < 0) {
+            // A RELEASE THAT NEVER CAME (an overflowed event queue) must
+            // not freeze the window: after a quarter second the oldest is
+            // long past being read, so it is taken back.
+            unsigned long long now = sys_monotonic_ns() / 1000000ULL;
+            if (!s->stall_ms) s->stall_ms = now ? now : 1;
+            if (now - s->stall_ms < 250) return 0;
+            for (int b = 0; b < UAPP_BUFS; b++)
+                if (b != s->front && (pick < 0 || s->busy_seq[b] < s->busy_seq[pick]))
+                    pick = b;
+            s->busy[pick] = 0;
+        }
+        s->stall_ms = 0;
+        if (!buf_ensure(s, pick, s->w, s->h)) return 0;
+        s->back = pick;
+    }
+    s->surface = ugfx_surface_for_pixels(s->px[s->back], s->w, s->h);
+    return &s->surface;
 }
 
 static void bufs_release(struct uapp_surf *s) {
@@ -285,8 +331,8 @@ static int wmchan_send(uint32_t type, uint32_t window,
 // The flip is this side's: the buffer just handed over is the one the
 // compositor reads, so the next frame goes into the other.
 static int surf_present(struct uapp_surf *s) {
-    int shown = s->front ^ 1;   // the one that has been drawn into
-    if (!s->px[shown]) return 0;
+    int shown = s->back;        // the one that has been drawn into
+    if (shown < 0 || !s->px[shown]) return 0;
 
     // A FULL RING MEANS NO FLIP. Dropping the frame is fine -- the next
     // present supersedes it -- but flipping anyway would leave the
@@ -297,13 +343,10 @@ static int surf_present(struct uapp_surf *s) {
                      (int)WIN_PRESENT_SIZE(s->w, s->h), 0, 0)) return 0;
 
     s->front = shown;
+    s->busy[shown] = 1;
+    s->busy_seq[shown] = ++g_present_seq;
+    s->back = -1;     // the next frame picks one that has come back
     s->dirty = 0;
-    // The BACK buffer for the new front: the other of the two. It may
-    // still be the pre-resize size, so make it current before handing
-    // it over as a surface.
-    int back = s->front ^ 1;
-    if (!buf_ensure(s, back, s->w, s->h)) return 0;
-    s->surface = ugfx_surface_for_pixels(s->px[back], s->w, s->h);
     return 1;
 }
 
@@ -323,8 +366,8 @@ static void present(struct uapp *a) {
             if ((int)pr.window < a->lease_count) a->lease_back = (int)pr.window;
             a->surface = lease_surface(a);
         }
-    } else if (surf_present(TOPLEVEL)) {
-        a->surface = TOPLEVEL->surface;
+    } else {
+        surf_present(TOPLEVEL);
     }
     // THE POPUPS AFTER THE TOPLEVEL, in slot order -- the order they
     // were opened, which is the order the compositor stacks them. Only
@@ -339,6 +382,13 @@ static void present(struct uapp *a) {
 // trip, not one per event.
 static void flush(struct uapp *a) {
     if (!a->dirty) return;
+    // NO FREE BUFFER, NO FRAME: it stays dirty and is drawn when the
+    // compositor hands one back (WIN_EV_BUF_RELEASE wakes the loop).
+    if (!a->lease_on) {
+        struct ugfx_surface *sf = surf_back(TOPLEVEL);
+        if (!sf) return;
+        a->surface = *sf;
+    }
     a->dirty = 0;
 
     // ORDER, and it is load-bearing: clear, then the APP's own painting,
@@ -719,14 +769,16 @@ int uapp_resize(struct uapp *a, int w, int h) {
     if (w > WIN_CLIENT_MAX_W) w = WIN_CLIENT_MAX_W;
     if (h > WIN_CLIENT_MAX_H) h = WIN_CLIENT_MAX_H;
 
-    int back = TOPLEVEL->front ^ 1;
-    if (!buf_make(TOPLEVEL, back, w, h)) return 0;
+    // The buffer being drawn into, if this frame has one; otherwise the
+    // next frame's surf_back() sizes whichever comes back.
+    int back = TOPLEVEL->back;
+    if (back >= 0 && !buf_make(TOPLEVEL, back, w, h)) return 0;
 
     a->w = w;
     a->h = h;
     TOPLEVEL->w = w;
     TOPLEVEL->h = h;
-    TOPLEVEL->surface = ugfx_surface_for_pixels(TOPLEVEL->px[back], w, h);
+    if (back >= 0) TOPLEVEL->surface = ugfx_surface_for_pixels(TOPLEVEL->px[back], w, h);
     a->surface = a->lease_on ? lease_surface(a) : TOPLEVEL->surface;
     if (a->desc->layout) uui_layout_run(a->desc->layout, 0, 0, a->w, a->h);
     return 1;
@@ -835,7 +887,7 @@ static int popup_open(void *ctx, int ax, int ay, int aw, int ah, int w, int h,
     s->parent = g_popup_parent ? g_popup_parent : g_app.window;
     s->done = done;
     s->owner = owner;
-    s->surface = ugfx_surface_for_pixels(s->px[s->front ^ 1], w, h);
+    surf_back(s);
     if (out_x) *out_x = r.b;
     if (out_y) *out_y = r.c;
     return slot_of(s);
@@ -853,10 +905,10 @@ static struct ugfx_surface *popup_surface(void *ctx, int id) {
     (void)ctx;
     if (id <= 0 || id >= WIN_CLIENT_MAX || !g_surf[id].used) return 0;
     struct uapp_surf *s = &g_surf[id];
-    if (!buf_ensure(s, s->front ^ 1, s->w, s->h)) return 0;
-    s->surface = ugfx_surface_for_pixels(s->px[s->front ^ 1], s->w, s->h);
+    struct ugfx_surface *sf = surf_back(s);
+    if (!sf) { g_app.dirty = 1; return 0; }   // drawn once a buffer is back
     s->dirty = 1;   // present() sends it after the toplevel
-    return &s->surface;
+    return sf;
 }
 
 // --- dialog windows: a second toplevel (ui/uapp.h) -------------------
@@ -890,8 +942,7 @@ static void dlg_flush(struct uapp_window *w) {
     if (!w->slot || !w->dirty) return;
     w->dirty = 0;
     struct uapp_surf *s = &g_surf[w->slot];
-    if (!buf_ensure(s, s->front ^ 1, s->w, s->h)) return;
-    s->surface = ugfx_surface_for_pixels(s->px[s->front ^ 1], s->w, s->h);
+    if (!surf_back(s)) { w->dirty = 1; return; }   // drawn once a buffer is back
     if (w->desc.layout) uui_layout_run(w->desc.layout, 0, 0, s->w, s->h);
     if (w->desc.log_prefix && layout_log_enabled()) {
         g_log_seen_n = 0;
@@ -944,7 +995,6 @@ struct uapp_window *uapp_window_open(struct uapp *a, const struct uapp_window_de
     d->cursor = WIN_CURSOR_DEFAULT;
     if (desc->widgets && desc->widget_count > 0)
         uui_router_init(&d->router, desc->widgets, desc->widget_count);
-    s->surface = ugfx_surface_for_pixels(s->px[s->front ^ 1], w, h);
     d->dirty = 1;
     dlg_flush(d);
     return d;
@@ -1284,6 +1334,16 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
     // translation. What a popup does NOT share: focus (the toplevel
     // keeps it), resize (a popup has one size) and close (which for a
     // popup is a dismissal).
+    // A BUFFER CAME BACK, for any surface: the next frame may draw into
+    // it. A stale one -- a generation since replaced -- is ignored.
+    if (in->type == WIN_EV_BUF_RELEASE) {
+        if (in->window < WIN_CLIENT_MAX && g_surf[in->window].used &&
+            in->a >= 0 && in->a < UAPP_BUFS &&
+            g_surf[in->window].px_gen[in->a] == (uint32_t)in->b)
+            g_surf[in->window].busy[in->a] = 0;
+        return;
+    }
+
     struct win_event copy = *in;
     const struct win_event *ev = in;
     if (in->window != a->window) {
@@ -1838,11 +1898,10 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
         a->timer_armed = wmchan_send(WIN_REQ_TIMER, a->window,
                                      (int)desc->tick_ms, 0, 0, 0);
     }
-    // THE BACK BUFFER, which with front 0 is buffer 1. Starting on
-    // buffer 0 paints into the one the compositor IS showing, which
-    // reads as a window that opens and draws nothing.
-    TOPLEVEL->surface = ugfx_surface_for_pixels(TOPLEVEL->px[TOPLEVEL->front ^ 1], a->w, a->h);
-    a->surface = TOPLEVEL->surface;
+    // THE BACK BUFFER, never buffer 0: the compositor shows that one
+    // from the create on, so painting it reads as a window that opens
+    // and draws nothing (surf_back() skips the busy front).
+    if (surf_back(TOPLEVEL)) a->surface = TOPLEVEL->surface;
 
     // Now that the content size is settled, place everything in it.
     // Re-run rather than trusting the natural-size pass: the window may

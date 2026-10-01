@@ -197,8 +197,14 @@ def run_rebinding(dbg, qmp, res):
         for ch in "shortcuts":
             dbg.send(f"gui key {ord(ch)}")
         time.sleep(2)
-    page = [l for l in (dbg.send("sh dmesg") or "").splitlines()
-            if "settings: page Shortcuts" in l]
+    # FROM THE WIRE, NOT `sh dmesg`: with the layout log on the kernel
+    # ring rolls over in about a second, and the page line was gone by
+    # the time it was read on a busy run -- with the page plainly open.
+    page = []
+    deadline = time.time() + 8
+    while time.time() < deadline and not any("slots 4" in l for l in page):
+        page = [l for l in dbg.logs("settings: page Shortcuts", clear=False)]
+        time.sleep(0.3)
     res.check("the Shortcuts page lists every action",
               any("slots 4" in l for l in page),
               f"page line: {page[-1] if page else row or 'none'}")

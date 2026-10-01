@@ -156,6 +156,7 @@ TOOLS = [
     ("shadow", "shadow_test.py", "drop shadows under windows and menus, and desktop.shadows turns them off"),
     ("anim", "animation_test.py", "open/close/minimize/restore ghosts, and desktop.animations turns them off"),
     ("idle", "idle_desktop_test.py", "nothing paints over an idle desktop"),
+    ("halfframe", "half_frame_test.py", "no half-painted window frame while scrolling"),
     ("caret", "caret_blink_test.py", "the text caret blinks, stops solid, and never spins"),
     ("imgview", "imgview_test.py", "JPEG decoding, the viewer, and the wallpaper"),
     ("icons", "icons_test.py", "app icons: QOI, alpha compositing, three draw sites"),

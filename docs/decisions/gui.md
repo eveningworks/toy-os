@@ -9145,3 +9145,46 @@ layout; **only A** would have fixed Doom and left every other app
 seeing Alt as Esc. **Moving Ctrl+letter to a bit as well** is the
 Wayland shape but a rewrite of every shortcut table for nothing a user
 sees.
+
+## A client draws only into a buffer the compositor released, and a window has three
+
+Two buffers and a flip ended the File Manager's flicker on selection,
+and a second one came back while scrolling: the icon pane showed bare
+window grey with the toolbar and tree drawn above it, 123 frames in 400
+under TCG while `/bin` scrolled in icons view. The present was fire and
+forget. A client presented buffer B and began repainting A at once --
+and A was exactly what a composite preempted mid-read was still
+scanning, so the composite finished on a half-cleared buffer and that
+frame stayed up until the next present.
+
+**Wayland's answer: `wl_buffer.release`.** The compositor says when it
+has stopped reading a buffer, and a client draws only into one it has
+been handed back; X11's Present has `PresentIdleNotify` for the same
+reason. Here it is `WIN_EV_BUF_RELEASE`, sent for the old front while
+the compositor handles the present that replaces it. That moment is
+safe because the compositor is single-threaded: no composite is in
+flight while a message is being handled, and nothing reads the old
+front after it.
+
+**Three buffers, so the client never waits** -- the mailbox shape the
+scanout flip already uses, after two buffers and a wait tore worse than
+none. One is shown, one may not have come back yet, one is free. GTK
+and Qt keep a small pool of shm buffers for this. The cost is memory, so
+the third is made lazily: the client picks its back buffer when a frame
+STARTS, by which time the release for the previous front has usually
+arrived, and two buffers alternate exactly as before. Picking at
+present time would always find the old front still busy and use all
+three on every frame.
+
+**A frame with no free buffer is skipped, not waited for**: it stays
+dirty and the release wakes the loop. A release lost to an overflowed
+event queue would strand a buffer for ever, so after 250 ms the oldest
+busy one is taken back; by then the compositor is either long past it or
+not running at all.
+
+Considered and not taken: **the compositor copying a frame at present
+time** (a shm-copy compositor's habit). The copy still races, because a
+compositor that is behind can handle a present after the client has
+started on that buffer again -- only a handback closes the window.
+`tools/half_frame_test.py` is the check, its positive control a
+`surf_back()` that ignores the busy flags (81 frames in 240).

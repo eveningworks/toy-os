@@ -496,6 +496,15 @@ void wm_client_popups_dismiss(int owner) {
 // pixels -- the kernel flipped it inside WIN_REQ_PRESENT, before this
 // event was queued, so by the time this runs the client is already
 // drawing into the other one.
+static void send_release(struct window *win, int b) {
+    struct win_event ev = {0};
+    ev.type = WIN_EV_BUF_RELEASE;
+    ev.window = win->client_win;
+    ev.a = b;
+    ev.b = (int32_t)win->client_gen[b];
+    if (!win_events_push(win->client_pid, &ev)) note_dropped(win);
+}
+
 static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
                               int w, int h) {
     int idx = find_client_window(pid, id);
@@ -506,7 +515,10 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     // THE FIRST FRAME is when the window appears, and so when it
     // animates in (wm_anim.h) -- after this present is adopted, since
     // the ghost is a snapshot of what arrived.
-    int first = !win->client_gen[0] && !win->client_gen[1];
+    int first = 1;
+    for (int b = 0; b < WIN_CLIENT_BUFS; b++)
+        if (win->client_gen[b]) first = 0;
+    if (front < 0 || front >= WIN_CLIENT_BUFS) return;
 
     // **THE GENERATION IS WHAT SAYS "RE-OPEN THE NAME".** The name is
     // the slot and never changes; the object under it does, on every
@@ -515,8 +527,14 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     // A failed open leaves the last good frame on screen -- see
     // map_buf() on why the size is checked by mapping it.
     if (!map_buf(win, front, gen, w, h)) return;
+    int old = win->client_front;
     win->client_front = front;
     win->client_buf = win->client_px[front];
+    // THE OLD FRONT IS FREE NOW, and only now: nothing reads it after
+    // this, and no composite is in flight while a message is handled.
+    // Without this the client redrew it while a preempted composite was
+    // still reading it -- a half-painted window on screen.
+    if (old != front) send_release(win, old);
     wm_peek_presented(win->open_seq);   // its peek thumbnail is stale
     // THE FRAME BRINGS ITS OWN SIZE, and this is where a resize lands.
     // Adopting it when the client ACCEPTED the proposal instead would
@@ -1193,7 +1211,7 @@ static void unmap_buf(struct window *win, int b) {
 }
 
 static void unmap_client_window(struct window *win) {
-    for (int b = 0; b < 2; b++) unmap_buf(win, b);
+    for (int b = 0; b < WIN_CLIENT_BUFS; b++) unmap_buf(win, b);
     win->client_buf = 0;
 }
 

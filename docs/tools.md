@@ -2684,6 +2684,17 @@ window without going through it will find its layout polls timing out.
   failed on the phase); this tool does not call it and sets the setting
   itself. In `gui_regress.py`.
 
+- **`half_frame_test.py`** -- no HALF-PAINTED window reaches the screen.
+  The File Manager on `/bin` in icons view, scrolled with the real wheel
+  while QMP dumps frames as fast as it can; a frame whose icon pane is
+  mostly the window's plain grey (236,236,236) was composited while the
+  client was repainting it. **The pane moving is the control** -- frames
+  that differ from the one before -- since a scroll that never happened
+  would pass on a still picture. Guards the buffer handback
+  (`WIN_EV_BUF_RELEASE`, `docs/decisions/gui.md`); its positive control
+  is `surf_back()` ignoring the busy flags, 81 of 240 frames. In
+  `gui_regress.py`.
+
 - **`idle_desktop_test.py`** -- with nobody touching it, does the screen
   SIT STILL? Two regions (the icon column, an empty patch) must be
   pixel-identical across eight captures. Written after a blinking console

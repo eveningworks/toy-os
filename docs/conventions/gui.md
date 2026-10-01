@@ -188,14 +188,16 @@ this the obvious way), not from how much history it accumulated.
     and the measuring ask the same helper for the indent -- a label
     measured at one indent and drawn at another is the bug that shape
     invites.
-- **A WINDOW HAS TWO BUFFERS, AND THE COMPOSITOR NEVER READS THE ONE
-  BEING DRAWN.** `WIN_REQ_PRESENT` flips which is front and returns the
-  new index; the client draws into the other. Wayland's attach/commit,
-  and it exists for the reason it does there: the compositor repaints on
-  its OWN cadence -- the taskbar clock forces one every second -- so
-  with a single buffer it eventually catches a frame halfway through,
-  and an app that clears its surface first then flashes its background.
-  That was the File Manager's flicker on every selection. Five things:
+- **A WINDOW HAS THREE BUFFERS, AND A CLIENT DRAWS ONLY INTO ONE THE
+  COMPOSITOR HAS RELEASED** (`WIN_EV_BUF_RELEASE`). A present names the
+  new front; the compositor reads it on its OWN cadence -- the taskbar
+  clock forces a repaint every second -- so a client that drew into a
+  buffer the compositor might still be reading put a frame halfway
+  through on screen, and an app that clears its surface first flashed
+  its background. That was the File Manager's flicker, twice: on every
+  selection with one buffer, and while scrolling with two (the client
+  repainted the old front while a preempted composite was still reading
+  it). Wayland's attach/commit plus `wl_buffer.release`. Six things:
   - **BOTH BUFFERS STAY MAPPED, IN BOTH PROCESSES.** Each is a named shm
     object the CLIENT creates (`WIN_BUF_NAME_FMT`: pid, slot, buffer)
     and grants to the compositor, which maps it once and re-opens the
@@ -214,9 +216,18 @@ this the obvious way), not from how much history it accumulated.
     no-op, so no caller needs a special case.
   - **THE FLIP IS THE CLIENT'S, AND THE FRAME NAMES ITSELF**: a present
     says which buffer, which object (its generation) and how big, so the
-    compositor adopts the geometry of what it is about to show and the
-    client knows which buffer is free the moment it has sent. There is
+    compositor adopts the geometry of what it is about to show. There is
     no second record of a buffer's size anywhere (`lib/uwmchan.h`).
+  - **A BUFFER COMES BACK ONLY WHEN THE COMPOSITOR SAYS SO.** It sends
+    `WIN_EV_BUF_RELEASE` for the old front as it handles the present
+    that replaces it -- a single-threaded compositor has no composite in
+    flight then. `ui/uapp.c`'s `surf_back()` picks the back buffer when
+    a FRAME STARTS, not at present time (when the old front is always
+    still busy), so with prompt releases two buffers alternate and the
+    third is made only under contention; with none free the frame stays
+    dirty until a release wakes the loop, and a release lost to an
+    overflowed queue is taken back after 250 ms rather than freezing the
+    window. `tools/half_frame_test.py` measures it.
   - **THE INVARIANT IS TESTED AS MEMORY, NOT AS A FLICKER.** Catching a
     torn frame means sampling fast enough to land inside one redraw --
     timing-dependent, and a check that passes more often the faster the

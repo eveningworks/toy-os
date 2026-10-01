@@ -269,6 +269,15 @@
 // does wl_keyboard.leave.
 #define WIN_EV_KEY_PHYS 41
 
+// THE COMPOSITOR HAS STOPPED READING A BUFFER: `window` the surface, a:
+// the buffer index, b: its generation. Wayland's wl_buffer.release. Sent
+// when a present makes another buffer the front, which is the moment the
+// old one can no longer be read (the compositor is single-threaded, so
+// no composite is in flight then). A client draws only into a buffer it
+// has not presented since its last release -- drawing into one the
+// compositor may still be reading is a half-painted frame on screen.
+#define WIN_EV_BUF_RELEASE 42
+
 #define WIN_EV_RAW_WHEEL 12 // a: notches, + = up/away, - = down/toward.
                             // Separate from RAW_MOUSE because the
                             // driver's wheel is a read-and-reset
@@ -1365,11 +1374,16 @@ struct win_request_msg {
 // A PRESENT EVENT'S `b`: which buffer is now the front one, and that
 // buffer's GENERATION -- the number that goes up each time the client
 // replaces the object behind the name. One field because struct
-// win_event has no spare one, and a buffer index is one bit.
-#define WIN_PRESENT_B(buf, gen) ((int32_t)(((uint32_t)(gen) << 1) \
-                                            | ((uint32_t)(buf) & 1u)))
-#define WIN_PRESENT_BUF(b)      ((int)((uint32_t)(b) & 1u))
-#define WIN_PRESENT_GEN(b)      ((uint32_t)(b) >> 1)
+// win_event has no spare one; the index is two bits.
+//
+// THREE BUFFERS PER SURFACE, a mailbox: one the compositor shows, one it
+// may not have released yet (WIN_EV_BUF_RELEASE), one to draw into -- so
+// a client never has to wait for the compositor to draw a frame.
+#define WIN_CLIENT_BUFS 3
+#define WIN_PRESENT_B(buf, gen) ((int32_t)(((uint32_t)(gen) << 2) \
+                                            | ((uint32_t)(buf) & 3u)))
+#define WIN_PRESENT_BUF(b)      ((int)((uint32_t)(b) & 3u))
+#define WIN_PRESENT_GEN(b)      ((uint32_t)(b) >> 2)
 
 
 // Where WIN_REQ_FONT maps the shared glyph data. A literal since the
