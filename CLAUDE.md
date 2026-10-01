@@ -212,11 +212,12 @@ look fine.
   ring holds a few hundred lines: stay under a line a second, give every
   probe in a comparison the SAME limiter, and use a file-backed serial
   log for anything verbose.
-- **Three ways a GUI test passes without testing anything:** "it
+- **Four ways a GUI test passes without testing anything:** "it
   responds" is not "it is drawn" (the ring-3 Calculator shipped with no
   visible buttons); moving identical content is pixel-identical, so
   number the rows; a test must not assume what it is testing. Ask what a
-  broken version would still pass.
+  broken version would still pass -- and park the pointer outside a
+  compared box: its sprite alone makes two frames differ.
 - **A positive control can turn nothing red because the test's DATA
   never reached the code under test** -- suspect the fixture before the
   harness, and ask what input actually reaches the branch.

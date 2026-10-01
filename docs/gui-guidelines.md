@@ -650,7 +650,11 @@ Two rules that keep it cheap and honest:
   first feels dead in exactly the moment hover exists to prevent.
 
 Hover is suppressed entirely while anything is held, armed or being
-dragged: the press visual owns the feedback then.
+dragged: the press visual owns the feedback then. **The hovered WINDOW
+is frozen too** -- no leave, no enter until the release, Wayland's
+implicit grab (`wm_update_content_hover()`). A leave mid-press would
+reach a client as a move to `(-1, -1)` with no button held, which an
+app tracking a drag in `on_motion` reads as the release.
 
 **A control built on `ui_button_group` gets all of this without
 writing any of it.** `ui_button_group_hover()` maintains each button's
@@ -983,7 +987,7 @@ them asked the opposite question. When a suite is built entirely out of
 "do X, check Y changed", the things that happen when nobody does anything
 are structurally invisible to it.
 
-## Three ways a GUI test passes without testing anything
+## Four ways a GUI test passes without testing anything
 
 All three of these shipped a real bug past a green suite. They are
 listed together because they share a shape: the assertion was true, and
@@ -1010,8 +1014,14 @@ using the scroll it was there to verify. Pick a fixed point you can
 reach unconditionally (the bottom, after typing) or set the state
 directly.
 
+**And a fourth: the cursor in the compared box.** The Image Viewer's
+"a drag pans the picture" compared the stage before and after a drag
+that left the pointer over it. The sprite made the frames differ, and
+the check passed for a pan that never moved. Park the pointer outside
+the region for both shots.
+
 The general form is the rule this file already states: **ask what a
-broken version would still pass.** These are three specific ways to
+broken version would still pass.** These are four specific ways to
 answer it wrong.
 
 ## Verifying a GUI change

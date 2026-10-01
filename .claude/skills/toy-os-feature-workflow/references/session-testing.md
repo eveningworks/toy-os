@@ -2952,3 +2952,32 @@ a hand-rolled poll -- and `remote.py reboot --wait` already did that for
 the laptop, which went unnoticed four times: read `--help` before
 writing a wait loop.
 
+
+**2026-10-01, the Image Viewer's pan: a check that passed for a feature
+that had never worked.**
+
+- **A FRAME COMPARISON WITH THE CURSOR INSIDE THE BOX ALWAYS DIFFERS.**
+  `imgview_test`'s "a drag pans the zoomed picture" compared the stage
+  before and after a drag that ended with the pointer still over it.
+  The sprite alone made the frames differ, so the check was green while
+  the pan never moved. A positive control written for the NEW full-screen
+  check would not turn red either, and that is what exposed the old one.
+  Park the pointer outside the compared region for BOTH shots. When a
+  control fails to fire, suspect every sibling check built the same way.
+- **A WINDOW'S RECT RIGHT AFTER A STATE CHANGE IS TRANSITIONAL.** The
+  WM adopts a size only when the client presents at it, so a read right
+  after leaving full screen (or maximize) can still give the old size.
+  A check that reads "what size was it" at that moment and later
+  "restores" to it makes the wrong size permanent. That was the
+  wallpaper check's intermittent red, first blamed on the
+  restore drag. Wait for the rect, and assert it.
+- **AN INJECTED GRIP DRAG CANNOT SET A SIZE; `gui resize W H` CAN.**
+- **A ONE-SECOND CLOCK TIES.** A cache rule of "entry not older than
+  source" served a same-second rewrite stale. Two `docs/bugs.md`
+  entries had it as "cause not established". Any freshness test on
+  whole-second mtimes needs a strict comparison, and so does its test
+  fixture, which then needs a second's gap before the first look.
+- **A helper that returns an ACCUMULATED list** (`imgview_test`'s
+  `poll_logs()`) makes "what happened since" a slice from a `len()`
+  taken before the action. Without that, the check reported two
+  slideshow steps that had happened before the drag.

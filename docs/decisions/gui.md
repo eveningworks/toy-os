@@ -9266,3 +9266,47 @@ lookup, so the file chooser shows the same folders the same way.
 accent recolours the bars with it; the places pane is a lighter step of
 the same, and the pane of files stays white, where the colour that
 matters is the icons'.
+
+## A held button keeps the pointer's window: no leave until the release
+
+While a button is held or a press is armed, `wm_update_content_hover()`
+changes nothing: the window under the press keeps the pointer, hears no
+leave, and the window the pointer crosses hears no enter. The release
+re-runs it, and that is when a leave or an enter goes out.
+
+**This is Wayland's implicit grab** (a `wl_pointer` keeps its focus
+surface for as long as a button is down), and Win32's `SetCapture` and
+X11's automatic grab have the same shape. The obvious alternative, the
+one toy-os had, was to treat "a button is held" as "no window is
+hovered", so that hover highlights would not fight the press visual.
+It also sent the pressed client a LEAVE on the first held move. A
+client hears a leave as a move to `(-1, -1)` with no button bits, which
+is exactly what a release looks like to an app tracking its own drag in
+`on_motion`. So every app-level drag ended on its first motion, and the
+Image Viewer's pan never moved at all. Widget drags survived because
+the toolkit's router grabs on press and ignores the leave, which is why
+the bug hid for so long.
+
+Freezing the hover changes nothing visible for highlights: the press
+visual still owns the feedback, and a stale hover cannot repaint
+because nothing reaches `on_hover` until the release.
+
+## New and redesigned apps share one design language, and the Image Viewer is its reference
+
+The maintainer adopted the redesigned Image Viewer's look (2026-10-01)
+as the look for future and redesigned apps. It is written as a section
+of docs/gui-guidelines.md rather than left implicit in two apps. The
+second example, the File Manager, showed that the look was being
+re-derived per app: its colours started as RGB in the app until the
+action roles moved into the theme.
+
+**One language, not per-app styling**, because what made the two apps
+read as modern was shared structure, not ornament: tinted chrome, a
+command bar coloured by what commands do, accent-filled selection,
+rounded shapes, colour that carries meaning, and full screen with
+floating controls. Windows 11 (Photos, Explorer) and KDE (Gwenview,
+Dolphin) each get their consistency the same way, from one set of
+system-wide rules. **It is a reference app, not a framework**: pieces
+become `userland/ui/` widgets when a second app needs them, as
+`uui_thumbstrip` did, and a redesign is still mocked up before it is
+coded.

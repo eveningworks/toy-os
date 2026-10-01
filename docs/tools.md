@@ -3014,8 +3014,8 @@ window without going through it will find its layout polls timing out.
   changed" cannot tell from "the pixels changed to something else".
   Every setting it touches is restored, the resolution included. In
   `gui_regress.py`.
-- **`imgview_test.py`** -- JPEG decoding all the way to a screen (15
-  checks), and the only one of the three decoder checks that can see a
+- **`imgview_test.py`** -- JPEG decoding all the way to a screen,
+  and the only one of the three decoder checks that can see a
   pixel. Its oracle is the host: `data/wallpapers/aurora.jpg` is
   1280x720 and so is the screen, so the default wallpaper must match
   libjpeg's decode of that file PIXEL FOR PIXEL, with nothing resampled
@@ -3027,7 +3027,17 @@ window without going through it will find its layout polls timing out.
   middle column match -- which a cropped picture breaks; the bars are on
   whichever axis the window's shape leaves them). The second picture is
   chosen by clicking the filmstrip's `strip.cell 1`, where the widget
-  reports it.
+  reports it. Then the redesign's controls: wheel zoom, drag-to-pan
+  windowed and full screen, rotate, Properties, the slideshow, and
+  "leaving full screen restores the window's rect". **A PAN CHECK PARKS
+  THE POINTER OFF THE COMPARED BOX**: with the cursor sprite inside it
+  the two frames always differed, and the windowed check passed for a
+  pan that never moved (positive controls: the imgview guard, and the
+  WM's mid-press leave). **The rect after full screen is WAITED FOR**:
+  the WM adopts a size when the client presents at it, so a read straight
+  after Esc can still be screen-sized, and the resize checks restored
+  to that. They restore with `gui resize`, never a grip drag. Its
+  `poll_logs()` is CUMULATIVE: take `len()` before an action and slice.
   Finally "Set as wallpaper" is followed across a process boundary --
   the viewer writes `/etc/desktop.conf`, the desktop notices through the
   filesystem generation counter, and the background becomes the other
@@ -4079,7 +4089,12 @@ window without going through it will find its layout polls timing out.
   toy-os's `touch` does NOT move an existing file's mtime, so the
   staleness check copies a different icon over one instead -- the first
   version went red against working code because the input never reached
-  the branch. In `gui_regress.py`.
+  the branch. **And a second must pass between writing the fixture and
+  the first look**: freshness is STRICTLY newer at one-second resolution
+  (`uthumb.c`'s `cache_fresh()`), so an entry written in its source's
+  second re-decodes once. The old "not older" rule tied on a same-second
+  rewrite and served it stale, which was this tool's intermittent red.
+  In `gui_regress.py`.
 - **`wait_for.sh`** -- wait for a PID to exit or a file to appear, with a
   MANDATORY timeout. It exists because the hand-rolled version has a
   failure mode that outlives the session: `while ps aux | grep -q

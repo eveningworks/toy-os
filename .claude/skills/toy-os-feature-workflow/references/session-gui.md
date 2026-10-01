@@ -656,3 +656,16 @@ struct landed on exactly those bytes, skipped its allocation and wrote
 through garbage -- a GP fault. malloc does not zero, and a "carried
 across the wipe" pattern must set the carried fields on a fresh
 allocation first. `uterm_test` t8-t10 maximize, open a tab, restore.
+
+## A held button must not tell the client the pointer left (2026-10-01)
+
+The WM treated "a button is held" as "no window hovered". On the first
+held move, the pressed client got a leave: a move to `(-1, -1)` with no
+button bits, which an app tracking its own drag reads as the release.
+Every app-level drag died there. Widget drags survived because the
+router grabs on press, and that is why it went unseen for so long.
+`wm_update_content_hover()` now returns while anything is held:
+Wayland's implicit grab. **When an app drag "does nothing", log its
+`on_motion` arguments first**: one probe line showed `-1,-1 b=0` where
+held motion should have been, and that pointed at the WM rather than
+the app.
