@@ -2157,14 +2157,13 @@ window without going through it will find its layout polls timing out.
   image. **Into `data/`, NOT `seed/sync/`** -- that tree is gitignored
   and `make clean` deletes it, so the first version's themes were never
   committed and every checkout but the authoring one silently got the
-  built-in fallback. It is the authoring path for a new theme too: a
-  MASK theme is a function returning shape name -> masks, an IMAGE theme
-  a row of `IMAGE_THEMES` (fill, rim and busy-ring colours) drawn over
+  built-in fallback. It is the authoring path for a new theme too: every
+  theme is a row of `IMAGE_THEMES` (fill, rim and busy-ring colours,
+  and optionally a heavier rim and body, as Classic bold has) drawn over
   the shared supersampled geometry (`GEOM`) and rendered natively at
-  1x/2x/3x into QOI files that Pillow encodes. It
-  EXTRACTS the default arrow from `userland/wm/wm_render.c`'s own baked
-  arrays and ports the procedural resize shapes, so the files on disk
-  cannot drift from the built-in fallback they mirror. `--check` fails
+  1x/2x/3x into QOI files that Pillow encodes. Classic and Classic bold
+  were mask themes ported from the built-ins until 2026-10-01; they are
+  image themes on the same geometry now. `--check` fails
   if they are stale -- binary QOIs included, so a different Pillow that
   encodes differently reads as stale (re-run and look at the art).
 - **`cursor_theme_test.py`** -- cursor themes end to end: the

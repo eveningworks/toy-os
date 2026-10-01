@@ -25,7 +25,7 @@ const char *cursor_shape_name(int index) {
 }
 
 static struct cursor_shape g_shapes[CURSOR_SHAPE_COUNT];
-static char g_theme[SETTING_VALUE_MAX] = "default";
+static char g_theme[SETTING_VALUE_MAX] = CURSOR_THEME_DEFAULT;
 static int  g_scale = 1;
 static uint32_t g_seen_generation;
 
@@ -191,7 +191,7 @@ static void adopt_settings(void) {
     g_scale = scale;
 
     if (!have || !etc_config_buf_get(&conf, "cursor_theme", val, sizeof val) || !val[0])
-        k_strlcpy(val, "default", sizeof val);
+        k_strlcpy(val, CURSOR_THEME_DEFAULT, sizeof val);
     // A new SIZE reloads too: an image theme's rendering for 2x is a
     // different file from its 1x one.
     if (k_strcmp(val, g_theme) != 0 || !g_shapes[0].loaded || rescaled) {

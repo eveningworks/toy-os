@@ -32,6 +32,12 @@
 // rename breaks every theme on disk. Each has a caller; `hand`, `move`
 // and `not-allowed` are cursor-shape-v1's pointer, move and not-allowed.
 // An unknown name in a theme directory is ignored.
+// The theme a machine with no `cursor_theme` stored gets. MUST MATCH
+// /etc/settings.d/system.cursor_theme's Default=: the WM reads the conf
+// file directly and never sees the descriptor, so the two only agree by
+// being written the same.
+#define CURSOR_THEME_DEFAULT "graphite"
+
 #define CURSOR_SHAPE_COUNT 10
 const char *cursor_shape_name(int index); // "arrow", "resize-h", ...
 

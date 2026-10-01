@@ -237,13 +237,25 @@ def main():
           not hw, "hwcursor on -- boot with a VGA that has no cursor plane" if hw else "")
     themes = image_themes()
     check("image themes are installed", len(themes) >= 1, ", ".join(themes))
-    # The CONTROL first: the mask default must show none of an image
-    # theme's colours, or a hit below proves nothing.
-    DebugConsole.warp_cursor(dbg, qmp, PARK_X, PARK_Y)
-    time.sleep(0.5)
+    # The CONTROL first, per theme: with a theme whose opaque colours do
+    # not overlap t's showing, none of t's may appear, or a hit below
+    # proves nothing. The control is CHOSEN from the data -- every theme
+    # is an image theme now and Classic is no longer pure black and
+    # white, so no one fixed theme is disjoint from all the others.
+    bw = {(0, 0, 0), (255, 255, 255)}
+    owns = {t: own_colours(t) for t in themes}
+    distinct = {}
     for t in themes:
-        stray = colour_hits(qmp, f"control_{t}", own_colours(t) - {(0, 0, 0), (255, 255, 255)})
-        check(f"control: the default pointer shows none of {t}'s colours", stray == 0,
+        ctl = next((c for c in themes if c != t and not (owns[c] & owns[t]) - bw), None)
+        if ctl is None:
+            check(f"control: a theme disjoint from {t}'s colours exists", False)
+            continue
+        distinct[t] = owns[t] - owns[ctl] - bw
+        set_setting(dbg, "cursor_theme", ctl)
+        DebugConsole.warp_cursor(dbg, qmp, PARK_X, PARK_Y)
+        time.sleep(0.5)
+        stray = colour_hits(qmp, f"control_{t}", distinct[t])
+        check(f"control: the {ctl} pointer shows none of {t}'s colours", stray == 0,
               f"{stray} px")
     for t in themes:
         set_setting(dbg, "cursor_theme", t)
@@ -252,7 +264,7 @@ def main():
               f'theme="{theme}" loaded={n} of {want}')
         DebugConsole.warp_cursor(dbg, qmp, PARK_X, PARK_Y)
         time.sleep(0.5)
-        hits = colour_hits(qmp, f"img_{t}", own_colours(t) - {(0, 0, 0), (255, 255, 255)})
+        hits = colour_hits(qmp, f"img_{t}", distinct.get(t, set()))
         check(f"the {t} pointer paints its own colours", hits >= 20, f"{hits} px")
         # large reloads the 2x RENDERING; its ink grows about fourfold
         ink1 = cursor_ink(qmp, f"img1_{t}")

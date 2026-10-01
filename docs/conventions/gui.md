@@ -1438,8 +1438,9 @@ this the obvious way), not from how much history it accumulated.
   means the same as `auto`. A number is a spinbox, a string a field, a key combination a
   capture control, as before.
 - **A GALLERY'S PICTURE IS THE CALLER'S PAINTER, AND `Preview=` NAMES IT.**
-  `uui_gallery` draws the cards -- the soft accent selection, hover, the
-  label -- and calls `draw_tile(surface, i, x, y, w, h, ctx)` for each
+  `uui_gallery` draws the cards -- the soft accent selection (a FILL, no
+  edge), hover, the label, and the focus ring only after Tab or an arrow
+  key, never after a click (Windows' focus-visible rule) -- and calls `draw_tile(surface, i, x, y, w, h, ctx)` for each
   tile, clipped to it; it knows nothing of what it shows. In System
   Settings a `Widget=gallery` setting's `Preview=<word>` picks the
   painter from `set_preview.c`'s table (`cursor` today; a wallpaper
@@ -1722,10 +1723,11 @@ this the obvious way), not from how much history it accumulated.
   (the first version shipped loading 0 of 6 and looked right).
   **Scaling is integer nearest-neighbour** where there is no rendering
   for the size, and the size is its own setting, not derived from
-  `font_size`. And **the generator EXTRACTS
-  the arrow from `wm_render.c`'s own arrays**, so re-run it after
-  touching those or the shipped theme drifts from the fallback
-  (`--check` fails on stale). See `docs/decisions.md`.
+  `font_size`. And **every SHIPPED theme is an image theme** (Classic
+  and Classic bold since 2026-10-01; the default is Graphite,
+  `CURSOR_THEME_DEFAULT`), painted over ONE geometry in
+  `tools/gen_cursors.py` -- the masks are the format's and the
+  built-ins', no longer any set's. See `docs/decisions.md`.
 - **A CLIENT NAMES ITS POINTER SHAPE, AND THE COMPOSITOR CLAMPS IT TO
   THE CONTENT AREA.** `WIN_REQ_CURSOR` (`abi/win_proto.h`) carries a
   `WIN_CURSOR_*` -- `DEFAULT`, `TEXT`, `WAIT`, the two resize shapes,
@@ -4826,10 +4828,11 @@ and makes the three one arrow rotated. Stepping along the axis sets only
 the pixels whose `x + y` is even on a DIAGONAL, so the corner cursor came
 out a checkerboard and read as bigger and different from the edge ones;
 `RZ_DIAG` (256/sqrt(2)) is what keeps a diagonal arrow 19 px long rather
-than 27. `wm_render.c`'s `draw_resize_cursor()` and
-`tools/gen_cursors.py`'s `resize_shape()` are the same arithmetic --
-change both, and `gen_cursors.py --check` fails the build if the data
-files fall behind. The shape is CENTRED on its hotspot, so
+than 27. `wm_render.c`'s `draw_resize_cursor()` is the BUILT-IN
+fallback only: since Classic was redrawn (2026-10-01) every shipped
+theme is an image theme over `tools/gen_cursors.py`'s one supersampled
+geometry, and the generator no longer ports this arithmetic (it was
+`resize_shape()`). The shape is CENTRED on its hotspot, so
 `cursor_rect()` gives it a centred box: the other built-ins draw down
 and right from theirs.
 
