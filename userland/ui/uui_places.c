@@ -143,6 +143,15 @@ static uint32_t bg_of(const struct uui_places *p) {
     return p->bg ? p->bg : ugfx_blend(UTHEME_PANEL_BG, UTHEME_WHITE, 128);
 }
 
+// A DRIVE'S BAR IS COLOURED BY WHAT IT IS, so the three read apart at a
+// glance -- and turns red when nearly full, Explorer's warning.
+static uint32_t bar_colour(const struct uui_place *r) {
+    if (r->total && r->used * 10 >= r->total * 9) return utheme_action(UTHEME_ACT_DANGER);
+    if (!r->persistent) return utheme_action(UTHEME_ACT_EDIT);      // RAM: violet
+    if (r->readonly)    return utheme_action(UTHEME_ACT_ARRANGE);   // read-only: orange
+    return utheme_action(UTHEME_ACT_CREATE);                        // a disk: green
+}
+
 static void op_draw(struct ugfx_surface *s, const void *w) {
     const struct uui_places *p = w;
     uint32_t bg = bg_of(p), fg = UTHEME_TEXT;
@@ -191,7 +200,7 @@ static void op_draw(struct ugfx_surface *s, const void *w) {
             uint64_t used = r->used > r->total ? r->total : r->used;
             int fill = (int)((uint64_t)bar_w * used / r->total);
             if (fill < 1 && used) fill = 1;
-            ugfx_fill_rect(s, tx, bar_y, fill, 4, UTHEME_ACCENT);
+            ugfx_fill_rect(s, tx, bar_y, fill, 4, bar_colour(r));
         }
         char free_s[16], total_s[16], line[64];
         human_size(free_s, sizeof free_s, r->total > r->used ? r->total - r->used : 0);

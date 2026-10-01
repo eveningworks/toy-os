@@ -235,9 +235,11 @@ int uui_toolbar_tick(struct uui_toolbar *t) {
 // glyph on the accent fill would lose its contrast.
 static void draw_icon(struct ugfx_surface *s, const struct uui_toolbar_item *it,
                       const struct uimg *ico, int x, int y, int accent) {
-    if (it->tint)
+    if (it->tint) {
+        uint32_t c = it->tint < UTHEME_ACT_COUNT ? utheme_action((int)it->tint) : it->tint;
         ugfx_blit_tinted(s, x, y, ico->w, ico->h, ico->px, ico->w,
-                         accent ? UTHEME_ACCENT_TEXT : it->tint);
+                         accent ? UTHEME_ACCENT_TEXT : c);
+    }
     else
         ugfx_blit_alpha(s, x, y, ico->w, ico->h, ico->px, ico->w);
 }

@@ -16,7 +16,8 @@
 // "Folder", "JPEG image", "Text", ..., or "File". Never NULL.
 const char *ufiletype_name(const char *name, int is_dir);
 
-// An icon_cache name: "folder", "file-image", ..., or "file".
+// An icon_cache name: "folder", "folder-music" (a folder of a known kind,
+// by name), "file-image", ..., or "file".
 const char *ufiletype_icon(const char *name, int is_dir);
 
 #endif

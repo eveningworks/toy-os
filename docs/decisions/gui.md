@@ -8148,8 +8148,13 @@ bound -- a name longer than `sys_dirent`'s 64 bytes gets no cache file
 and is thumbnailed in memory, which is the case a hash would have
 handled.
 
-Staleness is then "not OLDER than its source", make's rule, rather than
-a recorded mtime -- again because there is nowhere to record one. It is
+Staleness is then "STRICTLY NEWER than its source", make's rule, rather
+than a recorded mtime -- again because there is nowhere to record one.
+Strictly, because mtimes are whole seconds: a source rewritten in the
+second its entry was written would tie, and "not older" served the old
+picture (thumbcache_test caught it, 2026-10-01). Git's index has the
+same race ("racy git") and answers it the same way, by distrusting a
+same-second entry; the cost is one extra decode. It is
 worth more than the metadata version: a rewritten file overwrites its
 own entry instead of adding one, so the directory is bounded by how many
 distinct pictures have been looked at and not by how often they change.
@@ -9229,3 +9234,35 @@ so a 1600% view is never a copy 256 times the picture's size; below
 exact quarter-turn copy (`uimg_rotate()`); writing it back to the file
 would mean re-encoding a JPEG, which loses quality for a viewer's
 convenience.
+
+## The File Manager is colour-coded by what things do and what folders hold
+
+Chosen from mockups (2026-10-01) over a navy places pane and a
+wallpaper-tinted chrome: the chrome is a light wash of the accent, the
+command bar's icons are coloured by what each command does, the places
+are coloured tiles, a drive's usage bar is coloured by what the drive
+is, the breadcrumb is chips with the current folder in the accent, and
+a folder's icon says what it holds.
+
+**The action colours are theme ROLES, not RGB in the app**
+(`utheme_action()`). Two apps -- the Image Viewer and the File Manager --
+colour the same kinds of command, and docs/gui-guidelines.md's rule is
+a role once a second caller needs a colour. Named by what the command
+does (navigate, view, create, edit, danger, arrange, media) rather than
+by hue, so a dark theme or an accent picker can move them, and delete
+is red in every app that has one. A static toolbar table cannot call
+the theme, so `tint` holds the role number and the toolbar resolves it
+when it draws.
+
+**A folder's kind comes from its NAME** (`ufiletype_icon()`), the way
+Breeze's folder-music and Explorer's special folders key on well-known
+names: music, pictures and wallpapers, documents, fonts, sounds, icons,
+cursors, terminal, services, hwdata, soundfonts, home. Reading a
+folder's contents to guess would be I/O on the draw path, which
+ufiletype already refuses for files. The table lives in the shared
+lookup, so the file chooser shows the same folders the same way.
+
+**The chrome wash is derived from the accent, never fixed**, so another
+accent recolours the bars with it; the places pane is a lighter step of
+the same, and the pane of files stays white, where the colour that
+matters is the icons'.

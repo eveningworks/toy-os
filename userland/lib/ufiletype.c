@@ -45,8 +45,28 @@ const char *ufiletype_name(const char *name, int is_dir) {
     return i < 0 ? "File" : TYPES[i].name;
 }
 
+// A FOLDER OF A KNOWN KIND, by its NAME -- Breeze's folder-music and
+// Explorer's special folders, which key on the well-known names the same
+// way. The names cover the home places and this system's own
+// /usr/share; anything else is the plain folder.
+static const struct { const char *name, *icon; } FOLDERS[] = {
+    { "music",      "folder-music" },     { "sounds",     "folder-sounds" },
+    { "pictures",   "folder-pictures" },  { "wallpapers", "folder-pictures" },
+    { "images",     "folder-pictures" },  { "photos",     "folder-pictures" },
+    { "screenshots","folder-pictures" },  { "documents",  "folder-documents" },
+    { "doc",        "folder-documents" }, { "docs",       "folder-documents" },
+    { "fonts",      "folder-fonts" },     { "icons",      "folder-icons" },
+    { "cursors",    "folder-cursors" },   { "terminal",   "folder-terminal" },
+    { "services",   "folder-services" },  { "hwdata",     "folder-hwdata" },
+    { "soundfonts", "folder-soundfonts" },{ "home",       "folder-home" },
+};
+
 const char *ufiletype_icon(const char *name, int is_dir) {
-    if (is_dir) return "folder";
+    if (is_dir) {
+        for (int i = 0; name && i < (int)(sizeof FOLDERS / sizeof FOLDERS[0]); i++)
+            if (!strcasecmp(name, FOLDERS[i].name)) return FOLDERS[i].icon;
+        return "folder";
+    }
     int i = lookup(name ? name : "");
     return i < 0 ? "file" : TYPES[i].icon;
 }

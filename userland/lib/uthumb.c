@@ -96,16 +96,19 @@ static int cache_path(const char *src, int px, char *out, int cap) {
     return len > 0 && len < cap;
 }
 
-// A cache entry is good while it is NOT OLDER than its source -- make's
+// A cache entry is good while it is NEWER than its source -- make's
 // rule, and the one staleness test that needs no metadata in a format
-// with none to give. A rewritten source is newer, so the next look
+// with none to give. STRICTLY newer: mtimes are whole seconds, so an
+// entry written in the same second as a rewrite would tie and be served
+// stale ("racy git"); a tie costs one extra decode. A rewritten source
+// is newer, so the next look
 // re-decodes and OVERWRITES this same name: the directory is bounded by
 // the number of distinct (file, size) pairs, not by how often they
 // change.
 static int cache_fresh(const char *cache, uint64_t src_epoch) {
     struct sys_stat st;
     if (sys_stat(cache, &st) != 0) return 0;
-    return cal_rtc_to_epoch(&st.modified) >= src_epoch;
+    return cal_rtc_to_epoch(&st.modified) > src_epoch;
 }
 
 // The oldest files go first. With the rule above a HIT does not rewrite

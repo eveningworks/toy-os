@@ -595,8 +595,13 @@ def check_features(dbg, qmp, tmp, res, content):
     wait_layout(dbg, content, lambda l: l.has("image.picture")
                 and l.rect("image.picture")[2:] == lay.rect("image")[2:])
     box = (ix + iw // 4, iy + ih // 4, ix + 3 * iw // 4, iy + 3 * ih // 4)
+    # The pointer is PARKED off the stage for both shots: its sprite in
+    # the box would make the frames differ with nothing panned.
+    dbg.warp_cursor(qmp, 1180, 40)
+    dbg.settle()
     a_png = shot(qmp, tmp, "pan-a.png").crop(box).tobytes()
     dbg.drag_real(qmp, ix + iw // 2, iy + ih // 2, ix + iw // 2 - 120, iy + ih // 2 - 60)
+    dbg.warp_cursor(qmp, 1180, 40)
     dbg.settle()
     time.sleep(0.5)
     b_png = shot(qmp, tmp, "pan-b.png").crop(box).tobytes()
@@ -622,6 +627,7 @@ def check_features(dbg, qmp, tmp, res, content):
 
     # THE SLIDESHOW is full screen: the picture's box is the whole window,
     # and Esc brings the chrome back.
+    before = dbg.window(TITLE_VIEWER)
     key(0xB1)   # F11
     lay_s, _ = wait_layout(dbg, content, lambda l: l.has("image")
                            and l.rect("image")[0] == 0 and l.rect("image")[1] == 0, timeout=20)
@@ -629,11 +635,53 @@ def check_features(dbg, qmp, tmp, res, content):
     full = lay_s.has("image") and lay_s.rect("image")[2:] == (st["screen"]["w"], st["screen"]["h"])
     res.check("the slideshow fills the screen", full,
               f"image box {lay_s.rect('image') if lay_s.has('image') else None}")
+
+    # ZOOMED IN FULL SCREEN, a drag still pans -- and the zoom holds the
+    # slideshow, so the picture under the drag is the same one. 150%,
+    # since at 100% aurora is exactly the screen and has nowhere to go.
+    if full:
+        key(ord("1"))
+        key(ord("+"))
+        mark = len(poll_logs(dbg))      # poll_logs() is CUMULATIVE
+        sx, sy, sw, sh = lay_s.screen_rect("image")
+        # The top of the screen only (the pill is at the bottom), with the
+        # pointer parked in a bottom corner for both shots.
+        box = (sx + sw // 4, sy + sh // 8, sx + 3 * sw // 4, sy + sh // 2)
+        park = (sx + 4, sy + sh - 4)
+        dbg.warp_cursor(qmp, *park)
+        dbg.settle()
+        a_png = shot(qmp, tmp, "fpan-a.png").crop(box).tobytes()
+        dbg.drag_real(qmp, sx + sw // 2, sy + sh // 2, sx + sw // 2 - 120, sy + sh // 2 - 60)
+        dbg.warp_cursor(qmp, *park)
+        dbg.settle()
+        time.sleep(0.5)
+        b_png = shot(qmp, tmp, "fpan-b.png").crop(box).tobytes()
+        moved = [l for l in poll_logs(dbg)[mark:] if "imgview: shown" in l]
+        res.check("full screen, a drag pans the zoomed picture", a_png != b_png and not moved,
+                  f"stage changed: {a_png != b_png}; pictures shown meanwhile: {moved}")
+        key(ord("0"))
     key(27)     # Esc
     lay_e, _ = wait_layout(dbg, content, lambda l: l.has("image") and l.rect("image")[1] > 0,
                            timeout=20)
     res.check("Esc leaves the slideshow", lay_e.has("image") and lay_e.rect("image")[1] > 0,
               f"image box {lay_e.rect('image') if lay_e.has('image') else None}")
+
+    # ...and the window gets its size back. Waited for, not sampled: the
+    # WM adopts a size when the client PRESENTS at it, so straight after
+    # Esc the window can still read as screen-sized -- and the resize
+    # checks after this one restore to whatever they first read.
+    def geom(w):
+        return w and (w["x"], w["y"], w["w"], w["h"])
+    now = None
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        now = dbg.window(TITLE_VIEWER)
+        if before and geom(now) == geom(before):
+            break
+        time.sleep(0.3)
+    res.check("leaving full screen restores the window's rect",
+              before is not None and geom(now) == geom(before),
+              f"before {geom(before)}, after {geom(now)}")
 
 
 def check_resize_never_blanks(dbg, qmp, tmp, res, win):
@@ -707,11 +755,18 @@ def restore_window_size(dbg, was):
     now = dbg.window(TITLE_VIEWER)
     if not now:
         return
-    dbg.drag(now["x"] + now["w"] - 2, now["y"] + now["h"] - 2,
-             now["x"] + now["w"] - 2 + (was["w"] - now["w"]),
-             now["y"] + now["h"] - 2 + (was["h"] - now["h"]))
+    # `gui resize`, not a grip drag: an INJECTED drag is not tracked
+    # across frames (wm_debug.c's `gui resize`), and sometimes left the
+    # viewer clamped to the screen with no desktop beside it.
+    dbg.send(f"gui resize {was['content']['w']} {was['content']['h']}")
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        now = dbg.window(TITLE_VIEWER)
+        if now and now["content"]["w"] == was["content"]["w"] \
+                and now["content"]["h"] == was["content"]["h"]:
+            break
+        time.sleep(0.3)
     dbg.settle()
-    time.sleep(1.0)
 
 
 def check_auto_resize_falls_back(dbg, res):

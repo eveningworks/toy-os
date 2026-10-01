@@ -485,6 +485,131 @@ def icon_place_pictures():
     return im
 
 
+# --- coloured places and folder kinds (the File Manager, F1) -----------
+#
+# A PLACE IS A COLOURED TILE with its glyph in white: the glyph functions
+# above are reused, their dark ink becoming white and their light fills
+# letting the tile through, so a place reads by colour before shape.
+
+def _tile(colour, glyph_fn):
+    glyph = glyph_fn().convert("RGBA")
+    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle([2, 2, 61, 61], radius=14, fill=colour + (255,))
+    small = glyph.resize((40, 40), Image.LANCZOS)
+    white = Image.new("RGBA", small.size, (255, 255, 255, 0))
+    px, wp = small.load(), white.load()
+    for y in range(small.size[1]):
+        for x in range(small.size[0]):
+            r, g, b, a = px[x, y]
+            ink = 255 - (r * 3 + g * 6 + b) // 10      # dark ink -> opaque white
+            wp[x, y] = (255, 255, 255, a * ink // 255)
+    im.alpha_composite(white, (12, 12))
+    return im
+
+
+def icon_place_home_tile():      return _tile((70, 110, 160), icon_place_home)
+def icon_place_desktop_tile():   return _tile((47, 154, 146), icon_place_desktop)
+def icon_place_documents_tile(): return _tile((74, 134, 214), icon_place_documents)
+def icon_place_music_tile():     return _tile((214, 92, 143), icon_place_music)
+def icon_place_pictures_tile():  return _tile((74, 163, 107), icon_place_pictures)
+
+
+# A FOLDER OF A KNOWN KIND is the plain folder's shape in the kind's
+# colour, with a white emblem on its front -- Breeze's folder-music and
+# Explorer's special folders. lib/ufiletype.c maps names to these.
+def _folder_kind(body, tab, emblem):
+    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle([6, 14, 34, 24], radius=4, fill=tab + (255,))
+    d.rounded_rectangle([6, 20, 58, 52], radius=4, fill=body + (255,))
+    emblem(d, (255, 255, 255, 255))
+    return im
+
+
+def _em_music(d, w):
+    d.line([28, 46, 28, 28], fill=w, width=3)
+    d.line([40, 43, 40, 25], fill=w, width=3)
+    d.polygon([(27, 27), (41, 24), (41, 29), (27, 32)], fill=w)
+    d.ellipse([22, 42, 30, 49], fill=w)
+    d.ellipse([34, 39, 42, 46], fill=w)
+
+
+def _em_pictures(d, w):
+    d.polygon([(18, 47), (27, 35), (33, 42), (38, 37), (46, 47)], fill=w)
+    d.ellipse([39, 27, 45, 33], fill=w)
+
+
+def _em_documents(d, w):
+    for yy in (31, 37, 43):
+        d.line([20, yy, 44 if yy < 43 else 36, yy], fill=w, width=3)
+
+
+def _em_fonts(d, w):
+    d.line([24, 48, 32, 28], fill=w, width=4)
+    d.line([32, 28, 40, 48], fill=w, width=4)
+    d.line([27, 41, 37, 41], fill=w, width=3)
+
+
+def _em_sounds(d, w):
+    d.polygon([(22, 34), (27, 34), (34, 28), (34, 48), (27, 42), (22, 42)], fill=w)
+    d.arc([32, 30, 44, 46], start=-60, end=60, fill=w, width=3)
+
+
+def _em_icons(d, w):
+    for (x, y) in ((22, 29), (33, 29), (22, 39), (33, 39)):
+        d.rectangle([x, y, x + 8, y + 7], fill=w)
+
+
+def _em_cursors(d, w):
+    d.polygon([(26, 26), (26, 47), (31, 42), (35, 50), (38, 48), (34, 41), (41, 41)], fill=w)
+
+
+def _em_terminal(d, w):
+    d.line([22, 31, 28, 37, 22, 43], fill=w, width=3)
+    d.line([31, 45, 42, 45], fill=w, width=3)
+
+
+def _em_services(d, w):
+    d.ellipse([26, 31, 38, 43], outline=w, width=3)
+    for (x0, y0, x1, y1) in ((32, 25, 32, 29), (32, 45, 32, 49), (20, 37, 24, 37), (40, 37, 44, 37)):
+        d.line([x0, y0, x1, y1], fill=w, width=3)
+
+
+def _em_hwdata(d, w):
+    d.rectangle([25, 30, 39, 44], outline=w, width=3)
+    for x in (28, 32, 36):
+        d.line([x, 26, x, 30], fill=w, width=2)
+        d.line([x, 44, x, 48], fill=w, width=2)
+
+
+def _em_soundfonts(d, w):
+    d.rectangle([21, 30, 43, 46], outline=w, width=2)
+    for x in (27, 32, 37):
+        d.line([x, 30, x, 40], fill=w, width=3)
+
+
+def _em_home(d, w):
+    d.polygon([(32, 26), (44, 37), (20, 37)], fill=w)
+    d.rectangle([24, 36, 40, 48], fill=w)
+
+
+FOLDER_KINDS = {
+    "folder-music":      ((214, 92, 143), (185, 70, 118), _em_music),
+    "folder-pictures":   ((74, 163, 107), (55, 135, 84), _em_pictures),
+    "folder-documents":  ((74, 134, 214), (58, 111, 184), _em_documents),
+    "folder-fonts":      ((138, 99, 201), (113, 80, 173), _em_fonts),
+    "folder-sounds":     ((224, 104, 79), (196, 83, 59), _em_sounds),
+    "folder-icons":      ((224, 138, 60), (199, 116, 40), _em_icons),
+    "folder-cursors":    ((107, 127, 179), (85, 104, 154), _em_cursors),
+    "folder-terminal":   ((61, 67, 80), (43, 48, 57), _em_terminal),
+    "folder-services":   ((125, 134, 150), (102, 111, 128), _em_services),
+    "folder-hwdata":     ((47, 154, 146), (36, 125, 119), _em_hwdata),
+    "folder-soundfonts": ((176, 92, 201), (149, 71, 174), _em_soundfonts),
+    "folder-home":       ((70, 110, 160), (55, 88, 132), _em_home),
+}
+
+
 def icon_drive():
     # A drive seen from the front: a slab with its activity light.
     im, d = _place()
@@ -1370,11 +1495,11 @@ ICONS = {
     "file-config": icon_file_config,
     "file-font": icon_file_font,
     "file-app": icon_file_app,
-    "place-home": icon_place_home,
-    "place-desktop": icon_place_desktop,
-    "place-documents": icon_place_documents,
-    "place-music": icon_place_music,
-    "place-pictures": icon_place_pictures,
+    "place-home": icon_place_home_tile,
+    "place-desktop": icon_place_desktop_tile,
+    "place-documents": icon_place_documents_tile,
+    "place-music": icon_place_music_tile,
+    "place-pictures": icon_place_pictures_tile,
     "drive": icon_drive,
     "drive-ram": icon_drive_ram,
     "tb-details": icon_tb_details,
@@ -1407,6 +1532,10 @@ ICONS = {
 # synthesized-bold path is run rather than merely written. Give it an
 # icon and nothing on the image tests what happens when a file is
 # missing.
+
+
+for _name, (_body, _tab, _em) in FOLDER_KINDS.items():
+    ICONS[_name] = (lambda b=_body, t=_tab, e=_em: _folder_kind(b, t, e))
 
 
 def render(name):

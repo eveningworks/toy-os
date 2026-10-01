@@ -207,37 +207,47 @@ static const struct uui_menu_item more_items[] = {
     UUI_MENU("Close",              CMD_EXIT,       "Alt+F4"),
 };
 
+// COLOUR-CODED BY WHAT EACH COMMAND DOES (the File Manager design chosen
+// 2026-10-01), through the theme's action roles: moving about and the
+// clipboard, refresh and sort, new, rename, delete, the view mode.
+#define TINT_NAV    UTHEME_ACT_NAV
+#define TINT_TEAL   UTHEME_ACT_VIEW
+#define TINT_GREEN  UTHEME_ACT_CREATE
+#define TINT_VIOLET UTHEME_ACT_EDIT
+#define TINT_RED    UTHEME_ACT_DANGER
+#define TINT_ORANGE UTHEME_ACT_ARRANGE
+
 // Back, Forward, Up and Refresh, beside the breadcrumb -- every browser's
 // and every file manager's place for them.
 static const struct uui_toolbar_item nav_items[] = {
-    { "tb-back",    "Back (Alt+Left)",     CMD_BACK, 0, 0, 0, 0 },
-    { "tb-forward", "Forward (Alt+Right)", CMD_FORWARD, 0, 0, 0, 0 },
-    { "tb-up",      "Up (Backspace)",      CMD_UP, 0, 0, 0, 0 },
-    { "tb-refresh", "Refresh (Ctrl+R)",    CMD_REFRESH, 0, 0, 0, 0 },
+    { "tb-back",    "Back (Alt+Left)",     CMD_BACK, 0, 0, 0, TINT_NAV },
+    { "tb-forward", "Forward (Alt+Right)", CMD_FORWARD, 0, 0, 0, TINT_NAV },
+    { "tb-up",      "Up (Backspace)",      CMD_UP, 0, 0, 0, TINT_NAV },
+    { "tb-refresh", "Refresh (Ctrl+R)",    CMD_REFRESH, 0, 0, 0, TINT_TEAL },
 };
 
 // THE COMMAND BAR: the verbs with words where an icon alone would be a
 // guess. Same codes and the same item_flags as the menus, so a latched
 // button and a ticked menu row cannot disagree.
 static const struct uui_toolbar_item toolbar_items[] = {
-    { "tb-new",     "Create a folder or a file", CMD_MENU_NEW, "New", UUI_TB_MENU, 0, 0 },
+    { "tb-new",     "Create a folder or a file", CMD_MENU_NEW, "New", UUI_TB_MENU, 0, TINT_GREEN },
     UUI_TOOLBAR_SEP,
-    { "tb-cut",     "Cut (Ctrl+X)",     CMD_CLIP_CUT,   0, 0, 0, 0 },
-    { "tb-copy",    "Copy (Ctrl+C)",    CMD_CLIP_COPY,  0, 0, 0, 0 },
-    { "tb-paste",   "Paste (Ctrl+V)",   CMD_CLIP_PASTE, 0, 0, 0, 0 },
-    { "tb-rename",  "Rename (F2)",      CMD_RENAME,     0, 0, 0, 0 },
-    { "tb-delete",  "Delete (Del)",     CMD_DELETE,     0, 0, 0, 0 },
+    { "tb-cut",     "Cut (Ctrl+X)",     CMD_CLIP_CUT,   0, 0, 0, TINT_NAV },
+    { "tb-copy",    "Copy (Ctrl+C)",    CMD_CLIP_COPY,  0, 0, 0, TINT_NAV },
+    { "tb-paste",   "Paste (Ctrl+V)",   CMD_CLIP_PASTE, 0, 0, 0, TINT_NAV },
+    { "tb-rename",  "Rename (F2)",      CMD_RENAME,     0, 0, 0, TINT_VIOLET },
+    { "tb-delete",  "Delete (Del)",     CMD_DELETE,     0, 0, 0, TINT_RED },
     UUI_TOOLBAR_SEP,
-    { "tb-sort",    0,                  CMD_MENU_SORT,  "Sort", UUI_TB_MENU, 0, 0 },
-    { "tb-view",    0,                  CMD_MENU_VIEW,  "View", UUI_TB_MENU, 0, 0 },
+    { "tb-sort",    0,                  CMD_MENU_SORT,  "Sort", UUI_TB_MENU, 0, TINT_TEAL },
+    { "tb-view",    0,                  CMD_MENU_VIEW,  "View", UUI_TB_MENU, 0, TINT_ORANGE },
     { "tb-more",    "See more",         CMD_MENU_MORE,  0, UUI_TB_MENU, 0, 0 },
-    { "tb-pane",    "Show the details pane", CMD_VIEW_DPANE, "Details", UUI_TB_END, 0, 0 },
+    { "tb-pane",    "Show the details pane", CMD_VIEW_DPANE, "Details", UUI_TB_END, 0, TINT_NAV },
 };
 
 // The status bar's view switch, at its right end, as in Explorer.
 static const struct uui_toolbar_item viewbar_items[] = {
-    { "tb-details", "Details", CMD_VIEW_DETAILS, 0, 0, 0, 0 },
-    { "tb-icons",   "Icons",   CMD_VIEW_ICONS, 0, 0, 0, 0 },
+    { "tb-details", "Details", CMD_VIEW_DETAILS, 0, 0, 0, TINT_NAV },
+    { "tb-icons",   "Icons",   CMD_VIEW_ICONS, 0, 0, 0, TINT_NAV },
 };
 
 // THE CONTEXT MENU, on a secondary click inside a pane. A separate

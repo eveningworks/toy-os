@@ -925,7 +925,15 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
         else if (src == t->hovered) bg = uui_state_bg(uui_table_c_bg(t), UUI_STATE_HOVER);
         else if (uui_fileview_is_marked(fv, src))
             bg = UUI_COLOR(fv->mark_bg, uui_table_c_sel_bg(t));
-        if (bg != uui_table_c_bg(t)) ugfx_fill_rect(s, x, y, cw - 2, chh - 2, bg);
+        // ROUNDED CELLS, the selected one edged in the accent and its
+        // label a pill -- the colour-coded File Manager's icons view
+        // (2026-10-01), where the selection reads at a glance.
+        if (selected) {
+            uui_fill_round_rect(s, x, y, cw - 2, chh - 2, 8, UTHEME_ACCENT);
+            uui_fill_round_rect(s, x + 1, y + 1, cw - 4, chh - 4, 7, bg);
+        } else if (bg != uui_table_c_bg(t)) {
+            uui_fill_round_rect(s, x, y, cw - 2, chh - 2, 8, bg);
+        }
 
         int is_up = fv_is_up_row(fv, src);
         const struct sys_dirent *e = fv_entry(fv, src);
@@ -990,10 +998,16 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
             if (tw > avail) tw = avail;
             int lx = x + 3 + (max_w - (tw + (cut ? ell : 0))) / 2;
             if (lx < x + 3) lx = x + 3;
-            ugfx_draw_string_clipped(s, lx, ly, avail, line,
-                                      selected ? uui_table_c_sel_fg(t) : uui_table_c_fg(t), bg);
-            if (cut) ugfx_draw_string_clipped(s, lx + tw, ly, ell, "..",
-                                              selected ? uui_table_c_sel_fg(t) : uui_table_c_fg(t), bg);
+            uint32_t lfg = selected ? UTHEME_ACCENT_TEXT : uui_table_c_fg(t), lbg = bg;
+            if (selected) {
+                int pw = tw + (cut ? ell : 0) + 10;
+                if (pw > cw - 4) pw = cw - 4;
+                uui_fill_round_rect(s, x + (cw - 2 - pw) / 2, ly - 1, pw, ugfx_char_h() + 2,
+                                    UUI_CAPSULE, UTHEME_ACCENT);
+                lbg = UTHEME_ACCENT;
+            }
+            ugfx_draw_string_clipped(s, lx, ly, avail, line, lfg, lbg);
+            if (cut) ugfx_draw_string_clipped(s, lx + tw, ly, ell, "..", lfg, lbg);
         }
     }
 

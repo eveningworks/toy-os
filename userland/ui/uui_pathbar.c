@@ -9,7 +9,7 @@
 #include "win_proto.h"   // WIN_CURSOR_*
 #include <string.h>
 
-#define PAD      6   // inside a segment, each side
+#define PAD      10  // inside a segment, each side -- clear of the chip's round ends
 #define SEP_W    12  // the chevron between segments
 #define EDIT_GAP 28  // blank space kept at the right: a click there edits
 
@@ -227,10 +227,15 @@ static void op_draw(struct ugfx_surface *s, const void *w) {
         int k = l.seg[i], x = l.x[i], sw = l.w[i];
         int last = (k == n - 1);
         if (i) draw_chevron(s, x - SEP_W, p->y, p->h, dim);
-        uint32_t sbg = bg;
-        if (k == p->armed) sbg = uui_state_bg(bg, UUI_STATE_PRESSED);
-        else if (k == p->hot) sbg = uui_state_bg(bg, UUI_STATE_HOVER);
-        if (sbg != bg) ugfx_fill_rect(s, x, p->y + 2, sw, p->h - 4, sbg);
+        // EACH SEGMENT A CHIP: an accent wash for the folders above, the
+        // folder you are in filled in the accent -- the colour-coded File
+        // Manager's breadcrumb (2026-10-01), and where you are reads first.
+        uint32_t chip = last ? UTHEME_ACCENT : ugfx_blend(bg, UTHEME_ACCENT, 34);
+        uint32_t cfg = last ? UTHEME_ACCENT_TEXT : fg;
+        if (k == p->armed) chip = uui_state_bg(chip, UUI_STATE_PRESSED);
+        else if (k == p->hot) chip = uui_state_bg(chip, UUI_STATE_HOVER);
+        uui_fill_round_rect(s, x, p->y + 3, sw, p->h - 6, UUI_CAPSULE, chip);
+        uint32_t sbg = chip;
 
         int tx = x + PAD;
         if (k == 0 && p->root_icon) {
@@ -243,7 +248,7 @@ static void op_draw(struct ugfx_surface *s, const void *w) {
         seg_label(p, k, label, sizeof label);
         const struct ugfx_font *was = last ? ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD)) : 0;
         ugfx_draw_string_clipped(s, tx, p->y + (p->h - ugfx_char_h()) / 2,
-                                  x + sw - tx, label, fg, sbg);
+                                  x + sw - tx, label, cfg, sbg);
         if (last) ugfx_set_font(was);
     }
     ugfx_clear_clip_rect(s);

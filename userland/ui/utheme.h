@@ -53,7 +53,28 @@ struct utheme {
     // sections. Lighter than `outline`, which edges something you can
     // click, and lighter again than `border`, which frames a window.
     uint32_t separator;
+    // ACTION COLOURS, by what a command DOES, for a colour-coded command
+    // bar (Image Viewer's, the File Manager's): indexed by enum
+    // utheme_action. Ink on light chrome, so dark enough for 3:1 there.
+    uint32_t action[8];
 };
+
+// What a command does, as a colour role -- semantic like the close
+// button's red, never decoration. A uui_toolbar_item's `tint` may name
+// one of these instead of a colour (a static table cannot call
+// utheme_current()).
+enum utheme_action {
+    UTHEME_ACT_NONE = 0,
+    UTHEME_ACT_NAV,      // move about: back, forward, up, previous, next
+    UTHEME_ACT_VIEW,     // how it is shown: zoom, refresh, sort
+    UTHEME_ACT_CREATE,   // make or start: new, play
+    UTHEME_ACT_EDIT,     // change it: rename, rotate
+    UTHEME_ACT_DANGER,   // lose it: delete
+    UTHEME_ACT_ARRANGE,  // the layout: view mode
+    UTHEME_ACT_MEDIA,    // the desktop and the picture: wallpaper
+    UTHEME_ACT_COUNT
+};
+uint32_t utheme_action(int role);
 
 // The live theme. Never NULL: the first read lazily installs the default
 // palette, so a UTHEME_* used before uapp_run() calls utheme_init()

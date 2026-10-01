@@ -638,6 +638,10 @@ whenever a headline here tells you something you did not already know.
   tried after `/etc/settings.d` and before the raw value.**
 - **THE ICON CACHE IS THE TOOLKIT'S NOW (`userland/lib/icon_cache.h`),
   AND A SIDEBAR HEADING CAN CARRY AN ICON.**
+- **A HELD BUTTON FREEZES THE HOVERED WINDOW: no leave, no enter, until
+  the release** (Wayland's implicit grab)
+- **A NEW OR REDESIGNED APP FOLLOWS THE APP DESIGN LANGUAGE** at the top
+  of `docs/gui-guidelines.md` (the Image Viewer is the reference)
 - **A WINDOW HAS THREE BUFFERS, AND A CLIENT DRAWS ONLY INTO ONE THE
   COMPOSITOR HAS RELEASED** (`WIN_EV_BUF_RELEASE`)
 - **A DRAG'S APPEARANCE IS A SETTING, AND `auto` LEARNS RATHER THAN

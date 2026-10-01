@@ -38,6 +38,19 @@ void utheme_default(struct utheme *out) {
     out->outline     = ugfx_rgb(150, 155, 165);
     out->selection_bg = ugfx_rgb(205, 220, 240);
     out->separator   = ugfx_rgb(205, 205, 210);
+    out->action[UTHEME_ACT_NONE]    = out->text;
+    out->action[UTHEME_ACT_NAV]     = ugfx_rgb(47, 93, 156);
+    out->action[UTHEME_ACT_VIEW]    = ugfx_rgb(31, 127, 120);
+    out->action[UTHEME_ACT_CREATE]  = ugfx_rgb(44, 122, 61);
+    out->action[UTHEME_ACT_EDIT]    = ugfx_rgb(107, 75, 184);
+    out->action[UTHEME_ACT_DANGER]  = ugfx_rgb(178, 58, 50);
+    out->action[UTHEME_ACT_ARRANGE] = ugfx_rgb(199, 116, 40);
+    out->action[UTHEME_ACT_MEDIA]   = ugfx_rgb(168, 99, 15);
+}
+
+uint32_t utheme_action(int role) {
+    if (role < 0 || role >= UTHEME_ACT_COUNT) role = UTHEME_ACT_NONE;
+    return utheme_current()->action[role];
 }
 
 void utheme_init(void) {

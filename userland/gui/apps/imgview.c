@@ -103,7 +103,7 @@ static int g_sx, g_sy, g_sw, g_sh;
 static int g_px0, g_py0, g_pw, g_ph;     // the properties panel
 struct hit { int x, y, w, h; };
 static struct hit g_pill_prev, g_pill_play, g_pill_next, g_pill_every;
-static int g_drag, g_drag_x, g_drag_y, g_mx = -1, g_my = -1;
+static int g_drag, g_drag_x, g_drag_y, g_dragged, g_mx = -1, g_my = -1;
 
 // --- the ambient colours ------------------------------------------------
 
@@ -558,13 +558,13 @@ static const struct uui_menu_item menu_items[] = {
     UUI_SUBMENU("Desktop", desktop_items),
 };
 
-// COLOUR-CODED BY GROUP, symbolic icons tinted per item: navigation
-// blue, zoom teal, rotate violet, wallpaper amber, slideshow green.
-#define TINT_NAV   0xFF2F5D9Cu
-#define TINT_ZOOM  0xFF1F7F78u
-#define TINT_ROT   0xFF6B4BB8u
-#define TINT_WALL  0xFFA8630Fu
-#define TINT_SHOW  0xFF2C7A3Du
+// COLOUR-CODED BY WHAT EACH COMMAND DOES, through the theme's action
+// roles: moving about, zoom, rotate, the wallpaper, the slideshow.
+#define TINT_NAV   UTHEME_ACT_NAV
+#define TINT_ZOOM  UTHEME_ACT_VIEW
+#define TINT_ROT   UTHEME_ACT_EDIT
+#define TINT_WALL  UTHEME_ACT_MEDIA
+#define TINT_SHOW  UTHEME_ACT_CREATE
 
 static const struct uui_toolbar_item tb_items[] = {
     { "tb-back",         "Previous (Left)",      CMD_PREV,      0, 0, 0, TINT_NAV },
@@ -700,9 +700,9 @@ static void draw_props(struct ugfx_surface *s) {
     }
     if (g_have_img) snprintf(dec, sizeof dec, "%llu ms", g_decode_ms);
     const struct { const char *head; uint32_t col; const char *k[4]; const char *v[4]; } sec[] = {
-        { "IMAGE", TINT_ZOOM, { "Dimensions", "Format", "Decoded in", 0 },
+        { "IMAGE", utheme_action(TINT_ZOOM), { "Dimensions", "Format", "Decoded in", 0 },
           { dims, g_info_detail, dec, 0 } },
-        { "FILE", TINT_ROT, { "Name", "Folder", "Size", "Modified" },
+        { "FILE", utheme_action(TINT_ROT), { "Name", "Folder", "Size", "Modified" },
           { g_cur >= 0 ? g_entries[g_cur].name : "", g_dir, size, mod } },
     };
     for (int i = 0; i < 2; i++) {
@@ -715,7 +715,7 @@ static void draw_props(struct ugfx_surface *s) {
         }
         y += pad;
     }
-    text_at(s, x, y, w, "WALLPAPER", TINT_WALL, bg);
+    text_at(s, x, y, w, "WALLPAPER", utheme_action(TINT_WALL), bg);
     y += lh;
     char cur[64] = "", wp[32] = "", mode[16] = "";
     if (usetting_get("desktop.wallpaper", wp, sizeof wp) > 0) {
@@ -902,11 +902,17 @@ static int in_hit(const struct hit *h, int x, int y) {
     return x >= h->x && y >= h->y && x < h->x + h->w && y < h->y + h->h;
 }
 
+static int on_pill(int x, int y) {
+    return g_slide && (in_hit(&g_pill_prev, x, y) || in_hit(&g_pill_play, x, y) ||
+                       in_hit(&g_pill_next, x, y) || in_hit(&g_pill_every, x, y));
+}
+
 static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
     (void)a;
-    // A DRAG PANS a picture bigger than the stage; the picture follows
-    // the pointer, as every viewer's hand tool does.
-    if ((buttons & 1) && !g_slide && in_stage(x, y) && uui_image_can_pan(&g_view)) {
+    // A DRAG PANS a picture bigger than the stage, full screen included;
+    // the picture follows the pointer, as every viewer's hand tool does.
+    g_dragged = 0;
+    if ((buttons & 1) && in_stage(x, y) && !on_pill(x, y) && uui_image_can_pan(&g_view)) {
         g_drag = 1;
         g_drag_x = x;
         g_drag_y = y;
@@ -919,6 +925,7 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     if (!g_drag) return;
     if (!(buttons & 1)) { g_drag = 0; return; }
     if (uui_image_pan(&g_view, x - g_drag_x, y - g_drag_y)) uapp_redraw(a);
+    if (x != g_drag_x || y != g_drag_y) g_dragged = 1;
     g_drag_x = x;
     g_drag_y = y;
 }
@@ -926,7 +933,8 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
 static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
     (void)buttons;
     g_drag = 0;
-    if (!g_slide) return;
+    // A pan that ENDS over a pill is not a click on it.
+    if (!g_slide || g_dragged) return;
     if (in_hit(&g_pill_prev, x, y))      step(a, -1);
     else if (in_hit(&g_pill_next, x, y)) step(a, +1);
     else if (in_hit(&g_pill_play, x, y)) {
@@ -987,6 +995,9 @@ static int on_tick(struct uapp *a) {
     int redraw = uui_toolbar_tick(&g_tb);
     if (g_slide && !g_paused) {
         unsigned long long now = sys_monotonic_ns() / 1000000ull;
+        // A ZOOMED picture holds the slideshow -- it is being looked at --
+        // and its interval restarts when it zooms back out.
+        if (g_view.zoom) g_slide_t0 = now;
         if (now - g_slide_t0 >= (unsigned long long)g_slide_ms) {
             g_slide_t0 = now;
             step(a, +1);

@@ -1244,14 +1244,19 @@ void wm_update_content_hover(int mx, int my, uint8_t buttons) {
     // While anything is held or armed, the press visual owns the
     // feedback and hover must not fight it -- same deference
     // wm_update_title_hover() shows title_btn_armed_win.
-    int suppressed = (buttons & 0x1) || content_pressed >= 0 ||
-                      content_dragging >= 0 || dragging >= 0 || resizing >= 0 ||
-                      title_btn_armed_win >= 0;
+    //
+    // A HELD BUTTON FREEZES THE HOVERED WINDOW -- no leave, no enter --
+    // Wayland's implicit grab. A leave mid-press reaches a client as a
+    // move to (-1,-1) with NO button held, which reads as a release and
+    // ends any drag it was tracking. The release re-runs this.
+    if ((buttons & 0x1) || content_pressed >= 0 || content_dragging >= 0 ||
+        dragging >= 0 || resizing >= 0 || title_btn_armed_win >= 0)
+        return;
 
     int now = -1;
     // UNDER AN OVERLAY, NO WINDOW IS HOVERED: the menu or panel is on top
     // and takes the pointer, as a client's own popup already does (below).
-    if (!suppressed && !wm_overlay_under(mx, my)) {
+    if (!wm_overlay_under(mx, my)) {
         // While a client has a popup up, motion reaches only ITS
         // surfaces (the grab, abi/win_proto.h): sliding along its menu
         // bar still switches menus, but nothing else lights up.

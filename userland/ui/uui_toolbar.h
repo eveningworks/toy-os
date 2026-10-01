@@ -62,9 +62,10 @@ struct uui_toolbar_item {
     // uui_menu_item's is: the app binds the key.
     const char *accel;
     // THE ICON'S COLOUR, drawn as a symbolic icon (ugfx_blit_tinted()):
-    // 0 keeps the icon's own ink. A colour-coded command bar -- Image
-    // Viewer's zoom in teal, rotate in violet -- sets one per item. A
-    // latched accent button draws it in the accent's text colour instead.
+    // 0 keeps the icon's own ink; a small number is a theme ACTION ROLE
+    // (enum utheme_action -- what the command does); anything else is an
+    // 0xAARRGGBB colour. A latched accent button draws it in the accent's
+    // text colour instead.
     uint32_t tint;
 };
 

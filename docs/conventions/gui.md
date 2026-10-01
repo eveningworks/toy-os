@@ -188,6 +188,20 @@ this the obvious way), not from how much history it accumulated.
     and the measuring ask the same helper for the indent -- a label
     measured at one indent and drawn at another is the bug that shape
     invites.
+- **A NEW OR REDESIGNED APP FOLLOWS THE APP DESIGN LANGUAGE** at the top
+  of `docs/gui-guidelines.md`: tinted chrome, a command bar coloured by
+  action role, the content as the hero, accent-filled selection, rounded
+  shapes, colour by meaning, a full screen with floating controls. The
+  Image Viewer is the reference; mock a redesign up before coding it.
+- **A HELD BUTTON FREEZES THE HOVERED WINDOW: no leave, no enter, until
+  the release** (`wm_update_content_hover()`). Wayland's implicit grab.
+  A leave reaches a client as a move to (-1,-1) with NO button held,
+  and an app tracking a drag in `on_motion` reads that as the release
+  -- so the WM sending one on the first held move killed every
+  app-level drag (the Image Viewer's pan never moved) while widget
+  drags, which the router grabs, still worked. A test of a drag must
+  park the pointer outside what it compares: the cursor sprite alone
+  makes two frames differ.
 - **A WINDOW HAS THREE BUFFERS, AND A CLIENT DRAWS ONLY INTO ONE THE
   COMPOSITOR HAS RELEASED** (`WIN_EV_BUF_RELEASE`). A present names the
   new front; the compositor reads it on its OWN cadence -- the taskbar

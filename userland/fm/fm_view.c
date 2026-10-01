@@ -13,6 +13,14 @@
 // --- layout and drawing ------------------------------------------------
 
 static int toolbar_h(void) { return uui_toolbar_height(&g_toolbar); }
+
+// THE CHROME IS A WASH OF THE ACCENT (the colour-coded design chosen
+// 2026-10-01): the bars at one strength, the places pane lighter, a line
+// between them. Derived from the theme, never fixed, so another accent
+// carries through.
+static uint32_t chrome(void)      { return ugfx_blend(UTHEME_WHITE, UTHEME_ACCENT, 45); }
+static uint32_t chrome_line(void) { return ugfx_blend(UTHEME_WHITE, UTHEME_ACCENT, 85); }
+static uint32_t places_bg(void)   { return ugfx_blend(UTHEME_WHITE, UTHEME_ACCENT, 26); }
 static int statusbar_h(void) { return uui_statusbar_height(&g_status); }
 
 // The top row: Back/Forward/Up beside the breadcrumb and the search box,
@@ -74,7 +82,7 @@ void layout_all(int cw, int ch) {
     int nw, nth;
     uui_toolbar_natural_size(&g_nav, &nw, &nth);
     uui_toolbar_ops.set_geometry(&g_nav, 0, (nh - nth) / 2, nw, nth);
-    g_nav.bg = g_nav.border = UTHEME_PANEL_BG;   // part of the row, not a strip of its own
+    g_nav.bg = g_nav.border = chrome();   // part of the row, not a strip of its own
     int fh, sw = ugfx_char_advance('n') * 26;
     uui_pathbar_ops.natural_size(&g_path, 0, &fh);
     if (sw > cw / 3) sw = cw / 3;
@@ -85,6 +93,10 @@ void layout_all(int cw, int ch) {
 
     // --- the command bar ------------------------------------------------
     uui_toolbar_ops.set_geometry(&g_toolbar, 0, nh, cw, tb);
+    g_toolbar.bg = chrome();
+    g_toolbar.border = chrome_line();
+    g_status.bg = chrome();
+    g_places.bg = places_bg();
 
     // --- the status bar, with the view switch and Cancel at its end ----
     int vw, vh;
@@ -362,7 +374,11 @@ void log_layout(void) {
 
 void on_draw(struct uapp *a, struct uapp_draw *d) {
     layout_all(d->surface->w, d->surface->h);
-    ugfx_fill_rect(d->surface, 0, 0, d->surface->w, d->surface->h, UTHEME_PANEL_BG);
+    int cw = d->surface->w, nh = navrow_h(), tb = toolbar_h();
+    ugfx_fill_rect(d->surface, 0, 0, cw, d->surface->h, UTHEME_PANEL_BG);
+    ugfx_fill_rect(d->surface, 0, 0, cw, nh + tb, chrome());       // nav row + command bar
+    ugfx_fill_rect(d->surface, 0, nh - 1, cw, 1, chrome_line());
+    ugfx_fill_rect(d->surface, 0, nh + tb - 1, cw, 1, chrome_line());
     uui_statusbar_draw(d->surface, &g_status);
     if (g_dpane) details_draw(d->surface);
     if (!widget_by_id(ID_CANCEL)->hidden) uui_button_draw_one(d->surface, &g_cancel_btn);

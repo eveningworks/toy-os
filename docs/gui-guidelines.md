@@ -9,6 +9,57 @@ manifesto. Where a rule exists because something went wrong, that's
 said, because the reason is the useful part.
 
 
+## The app design language: what a new or redesigned app looks like
+
+**The Image Viewer (`userland/gui/apps/imgview.c`) is the reference,
+and the File Manager (`files.c`, `userland/fm/`) the second example**
+-- agreed 2026-10-01 as the look for every new app and every redesign.
+It is Windows 11 and KDE Breeze in SHAPE (Photos, Gwenview, Dolphin;
+Mica's tinted chrome), drawn with this theme's roles. Mock a redesign
+up on a Design canvas first, in this palette and with real data.
+
+**Anatomy, top to bottom:** menu bar, command bar, the content, an
+optional strip (thumbnails, a timeline), status bar. A side panel
+(Properties, details) opens on the RIGHT, toggled from the bar and a
+key, and the content gives it room rather than being covered.
+
+- **Chrome is TINTED, never flat grey and never saturated.** The menu
+  and command bars sit on a light blend of the accent (the File
+  Manager) or of the content itself (the viewer's ambient colours from
+  the picture), with a hairline in a deeper blend of the same colour.
+  Derive both from `utheme`, so a theme change follows.
+- **The command bar is symbolic icons, coloured by WHAT THEY DO** (the
+  action roles under "Colours" below), grouped by separators. A latched
+  toggle -- full screen, a panel that is open, the current view mode --
+  is FILLED in the accent with an `ACCENT_TEXT` icon. Every command is
+  reachable three ways: menu, bar, key. The keys are a TABLE of command
+  ids, the same ones the menu and bar run.
+- **The content is the hero.** Media sits on a dark or ambient stage
+  (radial, lighter in the middle); documents and lists on the plain
+  background. The default window is sized from the font and leaves the
+  desktop visible around it.
+- **Selection is FILLED IN THE ACCENT**, not washed grey: a selected
+  cell is a rounded accent ring with a pale fill and its label in an
+  accent pill. The current breadcrumb chip is the accent too. Hover is a
+  quieter rounded fill, and selection outranks it.
+- **Shapes are rounded**: capsule chips (`UUI_CAPSULE`), rounded cells
+  and pills, through the `uui_fill_round_rect()` wrappers.
+- **Colour carries meaning, not decoration.** Folders and places are
+  coloured by KIND with an emblem (`ufiletype_icon()`, `gen_icons.py`).
+  A usage bar is coloured by STATE (danger near full). Side-panel
+  section headers take the role of what they describe.
+- **The status bar is panes of readouts** -- the name, the dimensions,
+  the zoom -- not a sentence (see "Status bars" below).
+- **Full screen drops the chrome**: the controls float as a pill at the
+  bottom, Esc leaves, and the content can still be zoomed and panned.
+- **Direct manipulation first**: the wheel zooms about the pointer, a
+  drag pans anything bigger than its view, and arrow keys step through
+  items.
+
+New pieces of this language become `userland/ui/` widgets once a second
+app needs them (`uui_thumbstrip` did, from the File Manager's cache).
+
+
 ## The widgets, and what each is for
 
 `userland/ui/` is the toolkit. Reach for one of these before drawing
@@ -662,6 +713,13 @@ the same colour.
 
 Semantic colour is separate from decoration: the close button is red
 because closing is destructive, not because it looks nice.
+
+**A command bar may colour its actions by WHAT THEY DO** -- the Image
+Viewer and the File Manager do -- and the colours are the theme's ACTION
+ROLES (`utheme_action()`: navigate, view, create, edit, danger, arrange,
+media), never RGB typed into an app. A `uui_toolbar_item`'s `tint`
+names the role, and the icon is drawn symbolic in it. The same command
+takes the same colour in every app, so delete is red wherever it is.
 
 ## Motion: a window arrives, leaves and minimizes with a gesture
 

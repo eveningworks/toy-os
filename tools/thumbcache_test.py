@@ -166,6 +166,11 @@ def run(dbg, res):
     dbg.send(f"sh mkdir {STALE_DIR}")
     for n, src in (("a", "about"), ("b", "calculator"), ("c", "help")):
         dbg.send(f"sh cp {ICON_DIR}/{src}.qoi {STALE_DIR}/{n}.qoi")
+    # A SECOND MUST PASS before the first look. Freshness is STRICTLY
+    # newer at one-second resolution (uthumb.c's cache_fresh()), so an
+    # entry written in the same second as its source is re-decoded next
+    # time -- which would make b and c miss below as well as a.
+    time.sleep(1.2)
     before = len(drain_reports(dbg, seen))
     open_icons_on(dbg, STALE_DIR)
     first = wait_drain(dbg, seen, before)
