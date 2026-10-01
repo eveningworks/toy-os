@@ -1583,8 +1583,11 @@ Desktop calendar: DONE 2026-08-24. A popup panel above the taskbar,
 opened by clicking the tray clock, showing a month grid with today in
 the accent, `<`/`>` paging and a title that snaps back to today
 (`userland/wm/calendar_popup.c`). Days are not clickable -- there are no
-events to select one for. The week's first column is
-`desktop.week_start`.
+events to select one for. The week's first column is the locale's
+(`locale.week_start`, else the region's). Redesigned 2026-10-01 from
+mockups: a clock card (time, long date, zone) on top, the neighbouring
+months' days greyed to fill six rows, ISO week numbers where the locale
+shows them, and a "Date & time settings..." link.
 
 The plan here said "a reusable `widget_calendar` piece the same way
 `widget_scrollback`/`widget_button` are", and that was stale twice over

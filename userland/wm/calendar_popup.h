@@ -23,9 +23,9 @@
 // something stores events, and a highlight that does nothing reads as a
 // broken control.
 //
-// The week's first column comes from `desktop.week_start`
-// (kernel/lib/week_start_config.c), polled the same way the taskbar
-// polls `desktop.start_button`.
+// The week's first column is the locale's first weekday
+// (`locale.week_start`, else the region's), polled the same way the
+// taskbar polls `desktop.start_button`.
 
 // Whether the popup is currently open -- read by wm_render.c (draw or
 // not, and to force the full-screen overlay repaint) and wm_input.c.
@@ -39,10 +39,9 @@ void calendar_open_now(void);
 // Closes it with no action. Safe to call when it is already closed.
 void calendar_close(void);
 
-// Re-reads `desktop.week_start` if anything on the filesystem has
-// changed -- called once per frame from wm.c beside taskbar_poll_config()
-// and for the same reason: there is no inotify here, so a generation
-// counter is what says "ask again". The idle cost is one compare.
+// Adopts the locale's first weekday -- called once per frame from wm.c
+// beside taskbar_poll_config(). The idle cost is one compare; the tray
+// clock's wm_locale_sync() is what notices a change of region.
 void calendar_poll_config(void);
 
 // Draws the panel, using the live cursor for the `<`/`>` hover -- a
@@ -88,6 +87,10 @@ struct calendar_geom {
     int days;                  // days in the viewed month
     int today_col, today_row;  // today's cell, or -1/-1 when a different month is shown
     int week_start_monday;     // 1 = Monday first (the default), 0 = Sunday first
+    int week_numbers;          // the locale shows ISO week numbers
+    int week_x, week_w;        // their column, left of grid_x (-1 when hidden)
+    int card_x, card_y, card_w, card_h;  // the clock card at the top
+    int link_x, link_y, link_w, link_h;  // "Date & time settings..." at the foot
 };
 void calendar_geometry(struct calendar_geom *out);
 

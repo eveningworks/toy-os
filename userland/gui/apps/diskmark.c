@@ -36,6 +36,7 @@
 #include "ui/uui_meter.h"
 #include "lib/human.h"
 #include <stdio.h>
+#include "lib/unum.h"
 #include <string.h>
 #include <stdlib.h>
 #include "tmppath.h"
@@ -183,6 +184,7 @@ static void show_result(int p, uint64_t milli, uint64_t iops, uint64_t us) {
     g_result[p] = milli;
     snprintf(g_value[p], sizeof g_value[p], "%llu.%llu",
              (unsigned long long)(milli / 1000), (unsigned long long)((milli % 1000) / 100));
+    unum_localize(g_value[p], sizeof g_value[p], 0);
     snprintf(g_unit[p], sizeof g_unit[p], "MB/s");
     // IOPS and latency on the random profiles only: MB/s at 4 KiB is a
     // hard figure to feel, and at 1 KiB sequential the op count is just
@@ -191,6 +193,10 @@ static void show_result(int p, uint64_t milli, uint64_t iops, uint64_t us) {
         snprintf(g_detail[p], sizeof g_detail[p], "%llu IOPS, %llu.%llu ms avg",
                  (unsigned long long)iops,
                  (unsigned long long)(us / 1000), (unsigned long long)((us % 1000) / 100));
+        // The IOPS count is the first number, so the latency is
+        // localised on its own: unum_localize() takes the first only.
+        char *ms = strchr(g_detail[p], ',');
+        if (ms) unum_localize(ms + 1, sizeof g_detail[p] - (unsigned long)(ms + 1 - g_detail[p]), 0);
     } else {
         g_detail[p][0] = 0;
     }

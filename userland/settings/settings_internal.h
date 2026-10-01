@@ -91,14 +91,14 @@ enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER, CTRL_SPIN, CTRL_TEXT,
 
 enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST,
        ID_OPTS, ID_OPTS_OK, ID_OPTS_CANCEL, ID_SEARCH, ID_RESET, ID_APPLY,
-       ID_ASK, ID_FOOTER, ID_SI_COPY, ID_SI_DEVMGR,
+       ID_ASK, ID_FOOTER, ID_SI_COPY, ID_SI_DEVMGR, ID_CLOCK_CHANGE,
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
 
 // The focus ring: FOCUS_LEAD entries before the page's controls (search,
-// sidebar), and room after them for Test, Settings..., the advanced
-// toggle and the footer's two buttons.
+// sidebar), and room after them for Test, Settings..., Change..., the
+// advanced toggle and the footer's two buttons.
 #define FOCUS_LEAD 2
-#define FOCUS_MAX  (FOCUS_LEAD + PAGE_MAX + 5)
+#define FOCUS_MAX  (FOCUS_LEAD + PAGE_MAX + 6)
 
 #define NODE_SYSINFO       1
 #define NODE_CATEGORY_BASE 1000
@@ -106,8 +106,8 @@ enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST,
 
 
 // Title, description, a card per slot, Test and Settings..., the advanced
-// toggle.
-#define PAGE_ITEMS (2 + PAGE_MAX + 2 + 1)
+// toggle, and set_clock.c's clock, Change... card and preview.
+#define PAGE_ITEMS (2 + PAGE_MAX + 2 + 1 + 3)
 
 #define GROUP_DISPLAY_MAX (SETTING_ABI_CATEGORY_MAX + SETTING_ABI_LABEL_MAX + 3)
 
@@ -295,6 +295,17 @@ int refit_prose(void);
 void slot_rect(const struct slot *sl, int *x, int *y, int *w, int *h);
 const char *slot_kind_name(const struct slot *sl);
 int slot_disabled(const struct slot *sl);
+
+// set_clock.c -- Time & Locale's live clock, Change... and preview
+extern int g_clock_page, g_region_page;
+void clock_init(void);
+void clock_page_opened(void);
+int  clock_emit_top(struct uui_item *out, int n);
+int  clock_emit_after(struct uui_item *out, int n, int i,
+                      struct uui_focusable *focus, int *nfocus);
+int  clock_tick(void);
+void clock_open_dialog(struct uapp *a);
+void region_preview_refresh(void);
 
 // set_sysinfo.c
 extern struct uui_custom g_si_view;

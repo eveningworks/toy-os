@@ -7,26 +7,21 @@
 #include "rt/sys.h"
 #include <time.h>
 #include "lib/cmd.h"
+#include "lib/udate.h"
 #include <stdio.h>
+#include <locale.h>
 
-// "MM/DD/YYYY HH:MM:SS" -- the kernel shell's `stat` shape, kept so the
-// two commands do not disagree about how a timestamp looks while both
-// exist. Zero-padded widths are kfmt's, which pads NUMBERS with zeroes
-// (see CLAUDE.md) -- exactly what is wanted here and nowhere else.
-// LOCALISED, like every other displayed timestamp: what the kernel
-// stores is a UTC epoch (api/fs.h). This keeps its own spelling rather
-// than using lib/udate.h's, so `stat` and the kernel shell agree while
-// both exist -- which means it has to convert for itself.
+// In the locale's spelling, local time -- what the kernel stores is a
+// UTC epoch (api/fs.h), and lib/udate.h converts.
 static void put_time(const char *label, const struct rtc_time *t) {
-    struct rtc_time l = *t;
-    tz_localize(&l);
-    char buf[64];
-    snprintf(buf, sizeof buf, "  %s%02u/%02u/%04u %02u:%02u:%02u\n", label,
-             l.month, l.day, l.year, l.hour, l.minute, l.second);
+    char when[48], buf[80];
+    udate_format(when, sizeof when, t, UDATE_DATE | UDATE_TIME | UDATE_SECONDS);
+    snprintf(buf, sizeof buf, "  %s%s\n", label, when);
     sys_print(buf);
 }
 
 int main(int argc, char **argv) {
+    setlocale(LC_ALL, "");
     if (argc != 2) {
         cmd_usage("stat <path>");
         return 1;

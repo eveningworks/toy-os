@@ -48,6 +48,7 @@
 #include "ui/utheme.h"
 #include "calc_engine.h"
 #include "string.h"
+#include "lib/unum.h"   // the display, in the locale's decimal mark
 
 
 
@@ -88,6 +89,9 @@ static int display_h(void) { return ugfx_char_h() + 16; }
 static int expr_h(void)    { return ugfx_char_h() + 4; }
 
 static struct calc_state g_calc;
+// The engine works in '.', always; what is SHOWN is the locale's mark --
+// the display, the pending expression and the point key's label.
+static char g_point_label[2] = ".";
 static struct uui_button g_buttons[BUTTON_COUNT];
 static struct uui_button_group g_group;
 
@@ -103,6 +107,7 @@ static void draw_display(struct ugfx_surface *s, const struct uui_custom *c) {
         uint32_t expr_fg = ugfx_rgb(90, 100, 115);
         char num[CALC_DISPLAY_MAX];
         calc_format_scaled(g_calc.accumulator, num);
+        unum_localize(num, sizeof num, UNUM_GROUP);
         char expr[CALC_DISPLAY_MAX + 2];
         int pos = 0;
         for (const char *p = num; *p; p++) expr[pos++] = *p;
@@ -121,10 +126,14 @@ static void draw_display(struct ugfx_surface *s, const struct uui_custom *c) {
     // it without this code knowing where that is.
     int display_y = c->y + expr_h() + 2;
     ugfx_fill_rect(s, c->x, display_y, c->w, display_h(), display_bg);
-    int text_x = c->x + c->w - 6 - ugfx_text_width(g_calc.display);
+    char shown[CALC_DISPLAY_MAX + 8];
+    strlcpy(shown, g_calc.display, sizeof shown);
+    unum_localize(shown, sizeof shown, UNUM_GROUP);
+    g_point_label[0] = localeconv()->decimal_point[0];
+    int text_x = c->x + c->w - 6 - ugfx_text_width(shown);
     if (text_x < c->x + 4) text_x = c->x + 4;
     int text_y = display_y + (display_h() - ugfx_char_h()) / 2;
-    ugfx_draw_string(s, text_x, text_y, g_calc.display, fg, display_bg);
+    ugfx_draw_string(s, text_x, text_y, shown, fg, display_bg);
 }
 
 // Same passthrough the kernel version uses: the keyboard driver already
@@ -132,6 +141,8 @@ static void draw_display(struct ugfx_surface *s, const struct uui_custom *c) {
 // few keys that spell differently from their button code need mapping.
 static char code_for_key(int key) {
     if (key >= '0' && key <= '9') return (char)key;
+    // ',' is the point too: the Finnish keypad's decimal key types it.
+    if (key == ',') return '.';
     if (key == '.' || key == '+' || key == '-' || key == '*' ||
         key == '/' || key == '%' || key == '=') return (char)key;
     if (key == '\r' || key == '\n') return '=';
@@ -221,7 +232,7 @@ int main(void) {
         int is_op = (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '=');
         // Geometry is 0 here on purpose: the layout assigns it, and a
         // button's natural size comes from its own label.
-        uui_button_init(&g_buttons[i], 0, 0, 0, 0, BUTTONS[i].label,
+        uui_button_init(&g_buttons[i], 0, 0, 0, 0, c == '.' ? g_point_label : BUTTONS[i].label,
                          is_op ? op_btn_bg : btn_bg, fg, (int)(unsigned char)c);
         g_grid_items[i].ops = &uui_button_ops;
         g_grid_items[i].widget = &g_buttons[i];

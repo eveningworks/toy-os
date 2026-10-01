@@ -1,0 +1,12 @@
+Type=enum
+File=/etc/locale.conf
+Label=Week numbers
+Category=Time & Locale
+Group=Region & formats
+Default=region
+Choices=region,on,off
+Description=ISO week numbers beside the calendar
+Order=60
+Choice.region=Region
+Choice.on=On
+Choice.off=Off

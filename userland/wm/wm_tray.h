@@ -61,6 +61,9 @@ void tray_init(void);
 // once per wm_run() tick, exactly where the old once-a-second
 // last_second check used to call draw_clock_area()'s own rtc_read_local().
 void tray_update_clock(void);
+// Re-reads the timezone and the region when the settings registry has
+// moved (the calendar asks too, for the week's first day).
+void wm_locale_sync(void);
 
 // Draws every active tray item right-to-left from the panel's right
 // edge, in the strip's palette -- called from draw_taskbar() with the

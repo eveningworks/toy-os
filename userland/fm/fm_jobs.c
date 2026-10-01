@@ -504,9 +504,9 @@ void do_delete(void) {
         const char *name = k_path_basename(g_del_path);
         snprintf(g_del_title, sizeof g_del_title, "Delete %s?", name);
         struct sys_stat st;
-        char h[24], when[32];
+        char h[24], when[48];
         if (sys_stat(g_del_path, &st) == 0) {
-            rtc_format_iso(when, sizeof when, &st.modified, 0);
+            udate_format(when, sizeof when, &st.modified, UDATE_DATE | UDATE_TIME);
             if (st.is_dir) {
                 snprintf(g_del_facts, sizeof g_del_facts, "Folder, modified %s -- and everything in it", when);
             } else {

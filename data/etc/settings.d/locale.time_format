@@ -1,0 +1,14 @@
+Type=enum
+File=/etc/locale.conf
+Label=Time
+Category=Time & Locale
+Group=Region & formats
+Default=region
+Choices=region,24dot,24colon,12
+Description=The clock and times of day
+Widget=dropdown
+Order=30
+Choice.region=Region default
+Choice.24dot=14.02 (24-hour)
+Choice.24colon=14:02 (24-hour)
+Choice.12=2:02 PM (12-hour)

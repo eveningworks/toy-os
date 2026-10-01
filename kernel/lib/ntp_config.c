@@ -45,13 +45,16 @@ static int ntp_apply(const char *value) {
     return etc_config_set(NTP_CONFIG_FILE, "ntp", value) ? SETTING_SAVED : SETTING_UNSAVED;
 }
 
+// On the Date & time page, beside the manual Change... it switches off
+// (Windows 11's "Set time automatically"); the server and the interval
+// keep the Network Time page.
 static const struct setting g_ntp_setting = {
     .name = "ntp",
-    .label = "Network time",
+    .label = "Set the time automatically",
     .type = SETTING_TYPE_ENUM,
     .file = NTP_CONFIG_FILE,
     .category = NTP_CATEGORY,
-    .group = NTP_GROUP,
+    .group = "Date & time",
     .choice = onoff_choice,
     .get = ntp_get,
     .apply = ntp_apply,

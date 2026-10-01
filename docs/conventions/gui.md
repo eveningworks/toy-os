@@ -3077,6 +3077,28 @@ real scanout hardware does. Do not write a pixel assertion for one.
   `UUI_CAPSULE` is half the short axis, and any larger radius clamps to
   it. It lived inside `uui_scrollbar.c` until the tray's pressed pill
   became its second real caller; `UUI_SB_CAPSULE` is now an alias.
+- **A DATE OR A NUMBER SHOWN TO A PERSON GOES THROUGH `lib/udate.h` OR
+  `lib/unum.h`, never a hand-written `%04u-%02u` or `%u.%u`.**
+  `udate_format()` writes the LC_TIME locale's spelling (and ISO in "C",
+  so a program that never opted in prints what it always did);
+  `unum_localize()` rewrites a C-formatted number with the LC_NUMERIC
+  locale's decimal mark, and groups its digits only when asked
+  (`UNUM_GROUP`) -- a size in a column is never grouped. **Only the FIRST
+  number in the string is touched, so never pass it an IPv4 address.**
+  A column holding a date is sized for the widest region's ("12/31/2026
+  12:59 PM"), not for ISO's. GUI apps are already in the system's locale:
+  `uapp` calls `setlocale(LC_ALL, "")` at open and again on the
+  forwarded `WIN_EV_SETTING`.
+
+- **A SYSTEM SETTINGS PAGE'S EXTRAS ARE FOUND BY THE SETTING IT CARRIES**
+  -- the screensaver's Test, Date & time's live clock and Change...
+  (`set_clock.c`), Region & formats' preview -- never by the page's
+  title, which `/etc/settings.d` can rename. `settings <qualified name>`
+  opens on the page carrying that setting, for the same reason.
+  **Setting the clock is an ACTION, not a staged setting**: Change...
+  writes at once and is unavailable while `system.ntp` is on, as
+  `timedatectl set-time` refuses.
+
 - **THE TRAY CLOCK OPENS A CALENDAR, AND THE PANEL OWNS IT --
   `userland/wm/calendar_popup.c`, not an app.** Clicking the clock opens
   a month grid anchored above it, today in the theme's ACCENT, `<` / `>`
@@ -3103,19 +3125,25 @@ real scanout hardware does. Do not write a pixel assertion for one.
   centres eight pixels off the real ones. A CLOSED popup reports TODAY's
   month, because that is what opening it now would show.
 
-- **THE WEEK'S FIRST COLUMN IS A REGISTERED SETTING:
-  `desktop.week_start` = `monday` | `sunday`.** DECLARED by
-  `/etc/settings.d/desktop.week_start`, sharing `/etc/desktop.conf`
-  with the wallpaper and the Start button -- the
-  namespace is the registered name of the FILE. Persist-only because the
-  calendar that reads it is drawn by a ring-3 process and
-  `setting_register()` takes function pointers a process cannot supply;
-  `calendar_poll_config()` adopts it on the same `sys_fs_generation()`
-  poll `taskbar_poll_config()` uses. **Two choices, not seven**: `cal(1)`
-  offers these two, ISO 8601 says Monday, the US and Windows say Sunday,
-  and nothing wants a week starting on a Wednesday. The default is
-  `monday`. **A tool that changes it must set it back** -- the same rule
-  the Start button's entry states, and for the same reason.
+- **THE CALENDAR'S WEEK -- ITS FIRST DAY AND ITS NUMBERS -- IS THE
+  LOCALE'S.** `calendar_poll_config()` reads
+  `nl_langinfo(_NL_TIME_FIRST_WEEKDAY)` and `_TOY_WEEK_NUMBERS`, which
+  fold the region and its `locale.week_start`/`locale.week_numbers`
+  overrides together (`userland/libc/locale.c`); it never reads a
+  setting itself. The WM is not a uapp, so **`wm_locale_sync()`
+  (`wm_tray.c`) is what re-runs `tzset()` and `setlocale()`** when the
+  settings generation moves -- the tray clock calls it each second. A
+  week number belongs to the row's MONDAY (its second column on a Sunday
+  week), ISO 8601's rule. **A tool that changes either setting must set
+  it back.**
+
+- **THE POPUP'S CLOCK CARD TICKS WITH THE TRAY CLOCK, AND ITS LINK OPENS
+  SETTINGS BY A SETTING'S NAME.** The card shows seconds, so
+  `tray_update_clock()` damages the open popup each second -- which is
+  also why `calendar_test.py` compares the panel BELOW the card. "Date &
+  time settings..." spawns `settings system.timezone`: System Settings
+  opens on whichever page carries that setting, so a renamed page keeps
+  the link.
 
 - **AN ICON IS A NAME, IT IS CACHED, AND IT IS COMPOSITED.** A `.desktop`
   entry's `Icon=` is a NAME resolved to `/usr/share/icons/<name>.qoi`

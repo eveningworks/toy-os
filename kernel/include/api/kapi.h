@@ -17,7 +17,7 @@
 #include "mouse.h"     // mouse_init, mouse_get_state, mouse_set_bounds
 #include "timer.h"     // coarse_ticks, rtc_read
 #include "tz.h"        // the timezone SELECTION -- the database and the
-                       // conversion are ring 3's (userland/lib/utz.h)
+                       // conversion are ring 3's (userland/libc/tz.c)
 #include "font_config.h" // font size persistence (see kernel/lib/font_config.c)
 #include "font_face.h"   // fonts loaded from /usr/share/fonts at runtime
 #include "cursor_config.h" // console cursor-style persistence (see kernel/lib/cursor_config.c)

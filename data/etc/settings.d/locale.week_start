@@ -1,0 +1,12 @@
+Type=enum
+File=/etc/locale.conf
+Label=First day of week
+Category=Time & Locale
+Group=Region & formats
+Default=region
+Choices=region,monday,sunday
+Description=Where calendars start a week
+Order=50
+Choice.region=Region
+Choice.monday=Monday
+Choice.sunday=Sunday

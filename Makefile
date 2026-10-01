@@ -1146,7 +1146,7 @@ EXTRA_OBJS_files = fm/fm_view fm/fm_jobs fm/fm_tree fm/fm_thumbs fm/fm_modal \
                    fm/fm_history fm/fm_details fm/fm_options
 # System Settings, the same way: userland/settings/ is its parts.
 EXTRA_OBJS_settings = settings/set_registry settings/set_page settings/set_owner \
-                      settings/set_sysinfo
+                      settings/set_sysinfo settings/set_clock
 # Task Manager, the same way: userland/taskmgr/ is its pages.
 EXTRA_OBJS_taskmgr = taskmgr/tm_procs taskmgr/tm_perf taskmgr/tm_services
 # System Update: one engine behind the command and the window.
@@ -1967,6 +1967,9 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	# seeded once -- the kernel used to carry the table and write the
 	# file itself, and nothing in ring 0 reads the offsets now.
 	cp data/etc/timezones $(SEED_DIR)/sync/etc/timezones
+	# /etc/locales: the regional formats, the same kind of shipped table
+	# (userland/libc/locale.c reads it).
+	cp data/etc/locales $(SEED_DIR)/sync/etc/locales
 	# The TLS trust store: one PEM per anchor, EMPTY by default. An empty
 	# store is a supported state -- nothing is verifiable, so https
 	# refuses rather than connecting to something it cannot vouch for.

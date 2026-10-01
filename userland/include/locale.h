@@ -1,19 +1,23 @@
 #ifndef ULIB_LOCALE_H
 #define ULIB_LOCALE_H
 
-// **THERE IS ONE LOCALE AND IT IS "C".** Not a placeholder: this system
-// is Latin-1 end to end, its fonts carry 101 glyphs, and its number and
-// date formatting are fixed. A locale database would be a promise the
-// rest of the system does not keep.
+// **THE LOCALE IS A REGION'S FORMATS, NOT A LANGUAGE.** "C" plus one
+// locale per row of /etc/locales ("iso", "fi", "us"): each says how a
+// date, a time and a number are written and which day starts the week.
+// Messages, month names and the character set stay English and Latin-1
+// in every one -- LC_CTYPE, LC_COLLATE, LC_MESSAGES and LC_MONETARY are
+// accepted and behave as "C".
 //
-// setlocale() therefore SUCCEEDS for the locales that are really "C"
-// and FAILS for anything else, rather than accepting a name and quietly
-// ignoring it -- a caller that asks for de_DE and is told yes will
-// format numbers wrongly and never find out. Refusing is this
-// project's usual rule (a parser REJECTS rather than guesses); the
-// exception is <sys/stat.h>'s mkdir mode, which is ignored because
-// there is nothing for it to mean.
-
+// setlocale(LC_ALL, "") is how a program opts in, as on any POSIX
+// system: LC_ALL, then LC_TIME/LC_NUMERIC, then LANG from the
+// environment, and with none of those set, the system's choice in
+// System Settings (/etc/locale.conf, declared by settings.d/locale.*).
+// A program that never calls it stays in "C", and `LC_ALL=C` puts one
+// that does back there -- what a script parsing a tool's output sets.
+//
+// A NAME THAT IS NOT A LOCALE IS REFUSED, not ignored: a caller told
+// "yes" for de_DE would format numbers wrongly and never find out (a
+// parser REJECTS rather than guesses).
 #include <stddef.h>
 
 #define LC_ALL      0
@@ -25,20 +29,24 @@
 #define LC_MESSAGES 6
 
 // Set or query a locale. `locale` may be:
-//   NULL      -- query: always returns "C"
-//   ""        -- "take it from the environment", which here is "C"
-//   "C"       -- the one locale there is
-//   "POSIX"   -- its other name
-// Anything else returns NULL, meaning the request was refused. dash
-// calls this from var.c whenever LC_ALL or LANG is assigned, and takes
-// NULL as "leave the old one alone", which is exactly right.
+//   NULL        -- query: the category's locale name (LC_ALL: LC_TIME's)
+//   ""          -- the environment, else the system setting (above)
+//   "C"/"POSIX" -- the C locale
+//   a region    -- a name from /etc/locales, with that region's formats,
+//                  optionally overridden: "fi@time=24colon,week=sunday"
+//                  (keys date, time, number, week, weeknum; the words
+//                  are the locale.* settings')
+// Anything else returns NULL and changes nothing. dash calls this from
+// var.c whenever LC_ALL or LANG is assigned, and takes NULL as "leave
+// the old one alone", which is exactly right.
 //
 // The returned string is static and must not be freed or modified.
 char *setlocale(int category, const char *locale);
 
-// What the C locale's formatting looks like. Every pointer is to a
-// static string; "" means "this locale has no such convention", and
-// CHAR_MAX means "not available", both as C specifies.
+// The LC_NUMERIC locale's decimal mark and digit grouping (`grouping`
+// is "\3" when there is a separator), and C's empty monetary fields.
+// Every pointer is to a static string; "" means "this locale has no
+// such convention", and CHAR_MAX means "not available", as C specifies.
 struct lconv {
     char *decimal_point;
     char *thousands_sep;

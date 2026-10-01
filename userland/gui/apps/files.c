@@ -1334,9 +1334,9 @@ static void on_pane_dir(void *ctx, const char *dir) {
 static void describe(char *out, int cap, const char *label, const char *path) {
     struct sys_stat st;
     if (sys_stat(path, &st) != 0) { snprintf(out, (size_t)cap, "%s: gone", label); return; }
-    char human[24], when[32];
+    char human[24], when[48];
     human_size(human, sizeof human, st.size);
-    rtc_format_iso(when, sizeof when, &st.modified, 0);
+    udate_format(when, sizeof when, &st.modified, UDATE_DATE | UDATE_TIME);
     snprintf(out, (size_t)cap, "%s  %s  %s", label, human, when);
 }
 

@@ -62,6 +62,7 @@ int main(void) {
     utest_check(setlocale(LC_ALL, 0) != 0, "setlocale queries without setting");
     utest_check(setlocale(LC_ALL, "de_DE.UTF-8") == 0,
                 "setlocale REFUSES a locale it cannot honour");
+    setlocale(LC_ALL, "C");   // "" above took the SYSTEM's, whatever it is
     utest_check(strcmp(localeconv()->decimal_point, ".") == 0,
                 "localeconv reports the C locale's decimal point");
 

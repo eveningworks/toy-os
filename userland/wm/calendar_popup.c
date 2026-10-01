@@ -1,9 +1,10 @@
 // See calendar_popup.h for what this is and why the panel owns it.
-#include "wm/wm_watch.h" // calendar_poll_config()'s change counter
 #include "wm_internal.h"
 #include <time.h>
+#include <langinfo.h>
+#include "lib/udate.h"
+#include "ui/uui_primitives.h"
 #include "calendar_popup.h"
-#include "lib/usetting.h"
 #include "wm_shadow.h"
 #include "wm_tray.h"
 #include "wm_overlay.h"
@@ -12,7 +13,6 @@
 #include "kapi.h"
 #include "rt/sys.h"
 #include "caltime.h"      // cal_days_in_month/_days_from_civil -- shared with ring 0
-#include "wm/wm_conf.h"   // struct setting_msg, SETTING_OP_*
 
 int calendar_open = 0;
 
@@ -21,8 +21,8 @@ int calendar_open = 0;
 // showing tomorrow -- the same call every desktop's clock applet makes.
 static int view_year = 1970, view_month = 1;
 
-// `desktop.week_start`, adopted by calendar_poll_config(). Monday is
-// the registry's default (ISO 8601); see week_start_config.c.
+// The LC_TIME locale's first weekday (`locale.week_start`, or the
+// region's), adopted by calendar_poll_config().
 static int week_start_monday = 1;
 
 static const char *const g_month_names[] = {
@@ -31,7 +31,7 @@ static const char *const g_month_names[] = {
 };
 
 // Two letters, Monday-first as stored -- the popup rotates them when
-// `desktop.week_start` says Sunday. Two rather than three keeps the
+// the locale's week starts on a Sunday. Two rather than three keeps the
 // panel narrow enough to sit over the taskbar's right end without
 // covering half the strip, which is what GNOME and Plasma both draw.
 static const char *const g_day_names[] = { "Mo", "Tu", "We", "Th", "Fr", "Sa", "Su" };
@@ -88,7 +88,17 @@ static int cell_w_px(void) {
         int dw = ugfx_text_width(g_day_names[i]);
         if (dw > w) w = dw;
     }
-    return w + ugfx_char_w();
+    w += ugfx_char_w();
+    // Never narrower than tall: today's fill is a rounded cell, and a
+    // sliver of one reads as a bar.
+    int min = ugfx_char_h() + 8;
+    return w < min ? min : w;
+}
+
+// The clock card: the time at display size, the date written out, the
+// zone. Its height is the font's, so a bigger font grows it.
+static int card_h_px(void) {
+    return cal_pad() + ugfx_font_display()->line_h + 2 * ugfx_char_h() + cal_pad();
 }
 
 void calendar_geometry(struct calendar_geom *g) {
@@ -102,11 +112,21 @@ void calendar_geometry(struct calendar_geom *g) {
 
     int pad = cal_pad();
     g->cell_w = cell_w_px();
-    g->cell_h = ugfx_char_h() + 6;
+    g->cell_h = ugfx_char_h() + 8;
     g->header_h = ugfx_char_h() + 12;
+    g->week_numbers = nl_langinfo(_TOY_WEEK_NUMBERS)[0] == '1';
+    int week_w = g->week_numbers ? ugfx_text_width("53") + ugfx_char_w() : 0;
 
-    g->w = 7 * g->cell_w + 2 * pad;
-    g->h = g->header_h + (1 + CAL_WEEK_ROWS) * g->cell_h + pad;
+    // As wide as the grid, or as the longest date the card can show.
+    int grid_w = week_w + 7 * g->cell_w;
+    int text_w = ugfx_text_width("Wednesday 30 September 2026") + 4 * pad;
+    g->w = (grid_w > text_w ? grid_w : text_w) + 2 * pad;
+
+    g->card_h = card_h_px();
+    g->link_h = ugfx_char_h() + 12;
+    int nav_top = pad + g->card_h + pad / 2;
+    int grid_top = nav_top + g->header_h;
+    g->h = grid_top + (1 + CAL_WEEK_ROWS) * g->cell_h + pad / 2 + g->link_h;
 
     // ANCHORED TO THE CLOCK, not to the screen's right edge: the clock
     // is the control that was clicked, and a popup that opens somewhere
@@ -115,19 +135,33 @@ void calendar_geometry(struct calendar_geom *g) {
     int cx, cy, cw, ch;
     int right = screen_w - 8;
     if (tray_clock_rect(&cx, &cy, &cw, &ch)) right = cx + cw;
-    wm_popup_place(right - g->w, screen_h - taskbar_h - g->h, g->w, g->h, &g->x, &g->y);
+    wm_popup_place(right - g->w, screen_h - taskbar_h - g->h - 4, g->w, g->h, &g->x, &g->y);
 
-    // The header: `<` and `>` are squares at the ends, the title takes
-    // everything between them so the click target for "back to today"
-    // is the whole middle rather than the glyphs alone.
+    g->card_x = g->x + pad;
+    g->card_y = g->y + pad;
+    g->card_w = g->w - 2 * pad;
+
+    // The nav row: `<` and `>` squares at the ends, the title between
+    // them, so the click target for "back to today" is the whole middle
+    // rather than the glyphs alone.
+    int ny = g->y + nav_top;
     int btn = g->header_h - 4;
-    g->prev_x = g->x + pad;      g->prev_y = g->y + 2; g->prev_w = btn; g->prev_h = btn;
-    g->next_x = g->x + g->w - pad - btn; g->next_y = g->y + 2; g->next_w = btn; g->next_h = btn;
-    g->title_x = g->prev_x + btn; g->title_y = g->y;
+    g->prev_x = g->x + pad;      g->prev_y = ny + 2; g->prev_w = btn; g->prev_h = btn;
+    g->next_x = g->x + g->w - pad - btn; g->next_y = ny + 2; g->next_w = btn; g->next_h = btn;
+    g->title_x = g->prev_x + btn; g->title_y = ny;
     g->title_w = g->next_x - g->title_x; g->title_h = g->header_h;
 
-    g->grid_x = g->x + pad;
-    g->grid_y = g->y + g->header_h;
+    // The grid centred in the panel, the week column (when shown) to the
+    // left of the day columns -- grid_x is always the FIRST DAY column.
+    int gx = g->x + (g->w - grid_w) / 2;
+    g->week_x = g->week_numbers ? gx : -1;
+    g->week_w = week_w;
+    g->grid_x = gx + week_w;
+    g->grid_y = g->y + grid_top;
+
+    g->link_x = g->x + 1;
+    g->link_y = g->y + g->h - g->link_h;
+    g->link_w = g->w - 2;
 
     g->view_year = vy;
     g->view_month = vm;
@@ -145,6 +179,16 @@ void calendar_geometry(struct calendar_geom *g) {
         g->today_col = -1;
         g->today_row = -1;
     }
+}
+
+// The ISO 8601 week of a day: the week holding that week's Thursday,
+// counted in the Thursday's year. Days are days since the epoch.
+static int iso_week(int64_t days) {
+    int mon0 = (int)(((days + 3) % 7 + 7) % 7);
+    int64_t thu = days - mon0 + 3;
+    int y, m, d;
+    cal_civil_from_days(thu, &y, &m, &d);
+    return (int)((thu - cal_days_from_civil(y, 1, 1)) / 7) + 1;
 }
 
 // ---------------------------------------------------------------------
@@ -176,25 +220,10 @@ static void page_month(int delta) {
 }
 
 void calendar_poll_config(void) {
-    static uint64_t seen_gen;
-    static int primed;
-    uint64_t gen = wm_watch_config_gen();
-    if (primed && gen == seen_gen) return;
-    seen_gen = gen;
-    primed = 1;
-
-    // Read through the SETTINGS REGISTRY rather than straight out of
-    // /etc/desktop.conf, the note taskbar_poll_config() carries and for
-    // the same reason: the registry knows the default and the legal
-    // values, so reading the file here would put a second copy of the
-    // default in a second place.
-    int want = 1;
-    // usetting_get(), not sys_setting(): a DECLARED setting
-    // (/etc/settings.d) is invisible to the syscall.
-    char value[SETTING_ABI_VALUE_MAX];
-    if (usetting_get("desktop.week_start", value, sizeof value) && value[0]) {
-        if (k_strcmp(value, "sunday") == 0) want = 0;
-    }
+    // The locale's answer, which already folds the region and its
+    // override together (userland/libc/locale.c). A pointer read: the
+    // tray clock's wm_locale_sync() is what re-reads the locale.
+    int want = nl_langinfo(_NL_TIME_FIRST_WEEKDAY)[0] != 1;
     if (want == week_start_monday) return;
     week_start_monday = want;
     if (calendar_open) redraw_pending = 1;
@@ -226,6 +255,7 @@ int calendar_hover_at(int mx, int my) {
     if (uui_hit(g.prev_x, g.prev_y, g.prev_w, g.prev_h, mx, my)) return 1;
     if (uui_hit(g.next_x, g.next_y, g.next_w, g.next_h, mx, my)) return 2;
     if (uui_hit(g.title_x, g.title_y, g.title_w, g.title_h, mx, my)) return 3;
+    if (uui_hit(g.link_x, g.link_y, g.link_w, g.link_h, mx, my)) return 4;
     return 0;
 }
 
@@ -240,78 +270,149 @@ int calendar_rect(int *x, int *y, int *w, int *h) {
 // the core's now (wm_overlay.h).
 void calendar_damage(void) { wm_overlay_damage("calendar"); }
 
+// A chevron pointing left (dir < 0) or right, centred in a box -- the
+// command bar's NAV ink, as the File Manager's back and forward are.
+static void draw_chevron(int x, int y, int w, int h, int dir, uint32_t ink) {
+    int r = ugfx_char_h() / 4 + 1;
+    int cx = x + w / 2, cy = y + h / 2;
+    for (int t = 0; t < 2; t++) {   // two passes, a pixel apart: a 2px stroke
+        int tip = cx + dir * r / 2 + t, back = cx - dir * r / 2 + t;
+        ugfx_draw_line(wm_surface(), back, cy - r, tip, cy, ink, GEOM_AA);
+        ugfx_draw_line(wm_surface(), tip, cy, back, cy + r, ink, GEOM_AA);
+    }
+}
+
+// "Helsinki, UTC+3 (summer time)" -- the zone and the offset in force.
+static void zone_text(char *out, int cap, time_t now, int dst) {
+    long off = tz_offset_seconds(&now) / 60;
+    char o[16];
+    if (!off) k_strlcpy(o, "UTC", sizeof o);
+    else if (off % 60) k_snprintf(o, sizeof o, "UTC%c%ld:%02ld", off < 0 ? '-' : '+',
+                                  (off < 0 ? -off : off) / 60, (off < 0 ? -off : off) % 60);
+    else k_snprintf(o, sizeof o, "UTC%c%ld", off < 0 ? '-' : '+', (off < 0 ? -off : off) / 60);
+    if (!k_strcmp(tzname[0], o)) k_strlcpy(out, o, cap);   // not "UTC, UTC"
+    else k_snprintf(out, cap, "%s, %s%s", tzname[0], o, dst ? " (summer time)" : "");
+}
+
+static void draw_card(const struct calendar_geom *g) {
+    struct ugfx_surface *s = wm_surface();
+    uui_fill_round_rect(s, g->card_x, g->card_y, g->card_w, g->card_h, 6, UTHEME_SEPARATOR);
+    uui_fill_round_rect(s, g->card_x + 1, g->card_y + 1, g->card_w - 2, g->card_h - 2, 5,
+                        UTHEME_WHITE);
+    struct rtc_time now;
+    if (sys_gettime(&now) != 0) return;
+    time_t e = (time_t)cal_rtc_to_epoch(&now);
+    struct tm tm;
+    localtime_r(&e, &tm);
+    char clock[32], date[64], zone[80];
+    udate_format_tm(clock, sizeof clock, &tm, UDATE_TIME | UDATE_SECONDS);
+    udate_format_tm(date, sizeof date, &tm, UDATE_DATE | UDATE_LONG);
+    zone_text(zone, sizeof zone, e, tm.tm_isdst);
+
+    int pad = cal_pad();
+    int x = g->card_x + pad, w = g->card_w - 2 * pad, y = g->card_y + pad * 3 / 4;
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_display());
+    int big_h = ugfx_char_h();
+    ugfx_draw_string_clipped(s, x, y, w, clock, UTHEME_TEXT, UTHEME_WHITE);
+    ugfx_set_font(was);
+    y += big_h + 2;
+    ugfx_draw_string_clipped(s, x, y, w, date, UTHEME_TEXT, UTHEME_WHITE);
+    y += ugfx_char_h();
+    ugfx_draw_string_clipped(s, x, y, w, zone, uui_state_bg(UTHEME_TEXT, UUI_STATE_DISABLED),
+                             UTHEME_WHITE);
+}
+
 void calendar_draw(int mx, int my) {
     if (!calendar_open) return;
 
     struct calendar_geom g;
     calendar_geometry(&g);
+    struct ugfx_surface *s = wm_surface();
 
-    uint32_t bg = UTHEME_PANEL_BG, border = UTHEME_BORDER, fg = UTHEME_TEXT;
+    uint32_t bg = UTHEME_PANEL_BG, fg = UTHEME_TEXT;
+    uint32_t dim = uui_state_bg(UTHEME_TEXT, UUI_STATE_DISABLED);
+    uint32_t nav = utheme_action(UTHEME_ACT_NAV);
     // Derived from the panel's own colour, never hand-picked: on this
     // near-white theme "hover" has to DARKEN, which is the call
     // uui_state_bg() makes from gfx_luminance() rather than one made
     // here (docs/gui-guidelines.md).
     uint32_t hover_bg = uui_state_bg(bg, UUI_STATE_HOVER);
+    int radius = ugfx_char_h() / 2;
 
-    wm_shadow_draw(g.x, g.y, g.w, g.h, 0, WM_SHADOW_POPUP);
-    ugfx_fill_rect(wm_surface(), g.x, g.y, g.w, g.h, bg);
+    wm_shadow_draw(g.x, g.y, g.w, g.h, radius, WM_SHADOW_POPUP);
+    uui_fill_round_rect(s, g.x, g.y, g.w, g.h, radius, UTHEME_OUTLINE);
+    uui_fill_round_rect(s, g.x + 1, g.y + 1, g.w - 2, g.h - 2, radius - 1, bg);
 
-    // --- header: < month year > -------------------------------------
+    draw_card(&g);
+
+    // --- the nav row: < month year > --------------------------------
     int over_prev = uui_hit(g.prev_x, g.prev_y, g.prev_w, g.prev_h, mx, my);
     int over_next = uui_hit(g.next_x, g.next_y, g.next_w, g.next_h, mx, my);
     int over_title = uui_hit(g.title_x, g.title_y, g.title_w, g.title_h, mx, my);
-    if (over_prev) ugfx_fill_rect(wm_surface(), g.prev_x, g.prev_y, g.prev_w, g.prev_h, hover_bg);
-    if (over_next) ugfx_fill_rect(wm_surface(), g.next_x, g.next_y, g.next_w, g.next_h, hover_bg);
-    if (over_title) ugfx_fill_rect(wm_surface(), g.title_x, g.title_y + 2,
-                                   g.title_w, g.title_h - 4, hover_bg);
-
-    int glyph_y = g.prev_y + (g.prev_h - ugfx_char_h()) / 2;
-    draw_centred(g.prev_x, glyph_y, g.prev_w, "<", fg, over_prev ? hover_bg : bg);
-    draw_centred(g.next_x, glyph_y, g.next_w, ">", fg, over_next ? hover_bg : bg);
+    if (over_prev) uui_fill_round_rect(s, g.prev_x, g.prev_y, g.prev_w, g.prev_h, 4, hover_bg);
+    if (over_next) uui_fill_round_rect(s, g.next_x, g.next_y, g.next_w, g.next_h, 4, hover_bg);
+    if (over_title) uui_fill_round_rect(s, g.title_x + 2, g.title_y + 2,
+                                        g.title_w - 4, g.title_h - 4, 4, hover_bg);
+    draw_chevron(g.prev_x, g.prev_y, g.prev_w, g.prev_h, -1, nav);
+    draw_chevron(g.next_x, g.next_y, g.next_w, g.next_h, +1, nav);
 
     char title[32];
     k_snprintf(title, sizeof title, "%s %d",
                calendar_month_name(g.view_month), g.view_year);
-    draw_centred(g.title_x, g.y + (g.header_h - ugfx_char_h()) / 2, g.title_w,
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
+    draw_centred(g.title_x, g.title_y + (g.header_h - ugfx_char_h()) / 2, g.title_w,
                  title, fg, over_title ? hover_bg : bg);
+    ugfx_set_font(was);
 
-    // --- weekday header, then a rule --------------------------------
+    // --- weekday header ---------------------------------------------
+    int text_dy = (g.cell_h - ugfx_char_h()) / 2;
     for (int c = 0; c < 7; c++) {
         const char *label = g_day_names[week_start_monday ? c : (c + 6) % 7];
-        draw_centred(g.grid_x + c * g.cell_w,
-                     g.grid_y + (g.cell_h - ugfx_char_h()) / 2, g.cell_w,
-                     label, border, bg);
+        draw_centred(g.grid_x + c * g.cell_w, g.grid_y + text_dy, g.cell_w, label, dim, bg);
     }
-    ugfx_fill_rect(wm_surface(), g.grid_x, g.grid_y + g.cell_h - 1,
-                   7 * g.cell_w, 1, border);
 
-    // --- the days ----------------------------------------------------
-    for (int day = 1; day <= g.days; day++) {
-        int idx = g.first_col + day - 1;
-        int col = idx % 7, row = idx / 7;
-        if (row >= CAL_WEEK_ROWS) break; // cannot happen: 6 rows hold any month
-        int cx = g.grid_x + col * g.cell_w;
+    // --- six rows: the neighbouring months greyed, the week numbers
+    // beside them when the locale shows them ---------------------------
+    int64_t first = cal_days_from_civil(g.view_year, g.view_month, 1);
+    for (int row = 0; row < CAL_WEEK_ROWS; row++) {
         int cy = g.grid_y + (row + 1) * g.cell_h;
-
-        uint32_t cell_bg = bg, cell_fg = fg;
-        if (row == g.today_row && col == g.today_col) {
-            // TODAY is the accent, not a bespoke colour -- the same
-            // accent every selected row in this desktop uses, so the
-            // theme moves it and nothing here has to.
-            cell_bg = UTHEME_ACCENT;
-            cell_fg = UTHEME_ACCENT_TEXT;
-            ugfx_fill_rect(wm_surface(), cx + 1, cy + 1, g.cell_w - 2, g.cell_h - 2, cell_bg);
+        int64_t row_start = first - g.first_col + row * 7;
+        if (g.week_numbers) {
+            // Numbered by the row's MONDAY, which is its first column on
+            // a Monday week and its second on a Sunday one.
+            char wk[4];
+            k_snprintf(wk, sizeof wk, "%d", iso_week(row_start + (week_start_monday ? 0 : 1)));
+            draw_centred(g.week_x, cy + text_dy, g.week_w, wk, dim, bg);
         }
-        char num[3];
-        k_snprintf(num, sizeof num, "%d", day);
-        draw_centred(cx, cy + (g.cell_h - ugfx_char_h()) / 2, g.cell_w,
-                     num, cell_fg, cell_bg);
+        for (int col = 0; col < 7; col++) {
+            int64_t day = row_start + col;
+            int y, m, d;
+            cal_civil_from_days(day, &y, &m, &d);
+            int cx = g.grid_x + col * g.cell_w;
+            uint32_t cell_bg = bg, cell_fg = (m == g.view_month) ? fg : dim;
+            if (row == g.today_row && col == g.today_col) {
+                // TODAY is the accent, not a bespoke colour -- the same
+                // accent every selected row in this desktop uses.
+                cell_bg = UTHEME_ACCENT;
+                cell_fg = UTHEME_ACCENT_TEXT;
+                uui_fill_round_rect(s, cx + 2, cy + 2, g.cell_w - 4, g.cell_h - 4, 6, cell_bg);
+            }
+            char num[3];
+            k_snprintf(num, sizeof num, "%d", d);
+            if (cell_bg != bg) was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
+            draw_centred(cx, cy + text_dy, g.cell_w, num, cell_fg, cell_bg);
+            if (cell_bg != bg) ugfx_set_font(was);
+        }
     }
 
-    // Border last, after every fill -- a hover band spans the columns
-    // the border's edges sit on, so drawing it first would have it
-    // overpainted (the same lesson start_menu_draw() carries).
-    ugfx_draw_rect(wm_surface(), g.x, g.y, g.w, g.h, border);
+    // --- the link to Settings ---------------------------------------
+    int over_link = uui_hit(g.link_x, g.link_y, g.link_w, g.link_h, mx, my);
+    ugfx_fill_rect(s, g.x + 1, g.link_y - 1, g.w - 2, 1, UTHEME_SEPARATOR);
+    uint32_t link_bg = over_link ? uui_state_bg(UTHEME_CHROME, UUI_STATE_HOVER) : UTHEME_CHROME;
+    uui_fill_round_rect(s, g.link_x, g.link_y, g.link_w, g.link_h - 1, radius - 1, link_bg);
+    ugfx_fill_rect(s, g.link_x, g.link_y, g.link_w, radius, link_bg);   // square top corners
+    ugfx_draw_string_clipped(s, g.link_x + cal_pad(), g.link_y + (g.link_h - ugfx_char_h()) / 2,
+                             g.link_w - 2 * cal_pad(), "Date & time settings...", nav, link_bg);
 }
 
 int calendar_handle_click(int mx, int my) {
@@ -331,6 +432,13 @@ int calendar_handle_click(int mx, int my) {
     if (uui_hit(g.title_x, g.title_y, g.title_w, g.title_h, mx, my)) {
         go_today();
         redraw_pending = 1;
+        return 1;
+    }
+    // The link opens System Settings on the page that carries the
+    // timezone -- named by its SETTING, which a renamed page keeps.
+    if (uui_hit(g.link_x, g.link_y, g.link_w, g.link_h, mx, my)) {
+        calendar_close();
+        sys_spawn("/bin/wm/system/settings", "system.timezone", -1);
         return 1;
     }
     // A click anywhere else inside the panel is swallowed, not passed

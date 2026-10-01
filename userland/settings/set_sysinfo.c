@@ -4,6 +4,7 @@
 // them. One custom-drawn item in the page's scroll view, so it scrolls
 // like any other page; the two buttons are real widgets.
 #include "settings/settings_internal.h"
+#include "lib/unum.h"
 #include "lib/icon_cache.h"
 #include "lib/udevice.h"
 #include "lib/uclip.h"
@@ -37,6 +38,7 @@ static void human(uint64_t bytes, char *out, int cap) {
     if (i && whole < 100) snprintf(out, cap, "%llu.%llu %s", (unsigned long long)whole,
                                    (unsigned long long)tenth, u[i]);
     else snprintf(out, cap, "%llu %s", (unsigned long long)whole, u[i]);
+    unum_localize(out, (unsigned long)cap, 0);
 }
 
 // The rows that change while the page is open: memory in use and uptime.

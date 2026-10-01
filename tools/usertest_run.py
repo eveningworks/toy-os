@@ -400,6 +400,10 @@ TESTS = [
     # including on a failed check -- a test that leaves a setting behind
     # changes the machine for every later tool.
     ("utz_test", 0, None, None),
+    # The regional formats: setlocale() over /etc/locales, the locale's
+    # strftime conversions, @modifier overrides and lib/udate.h/unum.h.
+    # It WRITES `locale.region`/`locale.time_format` and puts them back.
+    ("locale_test", 0, None, None),
     # The ten POSIX headers the dash port needed. Exit code is the
     # failure count. Run through the legacy loader, which has NO
     # scheduler slot -- which is why times() must not fail there.

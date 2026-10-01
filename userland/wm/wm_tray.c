@@ -9,9 +9,12 @@
 // so `active` is what actually matters, not slot index continuity.
 #include "wm_internal.h"
 #include <time.h>
+#include <locale.h>
+#include "lib/udate.h"
 #include "wm/wm_conf.h"   // wm_setting_generation()
 #include "rt/sys.h"
 #include "wm_tray.h"
+#include "calendar_popup.h"   // its clock card ticks with the tray's
 #include "lib/usetting.h"
 #include "wm_taskbar.h"     // taskbar_h
 #include "lib/icon_cache.h"
@@ -44,9 +47,8 @@ struct tray_item {
 
 static struct tray_item tray_items[TRAY_MAX_ITEMS];
 static int clock_tray_id = -1;
-// The clock's second line, ISO 8601 like the build stamp on the desktop
-// -- the one date format with no locale to get wrong.
-static char clock_date[11];
+// The clock's second line, the short date in the locale's spelling.
+static char clock_date[24];
 
 // An item's box reaches this far past its content either side, and
 // neighbouring boxes stand TRAY_GAP apart.
@@ -168,39 +170,33 @@ void tray_init(void) {
     tray_ready = 1; // from here on, scope the clock tick to the taskbar
 }
 
+// The compositor is not a uapp, so it follows the zone and the region
+// itself: tzset() and setlocale() again whenever the settings registry
+// moves -- one compare per call, the shape cursor_theme_poll() uses.
+// libc caches both, so without this the clock would keep the old zone
+// and spelling until the desktop restarted.
+void wm_locale_sync(void) {
+    static uint32_t seen_gen;
+    static int primed;
+    uint32_t gen = wm_setting_generation();
+    if (primed && gen == seen_gen) return;
+    primed = 1;
+    seen_gen = gen;
+    tzset();
+    setlocale(LC_ALL, "");
+}
+
 void tray_update_clock(void) {
     if (clock_tray_id < 0) return;
-    // UTC from the kernel, localised here: the city database and the DST
-    // rules are libc's now (userland/libc/tz.c), and the compositor is
-    // an ordinary client of them.
-    //
-    // tzset() ON A SETTINGS CHANGE, not on every tick: libc caches the
-    // selected city, so a clock that never re-read it would keep showing
-    // the old zone until the desktop was restarted. One compare per
-    // second, the same shape cursor_theme_poll() uses.
-    static uint32_t seen_gen;
-    uint32_t gen = wm_setting_generation();
-    if (gen != seen_gen) {
-        seen_gen = gen;
-        tzset();
-    }
+    wm_locale_sync();
     struct rtc_time t;
-    sys_gettime(&t);
-    tz_localize(&t);
-
-    k_snprintf(clock_date, sizeof clock_date, "%04d-%02d-%02d",
-               (int)t.year, (int)t.month, (int)t.day);
-    char buf[9];
-    buf[0] = '0' + (t.hour / 10);
-    buf[1] = '0' + (t.hour % 10);
-    buf[2] = ':';
-    buf[3] = '0' + (t.minute / 10);
-    buf[4] = '0' + (t.minute % 10);
-    buf[5] = ':';
-    buf[6] = '0' + (t.second / 10);
-    buf[7] = '0' + (t.second % 10);
-    buf[8] = '\0';
+    sys_gettime(&t);   // UTC; udate_format() localises
+    udate_format(clock_date, sizeof clock_date, &t, UDATE_DATE);
+    char buf[TRAY_TEXT_MAX];
+    udate_format(buf, sizeof buf, &t, UDATE_TIME | UDATE_SECONDS);
     tray_set_text(clock_tray_id, buf);
+    // The calendar's clock card ticks with this one.
+    if (calendar_open) calendar_damage();
 }
 
 // The tray's icons run LARGER than a taskbar button's, because a tray

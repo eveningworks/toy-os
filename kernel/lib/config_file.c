@@ -111,6 +111,10 @@ void config_files_scan(void) {
                          "System settings", 1);
     config_file_register("timezones", "/etc/timezones",
                          "The timezone city database", 1);
+    config_file_register("locale", "/etc/locale.conf",
+                         "Regional formats", 1);
+    config_file_register("locales", "/etc/locales",
+                         "The regional format database", 1);
     config_file_register("desktop", "/etc/desktop.conf",
                          "Desktop icon positions and wallpaper", 1);
     config_file_register("storage", "/etc/storage.conf",

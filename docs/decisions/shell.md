@@ -231,6 +231,51 @@ Editing the database only takes effect on the next boot (no live-
 reload command yet); the commit for build 367 for the full
 writeup and what was verified.
 
+## Regional formats are a region plus overrides, read by libc's `setlocale()`
+
+**The shape is Windows 11's, KDE's and macOS's: pick a region (Finland,
+United States, or International/ISO 8601), then override any one format
+-- date, time, numbers, first day of week, week numbers.** GNOME's single
+"Formats" region was the alternative and was declined: it cannot say
+"Finnish, but 14:02 with a colon", which is a real Finnish habit. An
+override's value `region` means "the region's", which is KDE's per-
+category default rather than Windows' copy-on-pick, so changing region
+later still moves every format nobody overrode.
+
+**The engine is POSIX, not a toy-os API.** `setlocale(LC_ALL, "")`
+resolves LC_ALL, the category's variable, LANG, and then the system
+choice (`/etc/locale.conf`, systemd's file name, declared by
+`settings.d/locale.*` because ring 0 does nothing with it); `strftime`'s
+`%x %X %c`, `localeconv()` and `nl_langinfo()` answer from it. A region
+is a row of `/etc/locales` naming a word per category; the words mean
+format strings in `userland/libc/locale.c`. Overrides travel in POSIX's
+`@modifier` slot (`fi@time=24colon`) so a preview can ask for formats
+nobody has applied. A name that is not a locale is still REFUSED.
+
+**Who follows it.** A program that never calls `setlocale()` stays in
+"C", as POSIX says, and `LC_ALL=C` puts one back -- what a script parsing
+output sets. Every GUI app opts in through `uapp` and re-reads on the
+compositor's forwarded `WIN_EV_SETTING` (Windows' WM_SETTINGCHANGE
+shape); the `/bin` tools a person reads dates or sizes from (`ls`,
+`stat`, `time`, `df`, `meminfo`) opt in like their coreutils
+counterparts. Logs (`dmesg`, `logd`, `netlog`) and screenshot FILENAMES
+stay ISO: a log is data and a filename must sort.
+
+**The default region is International (ISO 8601)**, which is what every
+display printed before -- so a fresh install, and every test that parses
+`ls -l`, looks exactly as it did.
+
+**Names stay English.** A region decides the order and punctuation of a
+date, not the language of its month names; translations would need
+messages, fonts and a codeset this Latin-1 system does not have.
+
+**Setting the clock by hand is an ACTION, not a setting**: a button and
+a dialog that call `SYS_SETTIME` at once, not a staged field -- a time
+typed into a page waiting for Apply goes stale. It is refused while
+network time is on, as `timedatectl set-time` refuses, because the next
+sync would undo it; `/bin/time -s` takes ISO 8601 in every region so a
+script's input does not depend on a setting.
+
 ## `/etc` is one shared `toyos.conf` by default, not a file per setting
 
 `kernel/lib/etc_config.c`'s `etc_config_get()`/`etc_config_set()` is a

@@ -355,6 +355,12 @@ int ugfx_kern(int prev, int c);
 int ugfx_font_load(const char *path, int px, int bold,
                     struct ugfx_font *f, void *arena, unsigned long arena_size);
 
+// Twice the session's height, bold Liberation Sans -- the DISPLAY size
+// a clock or a headline figure is drawn at (System Settings' Date &
+// time, the tray calendar). Private and cached; re-rasterized when the
+// session's cell height changes. Never NULL.
+const struct ugfx_font *ugfx_font_display(void);
+
 // Bytes ugfx_font_load() needs at `px`. Sized for the worst case at
 // that size, so a caller can allocate before knowing which face it will
 // get -- a face whose glyphs turn out narrower simply uses less.

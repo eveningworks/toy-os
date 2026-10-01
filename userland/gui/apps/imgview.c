@@ -31,6 +31,8 @@
 #include "lib/usetting.h"
 #include "lib/uthumb.h"
 #include "lib/dirsort.h"
+#include "lib/udate.h"
+#include "lib/unum.h"
 #include "kpath.h"   // k_path_join/_dirname -- the KERNEL's, linked into ring 3
 #include "ui/ugfx.h"
 #include "ui/uui.h"
@@ -336,6 +338,7 @@ static void fmt_size(char *out, int cap, uint32_t bytes) {
                  (unsigned)(bytes % 1024 * 10 / 1024));
     else snprintf(out, (size_t)cap, "%u.%u MB", (unsigned)(bytes >> 20),
                   (unsigned)((bytes & 0xFFFFF) * 10 >> 20));
+    unum_localize(out, (unsigned long)cap, 0);
 }
 
 static void start_decode(struct uapp *a, const char *path, const char *name) {
@@ -694,9 +697,7 @@ static void draw_props(struct ugfx_surface *s) {
                              g_view.img ? g_view.img->h : 0);
     if (g_cur >= 0) {
         fmt_size(size, sizeof size, g_entries[g_cur].size);
-        const struct rtc_time *t = &g_entries[g_cur].modified;
-        snprintf(mod, sizeof mod, "%04u-%02u-%02u %02u:%02u", (unsigned)t->year,
-                 (unsigned)t->month, (unsigned)t->day, (unsigned)t->hour, (unsigned)t->minute);
+        udate_format(mod, sizeof mod, &g_entries[g_cur].modified, UDATE_DATE | UDATE_TIME);
     }
     if (g_have_img) snprintf(dec, sizeof dec, "%llu ms", g_decode_ms);
     const struct { const char *head; uint32_t col; const char *k[4]; const char *v[4]; } sec[] = {

@@ -30,7 +30,7 @@
 // not-yet-written config file is how "where do my settings go?" stays
 // unanswerable until after the first save.
 
-#define CONFIG_FILE_MAX       16 // registered config files
+#define CONFIG_FILE_MAX       24 // registered config files
 #define CONFIG_NAME_MAX       24 // the umbrella name, e.g. "system"
 #define CONFIG_PATH_MAX       40 // e.g. "/etc/toyos.conf"
 #define CONFIG_DESC_MAX       56 // one line, for `config files`

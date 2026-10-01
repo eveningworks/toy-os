@@ -47,6 +47,8 @@
 #include <stdio.h>
 #include "lib/dirsort.h"
 #include "lib/udate.h"
+#include "lib/unum.h"
+#include <locale.h>
 #include "kpath.h"    // k_path_basename, for a path that names a file
 #include <unistd.h>
 
@@ -98,6 +100,7 @@ static void put_human(uint32_t n) {
     if (u == 0) snprintf(buf, sizeof buf, "%u", whole);
     else if (whole >= 10) snprintf(buf, sizeof buf, "%u%c", whole, unit[u]);
     else snprintf(buf, sizeof buf, "%u.%u%c", whole, (rem * 10) / 1024, unit[u]);
+    unum_localize(buf, sizeof buf, 0);
 
     // Right-aligned in a fixed field, like the plain size column.
     for (int i = (int)strlen(buf); i < 6; i++) put(" ");
@@ -112,10 +115,21 @@ static void put_size(const struct opts *o, uint32_t n) {
     put(buf);
 }
 
+// In the locale's spelling, PADDED to the widest date it can write --
+// "1.1.2026" and "31.12.2026" differ in width, and the name column
+// after it must not move from row to row.
 static void put_timestamp(const struct rtc_time *t) {
-    char buf[32];
-    rtc_format_iso(buf, sizeof buf, t, 1);
+    static int width = -1;
+    char buf[48];
+    if (width < 0) {
+        struct tm widest = { .tm_sec = 59, .tm_min = 59, .tm_hour = 22, .tm_mday = 28,
+                             .tm_mon = 11, .tm_year = 100, .tm_wday = 4 };
+        udate_format_tm(buf, sizeof buf, &widest, UDATE_DATE | UDATE_TIME | UDATE_SECONDS);
+        width = (int)strlen(buf);
+    }
+    udate_format(buf, sizeof buf, t, UDATE_DATE | UDATE_TIME | UDATE_SECONDS);
     put(buf);
+    for (int i = (int)strlen(buf); i < width; i++) put(" ");
 }
 
 // ---- ordering --------------------------------------------------------
@@ -252,6 +266,7 @@ static void usage(void) {
 }
 
 int main(int argc, char **argv) {
+    setlocale(LC_ALL, "");
     // The last field is `color`, and its default is AUTO -- resolved
     // here rather than carried as a third state, because everything
     // below only ever asks "colour or not".

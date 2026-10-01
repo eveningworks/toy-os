@@ -405,6 +405,7 @@ No dependency on the phases above; ordered among themselves.
 
 - [x] ~~A settable wall clock, on the clocksource rather than the CMOS~~ DONE 2026-09-03 -- `api/ktime.h`, `SYS_SETTIME`, `QUERY_CLOCK`
 - [x] ~~Network time~~ DONE 2026-09-03 -- `/bin/ntpd`, SNTP, three settings under Time & Locale
+- [x] ~~Setting the clock by hand~~ DONE 2026-10-01 -- Settings' Change... and `time -s`, refused under network time
 - [ ] A slew instead of a step, which needs a rate-adjustable clocksource conversion first
 - [ ] More than one time server, and discarding the outlier -- one server is trusted completely today
 - [ ] Authenticated NTP (NTS) -- a forged reply can set this machine to any time at all
@@ -430,6 +431,12 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~The kernel returns UTC, not local time~~ DONE 2026-09-11 -- `SYS_GETTIME` and every filesystem timestamp
 - [x] ~~A ring-3 timezone library reading `/etc/timezones`~~ DONE 2026-09-11 -- `userland/libc/tz.c`; `kernel/lib/tz.c` went 663 lines to 58
 - [ ] More DST rules than EU/US/none, which is what a bigger city list needs to stop being wrong about the southern hemisphere
+
+### Regional formats
+
+- [x] ~~A region plus per-format overrides, via libc's `setlocale()`~~ DONE 2026-10-01 -- ISO 8601, Finland, United States
+- [ ] More regions -- a row in `/etc/locales` and a `Choice` in `settings.d/locale.region`, no code
+- [ ] Month and day names in the region's language, which needs translated messages and a wider codeset first
 
 ### Real mount points
 

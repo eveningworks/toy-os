@@ -32,9 +32,11 @@
 #include "lib/cmd.h"
 #include "lib/human.h"
 #include <stdio.h>
+#include <locale.h>
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    setlocale(LC_ALL, "");
 
     struct query_fsinfo fs;
     char u[16], t[16], f[16], line[200];

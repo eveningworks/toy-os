@@ -22,7 +22,7 @@
 // is UTC or local is the CALLER's business, and the answer is in the
 // same reckoning. toy-os feeds these UTC throughout: the kernel's
 // clock is UTC, every filesystem timestamp is a UTC epoch, and the
-// conversion to a local time happens in ring 3 (userland/lib/utz.h).
+// conversion to a local time happens in ring 3 (userland/libc/tz.c).
 //
 // The algorithm is Hinnant's, valid for any year the int range holds
 // and correct across the 100/400 leap rules -- not a table of month

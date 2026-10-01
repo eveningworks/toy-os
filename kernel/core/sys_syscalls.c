@@ -81,7 +81,7 @@ SYSCALL_HANDLER sys_do_setting(uint64_t *regs, uint64_t rdi) {
 
 int sys_gettime(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
-    // UTC. Converting to a local time is ring 3's (userland/lib/utz.h);
+    // UTC. Converting to a local time is ring 3's (userland/libc/tz.c);
     // the kernel has not known a zone since the database left it.
     struct rtc_time t;
     ktime_read(&t);

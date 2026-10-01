@@ -149,7 +149,7 @@ void details_draw(struct ugfx_surface *s) {
             human_size(h, sizeof h, e->size);
             y = fact(s, y, "Size", h, bg);
         }
-        rtc_format_iso(v, sizeof v, &e->modified, 0);
+        udate_format(v, sizeof v, &e->modified, UDATE_DATE | UDATE_TIME);
         y = fact(s, y, "Modified", v, bg);
         y = fact(s, y, "Location", dir, bg);
     } else {

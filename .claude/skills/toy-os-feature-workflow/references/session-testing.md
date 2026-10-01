@@ -3006,3 +3006,25 @@ that had never worked.**
 - **`check_text_measure.py` flags `ugfx_char_w() * n` as a WIDTH** even
   for a bar: `ugfx_char_w()` is the widest advance. Reserve with
   `ugfx_char_advance('0') * n`.
+
+**2026-10-01, regional formats and the clock: oracles that are not the app.**
+
+- **SETTING THE CLOCK IS CHECKED THROUGH THE KERNEL, NOT THE DIALOG.**
+  `clock_settings_test.py` reads `config get clock.utc` and requires the
+  STEP the dialog was told (an hour), and the positive control -- a Set
+  that never called `SYS_SETTIME` -- reddens exactly that check. "The
+  dialog closed and logged success" passed with the control applied.
+- **A LOCAL-TIME BUG HIDES ON A UTC MACHINE.** Every fresh image is UTC,
+  where local and UTC agree; select a zone with an offset (Helsinki)
+  before testing anything that converts, and round-trip through it.
+- **A uapp DIALOG PUBLISHES NO WIDGET MAP** -- `gui widgets <dialog>` is
+  empty. Its controls are in its `<log_prefix>: layout <name> x y w h`
+  lines (content-relative, behind `desktop.layout_log`, which
+  `enter_gui()` turns on); add the window's content origin.
+- **A PANEL WITH A SECONDS CLOCK IN IT NEVER SETTLES as a whole.** The
+  calendar's card ticks, so its pixel comparisons cover the panel BELOW
+  the card -- the same reason the old box stopped at the taskbar.
+- **A REGION LEFT SET CHANGES EVERY LATER TOOL'S OUTPUT** (`ls -l`,
+  `df`, the taskbar). Tests that set `locale.*` restore what they read,
+  and the default region stays ISO so an untouched machine prints what
+  it always did.

@@ -144,8 +144,8 @@ static int ntp_interval_minutes(void) {
 // --- the clock ---------------------------------------------------------
 
 // This machine's UTC, in nanoseconds. QUERY_CLOCK rather than
-// sys_gettime(), which answers in LOCAL civil time and so cannot be
-// compared against anything that arrived off the wire.
+// sys_gettime(), whose civil fields stop at the whole second -- too
+// coarse to compare against a timestamp that arrived off the wire.
 static uint64_t local_utc_ns(void) {
     struct query_clock c;
     if (sys_query_record(QUERY_CLOCK, 0, &c, sizeof c) < (int)sizeof c) return 0;

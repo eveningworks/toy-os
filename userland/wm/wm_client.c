@@ -71,6 +71,7 @@ enum {
     WM_PEND_FOCUS  = 1 << 2,
     WM_PEND_FONT   = 1 << 3,
     WM_PEND_SCREEN = 1 << 4,
+    WM_PEND_SETTING = 1 << 5,
 };
 
 static int send_state(struct window *win, const struct win_event *ev, uint32_t bit) {
@@ -118,6 +119,10 @@ void wm_client_flush_pending(void) {
         if (win->ev_pending & WM_PEND_FONT) {
             ev.type = WIN_EV_FONT; ev.a = 0; ev.b = 0;
             if (!send_state(win, &ev, WM_PEND_FONT)) continue;
+        }
+        if (win->ev_pending & WM_PEND_SETTING) {
+            ev.type = WIN_EV_SETTING; ev.a = 0; ev.b = 0;
+            if (!send_state(win, &ev, WM_PEND_SETTING)) continue;
         }
         for (uint32_t slot = 1; slot < 32 && win->ev_popup_done; slot++)
             if (win->ev_popup_done & (1u << slot)) send_popup_done(win, slot);
@@ -1374,6 +1379,9 @@ int wm_client_handle_event(const struct win_event *ev) {
         break;
     case WIN_EV_SETTING:
         wm_watch_setting();
+        // Forwarded, because the kernel tells only this process: an app
+        // showing a date re-reads the zone and the region (ui/uapp.c).
+        broadcast_state(WIN_EV_SETTING, 0, 0, WM_PEND_SETTING);
         break;
     default:
         return 0; // not ours -- raw input, see wm_rawin.c

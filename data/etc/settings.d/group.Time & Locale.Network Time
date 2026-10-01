@@ -1,2 +1,3 @@
 Label=Network Time
-Description=Where this machine's clock comes from. The timezone is a separate page
+Description=The server the automatic clock asks, and how often
+Order=20

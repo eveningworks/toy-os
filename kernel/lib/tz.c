@@ -1,7 +1,7 @@
 // WHICH TIMEZONE IS SELECTED, and nothing else.
 //
 // The city database, the DST rules and every conversion are RING 3's
-// now (userland/lib/utz.h). What is left in the kernel is one
+// now (userland/libc/tz.c). What is left in the kernel is one
 // registered setting whose value is a city NAME and whose choice list
 // is `/etc/timezones` read as an opaque list of lines -- setting.h's
 // `choice_file`, which enumerates a list the registry knows nothing
@@ -50,6 +50,7 @@ static const struct setting g_tz_setting = {
     .type        = SETTING_TYPE_ENUM,
     .file        = TZ_CONFIG_FILE,
     .category    = "Time & Locale",
+    .group       = "Date & time",
     .choice_file = TZ_DB_FILE,
     .get         = tz_get,
     .apply       = tz_apply,

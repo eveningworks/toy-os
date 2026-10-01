@@ -3,10 +3,11 @@
 
 WHAT IS UNDER TEST
 ------------------
-Clicking the tray clock opens a panel above it (userland/wm/calendar_popup.c)
-showing the current month with today highlighted, `<`/`>` to page months
-and a title that snaps back to today. The week's first column comes from
-`desktop.week_start` (kernel/lib/week_start_config.c).
+Clicking the tray clock opens a panel above it (userland/wm/calendar_popup.c):
+a clock card, the current month with today highlighted, `<`/`>` to page
+months, a title that snaps back to today, ISO week numbers when the
+locale shows them, and a link to System Settings' Date & time. The week's
+first column is the locale's (`locale.week_start`, else the region's).
 
 THREE THINGS THIS ASSERTS THAT AN "IT OPENED" CHECK WOULD NOT
 -------------------------------------------------------------
@@ -24,10 +25,10 @@ THREE THINGS THIS ASSERTS THAT AN "IT OPENED" CHECK WOULD NOT
    implementation. The year-boundary case (paging back past January) is
    included because "month - 1" without a wrap is the obvious bug.
 
-3. `desktop.week_start` ACTUALLY MOVES THE COLUMNS. Setting it to sunday
+3. `locale.week_start` ACTUALLY MOVES THE COLUMNS. Setting it to sunday
    must shift the reported first column by exactly one and repaint the
    header row; a popup that read the setting and ignored it passes every
-   other check here. The setting is restored to monday at the end --
+   other check here. The setting is restored at the end --
    a tool that leaves a setting changed changes the machine for every
    later tool (CLAUDE.md), which is how a faster pointer once made two
    unrelated tools fail.
@@ -65,10 +66,10 @@ def cal(dbg):
 
 
 def panel_box(g):
-    """The popup's own rect, EXCLUDING nothing -- its bottom edge is the
-    taskbar's top edge, so the once-a-second clock tick is outside it.
-    A comparison box containing the clock could never settle."""
-    return (g["x"], g["y"], g["x"] + g["w"], g["y"] + g["h"])
+    """The popup's rect BELOW its clock card. The card ticks every second,
+    and a comparison box containing a clock could never settle."""
+    top = g["card"]["y"] + g["card"]["h"] if g.get("card") else g["y"]
+    return (g["x"], top, g["x"] + g["w"], g["y"] + g["h"])
 
 
 def expected_first_col(year, month, week_start):
@@ -79,11 +80,11 @@ def expected_first_col(year, month, week_start):
 
 
 def cell_probe(g, col, row):
-    """A point inside a day cell that is NOT on the digit -- the top-left
-    corner of the cell's interior. Sampling the centre would read the
-    glyph as often as the background."""
-    x = g["grid_x"] + col * g["cell_w"] + 3
-    y = g["grid_y"] + (row + 1) * g["cell_h"] + 3
+    """A point inside a day cell that is NOT on the digit -- near the top,
+    a quarter in: inside today's ROUNDED fill (a corner probe would land
+    outside its curve), and clear of the centred glyph."""
+    x = g["grid_x"] + col * g["cell_w"] + g["cell_w"] // 4
+    y = g["grid_y"] + (row + 1) * g["cell_h"] + 4
     return x, y
 
 
@@ -216,10 +217,12 @@ def main():
     header_box = (g4["grid_x"], g4["grid_y"],
                   g4["grid_x"] + 7 * g4["cell_w"], g4["grid_y"] + g4["cell_h"])
     header_mon = qmp.stable_pixels(shot("cal_hdr_mon.png"), box=header_box)
-    dbg.send("sh config set desktop.week_start sunday")
+    was = (dbg.send("sh config get locale.week_start") or "").strip().splitlines()
+    was = was[-1].strip() if was else "region"
+    dbg.send("sh config set locale.week_start sunday")
     dbg.settle(); time.sleep(1.2)
     g5 = cal(dbg)
-    check("desktop.week_start=sunday is adopted", g5["week_start"] == "sunday",
+    check("locale.week_start=sunday is adopted", g5["week_start"] == "sunday",
           g5["week_start"])
     check("...and the 1st moves one column right",
           g5["view"]["first_col"] == (mon_first + 1) % 7,
@@ -227,9 +230,33 @@ def main():
     header_sun = qmp.stable_pixels(shot("cal_hdr_sun.png"), box=header_box)
     check("...and the weekday header was actually repainted",
           header_sun != header_mon)
-    dbg.send("sh config set desktop.week_start monday")   # leave the machine as found
-    dbg.settle(); time.sleep(1.0)
-    check("restored to monday", cal(dbg)["week_start"] == "monday")
+    dbg.send(f"sh config set locale.week_start {was}")   # leave the machine as found
+    dbg.settle(); time.sleep(1.2)
+    check("restored", cal(dbg)["week_start"] == g4["week_start"],
+          f'{was} -> {cal(dbg)["week_start"]}')
+
+    # --- 6b. week numbers follow their setting ------------------------
+    # The column's own pixels, not the flag: a popup that reported the
+    # setting and drew nothing would pass a flag check.
+    wn = (dbg.send("sh config get locale.week_numbers") or "").strip().splitlines()
+    wn = wn[-1].strip() if wn else "region"
+    dbg.send("sh config set locale.week_numbers on")
+    dbg.settle(); time.sleep(1.2)
+    g_on = cal(dbg)
+    on_ok = check("locale.week_numbers=on shows the column",
+                  g_on["week_numbers"] and g_on["week_x"] >= 0, str(g_on["week_x"]))
+    if on_ok:
+        wbox = (g_on["week_x"], g_on["grid_y"] + g_on["cell_h"],
+                g_on["week_x"] + g_on["week_w"], g_on["grid_y"] + 7 * g_on["cell_h"])
+        col_on = qmp.stable_pixels(shot("cal_wk_on.png"), box=wbox)
+        dbg.send("sh config set locale.week_numbers off")
+        dbg.settle(); time.sleep(1.2)
+        g_off = cal(dbg)
+        check("...and =off hides it", not g_off["week_numbers"] and g_off["week_x"] < 0)
+        col_off = qmp.stable_pixels(shot("cal_wk_off.png"), box=wbox)
+        check("...and the pixels where it was changed", col_on != col_off)
+    dbg.send(f"sh config set locale.week_numbers {wn}")
+    dbg.settle(); time.sleep(1.2)
 
     # --- 7. a second click on the clock CLOSES it ---------------------
     g6 = cal(dbg)
@@ -251,6 +278,27 @@ def main():
               st["start_menu"] is True and st["calendar"] is False, str(st))
         dbg.send(f"gui click {tb['cx']} {tb['cy']}")   # close the Start menu again
         dbg.settle()
+
+    # --- 8b. the link opens System Settings on Date & time ------------
+    dbg.send(f"gui click {g6['clock']['cx']} {g6['clock']['cy']}")
+    dbg.settle(); time.sleep(0.3)
+    gl = cal(dbg)
+    if check("reopened for the link check", gl["open"]):
+        dbg.logs("settings:", clear=True)
+        dbg.send(f"gui click {gl['link']['cx']} {gl['link']['cy']}")
+        deadline = time.time() + 15
+        page = ""
+        while time.time() < deadline and "Date & time" not in page:
+            time.sleep(0.5)
+            page += "\n".join(dbg.logs("settings: page", clear=True))
+        check("the link closed the popup", not cal(dbg)["open"])
+        check("...and opened System Settings on Date & time", "Date & time" in page,
+              page.strip()[-120:])
+        ws = dbg.windows()
+        for i, w in enumerate(ws):
+            if w["title"] == "System Settings":
+                dbg.send(f"gui close {i}")
+                dbg.settle()
 
     # --- 9. a click on the desktop dismisses it -----------------------
     dbg.send(f"gui click {g6['clock']['cx']} {g6['clock']['cy']}")

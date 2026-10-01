@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <caltime.h>
+#include <langinfo.h>
 #include "rt/sys.h"
 #include "proc_info.h"
 #include "syscall_abi.h"
@@ -137,26 +138,30 @@ static void sb_num(struct sb *b, long v, int width, char pad) {
 }
 
 // Named so the compound conversions (%F, %T) can reuse the simple ones
-// without a second switch to keep in step.
-static void one(struct sb *b, char c, const struct tm *tm) {
+// without a second switch to keep in step. `nopad` is GNU's `-` flag
+// ("%-d" is 1, not 01), which a region's short date is written in.
+static void one(struct sb *b, char c, const struct tm *tm, int nopad) {
+    int w2 = nopad ? 0 : 2;
     switch (c) {
     case 'Y': sb_num(b, tm->tm_year + 1900, 0, '0'); break;
-    case 'y': sb_num(b, (tm->tm_year + 1900) % 100, 2, '0'); break;
-    case 'm': sb_num(b, tm->tm_mon + 1, 2, '0'); break;
-    case 'd': sb_num(b, tm->tm_mday, 2, '0'); break;
-    case 'e': sb_num(b, tm->tm_mday, 2, ' '); break;
-    case 'H': sb_num(b, tm->tm_hour, 2, '0'); break;
-    case 'M': sb_num(b, tm->tm_min, 2, '0'); break;
-    case 'S': sb_num(b, tm->tm_sec, 2, '0'); break;
-    case 'j': sb_num(b, tm->tm_yday + 1, 3, '0'); break;
+    case 'y': sb_num(b, (tm->tm_year + 1900) % 100, w2, '0'); break;
+    case 'm': sb_num(b, tm->tm_mon + 1, w2, '0'); break;
+    case 'd': sb_num(b, tm->tm_mday, w2, '0'); break;
+    case 'e': sb_num(b, tm->tm_mday, w2, ' '); break;
+    case 'H': sb_num(b, tm->tm_hour, w2, '0'); break;
+    case 'M': sb_num(b, tm->tm_min, w2, '0'); break;
+    case 'S': sb_num(b, tm->tm_sec, w2, '0'); break;
+    case 'j': sb_num(b, tm->tm_yday + 1, nopad ? 0 : 3, '0'); break;
+    case 'u': sb_num(b, tm->tm_wday == 0 ? 7 : tm->tm_wday, 0, '0'); break;
+    case 'w': sb_num(b, tm->tm_wday, 0, '0'); break;
     case 'I': {
         // 12-hour: midnight and noon are both 12, which is the case a
         // plain `hour % 12` gets wrong in both directions.
         int h = tm->tm_hour % 12;
-        sb_num(b, h == 0 ? 12 : h, 2, '0');
+        sb_num(b, h == 0 ? 12 : h, w2, '0');
         break;
     }
-    case 'p': sb_str(b, tm->tm_hour < 12 ? "AM" : "PM"); break;
+    case 'p': sb_str(b, nl_langinfo(tm->tm_hour < 12 ? AM_STR : PM_STR)); break;
     case 'a': if (tm->tm_wday >= 0 && tm->tm_wday < 7) sb_str_n(b, WDAY[tm->tm_wday], 3); break;
     case 'A': if (tm->tm_wday >= 0 && tm->tm_wday < 7) sb_str(b, WDAY[tm->tm_wday]); break;
     case 'b': case 'h': if (tm->tm_mon >= 0 && tm->tm_mon < 12) sb_str_n(b, MON[tm->tm_mon], 3); break;
@@ -170,28 +175,44 @@ static void one(struct sb *b, char c, const struct tm *tm) {
         // Copied through literally, the same choice kfmt makes: a typo
         // shows up in the output instead of vanishing.
         sb_ch(b, '%');
+        if (nopad) sb_ch(b, '-');
         sb_ch(b, c);
         break;
+    }
+}
+
+// THE LOCALE'S CONVERSIONS EXPAND INTO MORE CONVERSIONS: %x is the
+// LC_TIME locale's D_FMT, itself written in %-d and friends. `depth`
+// stops a format that named itself; none of libc's do.
+static void run(struct sb *b, const char *fmt, const struct tm *tm, int depth) {
+    for (const char *p = fmt; *p; p++) {
+        if (*p != '%') { sb_ch(b, *p); continue; }
+        p++;
+        int nopad = 0;
+        if (*p == '-') { nopad = 1; p++; }
+        if (!*p) { sb_ch(b, '%'); break; }
+        const char *sub = 0;
+        switch (*p) {
+        case 'x': sub = nl_langinfo(D_FMT); break;
+        case 'X': sub = nl_langinfo(T_FMT); break;
+        case 'c': sub = nl_langinfo(D_T_FMT); break;
+        case 'r': sub = nl_langinfo(T_FMT_AMPM); break;
+        // The compounds, expanded through one() so there is a single
+        // definition of what %Y means.
+        case 'F': one(b, 'Y', tm, 0); sb_ch(b, '-'); one(b, 'm', tm, 0); sb_ch(b, '-'); one(b, 'd', tm, 0); break;
+        case 'T': one(b, 'H', tm, 0); sb_ch(b, ':'); one(b, 'M', tm, 0); sb_ch(b, ':'); one(b, 'S', tm, 0); break;
+        case 'R': one(b, 'H', tm, 0); sb_ch(b, ':'); one(b, 'M', tm, 0); break;
+        case 'D': one(b, 'm', tm, 0); sb_ch(b, '/'); one(b, 'd', tm, 0); sb_ch(b, '/'); one(b, 'y', tm, 0); break;
+        default:  one(b, *p, tm, nopad); break;
+        }
+        if (sub && depth < 2) run(b, sub, tm, depth + 1);
     }
 }
 
 size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm) {
     if (!s || !fmt || !tm || max == 0) return 0;
     struct sb b = { s, max, 0, 0 };
-    for (const char *p = fmt; *p; p++) {
-        if (*p != '%') { sb_ch(&b, *p); continue; }
-        p++;
-        if (!*p) { sb_ch(&b, '%'); break; }
-        switch (*p) {
-        // The compounds, expanded through one() so there is a single
-        // definition of what %Y means.
-        case 'F': one(&b, 'Y', tm); sb_ch(&b, '-'); one(&b, 'm', tm); sb_ch(&b, '-'); one(&b, 'd', tm); break;
-        case 'T': one(&b, 'H', tm); sb_ch(&b, ':'); one(&b, 'M', tm); sb_ch(&b, ':'); one(&b, 'S', tm); break;
-        case 'R': one(&b, 'H', tm); sb_ch(&b, ':'); one(&b, 'M', tm); break;
-        case 'D': one(&b, 'm', tm); sb_ch(&b, '/'); one(&b, 'd', tm); sb_ch(&b, '/'); one(&b, 'y', tm); break;
-        default:  one(&b, *p, tm); break;
-        }
-    }
+    run(&b, fmt, tm, 0);
     if (b.over) {
         // C: the contents are unspecified on overflow and the return is
         // 0. NUL-terminating anyway so a caller that ignores the return

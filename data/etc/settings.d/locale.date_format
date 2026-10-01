@@ -1,0 +1,15 @@
+Type=enum
+File=/etc/locale.conf
+Label=Date
+Category=Time & Locale
+Group=Region & formats
+Default=region
+Choices=region,dmy_dot,dmy_dot0,mdy_slash,iso
+Description=Short dates in lists, file times and the taskbar
+Widget=dropdown
+Order=20
+Choice.region=Region default
+Choice.dmy_dot=1.10.2026
+Choice.dmy_dot0=01.10.2026
+Choice.mdy_slash=10/1/2026
+Choice.iso=2026-10-01

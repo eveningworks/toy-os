@@ -1,4 +1,5 @@
 // See network_popup.h. A read-only tray flyout over QUERY_NETDEV.
+#include "lib/unum.h"
 #include "wm_internal.h"
 #include "network_popup.h"
 #include "wm_shadow.h"
@@ -41,8 +42,11 @@ static void fmt_speed(char *out, unsigned cap, const struct network_view *v) {
     unsigned long long b = v->link_bps;
     if (!b) k_strlcpy(out, "up", cap);
     else if (b >= 1000000000ull && b % 1000000000ull)
+    {
         k_snprintf(out, cap, "up, %llu.%llu Gb/s", b / 1000000000ull,
                    b % 1000000000ull / 100000000ull);
+        unum_localize(out, (unsigned long)cap, 0);
+    }
     else if (b >= 1000000000ull) k_snprintf(out, cap, "up, %llu Gb/s", b / 1000000000ull);
     else k_snprintf(out, cap, "up, %llu Mb/s", b / 1000000ull);
 }

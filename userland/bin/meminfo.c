@@ -13,6 +13,7 @@
 #include "lib/cmd.h"
 #include <stdio.h>
 #include <string.h>
+#include <locale.h>
 #include "lib/human.h"
 
 // --list walks the registry instead -- the generic path, and the reason
@@ -140,6 +141,7 @@ static int print_audit(void) {
 }
 
 int main(int argc, char **argv) {
+    setlocale(LC_ALL, "");
     if (argc > 1 && strcmp(argv[1], "--list") == 0) return list_providers();
     if (argc > 1 && strcmp(argv[1], "--audit") == 0) return print_audit();
     if (argc > 1 && strcmp(argv[1], "--map") == 0) return print_memmap();

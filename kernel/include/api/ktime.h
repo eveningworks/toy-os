@@ -17,7 +17,7 @@
 // **THIS CLOCK IS UTC.** The RTC is assumed to hold UTC (the convention
 // every Unix follows and Windows does not), and nothing in the kernel
 // knows what a timezone is. A caller wanting local civil time converts
-// in ring 3 (userland/lib/utz.h), which is where the city database and
+// in ring 3 (userland/libc/tz.c), which is where the city database and
 // the DST rules live.
 //
 // WHY THIS IS NOT A `struct clocksource`. clocksource.h refuses a wall

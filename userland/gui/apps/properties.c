@@ -168,10 +168,10 @@ static void build_rows(void) {
     }
 
     section("Dates");
-    char when[32];
-    rtc_format_iso(when, sizeof when, &g_stat.created, 1);
+    char when[48];
+    udate_format(when, sizeof when, &g_stat.created, UDATE_DATE | UDATE_TIME | UDATE_SECONDS);
     row("Created", "%s", when);
-    rtc_format_iso(when, sizeof when, &g_stat.modified, 1);
+    udate_format(when, sizeof when, &g_stat.modified, UDATE_DATE | UDATE_TIME | UDATE_SECONDS);
     row("Modified", "%s", when);
 
     section("Details");

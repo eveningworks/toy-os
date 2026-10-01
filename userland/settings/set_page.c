@@ -353,6 +353,7 @@ void open_group(int g) {
     // the flag is global, so that put the toggle on every page once checked.
     g_advanced_has = page_advanced > 0;
 
+    clock_page_opened();
     snprintf(g_status, sizeof g_status, "%s", g_page_title_text);
     relayout_page();
     // `captions` and `disabled` are otherwise INVISIBLE to a test.
@@ -492,6 +493,7 @@ void relayout_page(void) {
                                        .flags = UUI_FILL_W };
 
     g_page_captions = 0;
+    if (!g_show_sysinfo) n = clock_emit_top(PAGE, n);
     // SYSTEM INFORMATION is one drawn item and two buttons (set_sysinfo.c).
     if (g_show_sysinfo) {
         static struct uui_item si_btns[2];
@@ -515,6 +517,7 @@ void relayout_page(void) {
     for (int i = 0; i < page_slots; i++) {
         struct slot *sl = &g_slot[i];
         n = emit_slot(PAGE, n, i, FOCUS, &FOCUS_COUNT);
+        n = clock_emit_after(PAGE, n, i, FOCUS, &FOCUS_COUNT);
         // Test, under the saver it previews (Windows puts Preview there).
         if (g_test_has && sl->setting >= 0 && strcmp(g_name[sl->setting], OWNER_SAVER) == 0) {
             PAGE[n++] = (struct uui_item){ .ops = &uui_button_ops, .widget = &g_test_btn,
@@ -560,6 +563,7 @@ int control_changed(int slot_index) {
     default:             sl->staged = sl->radio.selected; break;
     }
     sl->row.changed = sl->setting >= 0 && sl->staged != sl->baseline;
+    region_preview_refresh();   // the preview shows what Apply would give
     if (sl->setting >= 0 && sl->staged >= 0) {
         snprintf(g_status, sizeof g_status, "%s -> %s   (not applied yet)",
                  g_label[sl->setting], staged_value(sl));

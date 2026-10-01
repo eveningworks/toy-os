@@ -2,3 +2,4 @@
 # relying on the count rule -- see /etc/settings.d/README.md.
 Description=Local time in this city's zone, with EU/US summer time
 Widget=dropdown
+Order=30

@@ -297,9 +297,8 @@ int sys_gettime(struct rtc_time *out);
 // out of range. Pass 0 for `nsec` only if you genuinely have no
 // sub-second part: dropping it costs up to a second of accuracy.
 //
-// **UTC, unlike sys_gettime()'s LOCAL answer and unlike libc time()'s
-// local-derived epoch** -- see abi/syscall_abi.h's SYS_SETTIME. Round
-// -tripping gettime through here moves the clock by the timezone offset.
+// **UTC**, like sys_gettime() and libc's time() -- a local time a
+// person typed goes through mktime() first (abi/syscall_abi.h).
 int sys_settime(uint64_t sec, uint32_t nsec);
 
 // --- memory ----------------------------------------------------------

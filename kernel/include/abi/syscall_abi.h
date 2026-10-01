@@ -350,7 +350,7 @@ struct listdir_request {
 #define SYS_GETTIME 14 // RDI = pointer to a `struct rtc_time` (out, see
                         // abi/rtctime.h). **UTC**, from the software
                         // clock (api/ktime.h). A local time is the
-                        // CALLER's to compute -- userland/lib/utz.h
+                        // CALLER's to compute -- userland/libc/tz.c
                         // reads /etc/timezones and does it, and the
                         // taskbar clock and `time` go through that.
                         // It used to return local time, which meant the
@@ -524,21 +524,10 @@ struct listdir_request {
                        // stores whole seconds -- it has no other field
                        // -- so it is written ROUNDED.
                        //
-                       // **THE ARGUMENT IS UTC; SYS_GETTIME'S ANSWER IS
-                       // LOCAL.** They are not inverses, and that is
-                       // deliberate rather than an oversight: the kernel
-                       // holds UTC (api/ktime.h) and applies the
-                       // configured city's offset only when handing out
-                       // broken-down civil time (api/tz.h). A client
-                       // that reads SYS_GETTIME, adds a second and
-                       // passes it back here moves the clock by the
-                       // timezone offset. NTP hands out UTC, which is
-                       // the caller this exists for.
-                       //
-                       // Note also that libc's time() is neither -- it
-                       // is a LOCAL-derived epoch, matching the
-                       // filesystem's stored timestamps. See
-                       // userland/include/time.h.
+                       // **THE ARGUMENT IS UTC**, as SYS_GETTIME's
+                       // answer and libc's time() are. A LOCAL time a
+                       // person typed goes through mktime() first (/bin/
+                       // time -s, System Settings' Change...).
                        //
                        // A STEP, not a slew: SYS_MONOTONIC_NS is what an
                        // interval is measured with, and this cannot move

@@ -36,11 +36,12 @@ static struct uui_dialog g_ask;
 static int on_tick(struct uapp *a) {
     (void)a;
     if (g_show_sysinfo && sysinfo_tick()) return 1;
-    if (registry_generation() == g_generation && !g_stale) return 0;
+    int clock = clock_tick();   // the live clock's second moved
+    if (registry_generation() == g_generation && !g_stale) return clock;
     if (page_dirty() || uui_dialog_is_open(&g_ask) ||
         (g_opts_win && uapp_window_is_open(g_opts_win))) {
         g_stale = 1;
-        return 0;
+        return clock;
     }
     g_stale = 0;
     int keep_node = uui_sidebar_selected_id(&g_tree);
@@ -290,6 +291,9 @@ static void on_widget(struct uapp *a, int id, int reason) {
     case ID_OPTS:
         open_options_dialog(a);
         return;
+    case ID_CLOCK_CHANGE:
+        clock_open_dialog(a);
+        return;
     case ID_TEST: {
         // The saver AS STAGED -- previewing what is on disk would answer a
         // question nobody asked.
@@ -479,6 +483,21 @@ static void on_open(struct uapp *a) {
     report_rows();
 }
 
+// `settings <qualified name>` opens on the page that setting is on --
+// the tray calendar's "Date & time settings..." passes system.timezone.
+// A NAME, not a page title, so renaming a page cannot break the link.
+static const char *g_open_setting;
+
+static int group_of_setting(const char *name) {
+    for (int i = 0; i < g_setting_count; i++) {
+        if (strcmp(g_name[i], name) != 0) continue;
+        for (int g = 0; g < g_group_count; g++)
+            if (!strcmp(g_group_cat[g], g_cat_of[i]) && !strcmp(g_group_key[g], group_key_of(i)))
+                return g;
+    }
+    return -1;
+}
+
 static void on_size(int *w, int *h) {
     // One cell's margin, half at the window edge and half inside the page.
     LAYOUT.margin      = ugfx_char_w() / 2;
@@ -492,6 +511,8 @@ static void on_size(int *w, int *h) {
         reload_settings();
         // The sidebar has already chosen its first ITEM (row 0 is a
         // heading, which names no page).
+        int g = g_open_setting ? group_of_setting(g_open_setting) : -1;
+        if (g >= 0) uui_sidebar_select_id(&g_tree, NODE_GROUP_BASE + g);
         if (g_node_count > 0) navigate(uui_sidebar_selected_id(&g_tree));
     }
     // Font-derived, so HERE rather than in main(): ugfx_char_h() is 0
@@ -505,7 +526,8 @@ static void on_size(int *w, int *h) {
     *h = ugfx_char_h() * 44;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc > 1) g_open_setting = argv[1];
     uui_sidebar_init(&g_tree, 0, 0, 0, 0, g_nodes, 0);
     g_tree.bg = UTHEME_PANEL_BG;
     g_tree.fg = UTHEME_TEXT;
@@ -539,6 +561,7 @@ int main(void) {
                        UTHEME_PANEL_BG, UTHEME_TEXT);
     uui_dialog_init(&g_ask);
     sysinfo_init();
+    clock_init();
 
     // Apply is the PRIMARY action, so it wears the accent.
     uui_button_init(&g_reset, 0, 0, 0, 0, "Reset", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);

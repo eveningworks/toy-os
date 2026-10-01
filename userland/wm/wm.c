@@ -1089,7 +1089,7 @@ void wm_run(void) {
         // decode that the cache then keeps.
         wmwd_phase("startbutton");
         taskbar_poll_config();
-        calendar_poll_config(); // `desktop.week_start`, same generation poll
+        calendar_poll_config(); // the locale's first weekday
         wm_shadow_poll_config(); // `desktop.shadows`, same poll
         wm_anim_poll_config();   // `desktop.animations`, same poll
         volume_poll_config();   // the level and the device list, and the debounced write

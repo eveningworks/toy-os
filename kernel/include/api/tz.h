@@ -4,7 +4,7 @@
 // THE TIMEZONE SELECTION, which is all of timezones the kernel knows.
 //
 // The city database (`/etc/timezones`), the DST rules and the
-// conversion from UTC to a local time are ring 3's: `userland/lib/utz.h`
+// conversion from UTC to a local time are ring 3's: `userland/libc/tz.c`
 // reads the same file and does the arithmetic. The kernel's clock is
 // UTC (api/ktime.h), `SYS_GETTIME` returns UTC, and every filesystem
 // timestamp is a UTC epoch -- so there is nothing here to convert with.

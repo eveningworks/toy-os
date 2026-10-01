@@ -1,7 +1,8 @@
 #ifndef ULIB_HUMAN_H
 #define ULIB_HUMAN_H
 
-// "1.2K", "4.0M" -- a byte count a person reads, for `-h`-style output.
+// "1.2K", "4.0M" -- a byte count a person reads, for `-h`-style output,
+// with the LC_NUMERIC locale's decimal mark ("1,2K" in Finland).
 //
 // A header rather than a third copy. /bin/df and /bin/meminfo had this
 // written out by hand, byte for byte identical -- two REAL callers,
@@ -30,6 +31,7 @@
 // dozen lines on the far side of --gc-sections, and a program that
 // includes it and never calls it links nothing.
 #include <stdio.h>
+#include "lib/unum.h"   // the locale's decimal mark
 
 static inline void human_size(char *out, unsigned long cap, unsigned long long n) {
     static const char unit[] = { 'B', 'K', 'M', 'G' };
@@ -44,6 +46,7 @@ static inline void human_size(char *out, unsigned long cap, unsigned long long n
     // precision that is not there.
     if (u == 0) snprintf(out, cap, "%lluB", whole);
     else snprintf(out, cap, "%llu.%llu%c", whole, (rem * 10) / 1024, unit[u]);
+    unum_localize(out, cap, 0);
 }
 
 // "1.2 MiB", "3.4 GiB" -- the same number with the unit spelled out and
@@ -60,6 +63,7 @@ static inline void human_size_iec(char *out, unsigned long cap, unsigned long lo
     }
     if (u == 0) snprintf(out, cap, "%llu %s", whole, unit[0]);
     else snprintf(out, cap, "%llu.%llu %s", whole, (rem * 10) / 1024, unit[u]);
+    unum_localize(out, cap, 0);
 }
 
 #endif // ULIB_HUMAN_H

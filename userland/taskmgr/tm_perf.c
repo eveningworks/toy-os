@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include "lib/udate.h"
 #include <stdlib.h>
 #include <stdarg.h>
 #include <time.h>
@@ -311,7 +312,7 @@ static void conn_cell(void *ctx, int row, int col, char *out, int cap) {
         time_t t = (time_t)((long long)r->utc + g_local_offset);
         struct tm tm;
         if (r->utc && gmtime_r(&t, &tm))
-            snprintf(out, (size_t)cap, "%02d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
+            udate_format_tm(out, (unsigned long)cap, &tm, UDATE_TIME | UDATE_SECONDS);
         break;
     }
     case 1: strlcpy(out, r->direction == QUERY_CONNLOG_IN ? "in" : "out", (size_t)cap); break;

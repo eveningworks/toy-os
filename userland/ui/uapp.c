@@ -18,6 +18,8 @@
 #include "ui/utheme.h"
 #include "ui/uui_caret.h"
 #include "lib/uclip.h"   // clip_poll() -- the clipboard is shared memory now
+#include <locale.h>
+#include <time.h>       // tzset()
 
 // THE CLIENT'S OWN WINDOW MEMORY. A buffer is a named shm object this
 // process creates and GRANTS to the compositor, which opens the name
@@ -1537,6 +1539,18 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             if (g_dlg[i].slot) g_dlg[i].dirty = 1;
         break;
 
+    case WIN_EV_SETTING:
+        // A setting changed somewhere (the compositor forwards the
+        // kernel's notice). Re-reading the zone and the formats is a few
+        // small reads, so it is done for ANY setting rather than asking
+        // which -- Windows' WM_SETTINGCHANGE carries no more than this.
+        tzset();
+        setlocale(LC_ALL, "");
+        a->dirty = 1;
+        for (int i = 1; i < WIN_CLIENT_MAX; i++)
+            if (g_dlg[i].slot) g_dlg[i].dirty = 1;
+        break;
+
     case WIN_EV_CLOSE:
         // The default ACCEPTS. An app that wants to refuse says so;
         // an app that has never heard of closing still closes.
@@ -1829,6 +1843,10 @@ static int activate_existing(const struct uapp_desc *desc) {
 
 static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     struct uapp *a = &g_app;
+    // EVERY GUI APP SPEAKS THE SYSTEM'S REGION, and follows a change to
+    // it (WIN_EV_SETTING below) -- what the person chose in System
+    // Settings is not something an app should have to opt into.
+    setlocale(LC_ALL, "");
     a->desc = desc;
     a->dirty = 1;
     a->running = 1;

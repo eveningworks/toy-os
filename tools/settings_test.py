@@ -221,7 +221,7 @@ def page_line(dbg, mark):
     drain(dbg)
     # `(.+?)` rather than `\S+`: a page name is "<category>/<group>"
     # and BOTH halves are human strings with spaces in them ("Time &
-    # Locale/Time zone").
+    # Locale/Date & time").
     hits = _since(mark, r"settings: page (.+?) slots (\d+) advanced (\d+) "
                         r"captions (\d+) disabled (\d+)")
     if not hits:
@@ -933,8 +933,8 @@ def main():
           f"{[s['name'] for s in page_slots]}")
 
     # --- the control TYPE follows the choice count / the text file ----
-    tz_row = row_named("Time zone") or row_named("Time")
-    if not check("the sidebar offers a timezone page", tz_row is not None):
+    tz_row = row_named("Date & time")
+    if not check("the sidebar offers a Date & time page", tz_row is not None):
         return report()
     mark = len(drain(dbg))
     open_row(tz_row)
@@ -942,17 +942,23 @@ def main():
     tz = [s for s in tz_slots if "timezone" in s["name"]]
     check("the timezone page loaded every city", tz and tz[-1]["choices"] >= 50,
           f"{tz[-1]['choices'] if tz else 0} choices")
+    tz_ctls = controls(dbg, mark)
     # A ONE-SETTING PAGE IS ONE CARD, and the card is titled even when
     # the page's name is the same word: a card is read on its own, as it
-    # is in Windows 11's Settings.
-    tz_page = page_line(dbg, mark)
-    check("a one-setting page is one titled card",
-          tz_page is not None and tz_page["slots"] == 1 and tz_page["captions"] == 1,
-          f"{tz_page}" if tz_page else "no page line")
+    # is in Windows 11's Settings. Startup target is one setting and the
+    # page is named for it.
+    one_row = row_named("Startup target")
+    if check("the sidebar offers a Startup target page", one_row is not None):
+        mark = len(drain(dbg))
+        open_row(one_row)
+        one_page = page_line(dbg, mark)
+        check("a one-setting page is one titled card",
+              one_page is not None and one_page["slots"] == 1 and one_page["captions"] == 1,
+              f"{one_page}" if one_page else "no page line")
 
     check("...and a long list uses a DROPDOWN, not radio buttons",
-          bool(tz) and tz[-1]["kind"] == "combo",
-          f"kind={tz[-1]['kind'] if tz else '?'}")
+          tz_ctls.get("system.timezone", {}).get("kind") == "combo",
+          f"kind={tz_ctls.get('system.timezone', {}).get('kind', '?')}")
     # NOT mouse_speed any more -- it became SETTING_TYPE_INT and has no
     # choices to be short. cursor_size is the short ENUM on this page,
     # and it is what this check was always about.
@@ -1366,9 +1372,8 @@ def main():
     #
     # Until CTRL_TEXT existed, SETTING_TYPE_STRING drew an EMPTY radio
     # list: a row that looks broken and can only be changed with `config
-    # set`. The Network Time page is the fixture because it carries one
-    # of each kind -- an enum, a string and an int -- so it also proves
-    # a page can mix them.
+    # set`. The Network Time page is the fixture because it carries a
+    # string and an int, so it also proves a page can mix them.
     ntp_row = row_named("Network Time")
     if check("the sidebar offers a Network Time page", ntp_row is not None,
              f"labels={[r['label'] for r in rows]}"):
@@ -1381,8 +1386,8 @@ def main():
         server_ctl = ntp_ctls.get("system.ntp_server")
         # BY NAME, not by count: three controls from the page that was
         # already open satisfies a count just as well as the right page.
-        want_ntp = ("system.ntp", "system.ntp_server", "system.ntp_interval")
-        check("the page carries all three network-time settings",
+        want_ntp = ("system.ntp_server", "system.ntp_interval")
+        check("the page carries the server and the interval",
               ntp_page is not None and all(n in ntp_ctls for n in want_ntp),
               f"page={ntp_page and ntp_page['page']!r} controls={sorted(ntp_ctls)}")
         if check("the app reported the server control's rect",
@@ -1758,7 +1763,7 @@ def main():
         x, y, w, h = buttons[1]                       # Discard
         mark = len(drain(dbg))
         click(x + w // 2, y + h // 2)
-        went = wait_page(dbg, mark, "Time zone")
+        went = wait_page(dbg, mark, "Date & time")
         check("Discard goes on to the page asked for, writing nothing",
               went is not None and stored_value(dbg, "mouse_speed") == on_disk,
               f"page {went and went['page']!r}, on disk "

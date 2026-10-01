@@ -120,6 +120,7 @@ static void cell(void *ctx, int row, int col, char *out, int cap) {
         // machine is all "0%" otherwise.
         if (p->cpu_pm < 100) snprintf(out, (size_t)cap, "%u.%u%%", p->cpu_pm / 10, p->cpu_pm % 10);
         else snprintf(out, (size_t)cap, "%u%%", p->cpu_pm / 10);
+        unum_localize(out, (unsigned long)cap, 0);
         break;
     case COL_MEM:    human_size_iec(out, cap, p->mem_bytes); break;
     default: break;
@@ -271,6 +272,7 @@ static void fill_details(void) {
     strlcpy(g_d_val_text[4], tm_status_text(p), TM_PATH_MAX);
     unsigned long long ms = p->cpu_ns / 1000000ULL;
     snprintf(g_d_val_text[5], TM_PATH_MAX, "%llu.%02llu s", ms / 1000, (ms % 1000) / 10);
+    unum_localize(g_d_val_text[5], TM_PATH_MAX, 0);
     human_size_iec(g_d_val_text[6], TM_PATH_MAX, p->mem_bytes);
     int s = tm_service_of_pid(p->pid);
     strlcpy(g_d_val_text[7], s >= 0 ? g_svc[s].name : "-", TM_PATH_MAX);
@@ -593,8 +595,12 @@ static void tick(struct uapp *a, int shown) {
         uui_chart_push(&g_pcpu, p->cpu_pm);
         uui_chart_push(&g_pmem, (uint32_t)(p->mem_bytes >> 10));
         uint32_t pk = peak_of(&g_pcpu);
-        snprintf(g_pcpu_val, sizeof g_pcpu_val, "%u.%u%%, peak %u.%u%%",
-                 p->cpu_pm / 10, p->cpu_pm % 10, pk / 10, pk % 10);
+        char cur[16], top_pct[16];
+        snprintf(cur, sizeof cur, "%u.%u%%", p->cpu_pm / 10, p->cpu_pm % 10);
+        snprintf(top_pct, sizeof top_pct, "%u.%u%%", pk / 10, pk % 10);
+        unum_localize(cur, sizeof cur, 0);
+        unum_localize(top_pct, sizeof top_pct, 0);
+        snprintf(g_pcpu_val, sizeof g_pcpu_val, "%s, peak %s", cur, top_pct);
         char now[16], top[16];
         human_size_iec(now, sizeof now, p->mem_bytes);
         human_size_iec(top, sizeof top, (unsigned long long)peak_of(&g_pmem) << 10);

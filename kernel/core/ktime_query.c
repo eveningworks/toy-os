@@ -1,6 +1,6 @@
-// The clock, as a queryable fact. See abi/query_abi.h's QUERY_CLOCK for
-// why ring 3 needs this at all: SYS_GETTIME's answer is local civil
-// time, so nothing in ring 3 could read UTC before it.
+// The clock, as a queryable fact (abi/query_abi.h's QUERY_CLOCK): UTC to
+// the nanosecond, and when and how often it was stepped -- what
+// SYS_GETTIME's whole-second civil fields cannot say.
 #include "query.h"
 #include "ktime.h"
 #include "clocksource.h"

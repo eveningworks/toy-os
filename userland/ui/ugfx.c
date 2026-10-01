@@ -801,6 +801,28 @@ int ugfx_font_load(const char *path, int px, int bold,
     return 1;
 }
 
+// The session size doubled, bold, for a clock or a figure that is the
+// point of its panel -- loaded once per cell height and kept. Falls
+// back to the session's bold weight when the file will not load.
+const struct ugfx_font *ugfx_font_display(void) {
+    static struct ugfx_font f;
+    static void *arena;
+    static int loaded_px, ok;
+    // From the SESSION font, never the current one: asked while this
+    // font is selected, ugfx_char_h() would double the double.
+    int px = ugfx_font_session(UGFX_FONT_REGULAR)->line_h * 2;
+    if (px < 16) px = 16;
+    if (px != loaded_px) {
+        loaded_px = px;
+        free(arena);
+        unsigned long need = ugfx_font_arena_size(px);
+        arena = malloc(need);
+        ok = arena && ugfx_font_load("/usr/share/fonts/liberation-sans-bold.ttf",
+                                     px, 0, &f, arena, need);
+    }
+    return ok ? &f : ugfx_font_session(UGFX_FONT_BOLD);
+}
+
 int ugfx_kern(int prev, int c) {
     if (!prev || !g_font->kern) return 0;
     return win_font_kern(g_font->kern, g_glyph_count,

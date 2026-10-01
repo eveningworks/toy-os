@@ -6,6 +6,7 @@
 #include "ui/uui_anim.h" // uui_wheel_step_px()
 #include "kpath.h"      // k_path_join/_dirname -- the KERNEL's, linked into ring 3
 #include "lib/human.h"  // human_size()
+#include "lib/udate.h"  // the Modified column, in the locale's spelling
 #include "lib/icon_cache.h" // icon_get() -- the icons view's artwork
 #include "lib/ufiletype.h"  // a row's type, in words and as an icon
 #include "icon_grid.h"      // cell math, shared with the desktop
@@ -31,7 +32,8 @@
 static const struct uui_table_column fv_cols_details[] = {
     { "Name",     0,  UUI_TALIGN_LEFT  },
     { "Size",     9,  UUI_TALIGN_RIGHT },
-    { "Modified", 17, UUI_TALIGN_LEFT  },
+    // Room for the widest region's "12/31/2026 12:59 PM" (lib/udate.h).
+    { "Modified", 20, UUI_TALIGN_LEFT  },
     { "Type",     13, UUI_TALIGN_LEFT  },
 };
 #define FV_NAME_MIN_CHARS 16   // the name column is never squeezed below this
@@ -201,14 +203,7 @@ static void fv_cell(void *ctx, int row, int col, char *out, int cap) {
             out[0] = '\0';
             break;
         }
-        // LOCALISED. The stored time is UTC (api/fs.h); this column is
-        // sized for its own narrow spelling, so it converts rather than
-        // going through lib/udate.h.
-        struct rtc_time t = e->modified;
-        tz_localize(&t);
-        snprintf(out, (size_t)cap, "%04u-%02u-%02u %02u:%02u",
-                  (unsigned)t.year, (unsigned)t.month, (unsigned)t.day,
-                  (unsigned)t.hour, (unsigned)t.minute);
+        udate_format(out, (unsigned long)cap, &e->modified, UDATE_DATE | UDATE_TIME);
         break;
     }
     default:

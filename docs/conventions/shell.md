@@ -888,3 +888,22 @@ and `&` is still trailing-only -- `a & b` is refused, not half-run,
 until `;`-style sequencing exists. And the shell's diagnostics go to
 its stdout (its sink), so a `tosh -c` with a bad line writes the error
 where the output would have gone.
+
+## A `/bin` TOOL A PERSON READS DATES OR SIZES FROM CALLS `setlocale(LC_ALL, "")`; A LOG, A FILENAME AND AN INPUT FORMAT STAY ISO
+
+`ls`, `stat`, `time`, `df` and `meminfo` opt in, as their coreutils
+counterparts do, and so print "1.10.2026 14.02.45" and "8,8G" in
+Finland. A tool that never calls `setlocale()` stays in "C" -- and
+`lib/udate.h`'s "C" spelling is ISO, so its output does not move.
+**`LC_ALL=C` is how a script asks for the stable form**, exactly as on
+Linux. The default region is International (ISO 8601), which is why a
+fresh install's `ls -l` and every test parsing it are unchanged.
+
+What does NOT follow the region, deliberately: **logs** (`dmesg`,
+`logd`, `netlog` -- data, compared across machines), **filenames**
+(`screenshot`'s stamp must sort), and **input**: `time -s` takes
+"YYYY-MM-DD HH:MM[:SS]" in every region, so a script that sets the clock
+does not depend on a setting. `ls -l` pads its date column to the
+widest date the locale can write, or the name column would move from
+row to row.
+

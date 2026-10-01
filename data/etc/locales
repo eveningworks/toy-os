@@ -1,0 +1,7 @@
+# The regional format database: one region per line,
+#   name,date,time,number,week,weeknumbers
+# each field a word from libc's tables (userland/libc/locale.c). The
+# region's display name is its Choice.<name> in settings.d/locale.region.
+iso,iso,24colon,point,monday,on
+fi,dmy_dot,24dot,space_comma,monday,on
+us,mdy_slash,12,comma_point,sunday,off

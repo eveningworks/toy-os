@@ -114,7 +114,9 @@ time_t timegm(struct tm *tm);
 static inline double difftime(time_t a, time_t b) { return (double)(a - b); }
 
 // The subset of conversions this implements: %Y %m %d %H %M %S %y %j
-// %e %a %A %b %B %p %I %Z %% and %F %T %D %R (the common compounds).
+// %e %u %w %a %A %b %B %p %I %Z %%, %F %T %D %R (the common compounds),
+// GNU's `-` flag ("%-d": no padding), and the LOCALE's %x %X %c %r --
+// the LC_TIME locale's D_FMT, T_FMT, D_T_FMT and T_FMT_AMPM (<langinfo.h>).
 // AN UNKNOWN CONVERSION IS COPIED THROUGH LITERALLY, the same choice
 // kfmt makes, so a typo is visible rather than silently dropped.
 // Returns the length written, or 0 if it would not fit -- in which case

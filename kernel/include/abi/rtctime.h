@@ -15,7 +15,7 @@
 //
 // **THE VALUES ARE UTC.** The kernel's clock is UTC, every filesystem
 // timestamp is a UTC epoch, and converting to a local time is ring 3's
-// job (userland/lib/utz.h). Nothing here records a zone, so a caller
+// job (userland/libc/tz.c). Nothing here records a zone, so a caller
 // that has converted one of these knows that only because it did it.
 struct rtc_time {
     uint8_t hour;

@@ -227,7 +227,9 @@
 // whole screen, and it presents with WIN_REQ_FB_PRESENT. With a = 0 the
 // client goes back to its own buffers and WIN_REQ_PRESENT.
 #define WIN_EV_SCANOUT    37
-// PUSHED CONFIGURATION, compositor only (the kernel's queue is its).
+// PUSHED CONFIGURATION. The kernel queues both to the compositor only;
+// the compositor FORWARDS SETTING to every client (a = 0), which is how
+// an app follows a change of timezone or region (ui/uapp.c).
 // FSWATCH: a: the watch id SYS_FS_WATCH returned. Something changed AT
 // that path or, for a directory, directly inside it -- which one is not
 // said; re-read what the watch was for. SETTING: a setting changed from
