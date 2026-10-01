@@ -9532,6 +9532,18 @@ The row walk keeps its order and kinds (folders, actions, apps, the
 description, search, and now the settings button), so the keyboard,
 the hit test and every tool reading `gui menu --json` follow the move.
 
+**The column's scrollbar is an OVERLAY bar** (chosen from mockups
+2026-10-01, over an always-visible bar in a gutter): a thin thumb at
+rest, the shared `uui_scrollbar`'s groove and thumb while the pointer
+is on it or a drag holds it, floating over the rows' right end --
+Windows 11's Start, Breeze and GNOME. It was a passive indicator so the
+panel would not grow a second scrollbar; it has none, since the draw,
+the hit test and the drag arithmetic are `uui_scrollbar`'s stateless
+helpers, and the drag and a held groove click (which pages, then
+repeats, Windows' and KDE's default) run from the overlay registry's
+press op. The bar's rect is the hit zone, so it takes a click before
+the row under it.
+
 ## A gallery's pictures are the caller's painter, and Preview= is read by the client
 
 Chosen from mockups (2026-10-01) over a preview strip under the dropdown

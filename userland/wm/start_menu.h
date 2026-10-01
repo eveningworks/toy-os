@@ -153,5 +153,11 @@ int start_menu_key(int key, uint8_t mods);
 // long enough -- call unconditionally every wm_run() tick. A no-op
 // whenever nothing's flashing.
 void start_menu_update(void);
+// The overlay registry's press op: the scrollbar's thumb drag and its
+// held groove click, every tick while the button is down.
+void start_menu_update_press(int mx, int my, uint8_t buttons);
+// The app column's scrollbar: its rect, the thumb's (y, h), and whether
+// it is drawn wide (pointer on it, or a drag). 0 when the column fits.
+int start_menu_scrollbar(int *x, int *y, int *w, int *h, int *thumb_y, int *thumb_h, int *wide);
 
 #endif

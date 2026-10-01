@@ -403,6 +403,45 @@ def run(dbg, qmp, tmp, res):
         res.check("Home goes back to the top",
                   dbg.menu().get("scroll", 0) == 0)
 
+    # --- 9b. the scrollbar: drag, page, widen --------------------------
+    #
+    # An overlay bar (Windows 11's, Breeze's): thin at rest, the shared
+    # uui_scrollbar's groove and thumb while the pointer is on it. Every
+    # number comes from `gui menu --json`'s "scrollbar" row.
+    open_menu(dbg)
+    dbg.menu_select_folder("All Apps")
+
+    def bar(m):
+        b = rows_of(m, "scrollbar")
+        return b[0] if b else None
+
+    m = dbg.menu()
+    b = bar(m)
+    res.check("All Apps has a scrollbar", b is not None, f"listed={m.get('listed')}")
+    if b:
+        cx = b["x"] + b["w"] // 2
+        dbg.warp_cursor(qmp, cx - 120, b["y"] + b["h"] // 2)   # a row, not the bar
+        rest = bar(dbg.menu())
+        dbg.warp_cursor(qmp, cx, b["thumb_y"] + 4)
+        hov = bar(dbg.menu())
+        res.check("the bar widens with the pointer on it, and only then",
+                  rest and hov and not rest["wide"] and hov["wide"],
+                  f"rest={rest and rest['wide']} on it={hov and hov['wide']}")
+        dbg.drag(cx, b["thumb_y"] + 4, cx, b["y"] + b["h"] - 2, steps=24)
+        m = dbg.menu()
+        res.check("dragging the thumb to the bottom scrolls to the last page",
+                  m.get("scroll") == m.get("listed", 0) - len(rows_of(m, "app")),
+                  f"scroll={m.get('scroll')} listed={m.get('listed')}")
+        b = bar(m)
+        before = m.get("scroll", 0)
+        dbg.click(cx, b["y"] + 3)          # the groove above the thumb
+        m = dbg.menu()
+        res.check("a click on the groove pages toward it by one screen",
+                  m.get("scroll") == max(0, before - len(rows_of(m, "app"))),
+                  f"scroll {before} -> {m.get('scroll')}")
+        res.check("...and the menu stays open: the bar is not a row",
+                  m.get("open"))
+
     # --- 10. ranking -------------------------------------------------------
     type_text(dbg, "te")
     hits = [r["label"] for r in rows_of(dbg.menu(), "app")]

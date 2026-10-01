@@ -150,6 +150,18 @@ static int query_len;
 #define TOK_APP(i)    (200 + (i))
 #define TOK_SEARCH    999
 #define TOK_SETTINGS  998
+#define TOK_SCROLLBAR 997
+
+// THE APP COLUMN'S SCROLLBAR: thin at rest, widened while the pointer is
+// on it or a drag holds it (an overlay bar, Windows 11's and Breeze's).
+// Drawn and hit-tested by the shared uui_scrollbar helpers; the drag and
+// the held-click paging run from the overlay's press op, every tick.
+static int sb_drag;               // 1 while the thumb is held
+static int sb_grab;               // where in the thumb the press landed
+static int sb_page;               // -1 / +1 while a track click repeats, else 0
+static uint64_t sb_next;          // when that repeat fires next, in ticks
+#define SB_REPEAT_DELAY 40        // 400 ms, then
+#define SB_REPEAT_EVERY 8         // every 80 ms -- Windows' typematic shape
 
 // The breathing room above the first row and below the last, which a
 // menu whose rows sit flush against its border does not have.
@@ -437,6 +449,38 @@ static void layout(struct sm_layout *L) {
     L->y = (screen_h - taskbar_h) - L->h - sm_gap();
     L->main_y = L->y + L->head_h;
     L->pane_x = L->x + L->side_w + 1;
+}
+
+static int pane_count(void);
+
+// The bar's rect (the WIDE one, which is also its hit zone), and whether
+// the column needs one at all. uui_scrollbar's vertical offset counts
+// from the BOTTOM (a scrollback), this list from the top: sb_offset()
+// is the one conversion.
+static int sb_rect(const struct sm_layout *L, int *x, int *y, int *w, int *h) {
+    int bw = ugfx_char_h() - 1;
+    *w = bw;
+    *x = L->x + L->w - 1 - sm_pill_inset() - bw;
+    *y = L->main_y + SM_INSET;
+    *h = L->main_h - 2 * SM_INSET;
+    return pane_count() > L->pane_rows;
+}
+
+static int sb_max_first(const struct sm_layout *L) {
+    int m = pane_count() - L->pane_rows;
+    return m > 0 ? m : 0;
+}
+
+static int sb_offset(const struct sm_layout *L) { return sb_max_first(L) - scroll; }
+
+static void sb_scroll_to(const struct sm_layout *L, int first) {
+    int m = sb_max_first(L);
+    if (first > m) first = m;
+    if (first < 0) first = 0;
+    if (first == scroll) return;
+    scroll = first;
+    start_menu_damage();
+    redraw_pending = 1;
 }
 
 void start_menu_geometry(int *out_x, int *out_y, int *out_w, int *out_h,
@@ -795,6 +839,12 @@ int start_menu_hover_at(int mx, int my) {
     if (!start_menu_open) { hover_token = 0; wm_tooltip_cancel(); return 0; }
     struct sm_layout L;
     layout(&L);
+    int bx, by, bw, bh;
+    if (sb_rect(&L, &bx, &by, &bw, &bh) && uui_hit(bx, by, bw, bh, mx, my)) {
+        wm_tooltip_cancel();
+        hover_token = TOK_SCROLLBAR;
+        return hover_token;
+    }
     int n = row_at(mx, my);
     track_tooltip(&L, n);
     if (n < 0) { hover_token = 0; return 0; }
@@ -1056,24 +1106,22 @@ void start_menu_draw(int mx, int my) {
                                 label, row_fg, row_bg);
     }
 
-    // WHERE IN THE LIST THIS IS, when the list is taller than the pane.
-    // An INDICATOR, not a scrollbar: there is no track to click and no
-    // thumb to drag, because the pane is scrolled by the wheel and the
-    // keyboard and adding a draggable control to an overlay the panel
-    // hand-draws would be a second implementation of `uui_scrollbar`
-    // (docs/decisions.md). It says where you are; it does not take
-    // input, and nothing about it invites a click.
-    int listed = pane_count();
-    if (listed > L.pane_rows) {
-        int track_h = L.main_h - 2 * SM_INSET;
-        int thumb_h = track_h * L.pane_rows / listed;
-        if (thumb_h < 8) thumb_h = 8;
-        int span = track_h - thumb_h;
-        int max_first = listed - L.pane_rows;
-        int top = L.main_y + SM_INSET;
-        int thumb_y = top + (max_first ? span * scroll / max_first : 0);
-        int tx = L.x + L.w - 1 - pr - 3;
-        uui_fill_round_rect(s, tx, thumb_y, 3, thumb_h, UUI_CAPSULE, UTHEME_OUTLINE);
+    // THE SCROLLBAR, an overlay over the rows' right end: a thin thumb
+    // at rest, the shared uui_scrollbar's groove and thumb while the
+    // pointer is on it or holds it -- so it says where you are without
+    // costing the rows a gutter, and it can be dragged.
+    int bx, by, bw, bh;
+    if (sb_rect(&L, &bx, &by, &bw, &bh)) {
+        int total_rows = pane_count();
+        if (sb_drag || hover_token == TOK_SCROLLBAR) {
+            uui_scrollbar_draw(s, bx, by, bw, bh, total_rows, L.pane_rows, sb_offset(&L),
+                               ugfx_blend(pane_bg, fg, 24),
+                               ugfx_blend(pane_bg, fg, sb_drag ? 170 : 130), 0);
+        } else {
+            int ty, th;
+            uui_scrollbar_thumb_rect(by, bh, total_rows, L.pane_rows, sb_offset(&L), &ty, &th, bw, 0);
+            uui_fill_round_rect(s, bx + bw - 4, ty, 3, th, UUI_CAPSULE, UTHEME_OUTLINE);
+        }
     }
 }
 
@@ -1127,6 +1175,34 @@ static int activate(int n) {
 
 int start_menu_handle_click(int mx, int my) {
     if (!start_menu_open) return 0;
+
+    // THE BAR TAKES ITS CLICK before the rows under its right end: the
+    // thumb starts a drag, the groove pages toward the click and keeps
+    // paging while the button is held (start_menu_update_press()).
+    {
+        struct sm_layout L;
+        layout(&L);
+        int bx, by, bw, bh;
+        if (sb_rect(&L, &bx, &by, &bw, &bh) && uui_hit(bx, by, bw, bh, mx, my)) {
+            int total = pane_count();
+            enum uui_scrollbar_zone z = uui_scrollbar_hit(bx, by, bw, bh, total, L.pane_rows,
+                                                          sb_offset(&L), mx, my, 0);
+            if (z == UUI_SB_THUMB) {
+                int ty, th;
+                uui_scrollbar_thumb_rect(by, bh, total, L.pane_rows, sb_offset(&L), &ty, &th, bw, 0);
+                sb_drag = 1;
+                sb_grab = my - ty;
+            } else if (z == UUI_SB_ABOVE || z == UUI_SB_BELOW) {
+                sb_page = z == UUI_SB_ABOVE ? -1 : 1;
+                sb_scroll_to(&L, scroll + sb_page * L.pane_rows);
+                sb_next = sys_ticks() + SB_REPEAT_DELAY;
+            }
+            hover_token = TOK_SCROLLBAR;
+            start_menu_damage();
+            redraw_pending = 1;
+            return 1;
+        }
+    }
 
     int n = row_at(mx, my);
     if (n < 0) {
@@ -1285,4 +1361,44 @@ void start_menu_update(void) {
         flash_row = -1;
         start_menu_close();
     }
+}
+
+// The overlay's press op, every tick: a thumb drag follows the pointer,
+// and a held groove click repeats its page while the thumb has not yet
+// reached the pointer -- a press is a gesture, not an edge.
+void start_menu_update_press(int mx, int my, uint8_t buttons) {
+    if (!start_menu_open || (!sb_drag && !sb_page)) return;
+    struct sm_layout L;
+    layout(&L);
+    int bx, by, bw, bh;
+    if (!(buttons & 0x1) || !sb_rect(&L, &bx, &by, &bw, &bh)) {
+        sb_drag = 0;
+        sb_page = 0;
+        start_menu_damage();
+        redraw_pending = 1;
+        return;
+    }
+    int total = pane_count();
+    if (sb_drag) {
+        int off = uui_scrollbar_offset_for_drag(by, bh, total, L.pane_rows, my, sb_grab, bw, 0);
+        sb_scroll_to(&L, sb_max_first(&L) - off);
+        return;
+    }
+    (void)mx;
+    if (sys_ticks() < sb_next) return;
+    enum uui_scrollbar_zone z = uui_scrollbar_hit(bx, by, bw, bh, total, L.pane_rows,
+                                                  sb_offset(&L), bx + bw / 2, my, 0);
+    if ((sb_page < 0 && z != UUI_SB_ABOVE) || (sb_page > 0 && z != UUI_SB_BELOW)) return;
+    sb_scroll_to(&L, scroll + sb_page * L.pane_rows);
+    sb_next = sys_ticks() + SB_REPEAT_EVERY;
+}
+
+int start_menu_scrollbar(int *x, int *y, int *w, int *h, int *thumb_y, int *thumb_h, int *wide) {
+    if (!start_menu_open) return 0;
+    struct sm_layout L;
+    layout(&L);
+    if (!sb_rect(&L, x, y, w, h)) return 0;
+    uui_scrollbar_thumb_rect(*y, *h, pane_count(), L.pane_rows, sb_offset(&L), thumb_y, thumb_h, *w, 0);
+    *wide = sb_drag || hover_token == TOK_SCROLLBAR;
+    return 1;
 }

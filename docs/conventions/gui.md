@@ -1993,8 +1993,9 @@ this the obvious way), not from how much history it accumulated.
   exists exactly when something is in it** -- the sidebar is derived
   from the registry, so an empty folder is unrepresentable and an
   unknown key becomes its own folder rather than losing the app.
-  **The app column scrolls past `SM_MAX_ROWS`** (wheel and keyboard,
-  with an indicator rather than a scrollbar), so a folder that outgrows
+  **The app column scrolls past `SM_MAX_ROWS`** (the wheel, the keyboard,
+  or a drag of its overlay scrollbar -- thin at rest, the shared uui_scrollbar
+  while the pointer is on it), so a folder that outgrows
   the screen still fits. And **a row that is not drawn has no geometry** -- a test
   reaching an app in another folder opens that folder first
   (`DebugConsole.menu_app_row()` does it), which is why `gui menu

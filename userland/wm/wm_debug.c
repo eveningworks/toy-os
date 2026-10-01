@@ -727,6 +727,12 @@ static void cmd_menu(struct dbg_out *o, int json) {
                      start_menu_open ? "true" : "false", mx, my, mw, mh, item_h,
                      start_menu_category(), start_menu_query(),
                      first, listed, start_menu_description());
+        int sbx, sby, sbw, sbh, sbty, sbth, sbwide;
+        if (start_menu_scrollbar(&sbx, &sby, &sbw, &sbh, &sbty, &sbth, &sbwide))
+            dbg_out_printf(o, "{\"label\":\"\",\"kind\":\"scrollbar\",\"x\":%d,\"y\":%d,\"w\":%d,"
+                              "\"h\":%d,\"thumb_y\":%d,\"thumb_h\":%d,\"wide\":%s}%s",
+                           sbx, sby, sbw, sbh, sbty, sbth, sbwide ? "true" : "false",
+                           total ? "," : "");
         for (int i = 0; i < total; i++) {
             const char *label; int kind, x, y, w, h, sel;
             if (!start_menu_row_info(i, &label, &kind, &x, &y, &w, &h, &sel)) break;

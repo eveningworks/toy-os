@@ -61,7 +61,7 @@ static const struct wm_overlay g_overlays[] = {
       context_menu_hover_at,     context_menu_damage,     0 /* a rect per submenu level */, 0, 0, context_menu_key, context_menu_close, 0,
       context_menu_contains },
     { "start",    open_start,    start_menu_draw,  start_menu_handle_click,
-      start_menu_hover_at,       start_menu_damage,       start_menu_rect, 0, start_menu_wheel, start_menu_key, start_menu_close, 0, 0 },
+      start_menu_hover_at,       start_menu_damage,       start_menu_rect, start_menu_update_press, start_menu_wheel, start_menu_key, start_menu_close, 0, 0 },
     { "calendar", open_calendar, calendar_draw,    calendar_handle_click,
       calendar_hover_at,         calendar_damage,         calendar_rect, 0, 0, 0, calendar_close, 0, 0 },
     { "volume",   open_volume,   volume_draw,      volume_handle_click,
