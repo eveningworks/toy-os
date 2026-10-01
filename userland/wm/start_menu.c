@@ -360,6 +360,10 @@ static void layout(struct sm_layout *L) {
     // booked whether or not every folder has artwork, so a missing icon
     // file cannot move the labels.
     L->side_w = side_label + 36 + SM_FOLDER_SZ(L->item_h) + 6;
+    // A FLOOR as well as the measure: sized to its labels alone the card
+    // came out a narrow strip. Windows 11's Start and Kickoff are wider
+    // still; this keeps the folders a comfortable column at any font.
+    if (L->side_w < ugfx_char_h() * 15) L->side_w = ugfx_char_h() * 15;
 
     // MEASURED, not counted: the column is as wide as its widest label
     // DRAWS, which on a proportional face is not its longest label times
@@ -376,6 +380,7 @@ static void layout(struct sm_layout *L) {
     // with an icon indent their label by it, and a width that ignored
     // it would clip the longest label the moment artwork arrived.
     L->pane_w = app_label + 16 + SM_ICON_COL(L->item_h);
+    if (L->pane_w < ugfx_char_h() * 26) L->pane_w = ugfx_char_h() * 26;   // the same floor
 
     L->sep_h = L->item_h / 2;
     int side_h = L->cats * L->item_h + L->sep_h + wm_system_action_count * L->item_h;
