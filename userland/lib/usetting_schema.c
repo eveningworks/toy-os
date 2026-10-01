@@ -419,6 +419,20 @@ int uschema_group_text(const char *category, const char *group,
     return ok && (m->label[0] || m->description[0]);
 }
 
+int uschema_text_word(const char *ns, const char *name, const char *key,
+                      char *out, uint32_t cap) {
+    if (!out || !cap) return 0;
+    out[0] = '\0';
+    if (!ns || !name || !key) return 0;
+    char path[SCHEMA_PATH_MAX];
+    if (snprintf(path, sizeof path, SETTING_TEXT_DIR "/%s.%s", ns, name) <= 0) return 0;
+    struct etc_config_buf *buf = malloc(sizeof *buf);
+    if (!buf) return 0;
+    if (uconf_load(path, buf)) str_key(buf, key, out, cap);
+    free(buf);
+    return out[0] != '\0';
+}
+
 void uschema_text(const struct uschema *s, struct setting_msg *m) {
     if (s) uschema_text_for(s->ns, s->name, m);
 }
@@ -446,6 +460,7 @@ void uschema_text_for(const char *ns, const char *name, struct setting_msg *m) {
         m->widget = !strcmp(word, "radio")    ? SETTING_ABI_WIDGET_RADIO
                   : !strcmp(word, "dropdown") ? SETTING_ABI_WIDGET_DROPDOWN
                   : !strcmp(word, "slider")   ? SETTING_ABI_WIDGET_SLIDER
+                  : !strcmp(word, "gallery")  ? SETTING_ABI_WIDGET_GALLERY
                                               : SETTING_ABI_WIDGET_AUTO;
 
         str_key(buf, SETTING_TEXT_KEY_APPLIES, word, sizeof word);

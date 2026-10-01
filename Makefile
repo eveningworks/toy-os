@@ -1146,7 +1146,7 @@ EXTRA_OBJS_files = fm/fm_view fm/fm_jobs fm/fm_tree fm/fm_thumbs fm/fm_modal \
                    fm/fm_history fm/fm_details fm/fm_options
 # System Settings, the same way: userland/settings/ is its parts.
 EXTRA_OBJS_settings = settings/set_registry settings/set_page settings/set_owner \
-                      settings/set_sysinfo settings/set_clock
+                      settings/set_sysinfo settings/set_clock settings/set_preview
 # The Audio Player, the same way: userland/player/ is its playlist and stage.
 EXTRA_OBJS_player = player/pl_list player/pl_stage
 # Task Manager, the same way: userland/taskmgr/ is its pages.

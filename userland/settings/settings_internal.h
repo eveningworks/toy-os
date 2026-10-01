@@ -31,6 +31,7 @@
 #include "ui/uui_button.h"
 #include "ui/uui_switch.h"
 #include "ui/uui_segmented.h"
+#include "ui/uui_gallery.h"
 #include "ui/uui_setting_row.h"
 #include "ui/uui_dialog.h"
 #include "lib/usaver.h"
@@ -87,7 +88,7 @@ _Static_assert(UUI_TEXTBOX_MAX >= SETTING_ABI_VALUE_MAX,
 
 // struct slot's `kind`.
 enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER, CTRL_SPIN, CTRL_TEXT,
-       CTRL_KEYCAP, CTRL_SWITCH, CTRL_SEGMENTED };
+       CTRL_KEYCAP, CTRL_SWITCH, CTRL_SEGMENTED, CTRL_GALLERY };
 
 enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST,
        ID_OPTS, ID_OPTS_OK, ID_OPTS_CANCEL, ID_SEARCH, ID_RESET, ID_APPLY,
@@ -145,6 +146,7 @@ struct slot {
     struct uui_keycapture keycap;
     struct uui_switch     sw;       // a two-valued state (onoff pairs)
     struct uui_segmented  seg;      // a few short names, side by side
+    struct uui_gallery    gallery;  // Widget=gallery: a card per choice, Preview= paints it
     int on_idx;                     // CTRL_SWITCH: the "on" value's index
     // Which presentation is showing. A KIND rather than a set of flags:
     // booleans can express "both" and "neither", and neither is a state
@@ -294,6 +296,12 @@ int control_changed(int slot_index);
 int refit_prose(void);
 void slot_rect(const struct slot *sl, int *x, int *y, int *w, int *h);
 const char *slot_kind_name(const struct slot *sl);
+
+// set_preview.c: a gallery's card pictures, by the setting's Preview= word.
+// preview_attach() picks the painter (none for an unknown word);
+// preview_reset() frees what the last page decoded.
+void preview_attach(struct slot *sl, int idx);
+void preview_reset(void);
 int slot_disabled(const struct slot *sl);
 
 // set_clock.c -- Time & Locale's live clock, Change... and preview

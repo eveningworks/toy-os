@@ -9531,3 +9531,33 @@ reason they never went behind a Leave tab, and the rail is folders only.
 The row walk keeps its order and kinds (folders, actions, apps, the
 description, search, and now the settings button), so the keyboard,
 the hit test and every tool reading `gui menu --json` follow the move.
+
+## A gallery's pictures are the caller's painter, and Preview= is read by the client
+
+Chosen from mockups (2026-10-01) over a preview strip under the dropdown
+and previews inside it: the cursor theme is a GALLERY of cards, each
+showing five of the theme's shapes on a half-light, half-dark tile --
+KDE's Cursors page, Windows 11's Themes grid. Built as `uui_gallery`, a
+reusable widget, with the wallpaper picker on the roadmap as its second
+caller.
+
+**The picture is a callback (`draw_tile`), not a list of images.** What
+a choice looks like is the caller's knowledge, and an image list would
+make every caller render and own bitmaps at a size only the widget
+knows; a painter is handed the tile's rect and draws into it, clipped.
+The widget stays a radio group with cards -- selection, hover, keys,
+commit on release -- and nothing else.
+
+**`Preview=` is a word in the setting's text file that the CLIENT reads
+(`uschema_text_word()`), not a field in `struct setting_msg`.** `Widget=`
+crosses the ABI because every client must at least fall back on it; a
+painter's name means something only to a client that has that painter,
+and widening an ABI struct for one presentation word is the cost
+without the reason. An unknown word draws cards with no picture -- the
+setting still works.
+
+**The shape format moved into `userland/lib/ucursor.c`.** Settings must
+draw a theme without being the compositor, and a second copy of the
+parser would drift from the one that decides what the pointer looks like.
+The WM keeps the live theme, the settings, and its own file reads (whose
+comment explains why it reads into its own buffer).

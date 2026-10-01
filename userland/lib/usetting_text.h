@@ -48,7 +48,9 @@
 
 // The keys a text file may carry:
 //   Description=<one line>
-//   Widget=auto | radio | dropdown | slider
+//   Widget=auto | radio | dropdown | slider | gallery
+//   Preview=<painter>   -- with gallery: what each card's picture shows
+//                          (System Settings: `cursor`)
 //   Applies=now | reboot
 //   Advanced=1 | 0
 //   Order=<integer, lower first>
@@ -64,6 +66,7 @@
 #define SETTING_TEXT_KEY_APPLIES  "Applies"
 #define SETTING_TEXT_KEY_ADVANCED "Advanced"
 #define SETTING_TEXT_KEY_ORDER    "Order"
+#define SETTING_TEXT_KEY_PREVIEW  "Preview"
 #define SETTING_TEXT_KEY_LABEL    "Label"
 #define SETTING_TEXT_CHOICE_PREFIX "Choice."
 #define SETTING_TEXT_GROUP_PREFIX  "group."

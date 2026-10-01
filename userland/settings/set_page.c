@@ -104,6 +104,7 @@ void set_slot_enabled(struct slot *sl, int idx) {
     sl->text.disabled   = off;
     sl->sw.disabled     = off;
     sl->seg.disabled    = off;
+    sl->gallery.disabled = off;
     sl->row.disabled    = off;
 }
 
@@ -147,6 +148,7 @@ static int pick_kind(struct slot *sl, int idx) {
     sl->on_idx = onoff_index(sl);
     if (g_widget[idx] == SETTING_ABI_WIDGET_DROPDOWN) return CTRL_COMBO;
     if (g_widget[idx] == SETTING_ABI_WIDGET_SLIDER)   return CTRL_SLIDER;
+    if (g_widget[idx] == SETTING_ABI_WIDGET_GALLERY)  return CTRL_GALLERY;
     if (sl->on_idx >= 0)   return CTRL_SWITCH;
     if (fits_segmented(sl)) return CTRL_SEGMENTED;
     return sl->choice_count >= CHOICES_DROPDOWN_MIN ? CTRL_COMBO : CTRL_RADIO;
@@ -243,6 +245,8 @@ void load_slot(struct slot *sl, int idx) {
     sl->slider.selected = sl->staged;
     uui_segmented_init(&sl->seg, sl->choice_ptr, sl->choice_count, sl->staged);
     uui_switch_init(&sl->sw, sl->on_idx >= 0 && sl->staged == sl->on_idx);
+    uui_gallery_init(&sl->gallery, sl->choice_ptr, sl->choice_count, sl->staged);
+    if (sl->kind == CTRL_GALLERY) preview_attach(sl, idx);
     set_slot_enabled(sl, idx);
 }
 
@@ -279,6 +283,7 @@ void open_group(int g) {
     g_slot_count = 0;
     g_saver_slot = -1;
     g_saver_base = -1;
+    preview_reset();   // a new page: the last one's decoded pictures go
 
     int hidden_advanced = 0, page_advanced = 0;
     // A selection sort over the group's settings: the registry's own
@@ -455,6 +460,9 @@ static struct uui_item slot_control(struct slot *sl, int i, struct uui_focusable
     case CTRL_SPIN:      it.ops = &uui_spinbox_ops;     it.widget = &sl->spin;   break;
     case CTRL_SWITCH:    it.ops = &uui_switch_ops;      it.widget = &sl->sw;     break;
     case CTRL_SEGMENTED: it.ops = &uui_segmented_ops;   it.widget = &sl->seg;    break;
+    // Cards across the card's whole width, under its text.
+    case CTRL_GALLERY:   it.ops = &uui_gallery_ops;     it.widget = &sl->gallery;
+                         it.flags = UUI_FILL_W; break;
     default:             it.ops = &uui_radio_list_ops;  it.widget = &sl->radio;  break;
     }
     *f = (struct uui_focusable){ it.widget, it.ops };
@@ -474,7 +482,7 @@ int emit_slot(struct uui_item *out, int n, int i,
     r->control = slot_control(sl, i, &focus[(*nfocus)++]);
     r->title = sl->setting >= 0 ? g_label[sl->setting] : "";
     r->desc = slot_prose(sl->setting);
-    r->stacked = sl->kind == CTRL_RADIO;
+    r->stacked = sl->kind == CTRL_RADIO || sl->kind == CTRL_GALLERY;
     r->changed = sl->setting >= 0 && sl->staged != sl->baseline;
     out[n++] = (struct uui_item){ .ops = &uui_setting_row_ops, .widget = r,
                                   .flags = UUI_FILL_W };
@@ -560,6 +568,7 @@ int control_changed(int slot_index) {
     case CTRL_SPIN:      sl->staged = uui_spinbox_value(&sl->spin); break;
     case CTRL_SWITCH:    sl->staged = sl->sw.on ? sl->on_idx : 1 - sl->on_idx; break;
     case CTRL_SEGMENTED: sl->staged = sl->seg.selected; break;
+    case CTRL_GALLERY:   sl->staged = sl->gallery.selected; break;
     default:             sl->staged = sl->radio.selected; break;
     }
     sl->row.changed = sl->setting >= 0 && sl->staged != sl->baseline;
@@ -617,6 +626,7 @@ const char *slot_kind_name(const struct slot *sl) {
     case CTRL_KEYCAP:    return "keycap";
     case CTRL_SWITCH:    return "switch";
     case CTRL_SEGMENTED: return "segmented";
+    case CTRL_GALLERY:   return "gallery";
     default:             return "radio";
     }
 }
@@ -631,6 +641,7 @@ int slot_disabled(const struct slot *sl) {
     case CTRL_KEYCAP:    return 0;
     case CTRL_SWITCH:    return sl->sw.disabled;
     case CTRL_SEGMENTED: return sl->seg.disabled;
+    case CTRL_GALLERY:   return sl->gallery.disabled;
     default:             return sl->radio.disabled;
     }
 }

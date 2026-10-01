@@ -81,6 +81,7 @@ REAL CALLER, not a plausible one.
 | `uui_segmented` | Two to four SHORT mutually-exclusive choices side by side; a view switch |
 | `uui_dropdown` | Many mutually-exclusive options, one visible |
 | `uui_slider` | An ORDERED enum, where "more" and "less" is the point |
+| `uui_gallery` | A few choices whose difference is SEEN -- a card per choice, its picture painted by the caller (a cursor theme's shapes; a wallpaper) |
 | `uui_listbox`, `uui_table` | Rows; rows with columns, a header and sorting |
 | `uui_tree` | Rows at a DEPTH, with collapsible parents -- navigation. A `UUI_TREE_HEADER` row is a section caption; a node may carry a right-hand `note` and a usage meter; `UUI_SEL_ROUNDED` is the design language's selection (the File Manager's side column) |
 | `uui_thumbstrip` | A filmstrip: one row of thumbnails, one selected (the pictures come from `lib/uthumb.h`) |

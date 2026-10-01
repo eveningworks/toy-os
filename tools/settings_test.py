@@ -1346,10 +1346,13 @@ def main():
             bx = cx + px0 + 8
             by = cy + py0 + 3 * 22
             crop = im.crop((bx, by, bx + pw0 - 16, cy + py0 + ph0 - 8))
-            # TEXT INK -- dark pixels -- not "anything but the background":
-            # a page of white cards is all non-background and would
-            # swamp a page of plain text lines.
-            return sum(1 for p in crop.getdata() if sum(p) < 300)
+            # TEXT INK -- near-black pixels -- not "anything but the
+            # background": a page of white cards is all non-background
+            # and would swamp a page of plain text lines. NEAR-BLACK, not
+            # merely dark: the cursor gallery's tiles are half the
+            # desktop's dark blue (sum 174), which counted as "ink" and
+            # inflated the Mouse page five-fold.
+            return sum(1 for p in crop.getdata() if sum(p) < 150)
 
         # BOTH PAGES CONFIRMED OPEN before their pixels are compared.
         # System Information is the LAST row of thirty-one and the

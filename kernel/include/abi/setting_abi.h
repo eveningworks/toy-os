@@ -71,6 +71,10 @@ enum setting_result {
 // high -- where "more" and "less" is what the user means and a radio
 // list says nothing about the order.
 #define SETTING_ABI_WIDGET_SLIDER   3
+// A grid of cards, each a picture of its choice -- a few choices whose
+// difference is SEEN (cursor themes). The picture's painter is named by
+// the text file's `Preview=` key, which the client reads itself.
+#define SETTING_ABI_WIDGET_GALLERY  4
 
 // `sflags` above.
 //

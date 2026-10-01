@@ -8,9 +8,7 @@
 #include <stddef.h>
 #include "wm/wm_log.h"
 #include "wm/wm_conf.h"
-#include "lib/uimg.h"
 
-#define CURSOR_DIR "/usr/share/cursors"
 // The shared file every setting here lives in, per CLAUDE.md's rule
 // that a setting joins /etc/toyos.conf unless it has enough keys of its
 // own to be unwieldy there. Two is not enough.
@@ -49,222 +47,15 @@ static int kind_to_index(enum wm_cursor_kind kind) {
     }
 }
 
-// --- the parser ------------------------------------------------------
-
-static int hex_val(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    if (c == '.') return 0;
-    return -1;
-}
-
-// One coverage character -> 0..255. The file stores 16 levels (see
-// tools/gen_cursors.py), so 'f' must land on exactly 255 rather than
-// 240: a fully opaque pixel that comes out 94% opaque makes every
-// cursor faintly translucent, which looks like a blending bug.
-static int cov_to_alpha(char c, unsigned char *out) {
-    int v = hex_val(c);
-    if (v < 0) return 0;
-    *out = (unsigned char)(v * 255 / 15);
-    return 1;
-}
-
-// The longest line worth holding. Comment and header lines run to ~60
-// characters; a grid row is at most CURSOR_SHAPE_MAX. Sized for the
-// former, because the first version sized it for the latter and every
-// file then failed on its own comment header -- with the built-in
-// fallback quietly keeping the pointer working, so nothing looked
-// broken.
-#define CURSOR_LINE_MAX 128
-
-// An image file's name: a bare filename in the theme's own directory,
-// ending ".qoi" -- no '/' and no "..", so a descriptor cannot point the
-// loader anywhere else on the disk.
-static int image_name_ok(const char *v) {
-    uint32_t n = (uint32_t)k_strlen(v);
-    if (n < 5 || n >= CURSOR_IMAGE_NAME_MAX) return 0;
-    if (k_strcmp(v + n - 4, ".qoi") != 0) return 0;
-    for (uint32_t i = 0; i < n; i++) {
-        char c = v[i];
-        int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                 (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '@' ||
-                 (c == '.' && i > 0 && v[i - 1] != '.');
-        if (!ok) return 0;
-    }
-    return 1;
-}
-
-// A whole shape file: a short header plus two grids of at most
-// CURSOR_SHAPE_MAX rows of CURSOR_SHAPE_MAX characters and a newline
-// each (2 * 32 * 33 = 2112), with room to spare. A file bigger than
-// this is refused by fs_read_into() rather than truncated, which the
-// parser then reports as malformed -- the correct outcome for a shape
-// file this loader cannot represent anyway.
-#define CURSOR_FILE_MAX 4096
-
-// Copies one line out, returning its FULL length (which may exceed what
-// fits) and advancing `*pos` past the newline. -1 at end of input.
-//
-// Returning the full length rather than the copied length is what lets
-// the caller refuse a grid row that is too long instead of silently
-// accepting its first 127 characters -- while an over-long COMMENT is
-// harmlessly skipped. A parser here rejects rather than guesses, but
-// only about the thing it is parsing.
-static int next_line(const char *text, uint32_t len, uint32_t *pos,
-                      char *out, uint32_t out_size) {
-    if (*pos >= len) return -1;
-    uint32_t n = 0, full = 0;
-    while (*pos < len && text[*pos] != '\n') {
-        if (n + 1 < out_size) out[n++] = text[*pos];
-        full++;
-        (*pos)++;
-    }
-    if (*pos < len) (*pos)++; // the newline
-    out[n] = '\0';
-    return (int)full;
-}
-
-static int parse_grid(const char *text, uint32_t len, uint32_t *pos,
-                       int w, int h, unsigned char grid[][CURSOR_SHAPE_MAX]) {
-    char line[CURSOR_LINE_MAX];
-    for (int y = 0; y < h; y++) {
-        int n = next_line(text, len, pos, line, sizeof line);
-        if (n != w) return 0; // a short or long row is a malformed file
-        for (int x = 0; x < w; x++)
-            if (!cov_to_alpha(line[x], &grid[y][x])) return 0;
-    }
-    return 1;
-}
-
-// Parses straight INTO `out` rather than into a local. Two reasons, both
-// practical: the struct is a couple of KB, so a local would put two of
-// them on the kernel stack and make the copy out a `memcpy` call this
-// kernel has no symbol for (it link-failed exactly that way once); and
-// `loaded` is set only on the last line, so a failed parse leaves the
-// destination unloaded, which is precisely the fall-back-to-built-in
-// state the caller wants. The trap that follows: `out` is scribbled on
-// during a parse that may still fail, so never hand this a shape that
-// is currently in use.
-int cursor_shape_parse(const char *text, uint32_t len, struct cursor_shape *out) {
-    if (!text || !out) return 0;
-
-    struct cursor_shape *sp = out;
-    k_memset(sp, 0, sizeof *sp);
-    int w = 0, h = 0, hx = 0, hy = 0;
-    int have_outline = 0, have_fill = 0, have_image = 0;
-
-    uint32_t pos = 0;
-    char line[CURSOR_LINE_MAX];
-    for (;;) {
-        int n = next_line(text, len, &pos, line, sizeof line);
-        if (n < 0) break;
-        if (n == 0 || line[0] == '#') continue;
-
-        if (k_strncmp(line, "width=", 6) == 0) {
-            if (!k_parse_u32(line + 6, (uint32_t *)&w)) return 0;
-        } else if (k_strncmp(line, "height=", 7) == 0) {
-            if (!k_parse_u32(line + 7, (uint32_t *)&h)) return 0;
-        } else if (k_strncmp(line, "hotspot=", 8) == 0) {
-            const char *comma = k_strchr(line + 8, ',');
-            if (!comma) return 0;
-            char xs[8];
-            uint32_t xn = (uint32_t)(comma - (line + 8));
-            if (xn >= sizeof xs) return 0;
-            k_memcpy(xs, line + 8, xn);
-            xs[xn] = '\0';
-            if (!k_parse_u32(xs, (uint32_t *)&hx)) return 0;
-            if (!k_parse_u32(comma + 1, (uint32_t *)&hy)) return 0;
-        } else if (k_strcmp(line, "outline=") == 0 || k_strcmp(line, "fill=") == 0) {
-            // Both grids come AFTER the dimensions, always -- a grid
-            // read before them has no idea how wide a row should be, so
-            // the only safe answer is to refuse.
-            if (w <= 0 || h <= 0 || w > CURSOR_SHAPE_MAX || h > CURSOR_SHAPE_MAX)
-                return 0;
-            int is_outline = (line[0] == 'o');
-            if (!parse_grid(text, len, &pos, w, h,
-                             is_outline ? sp->outline : sp->fill))
-                return 0;
-            if (is_outline) have_outline = 1; else have_fill = 1;
-        } else if (k_strncmp(line, "image", 5) == 0) {
-            // image= is the 1x rendering, image2=/image3= the larger
-            // ones. A key naming a scale past the cap is refused, not
-            // ignored: it is this format's key, written wrong.
-            int k = 1;
-            const char *v = line + 5;
-            if (*v >= '2' && *v <= '9') k = *v++ - '0';
-            if (*v != '=' || k > CURSOR_SCALE_MAX) return 0;
-            if (!image_name_ok(v + 1)) return 0;
-            k_strlcpy(sp->image[k - 1], v + 1, sizeof sp->image[k - 1]);
-            if (k == 1) have_image = 1;
-        }
-        // Unknown keys (`shape=`, and anything a later version adds) are
-        // ignored rather than refused, so an older WM can still read a
-        // newer theme's files.
-    }
-
-    // ONE kind or the other: masks AND an image is a file that does not
-    // know what it is, and an image with no 1x rendering has no floor
-    // for the sizes it does not cover.
-    if (have_image) {
-        if (have_outline || have_fill) return 0;
-        if (w <= 0 || h <= 0 || w > CURSOR_SHAPE_MAX || h > CURSOR_SHAPE_MAX) return 0;
-        sp->is_image = 1;
-    } else if (!have_outline || !have_fill) {
-        return 0;
-    }
-    if (hx < 0 || hx >= w || hy < 0 || hy >= h) return 0; // hotspot off the shape
-
-    sp->w = w; sp->h = h; sp->hot_x = hx; sp->hot_y = hy;
-    sp->baked = 1;
-    sp->loaded = 1; // last, so a failure above leaves it unloaded
-    return 1;
-}
-
 // --- loading ---------------------------------------------------------
 
-// Constructed, not caller-supplied: CURSOR_DIR "/<theme>/<shape>", so
+// Constructed, not caller-supplied: UCURSOR_DIR "/<theme>/<shape>", so
 // it is bounded by its own shape rather than by FS_PATH_MAX.
 #define CURSOR_PATH_MAX 192
 
-static void release_shape(struct cursor_shape *s) {
-    struct uimg im = { .px = s->px };
-    uimg_free(&im);
-    s->px = 0;
-    s->loaded = 0;
-}
-
-// Decodes the ONE rendering this size wants: the k-x file when the
-// theme has it, else the 1x one, drawn at k by nearest neighbour. Its
-// dimensions must be exactly k times the descriptor's -- a file of any
-// other size is a mismatched pair, refused rather than stretched.
-static int load_image(const char *theme, struct cursor_shape *s, const char *desc) {
-    int k = g_scale;
-    if (k < 1 || k > CURSOR_SCALE_MAX || !s->image[k - 1][0]) k = 1;
-
-    char path[CURSOR_PATH_MAX];
-    if (!k_snprintf(path, sizeof path, "%s/%s/%s", CURSOR_DIR, theme, s->image[k - 1]))
-        return 0;
-    struct uimg im;
-    if (uimg_load(path, &im) < 0) {
-        wm_logf("cursor: %s names %s, which did not decode (%s)\n",
-                desc, path, uimg_last_error());
-        return 0;
-    }
-    if (im.w != s->w * k || im.h != s->h * k) {
-        wm_logf("cursor: %s is %dx%d, not %dx%d -- refused\n",
-                path, im.w, im.h, s->w * k, s->h * k);
-        uimg_free(&im);
-        return 0;
-    }
-    s->px = im.px;   // ownership moves here; release_shape() frees it
-    s->baked = k;
-    return 1;
-}
-
 static int load_one(const char *theme, int index) {
     char path[CURSOR_PATH_MAX];
-    if (!k_snprintf(path, sizeof path, "%s/%s/%s", CURSOR_DIR, theme,
+    if (!k_snprintf(path, sizeof path, "%s/%s/%s", UCURSOR_DIR, theme,
                      g_names[index]))
         return 0;
     // A theme legitimately need not carry every shape, so "absent" is a
@@ -302,7 +93,9 @@ static int load_one(const char *theme, int index) {
         wm_logf("cursor: %s is malformed -- using the built-in shape\n", path);
         return 0;
     }
-    if (s->is_image && !load_image(theme, s, path)) {
+    char why[CURSOR_PATH_MAX + 64];
+    if (s->is_image && !ucursor_decode(theme, s, g_scale, why, sizeof why)) {
+        wm_logf("cursor: %s -- %s\n", path, why);
         s->loaded = 0;
         return 0;
     }
@@ -310,7 +103,7 @@ static int load_one(const char *theme, int index) {
 }
 
 int cursor_theme_load(const char *theme) {
-    for (int i = 0; i < CURSOR_SHAPE_COUNT; i++) release_shape(&g_shapes[i]);
+    for (int i = 0; i < CURSOR_SHAPE_COUNT; i++) ucursor_release(&g_shapes[i]);
     if (!theme || !theme[0]) return 0;
 
     int loaded = 0, images = 0, native = 0;
@@ -352,24 +145,7 @@ int cursor_shape_step(const struct cursor_shape *s) {
 
 uint32_t cursor_shape_argb(const struct cursor_shape *s, int dx, int dy,
                             uint32_t fill_rgb) {
-    int st = cursor_shape_step(s);
-    int x = dx / st, y = dy / st;
-    if (dx < 0 || dy < 0) return 0;
-    if (s->is_image) {
-        int pw = s->w * s->baked, ph = s->h * s->baked;
-        if (x >= pw || y >= ph || !s->px) return 0;
-        return s->px[y * pw + x];
-    }
-    if (x >= s->w || y >= s->h) return 0;
-    // Black rim under the fill, folded: alpha is their union, and the
-    // colour is the fill's share of it (the rim contributes black).
-    uint32_t o = s->outline[y][x], f = s->fill[y][x];
-    uint32_t a = f + o * (255 - f) / 255;
-    if (!a) return 0;
-    uint32_t r = ((fill_rgb >> 16) & 0xFF) * f / a;
-    uint32_t g = ((fill_rgb >> 8) & 0xFF) * f / a;
-    uint32_t b = (fill_rgb & 0xFF) * f / a;
-    return (a << 24) | (r << 16) | (g << 8) | b;
+    return ucursor_pixel(s, dx, dy, cursor_shape_step(s), fill_rgb);
 }
 
 // --- the two settings -------------------------------------------------
