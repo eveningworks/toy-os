@@ -1029,6 +1029,11 @@ void wm_run(void) {
             // the idle park (wm_anim.h).
             if ((wm_anim_active() || start_menu_animating()) && wait_ms > WM_ANIM_FRAME_MS)
                 wait_ms = WM_ANIM_FRAME_MS;
+            // The search field's caret blinks: wake for its next flip.
+            {
+                int cw = start_menu_wait_ms();
+                if (cw >= 0 && (uint32_t)cw < wait_ms) wait_ms = (uint32_t)cw;
+            }
 
             // Through the channel when there is one, so a client's
             // message defeats this park exactly as a kernel event does

@@ -70,6 +70,7 @@ void uui_textbox_init(struct uui_textbox *f, const char *initial) {
     f->active = 0;
     f->disabled = 0;
     f->placeholder = 0;
+    f->bare = 0;
     // Left UNSET so the theme answers at DRAW time -- see utheme.h.
     // These were four literals that happened to equal the default
     // palette, which meant a theme change reached everything except the
@@ -257,7 +258,7 @@ void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f) {
         // next character lands, the ring says WHICH control is listening,
         // and a caret 200px away is easy to miss. Over the border rather
         // than inside it, so the field does not appear to shrink.
-        uui_focus_ring(s, x, y, w, h);
+        if (!f->bare) uui_focus_ring(s, x, y, w, h);
     }
 }
 

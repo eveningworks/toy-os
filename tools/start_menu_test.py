@@ -98,6 +98,8 @@ KEY_ENTER = "0x0a"
 KEY_F4 = "0xA5"
 KEY_HOME = "0x97"
 KEY_END = "0x98"
+KEY_LEFT = "0x95"
+KEY_SHIFT_RIGHT = "0x9D"
 
 class Result:
     def __init__(self):
@@ -260,6 +262,55 @@ def run(dbg, qmp, tmp, res):
               "Calculator" in hits, f"{hits}")
     res.check("the first result is highlighted, ready for Enter",
               any(r["selected"] for r in rows_of(menu, "app")))
+
+    # --- 4b. the field is a REAL text field ---------------------------
+    #
+    # A caret that moves and blinks, Shift+arrow selection, a click that
+    # places the caret, the I-beam over it -- uui_textbox, not a string
+    # that could only grow at its end.
+    field = rows_of(dbg.menu(), "search")[0]
+    for _ in range(3):
+        dbg.key(KEY_LEFT)
+    dbg.key("x")
+    q = dbg.menu().get("query")
+    res.check("Left moves the caret, and a key inserts where it is", q == "xcal", f"{q!r}")
+    dbg.key(KEY_SHIFT_RIGHT)
+    dbg.key("k")
+    q = dbg.menu().get("query")
+    res.check("Shift+Right selects, and typing replaces the selection", q == "xkal", f"{q!r}")
+    dbg.click(field["x"] + field["w"] - 12, field["cy"])
+    dbg.key("z")
+    q = dbg.menu().get("query")
+    res.check("a click places the caret (at the end here)", q == "xkalz", f"{q!r}")
+    dbg.warp_cursor(qmp, field["cx"], field["cy"])
+    on = dbg.cursor_shape()
+    cat0 = rows_of(dbg.menu(), "category")[0]
+    dbg.warp_cursor(qmp, cat0["cx"], cat0["cy"])
+    off = dbg.cursor_shape()
+    res.check("the pointer is the I-beam over the field, and only there",
+              on == DebugConsole.CURSOR_TEXT and off == DebugConsole.CURSOR_NORMAL,
+              f"over the field {on}, off it {off}")
+    # THE CARET BLINKS: raw frames (a settled capture waits the blink out)
+    # of the field across about three half-periods must not all agree.
+    # The harness turns the blink OFF for every tool (gui_debug.py's
+    # _steady_caret), and the caret re-reads it at most every 2 s on an
+    # input -- so on, wait that out, then End (an input that changes no
+    # text) restarts the ten-second blink this samples inside.
+    dbg.send("sh config set desktop.caret_blink on")
+    time.sleep(2.2)
+    dbg.key(KEY_END)
+    seen = set()
+    for i in range(6):
+        p = os.path.join(tmp, f"blink{i}.png")
+        qmp.screenshot(p, stable=False)
+        from PIL import Image
+        seen.add(crop(Image.open(p).convert("RGB"), field))
+        time.sleep(0.27)
+    res.check("the caret blinks", len(seen) >= 2, f"{len(seen)} distinct frames of 6")
+    dbg.send("sh config set desktop.caret_blink off")   # still, for the frames below
+    dbg.key(KEY_ESC)                     # clears the query, menu stays up
+    for ch in "cal":
+        dbg.key(ch)
 
     # --- 5. Enter launches it ------------------------------------------
     dbg.key(KEY_ENTER)

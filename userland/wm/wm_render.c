@@ -616,8 +616,9 @@ static void draw_cursor(int x, int y, enum wm_cursor_kind kind) {
 // routing, and turns "stranded over the desktop" into "wrong inside one
 // window until the pointer crosses a boundary".
 static enum wm_cursor_kind client_cursor_at(int mx, int my) {
-    if (start_menu_open || context_menu_open || calendar_open ||
-        confirm_dialog_open) return WM_CURSOR_NORMAL;
+    // The Start menu's search field is text: the I-beam, as over any field.
+    if (start_menu_open) return start_menu_text_at(mx, my) ? WM_CURSOR_TEXT : WM_CURSOR_NORMAL;
+    if (context_menu_open || calendar_open || confirm_dialog_open) return WM_CURSOR_NORMAL;
     if (my >= screen_h - taskbar_h) return WM_CURSOR_NORMAL;
 
     for (int i = window_count - 1; i >= 0; i--) {

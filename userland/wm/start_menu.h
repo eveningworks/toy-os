@@ -163,5 +163,9 @@ int start_menu_scrollbar(int *x, int *y, int *w, int *h, int *thumb_y, int *thum
 int start_menu_scrollbar_grow(void);
 // A widening or a pending shrink in flight: the WM wants a frame soon.
 int start_menu_animating(void);
+// Is (mx, my) on the search field's text? The I-beam shows there.
+int start_menu_text_at(int mx, int my);
+// The caret's blink: ms until it next flips, -1 when none (once per wait).
+int start_menu_wait_ms(void);
 
 #endif

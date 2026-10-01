@@ -64,6 +64,12 @@ struct uui_textbox {
     // Shown dimmed while the field is EMPTY ("Find a setting"); NULL for
     // none. A hint, never a value: it is not in `buf`.
     const char *placeholder;
+
+    // 1 = drawn INSIDE a container's own frame (the Start menu's search
+    // field), which shows that the field is listening: no focus ring
+    // here, or the frame reads as doubled. Zero, as init leaves it, is
+    // every ordinary field.
+    int bare;
 };
 
 void uui_textbox_init(struct uui_textbox *f, const char *initial);

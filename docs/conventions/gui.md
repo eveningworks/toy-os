@@ -2061,6 +2061,11 @@ this the obvious way), not from how much history it accumulated.
   (typing "shut" finds Shutdown), matching is case-insensitive
   SUBSTRING and deliberately not fuzzy, and Esc clears the query before
   it closes anything -- one level at a time, as a menu's Esc always is.
+  The field is a real `uui_textbox` (`bare`: the menu draws its frame):
+  a blinking caret, Shift+arrow and drag selection, the clipboard keys,
+  a click that places the caret, and the I-beam over it. Left/Right/
+  Home/End edit the query while there is one, and move the selection
+  only while it is empty.
 - **A Start-menu entry launches a RING-3 program**, named by `exec_path`
   on the registry entry (`apps/gui_apps.h`): `open_app()` spawns it and
   the process makes its own window through the windowing protocol. Two

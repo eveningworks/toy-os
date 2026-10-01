@@ -1,6 +1,8 @@
 // See start_menu.h.
 #include "start_menu.h"
 #include "lib/utween.h"
+#include "ui/uui_caret.h"
+#include "ui/uui_textbox.h"
 #include "wm_anim.h"
 #include "ui/uui_popup.h"
 #include "wm_shadow.h"
@@ -141,9 +143,16 @@ static int sel_row = -1;  // the keyboard-highlighted app row, -1 for none
 // derived.
 static int scroll;
 
-#define START_QUERY_MAX 24
+// THE SEARCH FIELD IS A REAL TEXT FIELD -- the toolkit's uui_textbox,
+// as the desktop's rename is: a blinking caret, a click that places it,
+// a drag or Shift+arrow that selects, editing anywhere in the text.
+// `query` mirrors its text for the matching below.
+#define START_QUERY_MAX UUI_TEXTBOX_MAX
 static char query[START_QUERY_MAX];
 static int query_len;
+static struct uui_textbox g_search;
+static int g_search_drag;     // 1 while a press in the field is held
+static void search_clear(void);
 
 // Hover tokens. Opaque to wm_overlay.c, which only compares them, so
 // all that matters is that no two controls share one.
@@ -466,6 +475,37 @@ static void layout(struct sm_layout *L) {
 }
 
 static int pane_count(void);
+static int row_rect(const struct sm_layout *L, int apps, int n, const char **label,
+                    int *kind, int *x, int *y, int *w, int *h, int *selected);
+static int pane_visible(const struct sm_layout *L, int *first);
+
+// The search field's TEXT box: inside its frame, right of the magnifier,
+// clear of the accent underline. Also where the I-beam shows.
+static int search_text_rect(const struct sm_layout *L, int *x, int *y, int *w, int *h) {
+    int apps = pane_visible(L, 0);
+    int fx, fy, fw, fh, kind;
+    if (!row_rect(L, apps, L->cats + wm_system_action_count + apps + 1, 0, &kind,
+                  &fx, &fy, &fw, &fh, 0)) return 0;
+    int mr = fh / 5;
+    *x = fx + 12 + mr * 3;
+    *y = fy + 3;
+    *w = fx + fw - 6 - *x;
+    *h = fh - 6;
+    return 1;
+}
+
+static void search_place(const struct sm_layout *L) {
+    int x, y, w, h;
+    if (search_text_rect(L, &x, &y, &w, &h)) uui_textbox_set_geometry(&g_search, x, y, w, h);
+}
+
+int start_menu_text_at(int mx, int my) {
+    if (!start_menu_open) return 0;
+    struct sm_layout L;
+    layout(&L);
+    int x, y, w, h;
+    return search_text_rect(&L, &x, &y, &w, &h) && uui_hit(x, y, w, h, mx, my);
+}
 
 // The bar's rect (the WIDE one, which is also its hit zone), and whether
 // the column needs one at all. uui_scrollbar's vertical offset counts
@@ -939,6 +979,14 @@ void start_menu_open_now(void) {
     sel_cat = 0;
     sel_row = -1;
     scroll = 0;
+    // Always focused: nothing else in the popup takes text, so typing
+    // goes here with no click (docs/conventions/gui.md).
+    uui_textbox_init(&g_search, "");
+    g_search.placeholder = "Search";
+    g_search.bg = g_search.border = UTHEME_WHITE;   // the card draws the frame
+    g_search.bare = 1;                              // ...and its focus mark
+    uui_textbox_set_active(&g_search, 1);
+    uui_caret_reset();
     query[0] = '\0';
     query_len = 0;
     start_menu_damage();
@@ -946,6 +994,8 @@ void start_menu_open_now(void) {
 }
 
 void start_menu_close(void) {
+    uui_textbox_set_active(&g_search, 0);
+    g_search_drag = 0;
     sb_drag = sb_page = 0;
     sb_want = 0;
     sb_collapse_ns = 0;
@@ -1045,18 +1095,8 @@ void start_menu_draw(int mx, int my) {
             ugfx_fill_rect(s, x + fr, y + h - 2, w - 2 * fr, 2, UTHEME_ACCENT);
             int mr = h / 5;
             draw_magnifier(x + 10 + mr, y + h / 2 - 1, mr, ugfx_blend(fg, UTHEME_WHITE, 80));
-            int tx = x + 16 + mr * 3;
-            int ty = y + (h - ch) / 2;
-            int tw = w - (tx - x) - 6;
-            if (query_len) {
-                ugfx_draw_string_clipped(s, tx, ty, tw, query, fg, UTHEME_WHITE);
-                int caret = tx + ugfx_text_width(query);
-                if (caret < x + w - 3) ugfx_fill_rect(s, caret + 1, ty, 1, ch, fg);
-            } else {
-                ugfx_draw_string_clipped(s, tx, ty, tw, "Search",
-                                         ugfx_blend(fg, UTHEME_WHITE, 120), UTHEME_WHITE);
-                ugfx_fill_rect(s, tx - 1, ty, 1, ch, fg);
-            }
+            search_place(&L);
+            uui_textbox_draw(s, &g_search);
             continue;
         }
 
@@ -1196,8 +1236,7 @@ static int activate(int n) {
         sel_cat = n;
         sel_row = -1;
         scroll = 0;
-        query[0] = '\0';
-        query_len = 0;
+        search_clear();
         start_menu_damage();
         redraw_pending = 1;
         return 0;
@@ -1257,6 +1296,20 @@ int start_menu_handle_click(int mx, int my) {
         }
     }
 
+    // THE FIELD: a click places the caret, and a drag from it selects
+    // (start_menu_update_press()).
+    if (start_menu_text_at(mx, my)) {
+        struct sm_layout L;
+        layout(&L);
+        search_place(&L);
+        uui_textbox_ops.press(&g_search, mx, my, 0);
+        uui_caret_reset();
+        g_search_drag = 1;
+        start_menu_damage();
+        redraw_pending = 1;
+        return 1;
+    }
+
     int n = row_at(mx, my);
     if (n < 0) {
         // Clicked elsewhere while the menu was open (the desktop, a
@@ -1273,6 +1326,21 @@ int start_menu_handle_click(int mx, int my) {
 }
 
 // --- the keyboard -----------------------------------------------------
+
+// Mirror the field into `query`; 1 when the text changed.
+static int search_sync(void) {
+    const char *t = uui_textbox_text(&g_search);
+    if (!k_strcmp(t, query)) return 0;
+    k_strlcpy(query, t, sizeof query);
+    query_len = (int)k_strlen(query);
+    return 1;
+}
+
+static void search_clear(void) {
+    uui_textbox_set_text(&g_search, "");
+    query[0] = '\0';
+    query_len = 0;
+}
 
 static void query_changed(void) {
     sel_row = pane_count() > 0 ? 0 : -1;
@@ -1293,22 +1361,34 @@ static void scroll_to_selection(const struct sm_layout *L) {
 
 int start_menu_key(int key, uint8_t mods) {
     if (!start_menu_open) return 0;
-    // A BOUND SHORTCUT IS NEVER SHADOWED BY AN OPEN MENU: anything held
-    // with a modifier falls through to wm_shortcut.c and to Alt+F4.
-    // Ctrl combinations arrive as control CODES rather than as a mod bit
-    // (api/keyboard.h), so those fall out below by not being printable.
-    if (mods & (KEY_MOD_CTRL | KEY_MOD_ALT | KEY_MOD_ALTGR | KEY_MOD_SUPER)) return 0;
-
     struct sm_layout L;
     layout(&L);
+    // THE FIELD'S OWN EDITING CHORDS: Ctrl+A/C/X/V and the word moves are
+    // the text field's, as in every search box.
+    if ((mods & KEY_MOD_CTRL) && !(mods & (KEY_MOD_ALT | KEY_MOD_SUPER))) {
+        int k = key >= 'A' && key <= 'Z' ? key + 32 : key;
+        if (k == 'a' || k == 'c' || k == 'x' || k == 'v' || k == 0x01 || k == 0x03 ||
+            k == 0x18 || k == 0x16 || k == KEY_ARROW_LEFT || k == KEY_ARROW_RIGHT) {
+            search_place(&L);
+            uui_textbox_key_mods(&g_search, key, mods);
+            uui_caret_reset();
+            if (search_sync()) query_changed();
+            start_menu_damage();
+            redraw_pending = 1;
+            return 1;
+        }
+    }
+    // A BOUND SHORTCUT IS NEVER SHADOWED BY AN OPEN MENU: anything else
+    // held with a modifier falls through to wm_shortcut.c and to Alt+F4.
+    if (mods & (KEY_MOD_CTRL | KEY_MOD_ALT | KEY_MOD_ALTGR | KEY_MOD_SUPER)) return 0;
+
     int rows = pane_count();
 
     switch (key) {
     case 0x1B: // Esc clears the query first and closes only then --
                // one level at a time, as docs/gui-guidelines.md says.
         if (query_len) {
-            query[0] = '\0';
-            query_len = 0;
+            search_clear();
             query_changed();
             redraw_pending = 1;
         } else {
@@ -1328,14 +1408,6 @@ int start_menu_key(int key, uint8_t mods) {
             g_from_key = 1;
             if (activate(n)) flash(n);
             g_from_key = 0;
-            redraw_pending = 1;
-        }
-        return 1;
-    case '\b':
-    case 0x7F:
-        if (query_len) {
-            query[--query_len] = '\0';
-            query_changed();
             redraw_pending = 1;
         }
         return 1;
@@ -1368,6 +1440,7 @@ int start_menu_key(int key, uint8_t mods) {
     }
     case KEY_HOME:
     case KEY_END:
+        if (query_len) break;   // the caret's, while there is text
         if (rows > 0) sel_row = (key == KEY_HOME) ? 0 : rows - 1;
         scroll_to_selection(&L);
         start_menu_damage();
@@ -1379,7 +1452,8 @@ int start_menu_key(int key, uint8_t mods) {
         // so left/right is the cheapest way to reach every folder
         // without a focus model. Inert while searching, where the
         // results span every folder.
-        if (!query_len && L.cats > 0) {
+        if (query_len) break;   // the caret's, while there is text
+        if (L.cats > 0) {
             sel_cat += (key == KEY_ARROW_RIGHT) ? 1 : -1;
             if (sel_cat < 0) sel_cat = L.cats - 1;
             if (sel_cat >= L.cats) sel_cat = 0;
@@ -1393,14 +1467,15 @@ int start_menu_key(int key, uint8_t mods) {
         break;
     }
 
-    if (key >= 32 && key < 127 && query_len < START_QUERY_MAX - 1) {
-        query[query_len++] = (char)key;
-        query[query_len] = '\0';
-        query_changed();
-        redraw_pending = 1;
-        return 1;
-    }
-    return 0;
+    // EVERYTHING ELSE IS THE FIELD'S: typing, Backspace, Delete, the
+    // caret's moves and Shift+arrow selection -- uui_edit's keymap.
+    search_place(&L);
+    if (!uui_textbox_key_mods(&g_search, key, mods)) return 0;
+    uui_caret_reset();
+    if (search_sync()) query_changed();
+    start_menu_damage();
+    redraw_pending = 1;
+    return 1;
 }
 
 void start_menu_update(void) {
@@ -1432,6 +1507,13 @@ void start_menu_update(void) {
 // and a held groove click repeats its page while the thumb has not yet
 // reached the pointer -- a press is a gesture, not an edge.
 void start_menu_update_press(int mx, int my, uint8_t buttons) {
+    if (start_menu_open && g_search_drag) {
+        if (!(buttons & 0x1)) { g_search_drag = 0; return; }
+        uui_textbox_ops.motion(&g_search, mx, my, buttons);
+        start_menu_damage();
+        redraw_pending = 1;
+        return;
+    }
     if (!start_menu_open || (!sb_drag && !sb_page)) return;
     struct sm_layout L;
     layout(&L);
@@ -1470,3 +1552,13 @@ int start_menu_scrollbar(int *x, int *y, int *w, int *h, int *thumb_y, int *thum
 }
 
 int start_menu_scrollbar_grow(void) { return start_menu_open ? sb_amount() : 0; }
+
+// The caret's blink: milliseconds until it next flips, -1 when nothing
+// blinks. A 0 is "repaint now", answered once per phase -- so the WM
+// asks once per wait, and this repaints on it.
+int start_menu_wait_ms(void) {
+    if (!start_menu_open) return -1;
+    int w = uui_caret_wait_ms();
+    if (w == 0) { start_menu_damage(); redraw_pending = 1; }
+    return w;
+}

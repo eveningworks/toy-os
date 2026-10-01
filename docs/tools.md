@@ -2651,6 +2651,11 @@ window without going through it will find its layout polls timing out.
   `gui_regress.py` launches it with `--reboot`: the default
   `-no-reboot` answers a guest reboot by ending QEMU, and the tool's
   next command would then fail as a dead socket somewhere unrelated.
+  It also covers the field as a TEXT FIELD: a key inserts at a moved
+  caret, Shift+Right selects and typing replaces, a click places the
+  caret, the pointer is the I-beam over the field only, and raw frames
+  show the caret blink -- after turning `desktop.caret_blink` back ON,
+  which the harness turns off for every tool (`_steady_caret`).
   It also covers the DESCRIPTION: a line too long for the strip is
   marked `..` and the tooltip carries the whole of it, with the three
   halves asserted apart because they fail apart -- not up immediately,
