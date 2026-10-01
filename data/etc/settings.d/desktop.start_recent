@@ -1,0 +1,11 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Recent apps
+Category=Desktop
+Group=Start
+Default=on
+Choices=on,off
+Description=Keep a Recent folder of the apps opened last; off clears it
+Order=40
+Choice.on=On
+Choice.off=Off

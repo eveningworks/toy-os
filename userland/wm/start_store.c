@@ -196,3 +196,15 @@ uint32_t start_store_last_seq(const char *app_id) {
     struct run_row *r = row_for(app_id, 0);
     return r ? r->seq : 0;
 }
+
+void start_store_forget_launches(void) {
+    if (!g_loaded) start_store_load();
+    if (!g_run_count) return;
+    char key[GUI_APP_ICON_MAX + 8];
+    for (int i = 0; i < g_run_count; i++) {
+        k_snprintf(key, sizeof key, "run.%s", g_runs[i].id);
+        wm_conf_unset(START_CONF, key);
+    }
+    g_run_count = 0;
+    g_seq = 0;
+}

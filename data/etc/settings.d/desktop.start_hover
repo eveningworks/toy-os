@@ -1,0 +1,11 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Open folders on hover
+Category=Desktop
+Group=Start
+Default=off
+Choices=off,on
+Description=Pointing at a folder opens it without a click
+Order=50
+Choice.off=Off
+Choice.on=On

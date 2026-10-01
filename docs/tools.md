@@ -2671,6 +2671,19 @@ window without going through it will find its layout polls timing out.
   fine; that it appears, with the full text, and is drawn, still is. Run it after
   touching `start_menu.c`, `start_store.c`, `wm_tooltip.c`, the overlay
   table or a `.desktop` `Category=`.
+- **`start_settings_test.py`** -- the Start menu's settings, the
+  Desktop > Start page (`desktop.start_*`, read once per OPEN, so every
+  check reopens the menu). Detailed, Compact and Grid against each
+  other: one column vs several, shorter rows showing more, the SAME card
+  footprint in all three, and a grid cell's rect actually inked (in a
+  list that spot is a blank pill end). The grid's two-level keys. Power
+  buttons as the exact footer tail, with search finding Exit to shell
+  only while it is offered -- the pair, so an empty result means
+  something. Opens on All Apps, Recent and the last folder chosen by
+  hand. Recent off: the folder gone AND `run.*` gone from
+  `/etc/start-menu.conf` (read with `sh cat`, after asserting a launch
+  had put it there), and a launch while off unrecorded. Hover on opens a
+  rested-on folder, off does not. Positive controls in its docstring.
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window
   (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
   driven through Notepad, Image Viewer and Audio Player. 17 checks: the

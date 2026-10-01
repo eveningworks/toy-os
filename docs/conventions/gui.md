@@ -1628,8 +1628,8 @@ this the obvious way), not from how much history it accumulated.
   `docs/decisions.md`, and `tools/taskbar_test.py` for the thresholds.
 - **THE TASKBAR'S LAYOUT IS FOUR INDEPENDENT SETTINGS, AND EVERY RECT
   COMES FROM `taskbar_geom()`.** `desktop.taskbar_buttons` = `labelled` |
-  `icons`, `desktop.taskbar_align` and `desktop.start_position` = `left`
-  | `center`, `desktop.taskbar_float` = `off` | `on` -- Plasma's shape,
+  `icons`, `desktop.taskbar_align` and `desktop.start_position` (shown
+  on the Desktop > Start page) = `left` | `center`, `desktop.taskbar_float` = `off` | `on` -- Plasma's shape,
   where each is its own control -- and `desktop.taskbar_theme` = `dark` |
   `light` picks `taskbar_palette()`. ONE `taskbar_layout()` places every
   combination: Start first, taking its room out of the strip, then the
@@ -2005,10 +2005,11 @@ this the obvious way), not from how much history it accumulated.
 - **THE SIDEBAR'S FIRST FOLDERS ARE NOT CATEGORIES.** Favourites,
   Recent and All Apps come before the `Category=` ones, and the first
   two exist only when they hold something -- the same "a folder exists
-  when something is in it" rule the categories follow. The menu opens on
-  the first of them, so it opens on what you use (Kickoff's default) and
-  on All Apps on a machine where nothing has been pinned or launched
-  yet.
+  when something is in it" rule the categories follow. By default the
+  menu opens on the first of them, so it opens on what you use
+  (Kickoff's default) and on All Apps on a machine where nothing has
+  been pinned or launched yet; `desktop.start_opens` can name Recent,
+  All Apps or the last folder used instead.
 - **WHAT IS PINNED AND WHAT HAS BEEN LAUNCHED IS KEYED BY APP ID**, in
   `/etc/start-menu.conf` (`userland/wm/start_store.h`). Not by name and
   not by row: both move -- a rename, and every reload's re-sort -- and
@@ -2016,17 +2017,37 @@ this the obvious way), not from how much history it accumulated.
   launch is recorded in `open_app()`, the ONE place a launcher starts
   anything, so the desktop's icons and the context menu's Open count too.
 - **THE APP COLUMN SCROLLS, AND A ROW INDEX IS NOT A SCREEN POSITION.**
-  The pane is capped (`SM_MAX_ROWS`) and shows a window onto the list:
-  `pane_count()` is the list, `L.pane_rows` is the window, `scroll` is
-  where it sits. Anything PERSISTED -- the keyboard selection, what a
+  The pane is capped (`SM_MAX_ROWS` detailed rows of height) and shows a
+  window onto the list: `pane_count()` is the list in ITEMS,
+  `pane_lines()` in LINES (a grid's row of cells), `L.pane_rows` is the
+  window in lines, `scroll` is the first line shown, and `item_at()`
+  turns a screen item into a list index. Anything PERSISTED -- the keyboard selection, what a
   click launches -- is in LIST coordinates, and every place that
   conflates the two is a bug. The keyboard scrolls its selection into
   view, or the highlight walks off the bottom while Enter goes on
   launching something invisible.
-- **AND THE INDICATOR BESIDE IT IS NOT A SCROLLBAR** -- no track to
-  click, no thumb to drag, because the pane is scrolled by the wheel and
-  the keyboard. A draggable one would be a second implementation of
-  `uui_scrollbar` inside an overlay the panel hand-draws.
+- **AND ITS SCROLLBAR IS AN OVERLAY** -- a thin thumb over the rows'
+  right end that widens, animated, into `uui_scrollbar`'s groove and
+  thumb while the pointer is on it or a drag holds it; the thumb drags
+  and a click on the groove pages. Drawn and hit-tested with the shared
+  `uui_scrollbar_*` helpers rather than a second implementation, and it
+  counts LINES, so a grid scrolls by its rows.
+- **THE START MENU'S SETTINGS ARE READ ONCE PER OPEN**
+  (`read_settings()`, the Desktop > Start page): `desktop.start_list`
+  (detailed | compact | grid), `start_opens`, `start_recent`,
+  `start_hover`, `start_power`. A change applies at the next open, so
+  nothing re-lays-out under the pointer. Every list style keeps the
+  DETAILED footprint (width and height cap), so switching style changes
+  what is in the column, not the card. `start_power` offers a TAIL of
+  `wm_system_actions[]` -- `foot_count()`/`foot_action()` -- to the
+  footer AND to search. `start_recent=off` FORGETS: launches are
+  unrecorded and the stored ones removed (`start_menu_recent_on()`,
+  asked by `open_app()` before it records). Hover opens a folder after a
+  150 ms DWELL, so a hand crossing the rail does not switch folders.
+- **A GRID'S KEYS ARE TWO-LEVEL**: with no cell selected Left/Right move
+  the folder (as in a list); Down selects the first cell, then the
+  arrows move between cells, and Up from the top line goes back to no
+  selection.
 - **TEXT THAT DOES NOT FIT IS MARKED, NOT JUST CUT** --
   `ugfx_draw_string_elided()`, which draws what fits and then `..`. The
   mark is two ASCII dots and NOT U+2026, because the font is indexed

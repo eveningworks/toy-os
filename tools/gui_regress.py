@@ -132,6 +132,7 @@ TOOLS = [
     ("menubar", "menubar_test.py", "menu bar, submenus and the status bar"),
     ("popup", "popup_test.py", "a menu leaves its window: popup surfaces"),
     ("startmenu", "start_menu_test.py", "the Start menu: folders, search, keyboard"),
+    ("startset", "start_settings_test.py", "the Start menu's settings: list style, power, folders, hover"),
     ("filedialog", "filedialog_test.py", "the shared file chooser, as an owned window"),
     ("forcequit", "forcequit_test.py", "not-responding detection and force quit"),
     ("dialog", "dialog_test.py", "the confirm dialog, by pixel value"),

@@ -1,0 +1,12 @@
+Type=enum
+File=/etc/desktop.conf
+Label=App list
+Category=Desktop
+Group=Start
+Default=detailed
+Choices=detailed,compact,grid
+Description=How apps are shown
+Order=30
+Choice.detailed=Detailed
+Choice.compact=Compact
+Choice.grid=Grid

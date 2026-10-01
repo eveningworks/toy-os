@@ -165,7 +165,13 @@ int start_menu_scrollbar_grow(void);
 int start_menu_animating(void);
 // Is (mx, my) on the search field's text? The I-beam shows there.
 int start_menu_text_at(int mx, int my);
-// The caret's blink: ms until it next flips, -1 when none (once per wait).
+// The caret's blink and a hovered folder's dwell: ms until the next is due,
+// -1 when neither (a 0 for the caret is answered once per flip).
 int start_menu_wait_ms(void);
+
+// Whether launches are recorded for the Recent folder
+// (desktop.start_recent). Off also FORGETS what was recorded; open_app()
+// asks before every record.
+int start_menu_recent_on(void);
 
 #endif

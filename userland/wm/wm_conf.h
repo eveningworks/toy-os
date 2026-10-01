@@ -44,6 +44,9 @@ int wm_conf_get(const char *path, const char *key, char *out, uint32_t out_size)
 // missing, which is worse than one that was never written.
 int wm_conf_set(const char *path, const char *key, const char *value);
 
+// Removes a key; 1 if it was there. Every other line is preserved.
+int wm_conf_unset(const char *path, const char *key);
+
 // The settings registry's generation counter. Moves whenever any
 // setting changes, from anywhere -- Control Panel, `config`, or a hand
 // edit followed by `config reload`. The compositor compares it once per

@@ -9577,3 +9577,41 @@ draw a theme without being the compositor, and a second copy of the
 parser would drift from the one that decides what the pointer looks like.
 The WM keeps the live theme, the settings, and its own file reads (whose
 comment explains why it reads into its own buffer).
+
+## The Start menu's settings are one page, read per open, and Recent off forgets
+
+Chosen from mockups (2026-10-01): a Desktop > Start page holding the two
+Start-button rows that used to sit on Taskbar plus five menu settings --
+the list style (Detailed, Compact, Grid), the folder it opens on, Recent
+on/off, folders on hover, and which power actions show. Windows 11 keeps
+Start's layout and its recent/most-used switches under Personalization >
+Start, apart from Taskbar; Plasma's Kickoff configures list or grid,
+hover-switching and its footer buttons in one place. One page for
+everything Start follows both.
+
+**Read once per OPEN, not polled.** The menu is a transient popup: a
+setting changed while it is closed applies the next time it opens, and a
+change can never re-lay-out rows under the pointer. A per-frame
+generation poll (cursor_theme.c's shape) buys nothing a popup that opens
+fresh each time needs.
+
+**Every list style keeps the Detailed card's footprint.** Width and the
+height cap are measured on the two-line row in all three styles, so
+Compact shows more rows and Grid more apps in the same card rather than
+the menu changing size with a setting -- Windows' "more pins" layout
+does the same.
+
+**Recent off forgets.** Off stops recording AND removes the recorded
+launches from `/etc/start-menu.conf`, as Windows clears its list when
+"Show recently opened items" goes off. Hiding a list while keeping the
+history it was built from would surprise anyone who turned it off for
+privacy. Pins are untouched -- they are a choice, not a history.
+
+**The power setting filters search too.** "Shut down only" hides Exit to
+shell and Restart from the footer and from what typing finds: the
+setting says which actions the menu OFFERS, and a hidden action that
+search still ran would make the setting decorative.
+
+**Hover waits 150 ms.** A folder opens under a pointer that rests on
+it, not one passing over: the rail is a column, and a diagonal move to
+the apps crosses other folders.

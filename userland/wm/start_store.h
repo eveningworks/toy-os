@@ -66,5 +66,9 @@ void start_store_record_launch(const char *app_id);
 // How many times, and how recently (the sequence number; 0 for never).
 uint32_t start_store_launch_count(const char *app_id);
 uint32_t start_store_last_seq(const char *app_id);
+// Forgets every recorded launch -- in memory and in the file -- so
+// Recent is empty. Pins are untouched. Free when there is nothing to
+// forget.
+void start_store_forget_launches(void);
 
 #endif

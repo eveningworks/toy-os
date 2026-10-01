@@ -1,0 +1,14 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Opens on
+Category=Desktop
+Group=Start
+Default=favourites
+Choices=favourites,recent,all,last
+Description=The folder shown when the menu opens
+Widget=dropdown
+Order=20
+Choice.favourites=Favourites
+Choice.recent=Recent
+Choice.all=All Apps
+Choice.last=The last folder used

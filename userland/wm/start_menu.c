@@ -20,8 +20,50 @@
 #include "kapi.h"
 #include "keyboard.h"   // KEY_ARROW_* / KEY_MOD_*
 #include "rt/sys.h"
+#include "lib/usetting.h"
 
 int start_menu_open = 0;
+
+// THE MENU'S SETTINGS, the Desktop > Start page (data/etc/settings.d/
+// desktop.start_*), read through usetting_get() so an unset key is its
+// declared default. Read ONCE PER OPEN: a change applies the next time
+// the menu opens, and nothing re-lays-out under the pointer.
+enum sm_list  { SM_LIST_DETAILED, SM_LIST_COMPACT, SM_LIST_GRID };
+enum sm_opens { SM_OPENS_FAVOURITES, SM_OPENS_RECENT, SM_OPENS_ALL, SM_OPENS_LAST };
+enum sm_power { SM_POWER_ALL, SM_POWER_RESTART, SM_POWER_SHUTDOWN };
+static struct {
+    enum sm_list list;
+    enum sm_opens opens;
+    int hover;              // a folder opens when the pointer rests on it
+    enum sm_power power;
+} g_cfg;
+
+static int setting_is(const char *name, const char *want) {
+    char v[16];
+    return usetting_get(name, v, sizeof v) && !k_strcmp(v, want);
+}
+
+static void read_settings(void) {
+    g_cfg.list = setting_is("desktop.start_list", "compact") ? SM_LIST_COMPACT
+               : setting_is("desktop.start_list", "grid") ? SM_LIST_GRID : SM_LIST_DETAILED;
+    g_cfg.opens = setting_is("desktop.start_opens", "recent") ? SM_OPENS_RECENT
+                : setting_is("desktop.start_opens", "all") ? SM_OPENS_ALL
+                : setting_is("desktop.start_opens", "last") ? SM_OPENS_LAST : SM_OPENS_FAVOURITES;
+    g_cfg.hover = setting_is("desktop.start_hover", "on");
+    start_menu_recent_on();   // off: forgets, so Recent is not a folder
+    g_cfg.power = setting_is("desktop.start_power", "restart") ? SM_POWER_RESTART
+                : setting_is("desktop.start_power", "shutdown") ? SM_POWER_SHUTDOWN : SM_POWER_ALL;
+}
+
+// RECENT IS ON unless the setting says off -- and OFF FORGETS: the
+// launches already recorded go too, as Windows' "Show recently opened
+// items" clears its list. Asked fresh, because a launch from a desktop
+// icon records without the menu ever having opened.
+int start_menu_recent_on(void) {
+    if (!setting_is("desktop.start_recent", "off")) return 1;
+    start_store_forget_launches();
+    return 0;
+}
 
 // System actions shown under a divider at the foot of the sidebar --
 // these don't open a window like a real gui_app_registry entry does,
@@ -118,6 +160,15 @@ const struct start_action wm_system_actions[] = {
 };
 const int wm_system_action_count = sizeof(wm_system_actions) / sizeof(wm_system_actions[0]);
 
+// THE ACTIONS THE MENU OFFERS -- the footer's buttons and what search
+// finds -- are a TAIL of wm_system_actions[] (desktop.start_power):
+// all three, Restart and Shutdown, or Shutdown alone. Slot `i` of the
+// footer is action foot_action(i).
+static int foot_count(void) {
+    return g_cfg.power == SM_POWER_SHUTDOWN ? 1 : g_cfg.power == SM_POWER_RESTART ? 2 : 3;
+}
+static int foot_action(int slot) { return slot + wm_system_action_count - foot_count(); }
+
 // --- state ------------------------------------------------------------
 
 // A click used to close the menu in the same frame it ran the row's
@@ -135,12 +186,20 @@ static uint64_t flash_until = 0;
 // menu was open (60 ms a move at 1280x720).
 static int hover_token = 0;
 
+// OPEN FOLDERS ON HOVER (desktop.start_hover): the folder under a pointer
+// that has RESTED on it HOVER_DWELL_MS opens. The dwell is what lets a
+// hand cross other folders on its way to the app column.
+#define HOVER_DWELL_MS 150
+static int hover_cat = -1;            // the folder waiting to open, else -1
+static uint64_t hover_cat_ns;         // when it opens
+
 static int sel_cat = 0;   // the open folder, an index into the folder list
 static int sel_row = -1;  // the keyboard-highlighted app row, -1 for none
-// The first app row SHOWN. The list is taller than the pane now, so a
-// row index and a screen position are different things -- every place
-// that had conflated them is the reason this is named rather than
-// derived.
+// The first app LINE shown -- a row, or a grid's row of cells. The list
+// is taller than the pane now, so a list index and a screen position are
+// different things -- every place that had conflated them is the reason
+// this is named rather than derived. pane_visible() turns it into the
+// first ITEM.
 static int scroll;
 
 // THE SEARCH FIELD IS A REAL TEXT FIELD -- the toolkit's uui_textbox,
@@ -198,8 +257,12 @@ static uint64_t sb_collapse_ns;   // when a pending shrink starts, else 0
 // than standing for a program, and Kickoff and Whisker both draw it
 // that way.
 #define SM_FOLDER_SZ(item_h) ((item_h) / 2)
+// A GRID cell's icon: 48 px at the default font, the size Kickoff's grid
+// and Windows' pinned apps draw.
+static int sm_grid_icon(void) { return ugfx_char_h() * 3 + 6; }
 
-// HOW TALL THE APP COLUMN IS ALLOWED TO GET, in rows. Beyond this it
+// HOW TALL THE APP COLUMN IS ALLOWED TO GET, in DETAILED rows -- a
+// compact list or a grid fits more in the same height. Beyond this it
 // SCROLLS: a menu as tall as its biggest folder was fine at nineteen
 // apps and is not a design, and "All Applications" is unbounded by
 // construction. Eight two-line rows is about half a 720p screen with
@@ -375,17 +438,18 @@ struct sm_layout {
     int item_h;       // a folder row
     int app_h;        // an app row: two lines of text and air
     int side_w;       // the folder rail
-    int pane_x, pane_w, pane_h, pane_rows; // the app column; rows it can SHOW
+    int pane_x, pane_w, pane_h, pane_rows; // the app column; LINES it can show
+    int cols, cell_w; // items per line (1 unless a grid), and an item's width
     int cats;         // folders in the rail
     int head_h, foot_h; // the header band and the footer band
     int main_y, main_h; // the rail and the column between them
     int btn;          // the header's square settings button
 };
 
-// The footer's button for system action `i`: its width, from its label
+// The footer's button in slot `i`: its width, from its label
 // plus Shut down's glyph and Restart's chevron when it has a boot menu.
 static int sm_action_w(int i) {
-    const char *lb = wm_system_actions[i].label;
+    const char *lb = wm_system_actions[foot_action(i)].label;
     int w = ugfx_text_width(lb) + 2 * ugfx_char_h();
     if (!k_strcmp(lb, "Shutdown")) w += ugfx_char_h() + 9;
     if (!k_strcmp(lb, "Restart") && g_boot_menu) w += ugfx_char_h();
@@ -395,7 +459,11 @@ static int sm_action_w(int i) {
 static void layout(struct sm_layout *L) {
     int ch = ugfx_char_h();
     L->item_h = ch * 2 + 10;
-    L->app_h = ch * 4;
+    // The DETAILED row sets the menu's footprint in every list style, so
+    // switching style changes what is in the column, not the card.
+    int det_h = ch * 4;
+    L->app_h = g_cfg.list == SM_LIST_COMPACT ? L->item_h
+             : g_cfg.list == SM_LIST_GRID ? sm_grid_icon() + ch + 22 : det_h;
     L->cats = folder_count();
     L->head_h = ch * 4 + 6;
     L->foot_h = ch * 3 + 9;
@@ -427,12 +495,12 @@ static void layout(struct sm_layout *L) {
         int n = ugfx_text_width(gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name);
         if (n > app_label) app_label = n;
     }
-    L->pane_w = app_label + 16 + SM_ICON_COL(L->app_h);
+    L->pane_w = app_label + 16 + SM_ICON_COL(det_h);
     if (L->pane_w < ch * 34) L->pane_w = ch * 34;   // the same floor, room for the line under it
 
     // THE FOOTER MUST HOLD ITS BUTTONS and the version beside them.
     int foot_need = ugfx_text_width("toy-os " TOYOS_VERSION) + 3 * ch;
-    for (int i = 0; i < wm_system_action_count; i++) foot_need += sm_action_w(i) + 4;
+    for (int i = 0; i < foot_count(); i++) foot_need += sm_action_w(i) + 4;
     if (L->side_w + 1 + L->pane_w < foot_need) L->pane_w = foot_need - L->side_w - 1;
 
     // AS TALL AS THE RAIL, OR AS THE BIGGEST FOLDER, WHICHEVER IS
@@ -440,6 +508,18 @@ static void layout(struct sm_layout *L) {
     // the scrolling is for. The rail's own height is a floor rather
     // than a target: a column shorter than the folders beside it would
     // leave the divider running past the bottom of the list.
+    L->cols = 1;
+    L->cell_w = L->pane_w;
+    if (g_cfg.list == SM_LIST_GRID) {
+        // As many cells as fit at ch*8 each, Kickoff's grid -- four
+        // across at the default font.
+        // Clear of the scrollbar's thin thumb on the right, which a
+        // list's full-width pill can run under and a centred icon cannot.
+        int inner = L->pane_w - 2 * sm_pill_inset() - ch / 2;
+        L->cols = inner / (ch * 8);
+        if (L->cols < 1) L->cols = 1;
+        L->cell_w = inner / L->cols;
+    }
     int side_h = L->cats * L->item_h;
     int biggest = 0;
     for (int i = 0; i < L->cats; i++) {
@@ -447,8 +527,8 @@ static void layout(struct sm_layout *L) {
         while (folder_app_at(i, n)) n++;
         if (n > biggest) biggest = n;
     }
-    if (biggest > SM_MAX_ROWS) biggest = SM_MAX_ROWS;
-    int list_h = biggest * L->app_h;
+    int list_h = (biggest + L->cols - 1) / L->cols * L->app_h;
+    if (list_h > SM_MAX_ROWS * det_h) list_h = SM_MAX_ROWS * det_h;
     int content_h = side_h > list_h ? side_h : list_h;
     L->main_h = content_h + 2 * SM_INSET;
     L->pane_h = L->main_h;
@@ -475,6 +555,10 @@ static void layout(struct sm_layout *L) {
 }
 
 static int pane_count(void);
+// The list in LINES -- what the scrollbar and `scroll` count.
+static int pane_lines(const struct sm_layout *L) {
+    return (pane_count() + L->cols - 1) / L->cols;
+}
 static int row_rect(const struct sm_layout *L, int apps, int n, const char **label,
                     int *kind, int *x, int *y, int *w, int *h, int *selected);
 static int pane_visible(const struct sm_layout *L, int *first);
@@ -484,7 +568,7 @@ static int pane_visible(const struct sm_layout *L, int *first);
 static int search_text_rect(const struct sm_layout *L, int *x, int *y, int *w, int *h) {
     int apps = pane_visible(L, 0);
     int fx, fy, fw, fh, kind;
-    if (!row_rect(L, apps, L->cats + wm_system_action_count + apps + 1, 0, &kind,
+    if (!row_rect(L, apps, L->cats + foot_count() + apps + 1, 0, &kind,
                   &fx, &fy, &fw, &fh, 0)) return 0;
     int mr = fh / 5;
     *x = fx + 12 + mr * 3;
@@ -517,11 +601,11 @@ static int sb_rect(const struct sm_layout *L, int *x, int *y, int *w, int *h) {
     *x = L->x + L->w - 1 - sm_pill_inset() - bw;
     *y = L->main_y + SM_INSET;
     *h = L->main_h - 2 * SM_INSET;
-    return pane_count() > L->pane_rows;
+    return pane_lines(L) > L->pane_rows;
 }
 
 static int sb_max_first(const struct sm_layout *L) {
-    int m = pane_count() - L->pane_rows;
+    int m = pane_lines(L) - L->pane_rows;
     return m > 0 ? m : 0;
 }
 
@@ -652,7 +736,7 @@ static int pane_row(int n, struct gui_app **app, int *action) {
             if (match_score(a->name, query) != tier) continue;
             if (n-- == 0) { if (app) *app = a; return 1; }
         }
-        for (int i = 0; i < wm_system_action_count; i++) {
+        for (int i = wm_system_action_count - foot_count(); i < wm_system_action_count; i++) {
             if (match_score(wm_system_actions[i].label, query) != tier) continue;
             if (n-- == 0) { if (action) *action = i; return 1; }
         }
@@ -681,13 +765,22 @@ static int pane_count(void) {
 // was scrolled to.
 static int pane_visible(const struct sm_layout *L, int *first) {
     int total = pane_count();
-    int max_first = total - L->pane_rows;
+    int lines = (total + L->cols - 1) / L->cols;
+    int max_first = lines - L->pane_rows;
     if (max_first < 0) max_first = 0;
     if (scroll > max_first) scroll = max_first;
     if (scroll < 0) scroll = 0;
-    if (first) *first = scroll;
-    int n = total - scroll;
-    return n < L->pane_rows ? n : L->pane_rows;
+    int f = scroll * L->cols;
+    if (first) *first = f;
+    int n = total - f, room = L->pane_rows * L->cols;
+    return n < room ? n : room;
+}
+
+// The list index of on-screen item `i`.
+static int item_at(const struct sm_layout *L, int i) {
+    int f;
+    pane_visible(L, &f);
+    return f + i;
 }
 
 // WHICH ROW THE STRIP IS ABOUT: the keyboard's selection when there is
@@ -702,7 +795,9 @@ const char *start_menu_description(void) {
     if (sel_row >= 0) {
         pane_row(sel_row, &a, &act);
     } else if (hover_token >= TOK_APP(0) && hover_token < TOK_SEARCH) {
-        pane_row(scroll + hover_token - TOK_APP(0), &a, &act);
+        struct sm_layout L;
+        layout(&L);
+        pane_row(item_at(&L, hover_token - TOK_APP(0)), &a, &act);
     }
     if (a && a->comment) return a->comment;
     // A system action found by the search has no `Comment=` to show,
@@ -729,9 +824,9 @@ int start_menu_wheel(int mx, int my, int notches) {
     // -- a pointer resting on the sidebar while the other hand scrolls
     // is still scrolling THIS.
     if (!uui_hit(L.x, L.y, L.w, L.h, mx, my)) return 0;
-    int total = pane_count();
+    int total = pane_lines(&L);
     if (total <= L.pane_rows) return 1;   // consumed: nothing behind the menu should scroll
-    // Positive notches are "up" (mouse.h), which means EARLIER rows.
+    // Positive notches are "up" (mouse.h), which means EARLIER lines.
     scroll -= notches;
     if (scroll > total - L.pane_rows) scroll = total - L.pane_rows;
     if (scroll < 0) scroll = 0;
@@ -752,7 +847,7 @@ int start_menu_wheel(int mx, int my, int notches) {
 // the hover op runs this every frame the menu is open.
 static int row_rect(const struct sm_layout *L, int apps, int n, const char **label,
                     int *kind, int *x, int *y, int *w, int *h, int *selected) {
-    int acts = wm_system_action_count;
+    int acts = foot_count();
     const char *lb = "";
     int k, rx, ry, rw, rh, sel = 0;
 
@@ -766,7 +861,7 @@ static int row_rect(const struct sm_layout *L, int apps, int n, const char **lab
     } else if (n < L->cats + acts) {
         // THE FOOTER'S BUTTONS, right-aligned in the actions' own order.
         int i = n - L->cats;
-        lb = wm_system_actions[i].label;
+        lb = wm_system_actions[foot_action(i)].label;
         k = START_ROW_ACTION;
         int total = 0;
         for (int j = 0; j < acts; j++) total += sm_action_w(j) + 4;
@@ -776,18 +871,23 @@ static int row_rect(const struct sm_layout *L, int apps, int n, const char **lab
         ry = L->y + L->h - L->foot_h + (L->foot_h - rh) / 2;
         rw = sm_action_w(i);
     } else if (n < L->cats + acts + apps) {
-        // `i` IS THE SCREEN ROW; the entry it shows is `scroll + i`.
+        // `i` IS THE SCREEN ITEM; the entry it shows is `scroll * cols + i`.
         // Everything that persists -- the keyboard selection, what a
         // click launches -- is in LIST coordinates, and the two are
         // different numbers the moment the pane scrolls.
         int i = n - L->cats - acts;
         struct gui_app *a; int act;
-        pane_row(scroll + i, &a, &act);
+        int item = scroll * L->cols + i;
+        pane_row(item, &a, &act);
         lb = a ? a->name : (act >= 0 ? wm_system_actions[act].label : "");
         k = START_ROW_APP;
-        rx = L->pane_x; ry = L->main_y + SM_INSET + i * L->app_h;
-        rw = L->pane_w; rh = L->app_h;
-        sel = (scroll + i == sel_row);
+        // A grid's cells inside the column's pill inset; a list row is
+        // the column, and the draw insets its pill.
+        int gx = L->cols > 1 ? sm_pill_inset() : 0;
+        rx = L->pane_x + gx + (i % L->cols) * L->cell_w;
+        ry = L->main_y + SM_INSET + (i / L->cols) * L->app_h;
+        rw = L->cell_w; rh = L->app_h;
+        sel = (item == sel_row);
     } else if (n == L->cats + acts + apps) {
         // The description: reported for its TEXT, with no rect -- it is
         // drawn on the row it describes now, as that row's second line.
@@ -824,7 +924,7 @@ static int row_rect(const struct sm_layout *L, int apps, int n, const char **lab
 int start_menu_row_count(void) {
     struct sm_layout L;
     layout(&L);
-    return L.cats + wm_system_action_count + pane_visible(&L, 0) + 3;
+    return L.cats + foot_count() + pane_visible(&L, 0) + 3;
 }
 
 int start_menu_row_info(int n, const char **label, int *kind,
@@ -838,16 +938,31 @@ int start_menu_row_info(int n, const char **label, int *kind,
 // against the source artwork. Exported rather than re-derived: the
 // offsets moved once and icons_test.py's own copy of them went on
 // sampling the old place, which reads as a wrong icon.
+// Where an app item's icon goes -- left of its text in a list, centred
+// over its label in a grid. The draw and start_menu_row_icon() both ask.
+static void app_icon_box(const struct sm_layout *L, int x, int y, int w, int h,
+                         int *ix, int *iy, int *sz) {
+    if (L->cols > 1) {
+        *sz = sm_grid_icon();
+        *ix = x + (w - *sz) / 2;
+        *iy = y + 8;
+    } else {
+        *sz = SM_ICON_SZ(L->app_h);
+        *ix = x + sm_pill_inset() + 12;
+        *iy = y + (h - *sz) / 2;
+    }
+}
+
 int start_menu_row_icon(int n, int *x, int *y, int *sz) {
     struct sm_layout L;
     layout(&L);
-    int kind, rx, ry, rw, rh;
+    int kind, rx, ry, rw, rh, ix, iy, isz;
     if (!row_rect(&L, pane_visible(&L, 0), n, 0, &kind, &rx, &ry, &rw, &rh, 0)) return 0;
     if (kind != START_ROW_APP) return 0;
-    int sz_ = SM_ICON_SZ(L.app_h);
-    if (x) *x = rx + sm_pill_inset() + 12;   // start_menu_draw()'s app icon
-    if (y) *y = ry + (rh - sz_) / 2;
-    if (sz) *sz = sz_;
+    app_icon_box(&L, rx, ry, rw, rh, &ix, &iy, &isz);
+    if (x) *x = ix;
+    if (y) *y = iy;
+    if (sz) *sz = isz;
     return 1;
 }
 
@@ -865,7 +980,7 @@ static int row_at(int mx, int my) {
     struct sm_layout L;
     layout(&L);
     int apps = pane_visible(&L, 0);
-    int total = L.cats + wm_system_action_count + apps + 3;
+    int total = L.cats + foot_count() + apps + 3;
     for (int i = 0; i < total; i++) {
         int x, y, w, h, kind;
         if (!row_rect(&L, apps, i, 0, &kind, &x, &y, &w, &h, 0)) break;
@@ -882,10 +997,10 @@ struct gui_app *start_menu_app_at(int mx, int my) {
     struct sm_layout L;
     layout(&L);
     int n = row_at(mx, my);
-    if (n < L.cats + wm_system_action_count) return 0;
-    if (n >= L.cats + wm_system_action_count + pane_visible(&L, 0)) return 0;
+    if (n < L.cats + foot_count()) return 0;
+    if (n >= L.cats + foot_count() + pane_visible(&L, 0)) return 0;
     struct gui_app *a = 0;
-    pane_row(scroll + n - L.cats - wm_system_action_count, &a, 0);
+    pane_row(item_at(&L, n - L.cats - foot_count()), &a, 0);
     return a;
 }
 
@@ -895,20 +1010,29 @@ struct gui_app *start_menu_app_at(int mx, int my) {
 // (wm_tooltip_track() compares before it re-arms).
 static void track_tooltip(const struct sm_layout *L, int n) {
     int apps = pane_visible(L, 0);
-    int acts = wm_system_action_count;
+    int acts = foot_count();
     if (n < L->cats + acts || n >= L->cats + acts + apps) {
         wm_tooltip_cancel();
         return;
     }
     struct gui_app *a = 0; int act;
-    pane_row(scroll + n - L->cats - acts, &a, &act);
-    if (!a || !a->comment || !a->comment[0]) { wm_tooltip_cancel(); return; }
+    pane_row(item_at(L, n - L->cats - acts), &a, &act);
     int x, y, w, h;
-    if (!row_rect(L, apps, n, 0, 0, &x, &y, &w, &h, 0)) { wm_tooltip_cancel(); return; }
-    // ONLY WHEN THE ROW CUT IT: the row's second line already says what
-    // the app is, and a tooltip repeating it covers the next row.
-    int room = w - 2 * sm_pill_inset() - 10 - (12 + SM_ICON_SZ(L->app_h) + 12);
-    if (ugfx_text_width(a->comment) <= room) { wm_tooltip_cancel(); return; }
+    if (!a || !row_rect(L, apps, n, 0, 0, &x, &y, &w, &h, 0)) { wm_tooltip_cancel(); return; }
+    // A GRID CELL that cut its name says the name -- the one thing a
+    // cell exists to show.
+    if (L->cols > 1 && ugfx_text_width(a->name) > w - 12) {
+        wm_tooltip_track(a->name, x, y, w, h);
+        return;
+    }
+    if (!a->comment || !a->comment[0]) { wm_tooltip_cancel(); return; }
+    // A DETAILED row: ONLY WHEN THE ROW CUT IT -- its second line already
+    // says what the app is, and a tooltip repeating it covers the next
+    // row. Compact rows and grid cells show no description at all.
+    if (g_cfg.list == SM_LIST_DETAILED) {
+        int room = w - 2 * sm_pill_inset() - 10 - (12 + SM_ICON_SZ(L->app_h) + 12);
+        if (ugfx_text_width(a->comment) <= room) { wm_tooltip_cancel(); return; }
+    }
     wm_tooltip_track(a->comment, x, y, w, h);
 }
 
@@ -926,8 +1050,13 @@ int start_menu_hover_at(int mx, int my) {
     if (!sb_drag) sb_set_wide(0);
     int n = row_at(mx, my);
     track_tooltip(&L, n);
+    int want = g_cfg.hover && n >= 0 && n < L.cats && n != sel_cat && !query_len ? n : -1;
+    if (want != hover_cat) {
+        hover_cat = want;
+        hover_cat_ns = sys_monotonic_ns() + (uint64_t)HOVER_DWELL_MS * 1000000ull;
+    }
     if (n < 0) { hover_token = 0; return 0; }
-    int acts = wm_system_action_count;
+    int acts = foot_count();
     if (n < L.cats) hover_token = TOK_CAT(n);
     else if (n < L.cats + acts) hover_token = TOK_ACTION(n - L.cats);
     else if (n < L.cats + acts + pane_visible(&L, 0)) hover_token = TOK_APP(n - L.cats - acts);
@@ -961,22 +1090,47 @@ void start_menu_toggle_pin(const char *app_id) {
 
 // --- open / close -----------------------------------------------------
 
+// The folder open when the menu last closed, BY LABEL -- an index shifts
+// when Favourites or Recent comes or goes. For desktop.start_opens=last.
+static char g_last_folder[GUI_APP_ICON_MAX];
+
+static int folder_of_kind(enum folder_kind k) {
+    for (int i = 0; i < pseudo_count(); i++)
+        if (folder_kind_at(i) == k) return i;
+    return -1;
+}
+
+// WHERE THE MENU OPENS. Favourites (the default) is the first folder
+// that has anything in it -- Favourites, else Recent, else All, which is
+// what a first boot gets; Kickoff opens on Favorites for the same
+// reason. A reset each open, unless the setting asks for the last
+// folder: a menu that reopens where it was left makes the same click do
+// different things on different days, so that is opt-in.
+static int opening_folder(void) {
+    int f = -1;
+    switch (g_cfg.opens) {
+    case SM_OPENS_RECENT: f = folder_of_kind(FOLDER_RECENT); break;
+    case SM_OPENS_ALL:    f = folder_of_kind(FOLDER_ALL); break;
+    case SM_OPENS_LAST:
+        for (int i = 0; i < folder_count() && g_last_folder[0]; i++)
+            if (!k_strcmp(folder_label_at(i), g_last_folder)) { f = i; break; }
+        break;
+    default: break;
+    }
+    if (f < 0 && g_cfg.opens == SM_OPENS_RECENT) f = folder_of_kind(FOLDER_ALL);
+    return f < 0 ? 0 : f;
+}
+
 void start_menu_open_now(void) {
     wm_overlay_close_others("start");
+    read_settings();
     start_menu_open = 1;
     g_boot_menu = ubootmenu_read(&g_boot, 0) >= 2 && g_boot.oneshot;
     snapshot_recent();
     flash_row = -1;
     hover_token = 0;
-    // OPENS ON WHAT YOU USE, when there is such a thing: Favourites if
-    // anything is pinned, else Recent if anything has been launched,
-    // else All -- which is also what a machine on its first boot gets,
-    // rather than an arbitrary category. Kickoff opens on Favorites for
-    // the same reason. The folder list already puts these first, so
-    // this is index 0 either way; the reset is what matters, since a
-    // menu that reopened where it was left makes the same click do
-    // different things on different days.
-    sel_cat = 0;
+    hover_cat = -1;
+    sel_cat = opening_folder();
     sel_row = -1;
     scroll = 0;
     // Always focused: nothing else in the popup takes text, so typing
@@ -1003,6 +1157,8 @@ void start_menu_close(void) {
 
     if (!start_menu_open) return;
     wm_tooltip_cancel();   // it describes a row that is about to not exist
+    k_strlcpy(g_last_folder, folder_label_at(sel_cat), sizeof g_last_folder);
+    hover_cat = -1;
     start_menu_open = 0;
     flash_row = -1;
     hover_token = 0;
@@ -1077,8 +1233,7 @@ void start_menu_draw(int mx, int my) {
     }
 
     int apps = pane_visible(&L, 0);
-    int total = L.cats + wm_system_action_count + apps + 3;
-    int icon_sz = SM_ICON_SZ(L.app_h);
+    int total = L.cats + foot_count() + apps + 3;
     for (int i = 0; i < total; i++) {
         const char *label; int kind, x, y, w, h, selected;
         if (!row_rect(&L, apps, i, &label, &kind, &x, &y, &w, &h, &selected)) break;
@@ -1104,14 +1259,15 @@ void start_menu_draw(int mx, int my) {
         if (kind == START_ROW_CATEGORY) hot = (hover_token == TOK_CAT(i));
         else if (kind == START_ROW_ACTION) hot = (hover_token == TOK_ACTION(i - L.cats));
         else if (kind == START_ROW_SETTINGS) hot = (hover_token == TOK_SETTINGS);
-        else hot = (hover_token == TOK_APP(i - L.cats - wm_system_action_count));
+        else hot = (hover_token == TOK_APP(i - L.cats - foot_count()));
         int on_pane = (kind == START_ROW_APP);
         uint32_t row_bg = on_pane ? pane_bg : bg, row_fg = fg;
 
         // A ROW IS A PILL, inset from its column -- the card's. Footer and
         // header buttons are their own rects already.
         int px = x, pw = w;
-        if (kind == START_ROW_CATEGORY || kind == START_ROW_APP) { px = x + pr; pw = w - 2 * pr; }
+        if (kind == START_ROW_CATEGORY || (kind == START_ROW_APP && L.cols == 1)) { px = x + pr; pw = w - 2 * pr; }
+        else if (kind == START_ROW_APP) { px = x + 2; pw = w - 4; }   // a grid cell
         if (i == flash_row) {
             row_bg = flash_bg; row_fg = flash_fg;
             uui_fill_round_rect(s, px, y, pw, h, pr, row_bg);
@@ -1156,13 +1312,24 @@ void start_menu_draw(int mx, int my) {
             // a time. THE INDENT IS UNCONDITIONAL, the icon is not, so a
             // row with no artwork (Crash Test, on purpose) lines up.
             struct gui_app *a; int act;
-            pane_row(scroll + i - L.cats - wm_system_action_count, &a, &act);
-            int ix = px + 12;
+            pane_row(item_at(&L, i - L.cats - foot_count()), &a, &act);
+            int ix, iy, icon_sz;
+            app_icon_box(&L, x, y, w, h, &ix, &iy, &icon_sz);
+            const struct uimg *ico = a ? icon_get(a->icon_name, icon_sz) : 0;
+            if (L.cols > 1) {
+                // A GRID CELL: the icon, the name centred under it.
+                if (ico) ugfx_blit_alpha(s, x + (w - ico->w) / 2, iy, ico->w, ico->h, ico->px, ico->w);
+                int avail = pw - 8, lw = ugfx_text_width(label);
+                int lx = px + 4 + (lw < avail ? (avail - lw) / 2 : 0);
+                ugfx_draw_string_elided(s, lx, iy + icon_sz + 6, avail, label, row_fg, row_bg);
+                continue;
+            }
             int text_x = ix + icon_sz + 12;
             int right = px + pw - 10;
-            const struct uimg *ico = a ? icon_get(a->icon_name, icon_sz) : 0;
             if (ico) ugfx_blit_alpha(s, ix, y + (h - ico->h) / 2, ico->w, ico->h, ico->px, ico->w);
-            const char *note = a && a->comment ? a->comment : "";
+            // A COMPACT row is the name alone; its description is the
+            // tooltip's.
+            const char *note = a && a->comment && g_cfg.list == SM_LIST_DETAILED ? a->comment : "";
             if (note[0]) {
                 int top = y + (h - 2 * ch - 4) / 2;
                 ugfx_draw_string_elided(s, text_x, top, right - text_x, label, row_fg, row_bg);
@@ -1196,7 +1363,7 @@ void start_menu_draw(int mx, int my) {
     // costing the rows a gutter, and it can be dragged.
     int bx, by, bw, bh;
     if (sb_rect(&L, &bx, &by, &bw, &bh)) {
-        int total_rows = pane_count();
+        int total_rows = pane_lines(&L);
         int e = sb_amount();   // 0 thin .. SB_FULL wide, eased
         int ty, th;
         uui_scrollbar_thumb_rect(by, bh, total_rows, L.pane_rows, sb_offset(&L), &ty, &th, bw, 0);
@@ -1230,7 +1397,7 @@ static void flash(int row) {
 static int activate(int n) {
     struct sm_layout L;
     layout(&L);
-    int acts = wm_system_action_count;
+    int acts = foot_count();
     if (n < 0) return 0;
     if (n < L.cats) {
         sel_cat = n;
@@ -1242,12 +1409,12 @@ static int activate(int n) {
         return 0;
     }
     if (n < L.cats + acts) {
-        wm_system_actions[n - L.cats].on_select();
+        wm_system_actions[foot_action(n - L.cats)].on_select();
         return !context_menu_open;      // a flyout keeps Start up under it
     }
     if (n < L.cats + acts + pane_visible(&L, 0)) {
         struct gui_app *a; int act;
-        pane_row(scroll + n - L.cats - acts, &a, &act);
+        pane_row(item_at(&L, n - L.cats - acts), &a, &act);
         if (a) open_app(a);
         else if (act >= 0) wm_system_actions[act].on_select();
         return !context_menu_open;
@@ -1275,7 +1442,7 @@ int start_menu_handle_click(int mx, int my) {
         layout(&L);
         int bx, by, bw, bh;
         if (sb_rect(&L, &bx, &by, &bw, &bh) && uui_hit(bx, by, bw, bh, mx, my)) {
-            int total = pane_count();
+            int total = pane_lines(&L);
             enum uui_scrollbar_zone z = uui_scrollbar_hit(bx, by, bw, bh, total, L.pane_rows,
                                                           sb_offset(&L), mx, my, 0);
             if (z == UUI_SB_THUMB) {
@@ -1354,8 +1521,9 @@ static void query_changed(void) {
 // Enter goes on launching something invisible.
 static void scroll_to_selection(const struct sm_layout *L) {
     if (sel_row < 0) return;
-    if (sel_row < scroll) scroll = sel_row;
-    if (sel_row >= scroll + L->pane_rows) scroll = sel_row - L->pane_rows + 1;
+    int line = sel_row / L->cols;
+    if (line < scroll) scroll = line;
+    if (line >= scroll + L->pane_rows) scroll = line - L->pane_rows + 1;
     if (scroll < 0) scroll = 0;
 }
 
@@ -1404,7 +1572,7 @@ int start_menu_key(int key, uint8_t mods) {
             int first = 0;
             pane_visible(&L, &first);
             int row = sel_row >= 0 ? sel_row : first;
-            int n = L.cats + wm_system_action_count + (row - first);
+            int n = L.cats + foot_count() + (row - first);
             g_from_key = 1;
             if (activate(n)) flash(n);
             g_from_key = 0;
@@ -1412,13 +1580,21 @@ int start_menu_key(int key, uint8_t mods) {
         }
         return 1;
     case KEY_ARROW_DOWN:
-        if (rows > 0) sel_row = (sel_row + 1 >= rows) ? 0 : sel_row + 1;
+        if (L.cols > 1) {
+            // A GRID moves a line down, stopping at the last cell -- the
+            // wrap a list makes would jump columns.
+            if (rows > 0) sel_row = sel_row < 0 ? 0
+                                  : sel_row + L.cols < rows ? sel_row + L.cols : sel_row;
+        } else if (rows > 0) sel_row = (sel_row + 1 >= rows) ? 0 : sel_row + 1;
         scroll_to_selection(&L);
         start_menu_damage();
         redraw_pending = 1;
         return 1;
     case KEY_ARROW_UP:
-        if (rows > 0) sel_row = (sel_row <= 0) ? rows - 1 : sel_row - 1;
+        // A grid's top line goes back to NO selection, where Left and
+        // Right move between folders again.
+        if (L.cols > 1) sel_row = sel_row - L.cols >= 0 ? sel_row - L.cols : -1;
+        else if (rows > 0) sel_row = (sel_row <= 0) ? rows - 1 : sel_row - 1;
         scroll_to_selection(&L);
         start_menu_damage();
         redraw_pending = 1;
@@ -1428,7 +1604,7 @@ int start_menu_key(int key, uint8_t mods) {
     case KEY_PAGE_DOWN:
     case KEY_PAGE_UP: {
         if (rows <= 0) return 1;
-        int step = L.pane_rows > 1 ? L.pane_rows - 1 : 1;
+        int step = (L.pane_rows > 1 ? L.pane_rows - 1 : 1) * L.cols;
         sel_row = (sel_row < 0 ? 0 : sel_row) +
                   (key == KEY_PAGE_DOWN ? step : -step);
         if (sel_row < 0) sel_row = 0;
@@ -1453,6 +1629,16 @@ int start_menu_key(int key, uint8_t mods) {
         // without a focus model. Inert while searching, where the
         // results span every folder.
         if (query_len) break;   // the caret's, while there is text
+        if (L.cols > 1 && sel_row >= 0) {
+            // In a grid with a cell selected, the cells' -- a folder is
+            // one Up away.
+            int to = sel_row + (key == KEY_ARROW_RIGHT ? 1 : -1);
+            if (to >= 0 && to < rows) sel_row = to;
+            scroll_to_selection(&L);
+            start_menu_damage();
+            redraw_pending = 1;
+            return 1;
+        }
         if (L.cats > 0) {
             sel_cat += (key == KEY_ARROW_RIGHT) ? 1 : -1;
             if (sel_cat < 0) sel_cat = L.cats - 1;
@@ -1479,6 +1665,11 @@ int start_menu_key(int key, uint8_t mods) {
 }
 
 void start_menu_update(void) {
+    if (start_menu_open && hover_cat >= 0 && sys_monotonic_ns() >= hover_cat_ns) {
+        int f = hover_cat;
+        hover_cat = -1;
+        activate(f);   // a folder: selects it, and the menu stays up
+    }
     // THE SCROLLBAR'S TWEEN: a shrink whose linger has run out starts
     // now, and every frame of a widening or a shrink repaints the card.
     if (start_menu_open && sb_collapse_ns && sb_now() >= sb_collapse_ns) {
@@ -1526,7 +1717,7 @@ void start_menu_update_press(int mx, int my, uint8_t buttons) {
         redraw_pending = 1;
         return;
     }
-    int total = pane_count();
+    int total = pane_lines(&L);
     if (sb_drag) {
         int off = uui_scrollbar_offset_for_drag(by, bh, total, L.pane_rows, my, sb_grab, bw, 0);
         sb_scroll_to(&L, sb_max_first(&L) - off);
@@ -1546,7 +1737,7 @@ int start_menu_scrollbar(int *x, int *y, int *w, int *h, int *thumb_y, int *thum
     struct sm_layout L;
     layout(&L);
     if (!sb_rect(&L, x, y, w, h)) return 0;
-    uui_scrollbar_thumb_rect(*y, *h, pane_count(), L.pane_rows, sb_offset(&L), thumb_y, thumb_h, *w, 0);
+    uui_scrollbar_thumb_rect(*y, *h, pane_lines(&L), L.pane_rows, sb_offset(&L), thumb_y, thumb_h, *w, 0);
     *wide = sb_want;
     return 1;
 }
@@ -1560,5 +1751,10 @@ int start_menu_wait_ms(void) {
     if (!start_menu_open) return -1;
     int w = uui_caret_wait_ms();
     if (w == 0) { start_menu_damage(); redraw_pending = 1; }
+    if (hover_cat >= 0) {   // and for a hovered folder's dwell
+        uint64_t now = sys_monotonic_ns();
+        int d = hover_cat_ns > now ? (int)((hover_cat_ns - now + 999999) / 1000000) : 0;
+        if (w < 0 || d < w) w = d;
+    }
     return w;
 }

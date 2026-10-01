@@ -340,7 +340,7 @@ void open_app(const struct gui_app *app) {
     // launcher starts anything, so the desktop's icons and the context
     // menu's Open count too. A "recent" list that disagreed with what
     // you just did would not be worth keeping.
-    start_store_record_launch(app->app_id);
+    if (start_menu_recent_on()) start_store_record_launch(app->app_id);
 
     if (app->exec_path) {
         int pid = sys_spawn(app->exec_path, 0, -1);

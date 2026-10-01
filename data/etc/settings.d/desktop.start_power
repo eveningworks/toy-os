@@ -1,0 +1,13 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Power buttons
+Category=Desktop
+Group=Start
+Default=all
+Choices=all,restart,shutdown
+Description=The actions in the menu's footer
+Widget=dropdown
+Order=60
+Choice.all=All three
+Choice.restart=Restart and Shut down
+Choice.shutdown=Shut down only

@@ -23,6 +23,10 @@ int wm_conf_set(const char *path, const char *key, const char *value) {
     return uconf_set(path, key, value);
 }
 
+int wm_conf_unset(const char *path, const char *key) {
+    return uconf_unset(path, key);
+}
+
 uint32_t wm_setting_generation(void) {
     struct setting_msg msg;
     for (unsigned i = 0; i < sizeof msg; i++) ((uint8_t *)&msg)[i] = 0;
