@@ -104,6 +104,51 @@ static int clamp_radius(int req, int w, int h) {
     return req;
 }
 
+// Coverage of corner pixel (px, py) by a disc of radius `rad` centred on
+// the arc centre (r, r) -- arc_coverage() with the disc free to be the
+// inner edge of a 1px frame.
+static uint8_t disc_coverage(int r, int rad, int px, int py) {
+    if (rad <= 0) return 0;
+    int in = 0;
+    for (int sy = 0; sy < 4; sy++) {
+        for (int sx = 0; sx < 4; sx++) {
+            int cx = 8 * px + 2 * sx + 1 - 8 * r;
+            int cy = 8 * py + 2 * sy + 1 - 8 * r;
+            if (cx * cx + cy * cy <= 64 * rad * rad) in++;
+        }
+    }
+    return (uint8_t)(in * 255 / 16);
+}
+
+void uui_glass_round_rect(struct ugfx_surface *s, int x, int y, int w, int h,
+                          int radius, uint32_t c, uint8_t fill_a, uint8_t edge_a) {
+    if (w <= 2 || h <= 2) return;
+    int r = clamp_radius(radius, w, h);
+    for (int j = 0; j < h; j++) {
+        int cy = j < r ? j : (j >= h - r ? h - 1 - j : -1);
+        if (cy < 0 && j != 0 && j != h - 1) {
+            // A straight row: an edge pixel, a constant run, an edge pixel.
+            ugfx_blend_pixel(s, x, y + j, c, edge_a);
+            ugfx_blend_hspan(s, x + 1, y + j, w - 2, c, 0, fill_a);
+            ugfx_blend_pixel(s, x + w - 1, y + j, c, edge_a);
+            continue;
+        }
+        for (int i = 0; i < w; i++) {
+            int cx = i < r ? i : (i >= w - r ? w - 1 - i : -1);
+            int outer, inner;
+            if (cx >= 0 && cy >= 0) {
+                outer = disc_coverage(r, r, cx, cy);
+                inner = disc_coverage(r, r - 1, cx, cy);
+            } else {
+                outer = 255;
+                inner = (i == 0 || j == 0 || i == w - 1 || j == h - 1) ? 0 : 255;
+            }
+            int a = (fill_a * inner + edge_a * (outer - inner)) / 255;
+            if (a > 0) ugfx_blend_pixel(s, x + i, y + j, c, (uint8_t)a);
+        }
+    }
+}
+
 void uui_fill_round_rect(struct ugfx_surface *s, int x, int y, int w, int h,
                          int radius, uint32_t c) {
     if (w <= 0 || h <= 0) return;

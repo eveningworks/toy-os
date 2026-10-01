@@ -2757,6 +2757,19 @@ window without going through it will find its layout polls timing out.
   first version asserted the corner was "not the tile colour", which a
   plain `ugfx_blit()` satisfies by writing black, and only the positive
   control found that. In `gui_regress.py`.
+- **`desktop_menu_test.py`** -- the desktop's menus, glass, Rename and
+  Properties (23 checks), from the WM's own geometry (`gui ctxmenu
+  --json` now reports each row's rect, `disabled`, and a second submenu
+  level as `sub2`; `gui icons --json` reports `hovered`/`renaming`).
+  Paste greys and un-greys, Open > reaches every desktop app through its
+  categories, the keyboard opens and commits and Esc closes one level,
+  the icon menu's strip and Rename's greying, rename by F2 (a folder on
+  disk, a launcher's `Name=`), Alt+Enter, the hover wash with a control
+  icon, the GLASS check -- two icons over different wallpaper, each
+  matching its own blend, which a solid fill cannot -- and an app
+  popup's compositor-cut corner. **It establishes an empty clipboard by
+  spending a cut**: the clipboard outlives a run, and a second run on
+  the same guest inherited the first one's copy. In `gui_regress.py`.
 - **`mines_test.py`** -- Minesweeper (20 checks), and the protocol
   property it was built to prove: **a secondary click reaching a ring-3
   client**. The check that matters is a PAIR -- a right-click on the

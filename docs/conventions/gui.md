@@ -924,6 +924,19 @@ this the obvious way), not from how much history it accumulated.
   open-on-press exception in `docs/gui-guidelines.md` is about the
   primary button and does not carry over.
 
+- **A POPUP IS THE TOOLKIT'S CARD: PAINTED SQUARE INTO A SURFACE, CUT
+  ROUND BY THE COMPOSITOR.** `ui/uui_popup.h` owns the card's radius
+  (`uui_popup_radius()`, font-derived), ground and hairline, so a menu,
+  a dropdown list and a tooltip are one shape. A widget drawing into a
+  popup SURFACE paints a square card; `wm_render.c` saves what is under
+  the corners, composites the surface, and cuts the arc as it does a
+  window's -- reading the ring's colour off the middle of the surface's
+  TOP EDGE, so the arc continues whatever hairline that widget drew. A
+  widget drawing IN-WINDOW (no provider: the WM's own menus) rounds with
+  `uui_fill_round_rect()` itself. **Do not round inside a surface**: its
+  corner pixels would blend against the surface's stale buffer, not the
+  scene, and the compositor's cut would carry that blend. A popup's
+  shadow follows the radius but stays below its top edge (`wm_shadow.c`).
 - **A POPUP IS A SURFACE OF ITS CLIENT, PLACED BY THE COMPOSITOR, AND A
   PRESS OUTSIDE THE CLIENT'S SURFACES DISMISSES IT.** `WIN_REQ_POPUP`
   (`abi/win_proto.h`) opens a second window of the same client, anchored
@@ -1952,9 +1965,9 @@ this the obvious way), not from how much history it accumulated.
   exists exactly when something is in it** -- the sidebar is derived
   from the registry, so an empty folder is unrepresentable and an
   unknown key becomes its own folder rather than losing the app.
-  **Nothing scrolls**: the column is as tall as the biggest folder, so a
-  folder that outgrows the screen is a real limit, not a missing
-  scrollbar. And **a row that is not drawn has no geometry** -- a test
+  **The app column scrolls past `SM_MAX_ROWS`** (wheel and keyboard,
+  with an indicator rather than a scrollbar), so a folder that outgrows
+  the screen still fits. And **a row that is not drawn has no geometry** -- a test
   reaching an app in another folder opens that folder first
   (`DebugConsole.menu_app_row()` does it), which is why `gui menu
   --json` reports every app's folder beside the drawn rows.
@@ -4744,28 +4757,34 @@ positive control leaves the JSON check green.
 `context_menu.c` opens a `struct uui_menubar` through
 `uui_menubar_open_at()` with `count == 0`, so the widget draws and
 hit-tests and this file only supplies rows. `struct context_menu_item`
-is unchanged -- `label`/`on_select`/`ctx` plus the optional `sub`,
-`sub_count`, `checked`, `separator` -- because a caller packs a
-`gui_app *` or a window index into `ctx`, which the widget's `int code`
-cannot carry; the code maps back to the row here. `checked` is answered
-through the widget's `item_flags`, so a tick follows the caller's live
-struct with nothing to keep in sync.
+keeps `label`/`on_select`/`ctx` -- a caller packs a `gui_app *` or a
+window index into `ctx`, which the widget's `int code` cannot carry;
+the code maps back to the row here -- plus the optional `sub`,
+`sub_count`, `checked`, `separator`, and the widget's row extras:
+`icon`/`tint` (an action role), `accel`, `strip`, `disabled`. `checked`
+and `disabled` are answered through the widget's `item_flags`, so they
+follow the caller's live struct with nothing to keep in sync.
 
-Submenu depth is the widget's (`UUI_MENU_MAX_DEPTH`) now, not one --
-the callers still use one. A separator is a `NULL` label. `gui ctxmenu
---json` reports row tops from `uui_menubar_item_rect()`, never
-`y + i * item_h`, and the open submenu under `sub`. **There is still no
-keyboard**: `uui_menubar_key()` exists and `wm_overlay.h` has no key op
-to route it through.
+**It has NO COLOURS OF ITS OWN**: the WM's menus are the toolkit's card
+(`ui/uui_popup.h`), so a desktop menu and an app's are one design.
+Submenus nest TWO deep (Open > Category > app) out of one pool of rows.
+**It takes the keyboard** through the overlay registry's `key` op
+(`context_menu_key()`): the widget's keymap, a commit running the row
+exactly as a click does. A separator is a `NULL` label. `gui ctxmenu
+--json` reports each row's own rect (`x`, `w`, `cx` -- a strip button's
+are its own), `disabled`, the open submenu under `sub` and the one below
+it under `sub2`, all from `uui_menubar_item_rect()`.
 
 It works inside the compositor because `uui_popup_open()` is a no-op
 with no provider and the panel installs none for its own surface, so
 every level draws into `wm_surface()` -- clamped against the rectangle
 `wm_popup_place()` defines, handed to the widget as its bounds.
 
-The desktop's menu is Open > (the launchers), New folder, Paste,
-Refresh, Sort by name, Icon size > (ticked), Desktop settings -- what a
-right-click on the Windows or KDE desktop offers.
+The desktop's background menu is Open > (by the Start menu's
+categories), New folder, Paste (greyed with nothing to paste), Refresh,
+Sort by name, Icon size > (ticked), Desktop settings; an icon's is a
+strip of Cut, Copy, Rename, Delete, then Open and Properties -- Windows
+11's. Each row's icon is coloured by what it does.
 
 **THE TRAP FOR A TEST**: a real-mouse click after a `warp_cursor()`
 onto a submenu row did not land (`icons_test.py` measured it); the
@@ -4784,6 +4803,28 @@ change both, and `gen_cursors.py --check` fails the build if the data
 files fall behind. The shape is CENTRED on its hotspot, so
 `cursor_rect()` gives it a centred box: the other built-ins draw down
 and right from theirs.
+
+## THE DESKTOP'S SELECTION IS GLASS, ITS HOVER ASKS `wm_point_on_desktop()`, AND A CAPTION RENAMES IN PLACE
+
+The selection and the hover are `uui_glass_round_rect()` over the
+wallpaper (white at a per-state alpha, a rounded edge when selected),
+drawn in `icon_hl_rect()` so what is painted and what is damaged stay
+one rect. **The hover is fed from `wm.c` with the WM's own answer to
+"is the bare desktop under the pointer"** (`wm_point_on_desktop()`: no
+overlay, no taskbar, no window), because the desktop cannot see what
+is on top of it -- asking only `icon_hit_test()` lights an icon through
+a window. It is a REGISTRY index like the selection, so a reload resets
+it.
+
+**Rename is in place**: `begin_rename()` puts a `uui_textbox` over the
+caption with the name -- not the extension -- selected (the File
+Manager's rule), `desktop_handle_key()` takes every key while it is up,
+and `desktop_rename_click()` runs FIRST for every left click, consuming
+one on the field and committing on any other. A file goes through
+`sys_rename()`, which refuses an existing name; a LAUNCHER's caption is
+its `Name=`, rewritten line by line with the rest of the file kept, so
+the file name, its saved position and its AppId do not move. `gui icons
+--json` reports `hovered` and `renaming` per icon.
 
 ## THE DESKTOP IS `/home/desktop` AND NOTHING ELSE: A `.desktop` FILE THERE IS A LAUNCHER, THE APPLICATION DATABASE IS `/usr/wm/applications`, AND EVERY VERB IS A CHILD PROCESS
 

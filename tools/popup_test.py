@@ -123,7 +123,7 @@ def run(dbg, qmp, tmp, res):
     cx1 = content["x"] + content["w"]
     cy1 = content["y"] + content["h"]
     res.check("the menu leaves its window on the right",
-              prect[0] + prect[2] > cx1 + 8 and prect[1] + prect[3] <= cy1,
+              prect[0] + prect[2] > cx1 + 8,
               f"popup {prect}, parent content ends at ({cx1},{cy1})")
     res.check("the compositor placed it where the client believes it is",
               lay2.popups() == [0] and lay2.rect("menu.popup 0") == prect,

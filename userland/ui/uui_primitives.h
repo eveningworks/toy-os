@@ -77,6 +77,13 @@ int uui_hit(int x, int y, int w, int h, int px, int py);
 void uui_fill_round_rect(struct ugfx_surface *s, int x, int y, int w, int h,
                          int radius, uint32_t c);
 
+// GLASS: `c` laid OVER what is already there, `fill_a` inside and
+// `edge_a` on a 1px rounded edge -- Windows 11's desktop selection, and
+// anything else that must tint a picture rather than hide it. Same
+// rule as above: the caller painted under it in this pass.
+void uui_glass_round_rect(struct ugfx_surface *s, int x, int y, int w, int h,
+                          int radius, uint32_t c, uint8_t fill_a, uint8_t edge_a);
+
 // --- natural size ------------------------------------------------------
 //
 // The ring-3 half of apps/ui/ui_primitives.h's contract, same rule and

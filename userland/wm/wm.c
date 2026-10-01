@@ -1333,6 +1333,7 @@ void wm_run(void) {
         wm_dnd_motion(mx, my, buttons);        // a drag between windows, before either owner
         wm_update_drag_resize(mx, my, buttons);
         desktop_update_drag(mx, my, buttons); // desktop icon drag, if one's in progress -- see desktop.h
+        if (mouse_moved) desktop_update_hover(mx, my, !(buttons & 0x1) && wm_point_on_desktop(mx, my));
 
         static uint64_t last_second = (uint64_t)-1;
         uint64_t ticks = sys_ticks();

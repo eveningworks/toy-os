@@ -161,6 +161,7 @@ TOOLS = [
     ("caret", "caret_blink_test.py", "the text caret blinks, stops solid, and never spins"),
     ("imgview", "imgview_test.py", "JPEG decoding, the viewer, and the wallpaper"),
     ("icons", "icons_test.py", "app icons: QOI, alpha compositing, three draw sites"),
+    ("desktopmenu", "desktop_menu_test.py", "desktop menus, glass, rename, properties, popup corners"),
     ("player", "player_test.py", "the Audio Player on a machine with NO sound device"),
     ("calendar", "calendar_test.py", "the tray clock's calendar popup: grid, week start, week numbers, Settings link"),
     ("clock", "clock_settings_test.py", "Settings' Date & time: Change... steps the kernel clock, time -s, the NTP lock"),
@@ -244,6 +245,7 @@ COST_S = {
     "imgview": 30,     # two decodes, several settled frames, a wallpaper hop
     "wallpaper": 30,   # a resolution change out and back, plus five settled frames
     "icons": 25,       # three draw sites, each a settled frame
+    "desktopmenu": 30, # eight groups, four settled frames, two folder polls
     "gfxdemo": 24,
     "cursor": 21,
     "saver": 22,

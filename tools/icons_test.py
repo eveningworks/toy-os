@@ -805,9 +805,12 @@ def run(dbg, qmp, tmp, res):
         res.check("...and the first icon's HIGHLIGHT is repainted away",
                   band(im1, r0) != first_band,
                   f"{picks[0]} band {band(im0, r0)} -> {band(im1, r0)}")
+        # GLASS, so not the first icon's colour: the second's own band
+        # lightens when it is selected (the selection is white laid over
+        # the wallpaper under EACH icon -- docs/gui-guidelines.md).
+        lift = sum(band(im1, r1)) - sum(band(im0, r1))
         res.check("...while the second icon now carries it",
-                  band(im1, r1) == first_band,
-                  f"{picks[1]} band {band(im1, r1)} vs {first_band}")
+                  lift > 30, f"{picks[1]} band {band(im0, r1)} -> {band(im1, r1)}")
 
     # --- the Start menu stays up under its own row's menu ----------------
     #

@@ -13,6 +13,7 @@
 #include "start_menu.h"
 #include "context_menu.h"
 #include "calendar_popup.h"
+#include "ui/uui_popup.h"
 #include "volume_popup.h"
 #include "wm_overlay.h"
 #include "confirm_dialog.h"
@@ -914,7 +915,9 @@ int wm_cursor_shape_changed(int mx, int my) {
 
 static int corner_radius(const struct window *win) {
     if (win->state == WIN_MAXIMIZED || win->fullscreen) return 0;
-    int r = ugfx_char_h() / 2;
+    // A POPUP is the toolkit's card (ui/uui_popup.h): its widget paints
+    // it square and the corners are cut here, as a window's are.
+    int r = win->popup ? uui_popup_radius() : ugfx_char_h() / 2;
     if (r < 4) r = 4;
     if (r > CORNER_MAX_R) r = CORNER_MAX_R;
     if (2 * r > win->w || 2 * r > win->h) return 0;
@@ -975,6 +978,11 @@ static void corners_save(const struct window *win) {
 static void corners_round(const struct window *win) {
     int r = corner_radius(win);
     if (!r) return;
+    // A popup's hairline is whatever its widget drew -- a menu's, a
+    // list's, a tooltip's -- so the arc continues the edge it actually
+    // has, read off the middle of its top edge.
+    uint32_t outline = win->popup
+        ? ugfx_get_pixel(wm_surface(), win->x + win->w / 2, win->y) : FRAME_OUTLINE;
     for (int c = 0; c < 4; c++)
         for (int py = 0; py < r; py++)
             for (int px = 0; px < r; px++) {
@@ -991,7 +999,7 @@ static void corners_round(const struct window *win) {
                 // lines, so the ring between radius r and r-1 carries its
                 // colour round the corner.
                 uint8_t ring = (uint8_t)(cov - inner);
-                if (ring) ugfx_blend_pixel(wm_surface(), x, y, FRAME_OUTLINE, ring);
+                if (ring) ugfx_blend_pixel(wm_surface(), x, y, outline, ring);
             }
 }
 
@@ -1632,12 +1640,15 @@ static void draw_one_window(int i, int focus, int covered, int has_damage, int l
         if (windows[i].client_gen[windows[i].client_front] == 0) return;
         // A menu's small shadow, under it (wm_shadow.h); a fullscreen
         // window has nothing beside it to shadow.
-        if (windows[i].popup)
-            wm_shadow_draw(windows[i].x, windows[i].y, windows[i].w, windows[i].h, 0,
-                           WM_SHADOW_POPUP);
+        if (windows[i].popup) {
+            wm_shadow_draw(windows[i].x, windows[i].y, windows[i].w, windows[i].h,
+                           corner_radius(&windows[i]), WM_SHADOW_POPUP);
+            corners_save(&windows[i]);
+        }
         clip_to_window_content(&windows[i], has_damage);
         wm_client_draw(&windows[i]);
         apply_scene_clip(has_damage);
+        if (windows[i].popup) corners_round(&windows[i]);
         return;
     }
     // NOTHING UNTIL THE CLIENT'S FIRST PRESENT -- for a TOPLEVEL as

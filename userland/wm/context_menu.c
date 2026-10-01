@@ -5,6 +5,7 @@
 #include "wm_overlay.h"
 #include "ui/uui.h"
 #include "ui/uui_menubar.h"
+#include "ui/uui_popup.h"
 #include "ui/utheme.h"
 #include "kapi.h"
 
@@ -25,13 +26,13 @@ static struct uui_menubar g_menu;
 // Past these a menu is TRUNCATED rather than overrunning: the rows that
 // fit still work, which is the failure a WM menu can survive.
 #define CM_MAX_ROWS 32
-#define CM_MAX_SUB  32
+#define CM_MAX_SUB  96   // every row of every submenu, both levels together
 #define CM_CODES    (CM_MAX_ROWS + CM_MAX_SUB)
 
 static struct uui_menu_item g_items[CM_MAX_ROWS];
 static struct uui_menu_item g_subs[CM_MAX_SUB];
 static const struct context_menu_item *g_src[CM_CODES];
-static int g_ncodes;
+static int g_ncodes, g_subn;
 
 static int add_code(const struct context_menu_item *it) {
     if (g_ncodes >= CM_CODES) return -1;
@@ -39,28 +40,31 @@ static int add_code(const struct context_menu_item *it) {
     return g_ncodes++;
 }
 
-static void translate_row(const struct context_menu_item *s, struct uui_menu_item *d) {
+// One row, and its submenu below it to `depth` more levels.
+static void translate_row(const struct context_menu_item *s, struct uui_menu_item *d,
+                          int depth) {
+    *d = (struct uui_menu_item){ 0 };
     d->label = s->separator ? 0 : s->label;   // a NULL label IS the separator
-    d->accel = 0;                             // no accelerators in a WM menu
+    d->accel = s->accel;
     d->code = add_code(s);
-    d->sub = 0;
-    d->sub_count = 0;
+    d->icon = s->icon;
+    d->tint = s->tint;
+    d->style = s->strip ? UUI_MIS_STRIP : 0;
+    if (!s->sub || s->sub_count <= 0 || depth <= 0 || g_subn >= CM_MAX_SUB) return;
+    int k = s->sub_count;
+    if (g_subn + k > CM_MAX_SUB) k = CM_MAX_SUB - g_subn;
+    struct uui_menu_item *rows = &g_subs[g_subn];
+    g_subn += k;   // claimed before recursing, so a nested level packs after it
+    d->sub = rows;
+    d->sub_count = k;
+    for (int j = 0; j < k; j++) translate_row(&s->sub[j], &rows[j], depth - 1);
 }
 
 static int build(const struct context_menu_item *src, int count) {
     g_ncodes = 0;
+    g_subn = 0;
     int n = count > CM_MAX_ROWS ? CM_MAX_ROWS : count;
-    int subn = 0;
-    for (int i = 0; i < n; i++) {
-        translate_row(&src[i], &g_items[i]);
-        if (!src[i].sub || src[i].sub_count <= 0 || subn >= CM_MAX_SUB) continue;
-        int k = src[i].sub_count;
-        if (subn + k > CM_MAX_SUB) k = CM_MAX_SUB - subn;
-        g_items[i].sub = &g_subs[subn];
-        g_items[i].sub_count = k;
-        for (int j = 0; j < k; j++) translate_row(&src[i].sub[j], &g_subs[subn + j]);
-        subn += k;
-    }
+    for (int i = 0; i < n; i++) translate_row(&src[i], &g_items[i], 2);
     return n;
 }
 
@@ -68,7 +72,8 @@ static int build(const struct context_menu_item *src, int count) {
 // a tick follows the caller's live struct with nothing to keep in sync.
 static unsigned item_flags(int code) {
     if (code < 0 || code >= g_ncodes || !g_src[code]) return 0;
-    return g_src[code]->checked ? UUI_MI_CHECKED : 0;
+    return (g_src[code]->checked ? UUI_MI_CHECKED : 0) |
+           (g_src[code]->disabled ? UUI_MI_DISABLED : 0);
 }
 
 // --- geometry, all asked of the widget ---------------------------------
@@ -103,12 +108,8 @@ void context_menu_open_at(int x, int y, const struct context_menu_item *items, i
 
     uui_menubar_init(&g_menu, 0, 0);   // no bar strip: a context menu is level 0 alone
     g_menu.item_flags = item_flags;
-    // The panel's palette, not the widget's built-in defaults, so this
-    // menu and the rest of the desktop follow one theme.
-    g_menu.popup_bg = UTHEME_PANEL_BG;
-    g_menu.fg       = UTHEME_TEXT;
-    g_menu.border   = UTHEME_BORDER;
-    g_menu.hot_bg   = uui_state_bg(UTHEME_PANEL_BG, UUI_STATE_HOVER);
+    // The widget's own card, with no colours of the panel's: a desktop
+    // menu and an app's are one design (docs/gui-guidelines.md, "Menus").
     // The same usable rectangle wm_popup_place() clamps into, handed to
     // the widget's own flip/slide/clamp -- so a menu opened near the
     // taskbar or an edge stays whole, and one with no room below the
@@ -173,6 +174,26 @@ static int row_top(int level, int index) {
 }
 
 int context_menu_row_top(int index) { return row_top(0, index); }
+
+int context_menu_row_rect(int level, int index, int *x, int *y, int *w, int *h) {
+    if (!context_menu_open) return 0;
+    return uui_menubar_item_rect(&g_menu, level, index, x, y, w, h);
+}
+
+int context_menu_level_rows(int level, int *x, int *y, int *w) {
+    int h;
+    if (!context_menu_open || !uui_menubar_popup_rect(&g_menu, level, x, y, w, &h)) return 0;
+    return g_menu.level[level].count;
+}
+
+const char *context_menu_level_label(int level, int index) { return row_label(level, index); }
+
+int context_menu_row_disabled(int level, int index) {
+    if (!context_menu_open || level >= uui_menubar_depth(&g_menu)) return 0;
+    const struct uui_menu_level *lv = &g_menu.level[level];
+    if (index < 0 || index >= lv->count || !lv->items[index].label) return 0;
+    return (item_flags(lv->items[index].code) & UUI_MI_DISABLED) != 0;
+}
 int context_menu_sub_row_top(int index) { return row_top(1, index); }
 
 void context_menu_close(void) {
@@ -190,7 +211,7 @@ void context_menu_draw(int mx, int my) {
     for (int l = 0; l < uui_menubar_depth(&g_menu); l++) {
         int x, y, w, h;
         if (uui_menubar_popup_rect(&g_menu, l, &x, &y, &w, &h))
-            wm_shadow_draw(x, y, w, h, 0, WM_SHADOW_POPUP);
+            wm_shadow_draw(x, y, w, h, uui_popup_radius(), WM_SHADOW_POPUP);
     }
     uui_menubar_draw_popup(wm_surface(), &g_menu);
 }
@@ -245,6 +266,24 @@ int context_menu_handle_click(int mx, int my) {
     // panel's own drawing used to close on a separator.
     context_menu_open = uui_menubar_is_open(&g_menu);
     if (!context_menu_open) wm_overlay_set_parent(0);
+    redraw_pending = 1;
+    return 1;
+}
+
+// The open menu owns the keyboard, as an xdg_popup's grab does: every
+// key is the widget's while it is up, and a commit runs the row exactly
+// as a click does.
+int context_menu_key(int key, uint8_t mods) {
+    (void)mods;
+    if (!context_menu_open) return 0;
+    context_menu_damage();
+    int code;
+    uui_menubar_key(&g_menu, key, &code);
+    if (code >= 0 && code < g_ncodes && g_src[code] && g_src[code]->on_select)
+        g_src[code]->on_select(g_src[code]->ctx);
+    context_menu_open = uui_menubar_is_open(&g_menu);
+    if (!context_menu_open) wm_overlay_set_parent(0);
+    context_menu_damage();
     redraw_pending = 1;
     return 1;
 }

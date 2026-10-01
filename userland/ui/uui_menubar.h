@@ -88,18 +88,38 @@ struct uui_menu_item {
     // Non-NULL makes this a SUBMENU. `sub_count` is its length.
     const struct uui_menu_item *sub;
     int sub_count;
+
+    // --- optional, after `sub_count` so every positional initialiser
+    // above keeps its meaning --------------------------------------------
+
+    // The row's icon, an icon_get() name drawn in the gutter, and its
+    // colour -- uui_toolbar_item's `tint` exactly: 0 keeps the icon's own
+    // ink, a small number is a theme ACTION ROLE (what the command does),
+    // anything else an 0xAARRGGBB. A tick, when the item is checked, takes
+    // the gutter instead.
+    const char *icon;
+    uint32_t tint;
+    unsigned style; // UUI_MIS_*
 };
 
 // What `item_flags` may return. Absent = an ordinary enabled item.
 #define UUI_MI_CHECKED  0x01 // draws a tick in the left gutter
 #define UUI_MI_DISABLED 0x02 // greyed, unhittable, skipped by the arrows
 
-#define UUI_MENU(label_, code_, accel_) { (label_), (accel_), (code_), 0, 0 }
-#define UUI_MENU_SEP                    { 0, 0, 0, 0, 0 }
+// THE COMMAND STRIP: an icon-only button in a row across the menu's top
+// -- Windows 11's Cut/Copy/Rename/Delete. Only a LEADING run of items may
+// carry it; the hovered button names itself in a tip under the strip,
+// since an icon alone is not a label. Its own `icon` is required.
+#define UUI_MIS_STRIP 0x01
+
+#define UUI_MENU(label_, code_, accel_) { (label_), (accel_), (code_), 0, 0, 0, 0, 0 }
+#define UUI_MENU_ICON(label_, code_, accel_, icon_, tint_) \
+    { (label_), (accel_), (code_), 0, 0, (icon_), (tint_), 0 }
+#define UUI_MENU_SEP                    { 0, 0, 0, 0, 0, 0, 0, 0 }
 #define UUI_SUBMENU(label_, arr_) \
-    { (label_), 0, 0, (arr_), (int)(sizeof(arr_) / sizeof((arr_)[0])) }
+    { (label_), 0, 0, (arr_), (int)(sizeof(arr_) / sizeof((arr_)[0])), 0, 0, 0 }
 #define UUI_SUBMENU_CODE(label_, arr_, code_) \
-    { (label_), 0, (code_), (arr_), (int)(sizeof(arr_) / sizeof((arr_)[0])) }
+    { (label_), 0, (code_), (arr_), (int)(sizeof(arr_) / sizeof((arr_)[0])), 0, 0, 0 }
 
 // How many popups may be open at once -- the bar's own row is not one of
 // them, so this is the nesting depth BELOW a title. 5 is past anything a
@@ -140,6 +160,8 @@ struct uui_menubar {
     // uui_menubar_ops below. -1 when there is nothing waiting.
     int committed;
 
+    // Every colour defaults to UUI_COLOR_UNSET and resolves at draw time:
+    // the popup's from ui/uui_popup.h's card, so every menu matches.
     uint32_t bar_bg, fg, popup_bg, hot_bg, border, accel_fg, disabled_fg;
 };
 

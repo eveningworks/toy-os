@@ -1,6 +1,8 @@
 // menu bar + nested pull-down menus. See ui/uui_menubar.h for the design.
 #include "ui/uui_menubar.h"
 #include "ui/uui_popup.h" // each level is a popup surface when one is granted
+#include "ui/utheme.h"
+#include "lib/icon_cache.h" // row icons, as uui_toolbar draws them
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 #include <string.h>
 #include <ctype.h> // tolower() -- the toolkit's, over k_tolower
@@ -26,19 +28,43 @@ static int unit(void) {
     return u > 0 ? u : ugfx_char_w();
 }
 
-static int pad(void)      { return unit() / 2; }
-static int gutter(void)   { return unit() * 2; } // the tick column
-static int arrow_col(void){ return unit(); }     // the submenu arrow
-static int accel_gap(void){ return unit() * 2; }
+// THE POPUP IS WINDOWS 11'S CARD (docs/gui-guidelines.md, "Menus"): rows
+// a pointer can aim at, a hover that is a rounded pill INSET from the
+// edge, an icon gutter, separators edge to edge. Every number below is
+// a share of the line height, so 14 px gives Win11's own 32 px rows.
+static int air(void)      { int a = ugfx_char_h() / 3; return a < 3 ? 3 : a; } // card padding, pill inset
+static int row_pad(void)  { return unit() + unit() / 4; } // inside the pill, either side
+static int icon_px(void)  { return ugfx_char_h() + 3; }
+static int gutter(void)   { return icon_px() + unit() * 3 / 2; } // icon/tick + gap to the label
+static int arrow_col(void){ return unit() * 2; } // the submenu chevron, with air before it
+static int accel_gap(void){ return unit() * 5 / 2; }
+static int pill_r(void)   { return air(); }
 
-static int row_height(void) { return ugfx_char_h() + 6; }
+static int row_height(void) { return ugfx_char_h() * 2 + 6; }
 
 // A separator is a hairline with air above and below it, not a row.
-static int sep_height(void) { int h = ugfx_char_h() / 3; return h < 5 ? 5 : h; }
+static int sep_height(void) { return 2 * air() + 1; }
+
+// The command strip: buttons a row tall and a little wider than square.
+static int strip_btn_w(void) { return unit() * 5; }
+static int strip_height(void) { return row_height() + air(); }
 
 static int is_sep(const struct uui_menu_item *it) { return it->label == 0; }
 static int is_sub(const struct uui_menu_item *it) { return it->sub != 0 && it->sub_count > 0; }
+static int in_strip(const struct uui_menu_item *it) {
+    return !is_sep(it) && (it->style & UUI_MIS_STRIP) && it->icon;
+}
 
+// How many leading items form the strip. Only a LEADING run counts, so a
+// stray flag further down is an ordinary row rather than a gap.
+static int strip_count(const struct uui_menu_item *items, int count) {
+    int n = 0;
+    while (n < count && in_strip(&items[n])) n++;
+    return n;
+}
+
+// The height an item adds to the column below the strip; strip items
+// share the strip's one height, which row_offset() accounts for.
 static int item_height(const struct uui_menu_item *it) {
     return is_sep(it) ? sep_height() : row_height();
 }
@@ -65,9 +91,11 @@ static int title_w(const struct uui_menu_item *it) {
 static void level_size(const struct uui_menu_item *items, int count,
                         int *out_w, int *out_h) {
     int widest = 0, widest_accel = 0;
-    int h = 2; // the 1px border, top and bottom
+    int ns = strip_count(items, count);
+    // The 1px border and the card's air, top and bottom.
+    int h = 2 + 2 * air() + (ns ? strip_height() : 0);
 
-    for (int i = 0; i < count; i++) {
+    for (int i = ns; i < count; i++) {
         const struct uui_menu_item *it = &items[i];
         h += item_height(it);
         if (is_sep(it)) continue;
@@ -81,25 +109,47 @@ static void level_size(const struct uui_menu_item *items, int count,
 
     // The arrow column is reserved whether or not this menu has a
     // submenu, so labels line up between sibling menus.
-    int w = 2 + pad() + gutter() + widest + arrow_col() + pad();
+    int w = 2 + 2 * air() + 2 * row_pad() + gutter() + widest + arrow_col();
     if (widest_accel) w += accel_gap() + widest_accel;
+    int sw = 2 + 2 * air() + ns * strip_btn_w() + (ns > 0 ? (ns - 1) * air() : 0);
+    if (w < sw) w = sw;
+    if (w < unit() * 16) w = unit() * 16; // Windows' and Breeze's floor: a card, not a tag
 
     *out_w = w;
     *out_h = h;
 }
 
-// y offset of row `index` from the popup's top edge.
-static int row_offset(const struct uui_menu_item *items, int index) {
-    int y = 1;
-    for (int i = 0; i < index; i++) y += item_height(&items[i]);
+// y offset of row `index` from the popup's top edge; a strip item's is
+// the strip's own top.
+static int row_offset(const struct uui_menu_item *items, int count, int index) {
+    int ns = strip_count(items, count);
+    int y = 1 + air();
+    if (index < ns) return y;
+    if (ns) y += strip_height();
+    for (int i = ns; i < index; i++) y += item_height(&items[i]);
     return y;
 }
 
-// Which SELECTABLE row a point falls on, or -1. Separators deliberately
-// answer -1: they are drawn but are not rows you can be on.
-static int row_at(const struct uui_menu_level *lv, int dy) {
-    int y = 1;
-    for (int i = 0; i < lv->count; i++) {
+// Strip button `i`'s rect relative to the popup's top-left.
+static void strip_rect(int i, int *x, int *y, int *w, int *h) {
+    *x = 1 + air() + i * (strip_btn_w() + air());
+    *y = 1 + air() + (strip_height() - row_height()) / 2;
+    *w = strip_btn_w();
+    *h = row_height();
+}
+
+// Which SELECTABLE item a point falls on, or -1. Separators and the gaps
+// between strip buttons deliberately answer -1: they are drawn but are
+// not places you can be on.
+static int row_at(const struct uui_menu_level *lv, int dx, int dy) {
+    int ns = strip_count(lv->items, lv->count);
+    for (int i = 0; i < ns; i++) {
+        int x, y, w, h;
+        strip_rect(i, &x, &y, &w, &h);
+        if (uui_hit(x, y, w, h, dx, dy)) return i;
+    }
+    int y = 1 + air() + (ns ? strip_height() : 0);
+    for (int i = ns; i < lv->count; i++) {
         int h = item_height(&lv->items[i]);
         if (dy >= y && dy < y + h) return is_sep(&lv->items[i]) ? -1 : i;
         y += h;
@@ -128,7 +178,7 @@ static void place(const struct uui_menubar *m, int ax, int ay, int aw, int ah,
         if (y + h > m->by + m->bh && ay - h >= m->by) y = ay - h; // flip above
     } else {
         x = ax + aw;
-        y = ay - 1; // the submenu's first row lines up with its parent row
+        y = ay - 1 - air(); // the submenu's first row lines up with its parent row
         if (x + w > m->bx + m->bw && ax - w >= m->bx) x = ax - w; // flip left
     }
 
@@ -174,7 +224,7 @@ static void level_done(void *owner) {
 // when the provider grants one, drawn in-window against the bounds
 // otherwise. `side` 0 = below the anchor (a title, the cursor), 1 = to
 // its right (a submenu, whose first row lines up with its parent row --
-// hence the anchor is nudged up by the popup's 1px border).
+// hence the anchor is nudged up by the popup's border and air).
 static void open_level(struct uui_menubar *m, int l,
                         const struct uui_menu_item *items, int count,
                         int ax, int ay, int aw, int ah, int side, int parent) {
@@ -186,7 +236,7 @@ static void open_level(struct uui_menubar *m, int l,
     int px, py;
     // A MENU GRABS: a press outside must dismiss it and be swallowed,
     // which is the whole reason it is a surface and not a rectangle.
-    int surf = uui_popup_open(ax, side ? ay - 1 : ay, aw, ah, w, h,
+    int surf = uui_popup_open(ax, side ? ay - 1 - air() : ay, aw, ah, w, h,
                               side ? UUI_POPUP_RIGHT : UUI_POPUP_BELOW,
                               UUI_POPUP_GRAB, level_done, m, &px, &py);
     if (!surf) place(m, ax, ay, aw, ah, w, h, side, &px, &py);
@@ -275,21 +325,29 @@ void uui_menubar_init(struct uui_menubar *m, const struct uui_menu_item *items,
 
     m->bar_bg      = UUI_COLOR_UNSET;
     m->fg          = UUI_COLOR_UNSET;
-    m->popup_bg    = ugfx_rgb(250, 250, 252);
+    m->popup_bg    = UUI_COLOR_UNSET;
     m->hot_bg      = UUI_COLOR_UNSET;
     m->border      = UUI_COLOR_UNSET;
-    m->accel_fg    = ugfx_rgb(120, 125, 135);
-    m->disabled_fg = ugfx_rgb(170, 172, 178);
+    m->accel_fg    = UUI_COLOR_UNSET;
+    m->disabled_fg = UUI_COLOR_UNSET;
 }
 
-// Resolved at DRAW time (utheme.h). Only the roles the palette names:
-// `popup_bg`, `accel_fg` and `disabled_fg` are still literals, since no
-// role matches them and mapping them to the nearest one would change
-// what every menu looks like today.
+// Resolved at DRAW time (utheme.h), the popup's from the shared card
+// (ui/uui_popup.h) and the rest DERIVED from it, so a theme change
+// follows. `border` is the bar's hairline; the card's edge is the card's.
 static uint32_t m_bar_bg(const struct uui_menubar *m) { return UUI_COLOR(m->bar_bg, UTHEME_BAR_BG); }
 static uint32_t m_fg(const struct uui_menubar *m)     { return UUI_COLOR(m->fg, UTHEME_TEXT); }
-static uint32_t m_hot_bg(const struct uui_menubar *m) { return UUI_COLOR(m->hot_bg, UTHEME_SELECTION); }
+static uint32_t m_popup_bg(const struct uui_menubar *m) { return UUI_COLOR(m->popup_bg, uui_popup_bg()); }
+static uint32_t m_hot_bg(const struct uui_menubar *m) {
+    return UUI_COLOR(m->hot_bg, uui_state_bg(m_popup_bg(m), UUI_STATE_HOVER));
+}
 static uint32_t m_border(const struct uui_menubar *m) { return UUI_COLOR(m->border, UTHEME_OUTLINE); }
+static uint32_t m_accel_fg(const struct uui_menubar *m) {
+    return UUI_COLOR(m->accel_fg, ugfx_blend(m_fg(m), m_popup_bg(m), 120));
+}
+static uint32_t m_disabled_fg(const struct uui_menubar *m) {
+    return UUI_COLOR(m->disabled_fg, ugfx_blend(m_fg(m), m_popup_bg(m), 170));
+}
 
 
 void uui_menubar_set_geometry(struct uui_menubar *m, int x, int y, int w, int h) {
@@ -346,8 +404,17 @@ int uui_menubar_item_rect(const struct uui_menubar *m, int level, int index,
     if (level < 0 || level >= m->depth) return 0;
     const struct uui_menu_level *lv = &m->level[level];
     if (index < 0 || index >= lv->count) return 0;
+    if (index < strip_count(lv->items, lv->count)) {
+        int sx, sy, sw, sh;
+        strip_rect(index, &sx, &sy, &sw, &sh);
+        if (x) *x = lv->x + sx;
+        if (y) *y = lv->y + sy;
+        if (w) *w = sw;
+        if (h) *h = sh;
+        return 1;
+    }
     if (x) *x = lv->x;
-    if (y) *y = lv->y + row_offset(lv->items, index);
+    if (y) *y = lv->y + row_offset(lv->items, lv->count, index);
     if (w) *w = lv->w;
     if (h) *h = item_height(&lv->items[index]);
     return 1;
@@ -375,18 +442,42 @@ int uui_menubar_hit(const struct uui_menubar *m, int cx, int cy) {
 // drawing
 // ---------------------------------------------------------------------
 
-static void draw_tick(struct ugfx_surface *s, int x, int y, uint32_t fg) {
-    int ch = ugfx_char_h();
-    int mid = ch / 2;
-    ugfx_draw_line(s, x + 1, y + mid, x + ch / 3, y + ch - 3, fg, GEOM_AA);
-    ugfx_draw_line(s, x + ch / 3, y + ch - 3, x + ch - 2, y + 2, fg, GEOM_AA);
+// The tick takes the icon gutter, in the accent -- Windows 11's. Two
+// strokes a pixel apart, so it reads at the weight of the label beside it.
+static void draw_tick(struct ugfx_surface *s, int x, int y, int sz, uint32_t c) {
+    int a = sz / 6;
+    for (int d = 0; d < 3; d++) {   // three passes: (0,0), (0,1), (1,0)
+        int dx = d == 2, dy = d == 1;
+        ugfx_draw_line(s, x + a + dx, y + sz / 2 + dy, x + sz * 2 / 5 + dx, y + sz - a - 1 + dy, c, GEOM_AA);
+        ugfx_draw_line(s, x + sz * 2 / 5 + dx, y + sz - a - 1 + dy, x + sz - a + dx, y + a + 1 + dy, c, GEOM_AA);
+    }
 }
 
-static void draw_arrow(struct ugfx_surface *s, int cx, int cy, uint32_t fg) {
-    int r = ugfx_char_h() / 4;
+// A chevron, not a filled triangle: the submenu mark of Windows 11 and
+// Breeze, stroked at the label's weight.
+static void draw_chevron(struct ugfx_surface *s, int cx, int cy, uint32_t c) {
+    int r = ugfx_char_h() / 3;
     if (r < 3) r = 3;
-    for (int i = 0; i <= r; i++)
-        ugfx_fill_rect(s, cx - r / 2 + i, cy - (r - i), 1, 2 * (r - i) + 1, fg);
+    for (int d = 0; d < 2; d++) {
+        ugfx_draw_line(s, cx - r / 2 + d, cy - r, cx + r / 2 + d, cy, c, GEOM_AA);
+        ugfx_draw_line(s, cx + r / 2 + d, cy, cx - r / 2 + d, cy + r, c, GEOM_AA);
+    }
+}
+
+// The row's icon: its tint as a symbolic icon, or its own ink. A disabled
+// row's icon is drawn in the disabled ink whatever it is -- a full-colour
+// icon beside a greyed label reads as enabled.
+static void draw_item_icon(struct ugfx_surface *s, const struct uui_menubar *m,
+                           const struct uui_menu_item *it, int x, int y, int off) {
+    const struct uimg *ico = icon_get(it->icon, icon_px());
+    if (!ico) return;
+    if (off || it->tint) {
+        uint32_t c = off ? m_disabled_fg(m)
+                   : it->tint < UTHEME_ACT_COUNT ? utheme_action((int)it->tint) : it->tint;
+        ugfx_blit_tinted(s, x, y, ico->w, ico->h, ico->px, ico->w, c);
+    } else {
+        ugfx_blit_alpha(s, x, y, ico->w, ico->h, ico->px, ico->w);
+    }
 }
 
 void uui_menubar_draw(struct ugfx_surface *s, const struct uui_menubar *m) {
@@ -404,70 +495,120 @@ void uui_menubar_draw(struct ugfx_surface *s, const struct uui_menubar *m) {
         else if (m->hot_root == i) st = UUI_STATE_HOVER;
 
         uint32_t bg = uui_state_bg(m_bar_bg(m), st);
-        if (st != UUI_STATE_REST) ugfx_fill_rect(s, x, y, w, h, bg);
+        if (st != UUI_STATE_REST) uui_fill_round_rect(s, x, y + 2, w, h - 4, pill_r(), bg);
         ugfx_draw_string_clipped(s, x + unit(), y + (h - ugfx_char_h()) / 2,
                                   w - 2 * unit() + 2, m->items[i].label,
                                   m_fg(m), bg);
     }
 }
 
+// The hovered strip button's name, under the strip and inside the card
+// -- an icon alone is not a label, and a tooltip of its own would need a
+// surface and a timer this widget has neither of.
+static void draw_strip_tip(struct ugfx_surface *s, const struct uui_menubar *m,
+                           const struct uui_menu_level *lv, int lx, int ly) {
+    const struct uui_menu_item *it = &lv->items[lv->hot];
+    int bx, by, bw, bh;
+    strip_rect(lv->hot, &bx, &by, &bw, &bh);
+    int tw = ugfx_text_width(it->label);
+    int aw = it->accel ? ugfx_text_width(it->accel) : 0;
+    int w = tw + (aw ? unit() + aw : 0) + 2 * unit();
+    int h = ugfx_char_h() + 2 * air();
+    int x = lx + bx, y = ly + by + bh + air() / 2;
+    if (x + w > lx + lv->w - 2) x = lx + lv->w - 2 - w;
+    if (x < lx + 2) x = lx + 2;
+    uint32_t bg = UTHEME_WHITE;
+    uui_fill_round_rect(s, x, y, w, h, pill_r(), UTHEME_OUTLINE);
+    uui_fill_round_rect(s, x + 1, y + 1, w - 2, h - 2, pill_r() - 1, bg);
+    int ty = y + (h - ugfx_char_h()) / 2;
+    ugfx_draw_string_clipped(s, x + unit(), ty, tw, it->label, m_fg(m), bg);
+    if (aw) ugfx_draw_string_clipped(s, x + unit() + tw + unit(), ty, aw, it->accel,
+                                     m_accel_fg(m), bg);
+}
+
 // One level, with its origin moved by (-ox, -oy): 0,0 when it is drawn
 // into the window it hit-tests in, the level's own x/y when it is drawn
 // into its popup surface, whose top-left IS the level's.
 static void draw_level_at(struct ugfx_surface *s, const struct uui_menubar *m,
-                           const struct uui_menu_level *lv, int ox, int oy) {
+                           const struct uui_menu_level *lv, int ox, int oy,
+                           int on_surface) {
     int lx = lv->x - ox, ly = lv->y - oy;
-    ugfx_fill_rect(s, lx, ly, lv->w, lv->h, m->popup_bg);
-    ugfx_draw_rect(s, lx, ly, lv->w, lv->h, m_border(m));
+    uint32_t bg = m_popup_bg(m), edge = uui_popup_border();
+    if (on_surface) {
+        // SQUARE: the compositor rounds a popup surface's corners against
+        // what is really behind it, and carries this edge round the arc.
+        ugfx_fill_rect(s, lx, ly, lv->w, lv->h, bg);
+        ugfx_draw_rect(s, lx, ly, lv->w, lv->h, edge);
+    } else {
+        int r = uui_popup_radius();
+        uui_fill_round_rect(s, lx, ly, lv->w, lv->h, r, edge);
+        uui_fill_round_rect(s, lx + 1, ly + 1, lv->w - 2, lv->h - 2, r - 1, bg);
+    }
 
-    int y = ly + 1;
-    for (int i = 0; i < lv->count; i++) {
+    int ns = strip_count(lv->items, lv->count);
+    for (int i = 0; i < ns; i++) {
+        const struct uui_menu_item *it = &lv->items[i];
+        int bx, by, bw, bh;
+        strip_rect(i, &bx, &by, &bw, &bh);
+        bx += lx; by += ly;
+        int off = (flags_of(m, it) & UUI_MI_DISABLED) != 0;
+        if (i == lv->hot && !off) uui_fill_round_rect(s, bx, by, bw, bh, pill_r(), m_hot_bg(m));
+        draw_item_icon(s, m, it, bx + (bw - icon_px()) / 2, by + (bh - icon_px()) / 2, off);
+    }
+
+    int y = ly + 1 + air() + (ns ? strip_height() : 0);
+    int px = lx + 1 + air(), pw = lv->w - 2 - 2 * air();
+    for (int i = ns; i < lv->count; i++) {
         const struct uui_menu_item *it = &lv->items[i];
         int h = item_height(it);
 
         if (is_sep(it)) {
-            ugfx_fill_rect(s, lx + pad(), y + h / 2, lv->w - 2 * pad(), 1, m_border(m));
+            ugfx_fill_rect(s, lx + 1, y + h / 2, lv->w - 2, 1, ugfx_blend(edge, bg, 96));
             y += h;
             continue;
         }
 
         unsigned f = flags_of(m, it);
         int off = (f & UUI_MI_DISABLED) != 0;
-        uint32_t bg = m->popup_bg;
+        uint32_t rb = bg;
         if (i == lv->hot && !off) {
-            bg = m_hot_bg(m);
-            ugfx_fill_rect(s, lx + 1, y, lv->w - 2, h, bg);
+            rb = m_hot_bg(m);
+            uui_fill_round_rect(s, px, y, pw, h, pill_r(), rb);
         }
-        uint32_t fg = off ? m->disabled_fg : m_fg(m);
+        uint32_t fg = off ? m_disabled_fg(m) : m_fg(m);
         int ty = y + (h - ugfx_char_h()) / 2;
+        int gx = px + row_pad(), gy = y + (h - icon_px()) / 2;
 
-        if (f & UUI_MI_CHECKED) draw_tick(s, lx + 1 + pad(), ty, fg);
+        if (f & UUI_MI_CHECKED) draw_tick(s, gx, gy, icon_px(), off ? fg : UTHEME_ACCENT);
+        else if (it->icon) draw_item_icon(s, m, it, gx, gy, off);
 
-        int label_x = lx + 1 + pad() + gutter();
-        int right = lx + lv->w - 1 - pad() - arrow_col();
+        int label_x = gx + gutter();
+        int right = px + pw - row_pad() - arrow_col();
         int avail = right - label_x;
 
         if (is_sub(it)) {
-            draw_arrow(s, right + arrow_col() / 2, y + h / 2, fg);
+            draw_chevron(s, right + arrow_col() / 2, y + h / 2, fg);
         } else if (it->accel) {
             int aw = ugfx_text_width(it->accel);
             avail -= aw + accel_gap();
-            ugfx_draw_string_clipped(s, right - aw, ty, aw, it->accel,
-                                      off ? m->disabled_fg : m->accel_fg, bg);
+            ugfx_draw_string_clipped(s, right + arrow_col() - aw, ty, aw, it->accel,
+                                      off ? fg : m_accel_fg(m), rb);
         }
 
-        ugfx_draw_string_clipped(s, label_x, ty, avail, it->label, fg, bg);
+        ugfx_draw_string_clipped(s, label_x, ty, avail, it->label, fg, rb);
         y += h;
     }
+
+    if (lv->hot >= 0 && lv->hot < ns) draw_strip_tip(s, m, lv, lx, ly);
 }
 
 static void draw_level(struct ugfx_surface *s, const struct uui_menubar *m,
                         const struct uui_menu_level *lv) {
     if (lv->surf) {
         struct ugfx_surface *ps = uui_popup_surface(lv->surf);
-        if (ps) { draw_level_at(ps, m, lv, lv->x, lv->y); return; }
+        if (ps) { draw_level_at(ps, m, lv, lv->x, lv->y, 1); return; }
     }
-    draw_level_at(s, m, lv, 0, 0);
+    draw_level_at(s, m, lv, 0, 0, 0);
 }
 
 void uui_menubar_draw_popup(struct ugfx_surface *s, const struct uui_menubar *m) {
@@ -530,7 +671,7 @@ int uui_menubar_motion(struct uui_menubar *m, int cx, int cy) {
         struct uui_menu_level *lv = &m->level[l];
         if (!uui_hit(lv->x, lv->y, lv->w, lv->h, cx, cy)) continue;
 
-        int idx = row_at(lv, cy - lv->y);
+        int idx = row_at(lv, cx - lv->x, cy - lv->y);
         if (idx != lv->hot) { lv->hot = idx; changed = 1; }
 
         int want = l + 1;
@@ -561,7 +702,7 @@ int uui_menubar_release(struct uui_menubar *m, int cx, int cy) {
         const struct uui_menu_level *lv = &m->level[l];
         if (!uui_hit(lv->x, lv->y, lv->w, lv->h, cx, cy)) continue;
 
-        int idx = row_at(lv, cy - lv->y);
+        int idx = row_at(lv, cx - lv->x, cy - lv->y);
         if (idx < 0) return -1;
         const struct uui_menu_item *it = &lv->items[idx];
         if (!enabled(m, it) || is_sub(it)) return -1;
@@ -666,13 +807,22 @@ int uui_menubar_key(struct uui_menubar *m, int key, int *out_code) {
     case KEY_ARROW_UP:
     case KEY_ARROW_DOWN: {
         struct uui_menu_level *lv = &m->level[m->depth - 1];
-        lv->hot = step_sel(m, lv->items, lv->count, lv->hot,
+        // The strip is ONE row to Up/Down: Down leaves it for the list.
+        int ns = strip_count(lv->items, lv->count);
+        int from = (key == KEY_ARROW_DOWN && lv->hot >= 0 && lv->hot < ns) ? ns - 1 : lv->hot;
+        lv->hot = step_sel(m, lv->items, lv->count, from,
                             key == KEY_ARROW_DOWN ? +1 : -1);
         return 1;
     }
 
     case KEY_ARROW_RIGHT: {
         struct uui_menu_level *lv = &m->level[m->depth - 1];
+        int ns = strip_count(lv->items, lv->count);
+        if (lv->hot >= 0 && lv->hot + 1 < ns) { // along the strip
+            for (int i = lv->hot + 1; i < ns; i++)
+                if (enabled(m, &lv->items[i])) { lv->hot = i; break; }
+            return 1;
+        }
         if (lv->hot >= 0 && is_sub(&lv->items[lv->hot]) && enabled(m, &lv->items[lv->hot])) {
             open_sub(m, m->depth - 1, lv->hot);
             hot_to_first(m);
@@ -682,7 +832,14 @@ int uui_menubar_key(struct uui_menubar *m, int key, int *out_code) {
         return 1;
     }
 
-    case KEY_ARROW_LEFT:
+    case KEY_ARROW_LEFT: {
+        struct uui_menu_level *lv = &m->level[m->depth - 1];
+        if (lv->hot > 0 && lv->hot < strip_count(lv->items, lv->count)) {
+            for (int i = lv->hot - 1; i >= 0; i--)
+                if (enabled(m, &lv->items[i])) { lv->hot = i; break; }
+            return 1;
+        }
+    }
         if (m->depth > 1) { set_depth(m, m->depth - 1); return 1; }
         move_root(m, -1);
         return 1;

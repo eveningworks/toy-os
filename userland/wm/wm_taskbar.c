@@ -734,9 +734,9 @@ static void open_group_menu(const struct taskbar_button *b) {
             g_row_label[n][k] = windows[i].title[k];
         g_row_label[n][k] = '\0';
         g_row_target[n] = windows[i].open_seq;
-        g_rows[n].label = g_row_label[n];
-        g_rows[n].on_select = row_raise;
-        g_rows[n].ctx = &g_row_target[n];
+        g_rows[n] = (struct context_menu_item){ .label = g_row_label[n], .on_select = row_raise,
+                                                .ctx = &g_row_target[n],
+                                                .icon = wm_window_icon_name(i) };
         n++;
     }
     if (n == 0) return;

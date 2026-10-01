@@ -571,7 +571,9 @@ class DebugConsole:
             return None
         for r in m.get("rows", []):
             if r.get("label") == label:
-                return (m["x"] + m["w"] // 2, r["cy"])
+                # A command-strip button has its own x and width; a row
+                # spans the menu. `cx` is absent from an older WM.
+                return (r.get("cx", m["x"] + m["w"] // 2), r["cy"])
         return None
 
     def taskbar(self):

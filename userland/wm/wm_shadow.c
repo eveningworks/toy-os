@@ -142,10 +142,11 @@ void wm_shadow_draw(int x, int y, int w, int h, int corner_r, enum wm_shadow_kin
     int cy0 = sy + cr, cy1 = sy + h - 1 - cr;
 
     // Everything the shadow can reach, less the surface and the clip.
-    // A POPUP'S SHADOW FALLS DOWNWARD ONLY: a menu hangs from the bar
-    // or the control that opened it, and a shadow reaching up over
-    // that bar reads as the bar changing when the menu opens. Windows
-    // menus and Breeze's both keep the shadow below the top edge.
+    // A POPUP'S SHADOW STAYS BELOW ITS TOP EDGE: a menu hangs from the
+    // bar or the control that opened it, and a shadow reaching up over
+    // that bar reads as the bar changing when the menu opens (a rounded
+    // card tried every side, and menubar_test caught the next title
+    // darkening). Windows' menus and Breeze's both keep it below.
     int bx0 = sx - r, bx1 = sx + w + r, by0 = sy - r, by1 = sy + h + r;
     if (kind == WM_SHADOW_POPUP && by0 < y) by0 = y;
     if (bx0 < 0) bx0 = 0;

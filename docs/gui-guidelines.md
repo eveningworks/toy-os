@@ -431,9 +431,10 @@ the modifier.
 
 **6. The band draws LAST, above the items it crosses.** Drawing is
 immediate-mode here, so z-order is call order -- the same rule popups
-follow. An outline rather than a translucent fill, because `gfx.c` has
-no alpha blend and a solid fill would hide the highlights the user is
-watching appear.
+follow. It is GLASS on the desktop -- a faint translucent fill and a
+firmer edge (`uui_glass_round_rect()`), Windows' and KDE's band -- so
+the highlights the user is watching appear still show through it. (It
+was an outline while the drawing layer had no alpha blend.)
 
 **7. Damage the UNION of where the band was and where it is.** The
 compositor repaints declared damage only, so damaging just the new
@@ -505,6 +506,56 @@ fallback when no surface is granted. See `docs/decisions.md`.
 when Alt stopped being an ESC prefix for windows (`api/keyboard.h`,
 "Ctrl and Alt"): Alt-F is now 'f' with `KEY_MOD_ALT`, distinct from
 Esc. `KEY_F10` focuses the bar -- Windows' own second binding.
+
+**How a menu LOOKS: one card, for every menu.** An app's menu bar
+dropdown, its right-click menu, the desktop's, the window menu and the
+taskbar's are all `uui_menubar`, so they are one design -- Windows 11's
+(chosen from mockups on 2026-10-01, Breeze and a dark shell beside it):
+
+- **The card** (`ui/uui_popup.h`): a step lighter than the chrome, a
+  1px hairline, corners rounded at five-eighths of the line height
+  (8 px at 14 px), a shadow below its top edge. A popup SURFACE is painted
+  square and the compositor cuts its corners, continuing whatever edge
+  the widget drew; a menu drawn in-window rounds itself.
+- **Rows twice the line height plus air** (32 px at 14 px) -- a pointer
+  aims at them. Hover is a rounded grey PILL inset from the card's edge,
+  not a band across it.
+- **An icon gutter**: a row may carry an icon, tinted by the ACTION ROLE
+  of what it does, exactly as a command bar's buttons are (`icon`,
+  `tint` on `uui_menu_item`); a tick takes the gutter in the accent. A
+  disabled row's icon greys with its label.
+- **The key that does the same, right-aligned and dimmed** -- a label
+  only; the app binds the key. A submenu row ends in a stroked chevron.
+- **Separators run edge to edge.**
+- **A command strip** (`UUI_MIS_STRIP`) across the top for a file's
+  verbs -- Cut, Copy, Rename, Delete as icon buttons -- names the hovered
+  button in a tip under it, because an icon alone is not a label.
+
+**The WM's context menus take the keyboard** while open: arrows, Enter,
+Esc one level at a time, and a letter jumping to its row -- the
+widget's keymap, through the overlay registry's `key` op.
+
+## The desktop: icons are glass over the wallpaper
+
+The desktop shows a photograph, so nothing on it is a solid fill:
+
+- **A selected icon is GLASS** -- white laid over the wallpaper with a
+  rounded edge (`uui_glass_round_rect()`), Windows 11's desktop. A solid
+  accent block hid the picture and read as a different control from
+  the File Manager's soft selection.
+- **The icon under the pointer gets a fainter wash** -- the hover state
+  every desktop has and this one did not. Only the bare desktop lights
+  one: never through a window, an overlay or the taskbar
+  (`wm_point_on_desktop()`). Selected-and-hovered is a step brighter.
+- **The menus are the card above.** Over an icon: the file's verbs as a
+  strip, then Open and Properties. Over the background: Open > by the
+  Start menu's categories (so there is no cap to fall off), the
+  desktop's own verbs (New folder, Paste, Refresh, Sort, Icon size >),
+  then the way to its settings page.
+- **Rename happens in place** (F2, or the strip): the caption becomes a
+  field, Enter or a click elsewhere commits, Esc abandons. A launcher's
+  caption is its `Name=`, so that is what changes -- KDE's rule.
+- **Properties opens the Properties app** with the path (Alt+Enter).
 
 ## Closing a window: Esc doesn't, Alt+F4 does
 
@@ -749,7 +800,9 @@ every state change lands in one frame as before.
 Every window casts a drop shadow onto whatever is beneath it, and the
 focused window's is larger and darker than an inactive one's -- the
 Mutter/DWM/macOS treatment, at Breeze's default strength. Menus and
-flyouts cast a small one. Maximized and fullscreen windows cast none;
+flyouts cast a small one, following their rounded corners but never above
+their top edge -- a menu hangs from its bar, and a shadow over the bar
+reads as the bar changing. Maximized and fullscreen windows cast none;
 there is nothing beside them to fall on. `desktop.shadows` turns them
 off system-wide.
 

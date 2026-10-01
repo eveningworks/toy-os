@@ -61,4 +61,16 @@ int uui_popup_open(int ax, int ay, int aw, int ah, int w, int h, int gravity,
 void uui_popup_close(int id);
 struct ugfx_surface *uui_popup_surface(int id);
 
+// --- the popup's SHAPE, one answer for every popup ----------------------
+//
+// Windows 11's and Breeze's menus, dropdown lists and tooltips share one
+// rounded, hairline-edged card. The compositor rounds a popup SURFACE's
+// corners itself (wm_render.c, as it does a window's) at this radius, so
+// a widget drawing into a surface paints a SQUARE card and lets the
+// compositor cut it; one drawing in-window (no provider -- the WM's own
+// menus) rounds with uui_fill_round_rect(). Font-derived: 8 px at 14 px.
+int uui_popup_radius(void);
+uint32_t uui_popup_bg(void);      // a step lighter than the chrome
+uint32_t uui_popup_border(void);  // the card's hairline
+
 #endif

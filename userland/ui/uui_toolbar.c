@@ -162,8 +162,8 @@ static void open_more(struct uui_toolbar *t) {
                 t->menu_items[k++] = (struct uui_menu_item)UUI_MENU_SEP;
             continue;
         }
-        t->menu_items[k++] = (struct uui_menu_item){
-            it->label ? it->label : it->tip, it->accel, it->code, 0, 0 };
+        t->menu_items[k++] = (struct uui_menu_item)UUI_MENU_ICON(
+            it->label ? it->label : it->tip, it->code, it->accel, it->icon, it->tint);
     }
     while (k && !t->menu_items[k - 1].label) k--;
     if (!k) return;

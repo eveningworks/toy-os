@@ -35,6 +35,12 @@
 #define DESKTOP_ICON_START_Y 16
 #define DESKTOP_LABEL_LINES 2
 static int g_icon_px = 48;
+// The icon under the pointer, or -1 -- a glass wash fainter than the
+// selection's (Windows 11's and Plasma's desktop hover). Reset on reload:
+// it is a registry index, like the selection.
+static int g_hover = -1;
+static int g_rename = -1;   // the icon whose caption is being edited, or -1 (rename in place, below)
+static void draw_rename(void);
 static char g_icon_size[16];   // the setting's word, to notice a change
 static int icon_px(void) { return g_icon_px; }
 static int label_line_h(void) { return ugfx_char_h() + 1; }
@@ -657,7 +663,6 @@ void desktop_draw(void) {
 
     uint32_t label_fg = UTHEME_WHITE;
     uint32_t icon_fg = ugfx_rgb(230, 230, 235);
-    uint32_t icon_selected_bg = ugfx_rgb(70, 110, 160);
 
     // The primary follows the cursor; during a GROUP drag the other
     // selected icons follow it by the same pixel delta, drawn from where
@@ -687,14 +692,21 @@ void desktop_draw(void) {
         int px = icon_px();
         x += icon_dx();
 
-        if (rb_is_selected(&sel, i)) {
+        int selected = rb_is_selected(&sel, i);
+        int hovered = i == g_hover && !drag.active;
+        if (selected || hovered) {
             // The whole caption block, icon and both label lines, as on
             // Windows and KDE -- a highlight the width of the column.
             // The rect is icon_hl_rect()'s, so that what is PAINTED and
-            // what is DAMAGED cannot drift apart.
+            // what is DAMAGED cannot drift apart. GLASS, Windows 11's:
+            // white laid over the wallpaper, a rounded edge when
+            // selected, so the picture still shows through.
             int hx, hy, hw, hh;
             icon_hl_rect(cell_x, y, &hx, &hy, &hw, &hh);
-            ugfx_fill_rect(wm_surface(), hx, hy, hw, hh, icon_selected_bg);
+            uint8_t fill = selected ? (hovered ? 72 : 56) : 28;
+            uint8_t edge = selected ? (hovered ? 160 : 140) : 28;
+            uui_glass_round_rect(wm_surface(), hx, hy, hw, hh, ugfx_char_h() / 2,
+                                 UTHEME_WHITE, fill, edge);
         }
 
         // A REAL ICON IF THERE IS ONE, the letter tile if there is not.
@@ -741,8 +753,9 @@ void desktop_draw(void) {
         // it. Every desktop shadows or outlines these -- macOS, GNOME
         // and KDE shadow, Windows outlines -- because no single ink is
         // legible on every photograph a person might choose.
-        draw_label(cell_x, y + px + 4, item_name(i), label_fg);
+        if (i != g_rename) draw_label(cell_x, y + px + 4, item_name(i), label_fg);
     }
+    draw_rename();   // over the icons, under the band
 
     // Version watermark, bottom right -- what build am I looking at, at
     // a glance, the way Windows marks a preview build. Deliberately dim
@@ -799,12 +812,11 @@ void desktop_draw(void) {
     // immediate-mode here, so z-order is call order -- the same rule
     // apps/ui's popups follow.
     //
-    // An outline rather than the translucent fill Windows and KDE use:
-    // gfx.c has no alpha blend, and a solid fill would hide the very
-    // icons whose highlight the user is watching appear.
+    // Glass, as the selection is: a faint fill the icons show through
+    // and a firmer edge -- Windows' and KDE's band.
     int bx, by, bw, bh;
     if (rb_rect(&sel, &bx, &by, &bw, &bh)) {
-        ugfx_draw_rect(wm_surface(), bx, by, bw, bh, UTHEME_WHITE);
+        uui_glass_round_rect(wm_surface(), bx, by, bw, bh, 0, UTHEME_WHITE, 40, 200);
     }
 }
 
@@ -814,6 +826,7 @@ void desktop_draw(void) {
 int desktop_drag_active(void) { return drag.active || sel.armed; }
 
 void desktop_entries_changed(void) {
+    g_hover = -1;
     start_store_load();     // an entry that just arrived has history to find
     icon_cache_invalidate(); // an entry's artwork can have arrived with it
     if (!desktop_files_reload()) desktop_files_parse();   // same names: re-read the launchers
@@ -840,6 +853,26 @@ static int icon_hit_test(int mx, int my) {
     }
     return -1;
 }
+
+static void damage_icon_hl(int i) {
+    if (i < 0 || i >= item_count() || !item_visible(i)) return;
+    struct icon_grid g = current_grid();
+    int cx, cy, x, y, w, h;
+    icon_grid_cell_rect(&g, icon_col[i], icon_row[i], &cx, &cy);
+    icon_hl_rect(cx, cy, &x, &y, &w, &h);
+    wm_damage_rect(x, y, w, h);
+}
+
+void desktop_update_hover(int mx, int my, int on_desktop) {
+    int now = (on_desktop && !drag.active && !sel.armed) ? icon_hit_test(mx, my) : -1;
+    if (now == g_hover) return;
+    damage_icon_hl(g_hover);
+    damage_icon_hl(now);
+    g_hover = now;
+    redraw_pending = 1;
+}
+
+int desktop_hovered_icon(void) { return g_hover; }
 
 // EVERY ICON WHOSE HIGHLIGHT CHANGED, damaged by rect. `redraw_pending`
 // alone is not enough: it repaints the whole screen only in a QUIET
@@ -1375,10 +1408,170 @@ static void menu_new_folder(void *ctx) {
 
 static void menu_open_item(void *ctx) { item_activate((int)(intptr_t)ctx); }
 
-// The keyboard's half: Ctrl+C / Ctrl+X / Ctrl+V and Delete when no
-// window has the focus. Returns 1 if the key was the desktop's.
+// --- rename in place ---------------------------------------------------
+//
+// F2 or the icon menu's Rename: the caption becomes a field -- the
+// toolkit's uui_textbox, as the File Manager's in-place rename is -- and
+// Enter or a click anywhere else commits, Esc abandons. A FILE is renamed
+// (sys_rename refuses an existing name rather than replacing it); a
+// LAUNCHER's caption is its Name= key, so that is what changes and the
+// file keeps its name, its saved position and its AppId -- KDE's rule
+// for a .desktop file on the desktop.
+static char g_rename_path[PATH_BUF];    // its path when the edit began
+static struct uui_textbox g_rename_box;
+
+static int rename_rect(int *x, int *y, int *w, int *h) {
+    if (g_rename < 0 || !item_visible(g_rename)) return 0;
+    struct icon_grid g = current_grid();
+    int cx, cy;
+    icon_grid_cell_rect(&g, icon_col[g_rename], icon_row[g_rename], &cx, &cy);
+    *x = cx + 2;
+    *y = cy + icon_px() + 2;
+    *w = icon_col_w() - 4;
+    *h = ugfx_char_h() + 6;
+    return 1;
+}
+
+static void damage_rename(void) {
+    if (g_rename >= 0) damage_icon_hl(g_rename);
+    redraw_pending = 1;
+}
+
+static void begin_rename(int i) {
+    if (i < 0 || !item_visible(i)) return;
+    if (g_rename >= 0) damage_rename();
+    g_rename = i;
+    item_path(i, g_rename_path, sizeof g_rename_path);
+    const char *text = item_is_launcher(i) ? g_launch[i].name : k_path_basename(g_rename_path);
+    uui_textbox_init(&g_rename_box, text);
+    uui_textbox_set_active(&g_rename_box, 1);
+    g_rename_box.border = UTHEME_ACCENT;
+    // The NAME selected, not the extension -- the File Manager's rule.
+    int n = (int)k_strlen(text), stem = n;
+    const char *dot = k_strrchr(text, '.');
+    if (!item_is_launcher(i) && !item_is_dir(i) && dot && dot != text) stem = (int)(dot - text);
+    uui_textbox_select(&g_rename_box, 0, stem);
+    damage_rename();
+}
+
+// A launcher's new caption: its Name= line rewritten, every other line
+// kept as it was. Small files only -- a .desktop entry is a few lines.
+static void rename_launcher(const char *path, const char *name) {
+    static char in[1024], out[1200];
+    int fd = sys_open(path, 0);   // read-only
+    if (fd < 0) { wm_logf("desktop: cannot read %s", path); return; }
+    int n = (int)sys_read(fd, in, sizeof in - 1);
+    sys_close(fd);
+    if (n <= 0 || n >= (int)sizeof in - 1) { wm_logf("desktop: %s unreadable or too long", path); return; }
+    in[n] = '\0';
+    int o = 0, done = 0;
+    for (const char *line = in; *line; ) {
+        const char *nl = k_strchr(line, '\n');
+        int len = nl ? (int)(nl - line) : (int)k_strlen(line);
+        if (!done && len >= 5 && k_strncmp(line, "Name=", 5) == 0) {
+            o += k_snprintf(out + o, sizeof out - (size_t)o, "Name=%s\n", name);
+            done = 1;
+        } else if (o + len + 1 < (int)sizeof out) {
+            k_memcpy(out + o, line, (size_t)len);
+            o += len;
+            out[o++] = '\n';
+        }
+        line = nl ? nl + 1 : line + len;
+        if (o >= (int)sizeof out - 1) break;
+    }
+    if (!done) o += k_snprintf(out + o, sizeof out - (size_t)o, "Name=%s\n", name);
+    if (o <= 0 || o >= (int)sizeof out) return;
+    fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    if (fd < 0) { wm_logf("desktop: cannot write %s", path); return; }
+    if (sys_write(fd, out, (size_t)o) != o) wm_logf("desktop: short write to %s", path);
+    sys_close(fd);
+}
+
+static void end_rename(int commit) {
+    if (g_rename < 0) return;
+    int i = g_rename;
+    damage_rename();
+    g_rename = -1;
+    uui_textbox_set_active(&g_rename_box, 0);
+    const char *to = uui_textbox_text(&g_rename_box);
+    if (!commit || !to[0] || k_strchr(to, '/')) return;
+    if (item_is_launcher(i)) {
+        if (k_strcmp(to, g_launch[i].name) == 0) return;
+        rename_launcher(g_rename_path, to);
+    } else {
+        char dst[PATH_BUF];
+        if (k_strcmp(to, k_path_basename(g_rename_path)) == 0) return;
+        if (!k_path_join(DESKTOP_DIR, to, dst, sizeof dst)) return;
+        if (sys_rename(g_rename_path, dst) < 0) wm_logf("desktop: rename to %s refused", to);
+    }
+    desktop_entries_changed();
+    wm_damage_rect(0, 0, screen_w, screen_h - taskbar_h);
+}
+
+// A left click anywhere while a caption is being edited: on the field it
+// places the caret (1, consumed); anywhere else it commits and the click
+// goes on to do what it would have done (0) -- Explorer's behaviour.
+int desktop_rename_click(int mx, int my) {
+    if (g_rename < 0) return 0;
+    int x, y, w, h;
+    if (rename_rect(&x, &y, &w, &h) && uui_hit(x, y, w, h, mx, my)) {
+        uui_textbox_set_geometry(&g_rename_box, x, y, w, h);
+        uui_textbox_ops.press(&g_rename_box, mx, my, 0);
+        damage_rename();
+        return 1;
+    }
+    end_rename(1);
+    return 0;
+}
+
+int desktop_renaming(void) { return g_rename; }
+
+static void draw_rename(void) {
+    int x, y, w, h;
+    if (!rename_rect(&x, &y, &w, &h)) return;
+    uui_textbox_set_geometry(&g_rename_box, x, y, w, h);
+    uui_textbox_draw(wm_surface(), &g_rename_box);
+}
+
+static void menu_rename(void *ctx) {
+    (void)ctx;
+    for (int i = 0; i < item_count(); i++)
+        if (rb_is_selected(&sel, i)) { begin_rename(i); return; }
+}
+
+// Properties: the Properties app with the path, one window per item --
+// it is not single-instance, so two can be compared (properties.c).
+// Capped, as Explorer is not: a band over forty icons should not open
+// forty windows.
+#define DESKTOP_PROPERTIES_MAX 4
+static void menu_properties(void *ctx) {
+    (void)ctx;
+    static char paths[DESKTOP_PROPERTIES_MAX][PATH_BUF];
+    int n = selected_paths(paths, DESKTOP_PROPERTIES_MAX);
+    for (int i = 0; i < n; i++) {
+        char *const argv[] = { "/bin/wm/apps/properties", paths[i], 0 };
+        spawn_argv(argv);
+    }
+}
+
+static void menu_refresh(void *ctx);
+
+// The keyboard's half when no window has the focus: Ctrl+C / Ctrl+X /
+// Ctrl+V, Delete, F2 (rename), F5 (refresh) and Alt+Enter (properties);
+// and EVERY key while a caption is being edited. Returns 1 if the key
+// was the desktop's.
 int desktop_handle_key(int key, unsigned mods) {
+    if (g_rename >= 0) {
+        if (key == '\n' || key == '\r') end_rename(1);
+        else if (key == 0x1B) end_rename(0);
+        else uui_textbox_key_mods(&g_rename_box, key, mods);
+        damage_rename();
+        return 1;
+    }
     if (key == KEY_DELETE) { menu_delete(0); return 1; }
+    if (key == KEY_F2) { menu_rename(0); return 1; }
+    if (key == KEY_F5) { menu_refresh(0); return 1; }
+    if ((key == '\n' || key == '\r') && (mods & KEY_MOD_ALT)) { menu_properties(0); return 1; }
     if (!(mods & KEY_MOD_CTRL)) return 0;
     if (key == 'c' || key == 'C' || key == 0x03) { menu_copy(0);  return 1; }
     if (key == 'x' || key == 'X' || key == 0x18) { menu_cut(0);   return 1; }
@@ -1448,11 +1641,52 @@ static void menu_settings(void *ctx) {
     wm_logf("desktop: no System Settings entry to open");
 }
 
+// Open > groups the desktop's apps by their Start-menu folder (Category=),
+// so the list has no cap to fall off -- it used to stop at sixteen and
+// lose whatever sorted last. KDE's and Openbox's root menus are this shape.
+#define DESKTOP_OPEN_CATS 12
+#define DESKTOP_OPEN_APPS 48
+
+static int build_open_menu(struct context_menu_item *cats, struct context_menu_item *apps) {
+    int napps = gui_app_visible_count(GUI_SHOW_DESKTOP);
+    if (napps > DESKTOP_OPEN_APPS) napps = DESKTOP_OPEN_APPS;
+    static char cat_icons[DESKTOP_OPEN_CATS][24];
+    int ncat = 0, k = 0;
+    // Visible apps come sorted by (category, name), so a category is a run.
+    for (int i = 0; i < napps; i++) {
+        struct gui_app *app = gui_app_visible_at(GUI_SHOW_DESKTOP, i);
+        const char *key = app->category ? app->category : "";
+        if (ncat == 0 || k_strcmp(key, (const char *)cats[ncat - 1].ctx) != 0) {
+            if (ncat == DESKTOP_OPEN_CATS) break;
+            k_snprintf(cat_icons[ncat], sizeof cat_icons[ncat], "cat-%s", key);
+            cats[ncat] = (struct context_menu_item){ .label = gui_app_cat_label_for(key),
+                                                     .ctx = (void *)key, .sub = &apps[k],
+                                                     .icon = cat_icons[ncat] };
+            ncat++;
+        }
+        apps[k++] = (struct context_menu_item){ .label = app->name, .on_select = launch_from_menu,
+                                                .ctx = (void *)app,
+                                                .icon = app->icon_name[0] ? app->icon_name : 0 };
+        cats[ncat - 1].sub_count++;
+    }
+    return ncat;
+}
+
+// Is there anything on the clipboard the desktop can paste? Asked when
+// the menu opens, so Paste greys out instead of doing nothing.
+static int can_paste(void) {
+    static struct uclip c;
+    uclip_load(&c);
+    return uclip_op(&c) != UCLIP_NONE && uclip_kind(&c) == UCLIP_KIND_FILES;
+}
+
 void desktop_handle_right_click(int mx, int my) {
-    static struct context_menu_item launchers[16];
+    static struct context_menu_item cats[DESKTOP_OPEN_CATS];
+    static struct context_menu_item apps[DESKTOP_OPEN_APPS];
     static struct context_menu_item sizes[3];
     static struct context_menu_item items[12];
     int k = 0;
+    if (g_rename >= 0) end_rename(1);
 
     int idx = icon_hit_test(mx, my);
     if (idx >= 0) {
@@ -1460,27 +1694,29 @@ void desktop_handle_right_click(int mx, int my) {
         // set -- right-clicking one of five must offer to act on five.
         if (!rb_is_selected(&sel, idx)) { rb_clear(&sel); rb_select(&sel, idx, 1); }
         redraw_pending = 1;
+        // Windows 11's shape: the file verbs as a strip of buttons, then
+        // the rows. Rename names one thing, so it greys out for several.
+        int one = rb_selected_count(&sel) == 1;
+        items[k++] = (struct context_menu_item){ .label = "Cut", .on_select = menu_cut, .strip = 1,
+                                                 .icon = "tb-cut", .tint = UTHEME_ACT_EDIT, .accel = "Ctrl+X" };
+        items[k++] = (struct context_menu_item){ .label = "Copy", .on_select = menu_copy, .strip = 1,
+                                                 .icon = "tb-copy", .tint = UTHEME_ACT_EDIT, .accel = "Ctrl+C" };
+        items[k++] = (struct context_menu_item){ .label = "Rename", .on_select = menu_rename, .strip = 1,
+                                                 .icon = "tb-rename", .tint = UTHEME_ACT_EDIT, .accel = "F2",
+                                                 .disabled = !one };
+        items[k++] = (struct context_menu_item){ .label = "Delete", .on_select = menu_delete, .strip = 1,
+                                                 .icon = "tb-delete", .tint = UTHEME_ACT_DANGER, .accel = "Del" };
+        items[k++] = (struct context_menu_item){ .separator = 1 };
         items[k++] = (struct context_menu_item){ .label = "Open", .on_select = menu_open_item,
-                                                 .ctx = (void *)(intptr_t)idx };
-        items[k++] = (struct context_menu_item){ .separator = 1 };
-        items[k++] = (struct context_menu_item){ .label = "Cut", .on_select = menu_cut };
-        items[k++] = (struct context_menu_item){ .label = "Copy", .on_select = menu_copy };
-        items[k++] = (struct context_menu_item){ .separator = 1 };
-        items[k++] = (struct context_menu_item){ .label = "Delete", .on_select = menu_delete };
+                                                 .ctx = (void *)(intptr_t)idx,
+                                                 .icon = "tb-open", .tint = UTHEME_ACT_NAV };
+        items[k++] = (struct context_menu_item){ .label = "Properties", .on_select = menu_properties,
+                                                 .icon = "tb-info", .accel = "Alt+Enter" };
         context_menu_open_at(mx, my, items, k);
         return;
     }
 
-    // Open > -- the desktop's own entries, so an entry hidden from this
-    // surface by ShowIn= is not launchable from here either.
-    int n = gui_app_visible_count(GUI_SHOW_DESKTOP);
-    if (n > 16) n = 16;
-    for (int i = 0; i < n; i++) {
-        struct gui_app *app = gui_app_visible_at(GUI_SHOW_DESKTOP, i);
-        launchers[i] = (struct context_menu_item){ .label = app->name,
-                                                   .on_select = launch_from_menu,
-                                                   .ctx = (void *)app };
-    }
+    int ncat = build_open_menu(cats, apps);
     static const char *const words[3] = { "small", "medium", "large" };
     static const char *const labels[3] = { "Small", "Medium", "Large" };
     for (int i = 0; i < 3; i++) {
@@ -1490,15 +1726,23 @@ void desktop_handle_right_click(int mx, int my) {
                                                .checked = k_strcmp(g_icon_size, words[i]) == 0 };
     }
 
-    items[k++] = (struct context_menu_item){ .label = "Open", .sub = launchers, .sub_count = n };
+    items[k++] = (struct context_menu_item){ .label = "Open", .sub = cats, .sub_count = ncat,
+                                             .icon = "tb-open", .tint = UTHEME_ACT_NAV };
     items[k++] = (struct context_menu_item){ .separator = 1 };
-    items[k++] = (struct context_menu_item){ .label = "New folder", .on_select = menu_new_folder };
-    items[k++] = (struct context_menu_item){ .label = "Paste", .on_select = menu_paste };
+    items[k++] = (struct context_menu_item){ .label = "New folder", .on_select = menu_new_folder,
+                                             .icon = "tb-mkdir", .tint = UTHEME_ACT_CREATE };
+    items[k++] = (struct context_menu_item){ .label = "Paste", .on_select = menu_paste,
+                                             .icon = "tb-paste", .tint = UTHEME_ACT_EDIT,
+                                             .accel = "Ctrl+V", .disabled = !can_paste() };
     items[k++] = (struct context_menu_item){ .separator = 1 };
-    items[k++] = (struct context_menu_item){ .label = "Refresh", .on_select = menu_refresh };
-    items[k++] = (struct context_menu_item){ .label = "Sort by name", .on_select = menu_sort };
-    items[k++] = (struct context_menu_item){ .label = "Icon size", .sub = sizes, .sub_count = 3 };
+    items[k++] = (struct context_menu_item){ .label = "Refresh", .on_select = menu_refresh,
+                                             .icon = "tb-refresh", .tint = UTHEME_ACT_VIEW, .accel = "F5" };
+    items[k++] = (struct context_menu_item){ .label = "Sort by name", .on_select = menu_sort,
+                                             .icon = "tb-sort", .tint = UTHEME_ACT_ARRANGE };
+    items[k++] = (struct context_menu_item){ .label = "Icon size", .sub = sizes, .sub_count = 3,
+                                             .icon = "tb-icons", .tint = UTHEME_ACT_VIEW };
     items[k++] = (struct context_menu_item){ .separator = 1 };
-    items[k++] = (struct context_menu_item){ .label = "Desktop settings", .on_select = menu_settings };
+    items[k++] = (struct context_menu_item){ .label = "Desktop settings", .on_select = menu_settings,
+                                             .icon = "tb-gear" };
     context_menu_open_at(mx, my, items, k);
 }

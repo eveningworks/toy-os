@@ -184,6 +184,10 @@ void wm_handle_left_click(int mx, int my) {
     // and the tray hit-test never runs.
     if (wm_overlay_click(mx, my)) return;
 
+    // A desktop caption being edited: its field takes the click, and any
+    // other click commits it first and then does its own job.
+    if (desktop_rename_click(mx, my)) return;
+
     // THE POPUP GRAB, before the taskbar and the windows: a press
     // anywhere but one of the owning client's own surfaces dismisses its
     // popups and goes no further -- Wayland's and Win32's rule both, and
@@ -595,25 +599,37 @@ void wm_open_window_menu(int idx, int mx, int my) {
     if (idx < 0 || idx >= window_count) return;
     const struct window *w = &windows[idx];
     g_ctx_window_target = idx;
-    static struct context_menu_item items[4];
+    static struct context_menu_item items[5];
     int n = 0;
     // A MINIMIZED window -- reachable only from its taskbar button --
     // offers the way back instead of a Minimize that would do nothing.
-    if (w->state == WIN_MINIMIZED) {
-        items[n].label = "Restore"; items[n].on_select = ctx_restore_window;
-    } else {
-        items[n].label = "Minimize"; items[n].on_select = ctx_minimize_window;
-    }
-    items[n].ctx = &g_ctx_window_target; n++;
+    // The glyphs are the caption buttons', so a row and the button it
+    // stands for look alike.
+    if (w->state == WIN_MINIMIZED)
+        items[n++] = (struct context_menu_item){ .label = "Restore", .on_select = ctx_restore_window,
+                                                 .ctx = &g_ctx_window_target, .icon = "tb-restore" };
+    else
+        items[n++] = (struct context_menu_item){ .label = "Minimize", .on_select = ctx_minimize_window,
+                                                 .ctx = &g_ctx_window_target, .icon = "tb-minimize" };
     // Nothing that sizes a window it cannot see: maximizing or going
     // fullscreen from minimized would leave it resized and still hidden.
     if (w->resizable && w->state != WIN_MINIMIZED) {
-        items[n].label = (w->state == WIN_MAXIMIZED) ? "Restore" : "Maximize";
-        items[n].on_select = ctx_toggle_maximize_window; items[n].ctx = &g_ctx_window_target; n++;
-        items[n].label = w->fullscreen ? "Exit Fullscreen" : "Fullscreen";
-        items[n].on_select = ctx_toggle_fullscreen_window; items[n].ctx = &g_ctx_window_target; n++;
+        int max = w->state == WIN_MAXIMIZED;
+        items[n++] = (struct context_menu_item){ .label = max ? "Restore" : "Maximize",
+                                                 .on_select = ctx_toggle_maximize_window,
+                                                 .ctx = &g_ctx_window_target,
+                                                 .icon = max ? "tb-restore" : "tb-maximize" };
+        items[n++] = (struct context_menu_item){ .label = w->fullscreen ? "Exit Fullscreen" : "Fullscreen",
+                                                 .on_select = ctx_toggle_fullscreen_window,
+                                                 .ctx = &g_ctx_window_target,
+                                                 .icon = w->fullscreen ? "tb-unfullscreen" : "tb-fullscreen",
+                                                 .tint = UTHEME_ACT_VIEW };
     }
-    items[n].label = "Close"; items[n].on_select = ctx_close_window; items[n].ctx = &g_ctx_window_target; n++;
+    // Close apart, as Windows' window menu sets it, with the key that does it.
+    items[n++] = (struct context_menu_item){ .separator = 1 };
+    items[n++] = (struct context_menu_item){ .label = "Close", .on_select = ctx_close_window,
+                                             .ctx = &g_ctx_window_target, .icon = "tb-close",
+                                             .tint = UTHEME_ACT_DANGER, .accel = "Alt+F4" };
     context_menu_open_at(mx, my, items, n);
 }
 
@@ -672,21 +688,20 @@ void wm_handle_right_click(int mx, int my) {
         wm_overlay_set_parent("start");
         {
             static struct context_menu_item item[3];
-            item[0].label = "Open";
-            item[0].on_select = ctx_open_app;
-            item[0].ctx = app;
+            item[0] = (struct context_menu_item){ .label = "Open", .on_select = ctx_open_app,
+                                                  .ctx = app, .icon = "tb-open",
+                                                  .tint = UTHEME_ACT_NAV };
             // PIN IS A TOGGLE WITH TWO NAMES, not a checkmark: the row
             // says what the click will DO, which is how Windows and
             // KDE both word this ("Pin to Start" / "Unpin from
             // Start"). A ticked "Pinned" would need a second click to
             // discover what it means.
-            item[1].label = start_store_is_pinned(app->app_id)
-                                ? "Unpin from Start" : "Pin to Start";
-            item[1].on_select = ctx_toggle_pin;
-            item[1].ctx = app;
-            item[2].label = "Add to desktop";
-            item[2].on_select = ctx_add_to_desktop;
-            item[2].ctx = app;
+            item[1] = (struct context_menu_item){
+                .label = start_store_is_pinned(app->app_id) ? "Unpin from Start" : "Pin to Start",
+                .on_select = ctx_toggle_pin, .ctx = app, .icon = "tb-pin" };
+            item[2] = (struct context_menu_item){ .label = "Add to desktop",
+                                                  .on_select = ctx_add_to_desktop, .ctx = app,
+                                                  .icon = "place-desktop", .tint = UTHEME_ACT_CREATE };
             context_menu_open_at(mx, my, item, 3);
         }
         return;
@@ -1240,6 +1255,20 @@ int content_hover_win = -1;
 // or not it has focus -- the only app callback that reaches an
 // unfocused window. A control that stays inert until you've clicked its
 // window first is exactly the deadness hover exists to remove.
+// Is the bare desktop under the point -- no overlay, taskbar or window
+// on top of it? The desktop's hover wash asks, and nothing else must
+// light an icon through a window.
+int wm_point_on_desktop(int mx, int my) {
+    if (wm_overlay_under(mx, my)) return 0;
+    if (my >= screen_h - taskbar_h) return 0;
+    for (int i = window_count - 1; i >= 0; i--) {
+        const struct window *w = &windows[i];
+        if (w->state == WIN_MINIMIZED) continue;
+        if (uui_hit(w->x, w->y, w->w, w->h, mx, my)) return 0;
+    }
+    return 1;
+}
+
 void wm_update_content_hover(int mx, int my, uint8_t buttons) {
     // While anything is held or armed, the press visual owns the
     // feedback and hover must not fight it -- same deference

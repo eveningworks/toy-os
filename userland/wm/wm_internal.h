@@ -575,6 +575,7 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons);
 // drawing then, exactly as wm_update_title_hover() steps aside for
 // title_btn_armed_win.
 void wm_update_content_hover(int mx, int my, uint8_t buttons);
+int wm_point_on_desktop(int mx, int my);  // nothing on top of the desktop there
 
 // Recomputes title_hover_win/kind from the live mouse position -- a
 // no-op while a button is armed (title_btn_armed_win >= 0), since the

@@ -1069,6 +1069,53 @@ def icon_tb_fullscreen():
     return im
 
 
+# THE WINDOW MENU'S FOUR, drawn as the caption buttons draw them
+# (wm_render.c) -- the menu row and the button it stands for share a glyph.
+def icon_tb_minimize():
+    im, d = _tb()
+    d.rectangle([10, 40, 54, 46], fill=TB_INK)
+    return im
+
+
+def icon_tb_maximize():
+    im, d = _tb()
+    d.rounded_rectangle([10, 10, 54, 54], radius=4, outline=TB_INK, width=6)
+    return im
+
+
+def icon_tb_restore():
+    im, d = _tb()
+    d.rounded_rectangle([20, 8, 56, 44], radius=4, outline=TB_INK, width=6)
+    d.rectangle([8, 20, 44, 56], fill=(0, 0, 0, 0))
+    d.rounded_rectangle([8, 20, 44, 56], radius=4, outline=TB_INK, width=6)
+    return im
+
+
+def icon_tb_close():
+    im, d = _tb()
+    d.line([12, 12, 52, 52], fill=TB_INK, width=7)
+    d.line([52, 12, 12, 52], fill=TB_INK, width=7)
+    return im
+
+
+def icon_tb_unfullscreen():
+    # Four corners pointing in: the fullscreen glyph turned inside out.
+    im, d = _tb()
+    for (x, y, dx, dy) in ((24, 24, -1, -1), (40, 24, 1, -1), (24, 40, -1, 1), (40, 40, 1, 1)):
+        d.line([x, y, x + 18 * dx, y], fill=TB_INK, width=6)
+        d.line([x, y, x, y + 18 * dy], fill=TB_INK, width=6)
+    return im
+
+
+def icon_tb_pin():
+    # A pushpin, head up-right: Explorer's "Pin to Start".
+    im, d = _tb()
+    d.polygon([(36, 6), (58, 28), (50, 32), (40, 42), (40, 50), (14, 24), (22, 24), (32, 14)],
+              fill=TB_INK)
+    d.line([24, 40, 8, 56], fill=TB_INK, width=6)
+    return im
+
+
 def icon_tb_info():
     im, d = _tb()
     d.ellipse([4, 4, 60, 60], outline=TB_INK, width=6)
@@ -1528,6 +1575,12 @@ ICONS = {
     "tb-repeat": icon_tb_repeat,
     "tb-playlist": icon_tb_playlist,
     "tb-fullscreen": icon_tb_fullscreen,
+    "tb-unfullscreen": icon_tb_unfullscreen,
+    "tb-minimize": icon_tb_minimize,
+    "tb-maximize": icon_tb_maximize,
+    "tb-restore": icon_tb_restore,
+    "tb-close": icon_tb_close,
+    "tb-pin": icon_tb_pin,
     "tb-back": icon_tb_back,
     "tb-forward": icon_tb_forward,
     "tb-refresh": icon_tb_refresh,

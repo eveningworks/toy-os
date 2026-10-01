@@ -74,8 +74,9 @@ F10 = "0xa4"        # KEY_F10 -- api/keyboard.h
 DOWN = "0x92"       # KEY_ARROW_DOWN
 RIGHT = "0x96"      # KEY_ARROW_RIGHT
 
-# uui_menubar.c's palette, and uui_statusbar.c's.
-POPUP_BG = (250, 250, 252)
+# The popup card's ground (ui/uui_popup.h's uui_popup_bg(): the field
+# white a step toward the chrome), and uui_statusbar.c's bar.
+POPUP_BG = (251, 251, 251)
 BAR_BG = (226, 226, 229)   # utheme.c bar_bg
 
 # Menu command codes, from userland/gui/apps/notepad.c. A test asserting on
@@ -390,9 +391,12 @@ def run(dbg, qmp, tmp, res):
     if lay4.popups() == [0, 1]:
         p0 = lay4.rect("menu.popup 0")
         p1 = lay4.rect("menu.popup 1")
+        # Aligned by its FIRST ROW, not its top: the card has air above
+        # its rows, so the popup starts that much above the parent row.
+        first = lay4.rect("menu.item 1 0")
         res.check("a submenu opens to the RIGHT of its parent, aligned to its row",
-                  p1[0] >= p0[0] + p0[2] - 2 and abs(p1[1] - go[1]) <= 4,
-                  f"parent {p0}, submenu {p1}, parent row y {go[1]}")
+                  p1[0] >= p0[0] + p0[2] - 2 and abs(first[1] - go[1]) <= 1,
+                  f"parent {p0}, submenu {p1}, its first row y {first[1]}, parent row y {go[1]}")
 
         # --- 7. commit on release, from the deepest level -------------
         actions(dbg)

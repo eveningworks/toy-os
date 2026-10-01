@@ -1,5 +1,6 @@
 // See start_menu.h.
 #include "start_menu.h"
+#include "ui/uui_popup.h"
 #include "wm_shadow.h"
 #include "start_store.h"
 #include "wm_tooltip.h"
@@ -155,12 +156,12 @@ static int query_len;
 // The icon on an app row, and the column it reserves -- stated once, so
 // the width the layout books and the pixels the draw puts there cannot
 // drift apart.
-#define SM_ICON_SZ(item_h)  ((item_h) - 6)
-#define SM_ICON_COL(item_h) (SM_ICON_SZ(item_h) + 10)
+#define SM_ICON_SZ(item_h)  ((item_h) * 3 / 4)
+#define SM_ICON_COL(item_h) (SM_ICON_SZ(item_h) + 22)  // the pill's inset and pad, the icon, a gap
 // A FOLDER'S icon is smaller than an app's: it labels a list rather
 // than standing for a program, and Kickoff and Whisker both draw it
 // that way.
-#define SM_FOLDER_SZ(item_h) ((item_h) - 10)
+#define SM_FOLDER_SZ(item_h) ((item_h) / 2)
 
 // HOW TALL THE APP COLUMN IS ALLOWED TO GET, in rows. Beyond this it
 // SCROLLS: a menu as tall as its biggest folder was fine at nineteen
@@ -334,12 +335,16 @@ struct sm_layout {
     int search_h;
 };
 
+// The gap between the card and the strip, and the screen's edge.
+static int sm_gap(void) { return ugfx_char_h() / 2 + 2; }
+// A row pill's radius and its inset from the column -- the card's.
+static int sm_pill_inset(void) { return ugfx_char_h() / 3; }
+
 static void layout(struct sm_layout *L) {
-    // A ROW IS TALLER THAN A MENU BAR'S, because this is a launcher a
-    // pointer aims at rather than a list being scanned -- Breeze and
-    // Windows 11 both give a launcher row about twice a text line's
-    // leading. Font-derived, so it follows `font_size`.
-    L->item_h = ugfx_char_h() + 10;
+    // A ROW IS A MENU ROW'S HEIGHT, twice the line plus air -- the card's
+    // (ui/uui_menubar.c), and Windows 11's launcher rows. Font-derived,
+    // so it follows `font_size`.
+    L->item_h = ugfx_char_h() * 2 + 6;
     L->cats = folder_count();
 
     int side_label = 0;
@@ -354,7 +359,7 @@ static void layout(struct sm_layout *L) {
     // The folder icon's column, on the same terms as the app column's:
     // booked whether or not every folder has artwork, so a missing icon
     // file cannot move the labels.
-    L->side_w = side_label + 20 + SM_FOLDER_SZ(L->item_h) + 6;
+    L->side_w = side_label + 36 + SM_FOLDER_SZ(L->item_h) + 6;
 
     // MEASURED, not counted: the column is as wide as its widest label
     // DRAWS, which on a proportional face is not its longest label times
@@ -396,7 +401,7 @@ static void layout(struct sm_layout *L) {
     // ONE row at a time, which is what a status line is for. The strip
     // is always there, empty or not -- a menu whose height changed as
     // the pointer moved would be worse than a blank line.
-    L->desc_h = ugfx_char_h() + 6;
+    L->desc_h = ugfx_char_h() + 10;
 
     L->w = L->side_w + 1 + L->pane_w;
     L->h = L->pane_h + L->desc_h + L->search_h;
@@ -409,10 +414,11 @@ static void layout(struct sm_layout *L) {
         // Centred Start, centred menu -- Windows 11's.
         if (taskbar_start_centered())
             L->x = screen_w / 2 - L->w / 2;
-        if (L->x + L->w > screen_w - 4) L->x = screen_w - 4 - L->w;
-        if (L->x < 4) L->x = 4;
+        if (L->x + L->w > screen_w - sm_gap()) L->x = screen_w - sm_gap() - L->w;
+        if (L->x < sm_gap()) L->x = sm_gap();
     }
-    L->y = (screen_h - taskbar_h) - L->h;
+    // FLOATING, a gap above the strip as Windows 11's Start is.
+    L->y = (screen_h - taskbar_h) - L->h - sm_gap();
     L->pane_x = L->x + L->side_w + 1;
 }
 
@@ -687,9 +693,10 @@ int start_menu_row_icon(int n, int *x, int *y, int *sz) {
     int kind, rx, ry, rw, rh;
     if (!row_rect(&L, pane_visible(&L, 0), n, 0, &kind, &rx, &ry, &rw, &rh, 0)) return 0;
     if (kind != START_ROW_APP) return 0;
-    if (x) *x = rx + 6;
-    if (y) *y = ry + 3;
-    if (sz) *sz = SM_ICON_SZ(L.item_h);
+    int sz_ = SM_ICON_SZ(L.item_h);
+    if (x) *x = rx + sm_pill_inset() + 10;   // start_menu_draw()'s app icon
+    if (y) *y = ry + (rh - sz_) / 2;
+    if (sz) *sz = sz_;
     return 1;
 }
 
@@ -835,38 +842,62 @@ static void draw_magnifier(int cx, int cy, int r, uint32_t c) {
                    cx + r + r / 2, cy + r + r / 2, c, GEOM_AA);
 }
 
+// A stroked chevron, the card's submenu mark (ui/uui_menubar.c).
+static void sm_chevron(int cx, int cy, uint32_t c) {
+    int r = ugfx_char_h() / 3;
+    if (r < 3) r = 3;
+    for (int d = 0; d < 2; d++) {
+        ugfx_draw_line(wm_surface(), cx - r / 2 + d, cy - r, cx + r / 2 + d, cy, c, GEOM_AA);
+        ugfx_draw_line(wm_surface(), cx + r / 2 + d, cy, cx - r / 2 + d, cy + r, c, GEOM_AA);
+    }
+}
+
 void start_menu_draw(int mx, int my) {
     if (!start_menu_open) return;
     struct sm_layout L;
     layout(&L);
-    wm_shadow_draw(L.x, L.y, L.w, L.h, 0, WM_SHADOW_POPUP);
+    struct ugfx_surface *s = wm_surface();
+    int r = uui_popup_radius();
+    int pr = sm_pill_inset();
+    wm_shadow_draw(L.x, L.y, L.w, L.h, r, WM_SHADOW_POPUP);
 
-    uint32_t bg = UTHEME_PANEL_BG, border = UTHEME_BORDER, fg = UTHEME_TEXT;
+    // THE TOOLKIT'S CARD (ui/uui_popup.h), Windows 11's Start in this
+    // menu's shape: the folders and the search on a step of chrome, the
+    // apps and the description on the card's lighter ground.
+    uint32_t edge = uui_popup_border(), fg = UTHEME_TEXT;
+    uint32_t pane_bg = uui_popup_bg();
+    uint32_t bg = ugfx_blend(pane_bg, UTHEME_CHROME, 128);
     // Hover comes from uui_state_bg(), derived from the row's OWN
-    // colour, rather than a hand-picked tint: docs/gui-guidelines.md
-    // says not to pick tints (a fixed "lighter" wash is what made hover
-    // invisible on this near-white theme once), and a fixed dark blue
-    // also forced the label to white, so the menu had a second text
-    // colour nothing else used.
+    // colour, rather than a hand-picked tint (docs/gui-guidelines.md).
     uint32_t side_hover = uui_state_bg(bg, UUI_STATE_HOVER);
-    uint32_t pane_bg = UTHEME_WHITE;
     uint32_t pane_hover = uui_state_bg(pane_bg, UUI_STATE_HOVER);
     // The click flash stays a deliberately DISTINCT warm colour, not a
     // ui_state derivation: it is not an interaction state, it is a
     // momentary confirmation that a row was chosen.
     uint32_t flash_bg = ugfx_rgb(230, 190, 90);
     uint32_t flash_fg = UTHEME_WHITE;
+    uint32_t rule = ugfx_blend(edge, pane_bg, 96);
 
     // TRACKED, not derived: see hover_token. (mx, my) still arrive so
     // the signature matches the other overlays.
     (void)mx; (void)my;
 
-    ugfx_fill_rect(wm_surface(), L.x, L.y, L.w, L.h, bg);
-    ugfx_fill_rect(wm_surface(), L.pane_x, L.y, L.pane_w, L.pane_h, pane_bg);
-    ugfx_fill_rect(wm_surface(), L.x + L.side_w, L.y, 1, L.pane_h, UTHEME_SEPARATOR);
-    ugfx_fill_rect(wm_surface(), L.x + 6,
-                   L.y + SM_INSET + L.cats * L.item_h + L.sep_h / 2,
-                   L.side_w - 12, 1, UTHEME_SEPARATOR);
+    uui_fill_round_rect(s, L.x, L.y, L.w, L.h, r, edge);
+    uui_fill_round_rect(s, L.x + 1, L.y + 1, L.w - 2, L.h - 2, r - 1, bg);
+    {
+        // The app column and the description strip: the card's top-right
+        // arc, square where they meet the sidebar and the search band.
+        int px = L.pane_x, pw = L.x + L.w - 1 - px;
+        uui_fill_round_rect(s, px, L.y + 1, pw, 2 * r, r - 1, pane_bg);
+        ugfx_fill_rect(s, px, L.y + 1, r, r, pane_bg);
+        ugfx_fill_rect(s, px, L.y + r, pw, L.pane_h - r, pane_bg);
+        ugfx_fill_rect(s, L.x + 1, L.y + L.pane_h, L.w - 2, L.desc_h, pane_bg);
+        ugfx_fill_rect(s, L.x + L.side_w, L.y + 1, 1, L.pane_h - 1, rule);
+        ugfx_fill_rect(s, L.x + 1, L.y + L.pane_h, L.w - 2, 1, rule);
+        ugfx_fill_rect(s, L.x + 1, L.y + L.pane_h + L.desc_h, L.w - 2, 1, rule);
+    }
+    ugfx_fill_rect(s, L.x + 2 * pr + 2, L.y + SM_INSET + L.cats * L.item_h + L.sep_h / 2,
+                   L.side_w - 4 * pr - 4, 1, rule);
 
     int apps = pane_visible(&L, 0);
     int total = L.cats + wm_system_action_count + apps + 2;
@@ -877,28 +908,31 @@ void start_menu_draw(int mx, int my) {
         int side = (kind == START_ROW_CATEGORY || kind == START_ROW_ACTION);
         uint32_t row_bg = side ? bg : pane_bg, row_fg = fg;
 
+        if (kind == START_ROW_DESC) continue;   // drawn below, with its rule
         if (kind == START_ROW_SEARCH) {
-            // A sunken field with the query in it, always focused --
-            // there is nothing else here that takes text, so a caret is
-            // drawn unconditionally rather than following a focus that
-            // cannot move.
-            int fx = x + 4, fy = y + 4, fw = w - 8, fh = h - 8;
-            ugfx_fill_rect(wm_surface(), fx, fy, fw, fh, UTHEME_WHITE);
-            ugfx_draw_rect(wm_surface(), fx, fy, fw, fh, UTHEME_OUTLINE);
-            int r = fh / 4;
-            draw_magnifier(fx + 4 + r, fy + fh / 2 - 1, r, UTHEME_OUTLINE);
-            int tx = fx + 8 + r * 3;
+            // A field with the query in it, always focused -- there is
+            // nothing else here that takes text, so a caret is drawn
+            // unconditionally rather than following a focus that cannot
+            // move. Windows 11's: rounded, an accent underline.
+            int fh = ugfx_char_h() + 14;
+            int fx = x + 2 * pr, fy = y + (h - fh) / 2, fw = w - 4 * pr;
+            uui_fill_round_rect(s, fx, fy, fw, fh, pr, UTHEME_OUTLINE);
+            uui_fill_round_rect(s, fx + 1, fy + 1, fw - 2, fh - 2, pr - 1, UTHEME_WHITE);
+            ugfx_fill_rect(s, fx + pr, fy + fh - 2, fw - 2 * pr, 2, UTHEME_ACCENT);
+            int mr = fh / 5;
+            draw_magnifier(fx + 8 + mr, fy + fh / 2 - 1, mr, ugfx_blend(fg, UTHEME_WHITE, 80));
+            int tx = fx + 14 + mr * 3;
             int ty = fy + (fh - ugfx_char_h()) / 2;
             int tw = fw - (tx - fx) - 6;
             if (query_len) {
-                ugfx_draw_string_clipped(wm_surface(), tx, ty, tw, query, fg, UTHEME_WHITE);
+                ugfx_draw_string_clipped(s, tx, ty, tw, query, fg, UTHEME_WHITE);
                 int caret = tx + ugfx_text_width(query);
                 if (caret < fx + fw - 3)
-                    ugfx_fill_rect(wm_surface(), caret + 1, ty, 1, ugfx_char_h(), fg);
+                    ugfx_fill_rect(s, caret + 1, ty, 1, ugfx_char_h(), fg);
             } else {
-                ugfx_draw_string_clipped(wm_surface(), tx, ty, tw, "Search apps",
-                                         UTHEME_OUTLINE, UTHEME_WHITE);
-                ugfx_fill_rect(wm_surface(), tx - 1, ty, 1, ugfx_char_h(), fg);
+                ugfx_draw_string_clipped(s, tx, ty, tw, "Search apps",
+                                         ugfx_blend(fg, UTHEME_WHITE, 120), UTHEME_WHITE);
+                ugfx_fill_rect(s, tx - 1, ty, 1, ugfx_char_h(), fg);
             }
             continue;
         }
@@ -908,21 +942,26 @@ void start_menu_draw(int mx, int my) {
         else if (kind == START_ROW_ACTION) hot = (hover_token == TOK_ACTION(i - L.cats));
         else hot = (hover_token == TOK_APP(i - L.cats - wm_system_action_count));
 
+        // THE ROW IS A PILL, inset from the column's edges -- the card's.
+        int px = x + pr, pw = w - 2 * pr;
         if (i == flash_row) {
             row_bg = flash_bg; row_fg = flash_fg;
+            uui_fill_round_rect(s, px, y, pw, h, pr, row_bg);
         } else if (selected) {
-            // SELECTION OUTRANKS HOVER -- a pale wash with ordinary
-            // text, Explorer's treatment, plus the accent bar below.
+            // SELECTION OUTRANKS HOVER -- the soft accent fill with its
+            // 1px edge (docs/gui-guidelines.md), and a folder's accent
+            // bar, Windows 11's navigation-pane mark.
             row_bg = UTHEME_SELECTION;
+            uui_fill_round_rect(s, px, y, pw, h, pr, ugfx_blend(UTHEME_SELECTION, UTHEME_ACCENT, 110));
+            uui_fill_round_rect(s, px + 1, y + 1, pw - 2, h - 2, pr - 1, row_bg);
+            if (kind == START_ROW_CATEGORY)
+                uui_fill_round_rect(s, px + 2, y + h / 4, 3, h / 2, UUI_CAPSULE, UTHEME_ACCENT);
         } else if (hot) {
             row_bg = side ? side_hover : pane_hover;
+            uui_fill_round_rect(s, px, y, pw, h, pr, row_bg);
         }
-        if (row_bg != (uint32_t)(side ? bg : pane_bg))
-            ugfx_fill_rect(wm_surface(), x, y, w, h, row_bg);
-        if (selected && kind == START_ROW_CATEGORY)
-            ugfx_fill_rect(wm_surface(), x, y + 2, 3, h - 4, UTHEME_ACCENT);
 
-        int text_x = x + 10;
+        int text_x = px + 10;
         if (kind == START_ROW_APP) {
             // THE INDENT IS UNCONDITIONAL, the icon is not. A row whose
             // app has no artwork (Crash Test ships without any, on
@@ -930,38 +969,32 @@ void start_menu_draw(int mx, int my) {
             // the list reads straight rather than ragged.
             struct gui_app *a; int act;
             pane_row(scroll + i - L.cats - wm_system_action_count, &a, &act);
-            text_x = x + 6 + icon_sz + 4;
+            text_x = px + 10 + icon_sz + 10;
             const struct uimg *ico = a ? icon_get(a->icon_name, icon_sz) : 0;
             if (ico)
-                ugfx_blit_alpha(wm_surface(), x + 6, y + 3,
-                                ico->w, ico->h, ico->px, ico->w);
+                ugfx_blit_alpha(s, px + 10, y + (h - ico->h) / 2, ico->w, ico->h, ico->px, ico->w);
         } else if (kind == START_ROW_CATEGORY) {
             // The folder's own icon, on the same terms: the column is
             // booked whether or not the file exists, so a theme missing
             // one folder's artwork does not move the other labels.
             int fsz = SM_FOLDER_SZ(L.item_h);
-            text_x = x + 8 + fsz + 6;
+            text_x = px + 12 + fsz + 10;
             const struct uimg *ico = icon_get(folder_icon_at(i), fsz);
             if (ico)
-                ugfx_blit_alpha(wm_surface(), x + 8, y + (h - ico->h) / 2,
-                                ico->w, ico->h, ico->px, ico->w);
+                ugfx_blit_alpha(s, px + 12, y + (h - ico->h) / 2, ico->w, ico->h, ico->px, ico->w);
         }
         // Restart with a boot menu behind it says so, as a submenu row
-        // does in every menu here (uui_menubar's arrow, same shape).
-        int right = x + w - 8;
+        // does in every menu here (the card's chevron).
+        int right = px + pw - 8;
         if (kind == START_ROW_ACTION && g_boot_menu && !k_strcmp(label, "Restart")) {
-            int r = ugfx_char_h() / 4;
-            if (r < 3) r = 3;
-            int cx = right - r, cy = y + h / 2;
-            for (int k = 0; k <= r; k++)
-                ugfx_fill_rect(wm_surface(), cx - r / 2 + k, cy - (r - k), 1, 2 * (r - k) + 1, row_fg);
-            right -= 2 * r + 4;
+            int cr = ugfx_char_h() / 3;
+            sm_chevron(right - cr, y + h / 2, row_fg);
+            right -= 2 * cr + 6;
         }
         // Elided, for the same reason the strip is -- and a row label
         // that ran past its column used to be drawn through the border
         // before it was even clipped.
-        ugfx_draw_string_elided(wm_surface(), text_x,
-                                y + (L.item_h - ugfx_char_h()) / 2,
+        ugfx_draw_string_elided(s, text_x, y + (L.item_h - ugfx_char_h()) / 2,
                                 right - text_x, label, row_fg, row_bg);
     }
 
@@ -974,42 +1007,33 @@ void start_menu_draw(int mx, int my) {
     // input, and nothing about it invites a click.
     int listed = pane_count();
     if (listed > L.pane_rows) {
-        int track_h = L.pane_h - 2 * SM_INSET;
+        int track_h = L.pane_h - 2 * SM_INSET - 2 * r;
         int thumb_h = track_h * L.pane_rows / listed;
         if (thumb_h < 8) thumb_h = 8;
         int span = track_h - thumb_h;
         int max_first = listed - L.pane_rows;
-        int thumb_y = L.y + SM_INSET + (max_first ? span * scroll / max_first : 0);
-        int tx = L.pane_x + L.pane_w - 5;
-        ugfx_fill_rect(wm_surface(), tx, L.y + SM_INSET, 3, track_h,
-                       uui_state_bg(pane_bg, UUI_STATE_HOVER));
-        ugfx_fill_rect(wm_surface(), tx, thumb_y, 3, thumb_h, UTHEME_OUTLINE);
+        int top = L.y + SM_INSET + r;
+        int thumb_y = top + (max_first ? span * scroll / max_first : 0);
+        int tx = L.x + L.w - 1 - pr - 3;
+        uui_fill_round_rect(s, tx, thumb_y, 3, thumb_h, UUI_CAPSULE, UTHEME_OUTLINE);
     }
 
-    // The description strip: a rule, then one line about the current
-    // row. Drawn even when empty, because its HEIGHT is part of the
-    // layout -- a menu that changed size as the pointer moved would be
-    // worse than a blank line (see layout()).
+    // The description strip: one line about the current row. Drawn even
+    // when empty, because its HEIGHT is part of the layout -- a menu
+    // that changed size as the pointer moved would be worse than a blank
+    // line (see layout()).
     {
         int dy = L.y + L.pane_h;
-        ugfx_fill_rect(wm_surface(), L.x, dy, L.w, L.desc_h, bg);
-        ugfx_fill_rect(wm_surface(), L.x + 6, dy, L.w - 12, 1, UTHEME_SEPARATOR);
         const char *d = start_menu_description();
         if (d && d[0])
             // ELIDED, not clipped: a description that simply stopped at
             // the menu's edge read as a complete shorter sentence, and
             // the strip is the one place a person reads a whole line.
             // The full text is the tooltip's job (wm_tooltip.h).
-            ugfx_draw_string_elided(wm_surface(), L.x + 10,
+            ugfx_draw_string_elided(s, L.x + 2 * pr + 10,
                                     dy + (L.desc_h - ugfx_char_h()) / 2,
-                                    L.w - 20, d, UTHEME_OUTLINE, bg);
+                                    L.w - 4 * pr - 20, d, ugfx_blend(fg, pane_bg, 110), pane_bg);
     }
-
-    // Border last, after every row fill -- a hover/selection band spans
-    // the full column width, the same columns the border's edges sit on,
-    // so drawing the border first would get overpainted wherever a
-    // highlighted row touches it.
-    ugfx_draw_rect(wm_surface(), L.x, L.y, L.w, L.h, border);
 }
 
 // --- acting on a row ---------------------------------------------------

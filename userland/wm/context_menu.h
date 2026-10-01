@@ -1,6 +1,8 @@
 #ifndef CONTEXT_MENU_H
 #define CONTEXT_MENU_H
 
+#include <stdint.h>
+
 // A reusable right-click popup menu -- same peer-file pattern as
 // start_menu.h/.c (factored state + drawing + hit-testing, sharing the
 // window manager's state through wm_internal.h rather than being an
@@ -10,11 +12,8 @@
 // genuinely generic: ANY caller (desktop background, a taskbar app
 // button, a window's title bar/content area, a Start menu row) can open
 // one with its own short item list, anchored at the cursor position
-// where the right-click landed. First real callers: wm_input.c's
-// right-click dispatch (see its own comment for exactly which surfaces
-// wire this in this round) -- see docs/roadmap.md for what's
-// deliberately NOT wired yet (desktop icons' own per-icon menu, once
-// desktop.c grows real icon identity beyond "click launches app X").
+// where the right-click landed: the desktop (its background and each
+// icon), a window's title bar, a taskbar button, a Start menu row.
 //
 // THE MENU IS DRAWN AND HIT-TESTED BY `uui_menubar` (ui/uui_menubar.h),
 // opened through uui_menubar_open_at() with no bar strip behind it (as
@@ -25,9 +24,8 @@
 // is looked back up here. See docs/decisions.md for why the Start menu
 // deliberately did NOT move.
 //
-// Submenu depth is the widget's now, not one. **The keyboard is still
-// not wired**: uui_menubar_key() exists, and wm_overlay.h has no key op
-// to route it through.
+// Submenu depth is TWO (the desktop's Open > Category > app); the
+// keyboard is the widget's, routed through the overlay registry's key op.
 
 struct context_menu_item {
     const char *label;
@@ -48,6 +46,16 @@ struct context_menu_item {
     int checked;
     // A separator: a rule, half a row tall, not hoverable, never selected.
     int separator;
+
+    // The widget's row extras (ui/uui_menubar.h): an icon_get() name and
+    // its tint (an action role or a colour), the key that does the same
+    // ("Ctrl+C" -- a label only, the caller binds the key), a button in
+    // the command STRIP across the top (leading rows only), and greyed.
+    const char *icon;
+    uint32_t tint;
+    const char *accel;
+    int strip;
+    int disabled;
 };
 
 // Whether a context menu is currently open -- read by wm_render.c (draw
@@ -90,6 +98,8 @@ int context_menu_contains(int mx, int my);
 void context_menu_damage(void);
 
 int context_menu_handle_click(int mx, int my);
+// The overlay's key op: arrows, Enter, Esc and letters, as uui_menubar_key().
+int context_menu_key(int key, uint8_t mods);
 
 // The open menu's geometry, for the debug console (`gui ctxmenu`) and
 // therefore for tests. Returns the row count, or 0 when nothing is
@@ -110,6 +120,15 @@ const char *context_menu_sub_row_label(int index);
 // The y a row's TOP sits at within its menu -- separators are half a
 // row, so rows are no longer at index * item_h.
 int context_menu_row_top(int index);
+// A row's own rect at `level` (0 the menu, 1 its open submenu) -- a strip
+// button's x and width are its own, so a test clicks its centre -- and
+// whether it is greyed.
+int context_menu_row_rect(int level, int index, int *x, int *y, int *w, int *h);
+int context_menu_row_disabled(int level, int index);
+// Any open level's rect and rows (0 the menu, 1 its submenu, 2 the one
+// below that), for `gui ctxmenu`'s "sub2". 0 rows when that level is shut.
+int context_menu_level_rows(int level, int *x, int *y, int *w);
+const char *context_menu_level_label(int level, int index);
 int context_menu_sub_row_top(int index);
 
 #endif

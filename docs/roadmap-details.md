@@ -1362,8 +1362,10 @@ mind, not desktop-only. Positions persist across reboot in
 
 Per-icon desktop context menus -- BUILT 2026-09-10 for what has an
 identity: a file icon (an entry of `/home/desktop`) offers Open, Cut,
-Copy, Delete, a launcher offers Open. Rename and Properties on the
-desktop are still open; the File Manager has both.
+Copy, Delete, a launcher offers Open. Rename and Properties followed on
+2026-10-01 with the menu redesign: Cut, Copy, Rename and Delete are a
+command strip, Rename edits the caption in place (a launcher's `Name=`),
+and Properties starts the Properties app with the path.
 
 More compositor work beyond `gfx_present()`'s dirty-pixel blit and the
 cursor-sprite save/restore path -- partially done now, see

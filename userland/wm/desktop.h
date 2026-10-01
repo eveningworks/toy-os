@@ -60,6 +60,10 @@ void desktop_poll_config(void);
 // point and its new position is persisted. A no-op when no drag is in
 // progress (armed by desktop_handle_click() below).
 void desktop_update_drag(int mx, int my, uint8_t buttons);
+// The hover wash: `on_desktop` is the caller's answer to "is the bare
+// desktop under the pointer" (no window, overlay or taskbar on top).
+void desktop_update_hover(int mx, int my, int on_desktop);
+int desktop_hovered_icon(void);            // -1 when none, for `gui icons`
 
 // Handles a left-click at (mx, my) that nothing else (a window, the
 // taskbar, an open Start/context menu) claimed -- i.e. wm_input.c's
@@ -116,6 +120,11 @@ struct gui_app;
 void desktop_add_launcher(const struct gui_app *app);   // writes <app_id>.desktop into /home/desktop
 // Ctrl+C/X/V and Delete when no window has the focus. 1 if consumed.
 int desktop_handle_key(int key, unsigned mods);
+// A caption being edited in place (F2, the icon menu's Rename): a left
+// click on its field is consumed (1); anywhere else commits it and the
+// click carries on (0). Called first thing for every left click.
+int desktop_rename_click(int mx, int my);
+int desktop_renaming(void);                // the icon index, or -1
 // A drop from another window landed on the desktop background: the
 // drag slot's files move (or copy, with Ctrl) into /home/desktop.
 // Returns 1 if it took them.

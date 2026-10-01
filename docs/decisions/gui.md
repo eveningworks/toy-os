@@ -9396,3 +9396,51 @@ Four calls a future session would otherwise re-litigate:
 - **Tags are parsed in ring 3 by `lib/utags.h`**, untrusted input like
   `ttf.h`: every length checked, an unknown encoding or an
   unsynchronised tag skipped rather than guessed.
+
+## Every menu is one card, Windows 11's, and the compositor cuts a popup's corners
+
+Chosen from mockups (2026-10-01) over Breeze's soft-accent menus and a
+dark shell matching the taskbar, and applied to EVERY menu -- an app's
+menu bar and right-click menus as well as the desktop's, the window
+menu and the taskbar's. They are all `uui_menubar` already, so one
+restyle reaches all of them, and the WM's context menu dropped the
+panel colours it used to paint over the widget's: before this the
+desktop's menu and an app's were two designs drawn by one widget.
+
+**The card**: a ground a step lighter than the chrome, a hairline,
+corners rounded at five-eighths of the line height, a shadow that
+follows them but stays below the top edge, as before. **The rows** are
+twice the line height plus air, with hover a
+rounded pill inset from the edge; a row may carry an icon tinted by the
+ACTION ROLE of what it does -- the colour the command bars already
+give the same verbs -- and its key, right-aligned and dimmed. A file's
+verbs can be a **command strip** across the top (Explorer's context
+menu since Windows 11), and the hovered button names itself in a tip
+inside the card, since a tooltip of its own would need a surface and a
+timer the widget has neither of.
+
+**A popup surface is painted SQUARE and the compositor rounds it**, as
+it already rounds a window: it saves what is under the corners before
+compositing the surface and cuts the arc after, reading the ring's
+colour off the surface's own top edge. The alternative -- every widget
+rounding its own surface -- blends the arc against the surface's stale
+buffer, because a client never sees what is behind its popup; that is
+why a window's corners were the compositor's in the first place.
+Reading the edge colour rather than assuming one is what lets a menu, a
+dropdown list and a tooltip, each with its own hairline, share one cut.
+`uui_popup_radius()` is the one number both sides use.
+
+**The desktop's Open > is grouped by the Start menu's categories.** It
+was a flat list capped at sixteen, and with twenty desktop apps it lost
+Task Manager, Terminal, System Update and UI Demo off the end without a
+sign. KDE's and Openbox's root menus are categories; two levels of
+submenu cost the context menu one more level in its row pool, and
+nothing is capped any more.
+
+**The desktop's selection is glass.** A solid accent block hid the
+wallpaper and looked like a different control from the File Manager's
+soft selection; white laid over the picture with a rounded edge is
+Windows 11's desktop, and the hover state the desktop never had is the
+same wash, fainter. Both use `uui_glass_round_rect()`, which the
+rubber band now uses too: it was an outline only because the drawing
+layer once had no alpha blend.
