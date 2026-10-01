@@ -1155,11 +1155,11 @@ def run(dbg, qmp, tmp, res):
               lay is not None and lay.view and lay.view[2] == 0 and
               lay.pane[0][2] < w_two * 5 // 4, f"view={lay and lay.view} pane0={lay and lay.pane.get(0)}")
 
-    # The folder tree: a lazy uui_tree over the open set, under the
-    # places in the side column.
+    # The folder tree: the side column is one navigation tree (places,
+    # then the volumes), and Folder tree lets the volumes open.
     view_pick(dbg, qmp, win, last_layout() or lay, "tree", res)
     lay = wait_layout(dbg, win, lambda l: l.view and l.view[3] == 1 and l.treebox)
-    res.check("View->Folder tree shows the tree under the places, left of the panes",
+    res.check("View->Folder tree opens the volumes in the side column, left of the panes",
               lay is not None and lay.view and lay.view[3] == 1 and
               lay.view[4] > 1 and lay.treebox is not None and lay.treebox[1] > 0 and
               lay.treebox[0] + lay.treebox[2] <= lay.pane[0][0],
@@ -1169,22 +1169,23 @@ def run(dbg, qmp, tmp, res):
         res.check("the tree pre-selects the active pane's directory",
                   tsel >= 1, f"selected id={tsel}")
 
-        # Row 1 is "/"'s first child ("bin"). Clicking its LABEL
-        # navigates the active pane; clicking its EXPANDER (depth-1
-        # triangle at x ~ pad + indent) relists and GROWS the node
-        # count without navigating anywhere new.
+        # The row for /bin, System's first folder, found BY PATH (the
+        # places come first). Clicking its LABEL navigates the active
+        # pane; clicking its EXPANDER (depth 1, at x ~ pad + indent)
+        # relists and GROWS the node count without navigating anywhere.
         n_before = lay.view[4]
-        sure_click(dbg, qmp, ox + tx + tw // 2, oy + ty + trh + trh // 2)
+        brow = next((r for r, p in sorted(lay.treerow.items()) if p == "/bin"), 1)
+        sure_click(dbg, qmp, ox + tx + tw // 2, oy + ty + brow * trh + trh // 2)
         lay = wait_layout(dbg, win, lambda l: l.dir.get(0) not in (SRC, None))
         res.check("clicking a tree row navigates the active pane",
                   lay is not None and lay.dir.get(0) not in (SRC, None),
                   f"dir={lay and lay.dir}")
-        sure_click(dbg, qmp, ox + tx + 20, oy + ty + trh + trh // 2)
+        sure_click(dbg, qmp, ox + tx + 20, oy + ty + brow * trh + trh // 2)
         lay = wait_layout(dbg, win, lambda l: l.view and l.view[4] > n_before)
         res.check("clicking its expander lazily lists the directory's children",
                   lay is not None and lay.view and lay.view[4] > n_before,
                   f"nodes {n_before} -> {lay and lay.view and lay.view[4]}")
-        sure_click(dbg, qmp, ox + tx + 20, oy + ty + trh + trh // 2)
+        sure_click(dbg, qmp, ox + tx + 20, oy + ty + brow * trh + trh // 2)
         lay = wait_layout(dbg, win, lambda l: l.view and l.view[4] == n_before)
         res.check("clicking it again collapses back to the open set",
                   lay is not None and lay.view and lay.view[4] == n_before,
@@ -1698,21 +1699,28 @@ def run(dbg, qmp, tmp, res):
               seg is not None and lay.dir.get(0) == SRC,
               f"segments={sorted(lay.pathseg)} dir0={lay.dir.get(0)}")
 
-    # Places: the first DEVICE row is the root filesystem ("System"),
-    # after the five places; Home is the first place.
-    dev = lay.placerows.get(5)
-    if dev:
-        sure_click(dbg, qmp, ox + dev[0] + 30, oy + dev[1] + 8)
+    # The places and volumes are rows of the side column's tree, found
+    # BY PATH: "/" is the System volume, and the FIRST /home is the Home
+    # place (the same folder under System comes after it).
+    def tree_row(path):
+        rows = [r for r, p in sorted(lay.treerow.items()) if p == path]
+        return rows[0] if rows and lay.treebox else None
+    sysrow = tree_row("/")
+    if sysrow is not None:
+        tx, ty, tw, th, trh, _ = lay.treebox
+        sure_click(dbg, qmp, ox + tx + tw // 2, oy + ty + sysrow * trh + trh // 2)
         lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == "/") or lay
-    res.check("the System device in Places goes to the root, and is highlighted there",
-              dev is not None and lay.dir.get(0) == "/" and lay.placesel == 5,
-              f"rows={sorted(lay.placerows)} dir0={lay.dir.get(0)} sel={lay.placesel}")
-    home = lay.placerows.get(0)
-    if home:
-        sure_click(dbg, qmp, ox + home[0] + 30, oy + home[1] + home[3] // 2)
+    res.check("the System volume goes to the root, and is highlighted there",
+              sysrow is not None and lay.dir.get(0) == "/" and
+              lay.treesel is not None and lay.treesel[0] == "/",
+              f"rows={lay.treerow} dir0={lay.dir.get(0)} sel={lay.treesel}")
+    homerow = tree_row("/home")
+    if homerow is not None:
+        tx, ty, tw, th, trh, _ = lay.treebox
+        sure_click(dbg, qmp, ox + tx + tw // 2, oy + ty + homerow * trh + trh // 2)
         lay = wait_layout(dbg, win, lambda l: l.dir.get(0) == "/home") or lay
-    res.check("Home in Places goes to /home",
-              home is not None and lay.dir.get(0) == "/home", f"dir0={lay.dir.get(0)}")
+    res.check("Home goes to /home",
+              homerow is not None and lay.dir.get(0) == "/home", f"dir0={lay.dir.get(0)}")
 
     # Search filters the folder by name, anywhere in it: in /fmtest, "rli"
     # leaves ".." and charlie.txt ("ch" would keep echo.txt too); Esc gives

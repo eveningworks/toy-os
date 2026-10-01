@@ -75,15 +75,20 @@ void uui_tree_set_on_toggle(struct uui_tree *t,
 
 // --- structure, derived from the depth run (or declared -- see `kind`) --
 
+static int is_header(const struct uui_tree *t, int node) {
+    return node >= 0 && node < t->count && t->nodes[node].kind == UUI_TREE_HEADER;
+}
+
 int uui_tree_is_parent(const struct uui_tree *t, int node) {
     if (node < 0 || node >= t->count) return 0;
+    if (is_header(t, node)) return 0;
     if (t->nodes[node].kind != UUI_TREE_AUTO) return 1; // declared lazy parent
     if (node >= t->count - 1) return 0;
     return t->nodes[node + 1].depth > t->nodes[node].depth;
 }
 
 int uui_tree_is_collapsed(const struct uui_tree *t, int node) {
-    if (node < 0 || node >= t->count) return 0;
+    if (node < 0 || node >= t->count || is_header(t, node)) return 0;
     if (t->nodes[node].kind != UUI_TREE_AUTO)
         return t->nodes[node].kind == UUI_TREE_CLOSED;
     if (node >= UUI_TREE_MAX_NODES) return 0;
@@ -277,19 +282,27 @@ void uui_tree_natural_size(const struct uui_tree *t, int *out_w, int *out_h) {
 
 // --- drawing ----------------------------------------------------------
 
+// A usage meter's width: four digits' worth, from the face.
+static int meter_w(void) { return ugfx_char_advance('0') * 4; }
+
 static int row_text_x(const struct uui_tree *t, int node) {
     return t->x + UUI_TREE_PAD_X + t->nodes[node].depth * UUI_TREE_INDENT +
            UUI_TREE_EXP_W + icon_gutter(t);
 }
 
-// A small filled triangle: right when collapsed, down when expanded --
-// the disclosure shape every desktop tree uses, drawn rather than
-// spelled with characters so it does not depend on the font.
+// A CHEVRON, two pixels thick: right when collapsed, down when expanded
+// -- Windows 11's and Breeze's disclosure mark, in a muted colour so the
+// labels lead. Drawn, not spelled, so it does not depend on the font.
 static void draw_expander(struct ugfx_surface *s, int cx, int cy, int open,
                            uint32_t col) {
     for (int i = 0; i < 4; i++) {
-        if (open) ugfx_fill_rect(s, cx - 3 + i, cy - 1 + i, 7 - 2 * i, 1, col);
-        else      ugfx_fill_rect(s, cx - 1 + i, cy - 3 + i, 1, 7 - 2 * i, col);
+        if (open) {
+            ugfx_fill_rect(s, cx - 3 + i, cy - 1 + i, 2, 1, col);
+            ugfx_fill_rect(s, cx + 2 - i, cy - 1 + i, 2, 1, col);
+        } else {
+            ugfx_fill_rect(s, cx - 1 + i, cy - 3 + i, 1, 2, col);
+            ugfx_fill_rect(s, cx - 1 + i, cy + 2 - i, 1, 2, col);
+        }
     }
 }
 
@@ -306,6 +319,19 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
     // already has the answer.
     int sel_ry = -1;
     int strong = t->sel_style == UUI_SEL_STRONG;
+    int rounded = t->sel_style == UUI_SEL_ROUNDED;
+    uint32_t muted = ugfx_blend(t->fg, t->bg, 120);
+    // METERS ARE ALL OR NONE: one volume with a bar and its neighbour
+    // without reads as a fault, so they show only if every one fits.
+    int meters = 1;
+    for (int n = 0; n < t->count && meters; n++) {
+        const struct uui_tree_node *m = &t->nodes[n];
+        if (!m->meter_on) continue;
+        int room = t->x + t->w - t->bar_w - UUI_TREE_PAD_X - (rounded ? 6 : 0)
+                 - (row_text_x(t, n) + ugfx_text_width(m->label) + 6)
+                 - (m->note ? ugfx_text_width(m->note) + 6 : 0);
+        if (room < meter_w() + 6) meters = 0;
+    }
     uint32_t sel_bg = strong ? UTHEME_ACCENT : t->sel_bg;
     uint32_t sel_fg = strong ? UTHEME_ACCENT_TEXT : t->sel_fg;
 
@@ -325,13 +351,39 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
         int node = uui_tree_node_at_row(t, r);
         if (node < 0) break;
         int ry = t->y + (r - t->top) * rh + disp;
+        const struct uui_tree_node *nd = &t->nodes[node];
+        if (nd->kind == UUI_TREE_HEADER) {
+            // A caption, bold and muted, sitting low in its row so it
+            // reads as the head of what follows.
+            const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
+            int hy = ry + rh - ugfx_char_h() - 2;
+            ugfx_draw_string_clipped(s, t->x + UUI_TREE_PAD_X + 4, hy,
+                                      t->w - bar - 2 * UUI_TREE_PAD_X - 4, nd->label,
+                                      muted, t->bg);
+            ugfx_set_font(was);
+            continue;
+        }
         int selected = (node == t->selected);
         if (selected) sel_ry = ry;
-        if (selected)
+        if (rounded && (selected || node == t->hovered)) {
+            // Inset and rounded; the edge is the focus ring when focused.
+            int rx = t->x + 4, rw = t->w - bar - 8;
+            if (selected) {
+                uint32_t edge = t->focused ? UTHEME_ACCENT
+                                           : ugfx_blend(UTHEME_WHITE, UTHEME_ACCENT, 130);
+                uui_fill_round_rect(s, rx, ry + 1, rw, rh - 2, 5, edge);
+                uui_fill_round_rect(s, rx + 1, ry + 2, rw - 2, rh - 4, 4, sel_bg);
+            } else {
+                uui_fill_round_rect(s, rx, ry + 1, rw, rh - 2, 5,
+                                    uui_state_bg(t->bg, UUI_STATE_HOVER));
+            }
+        } else if (selected)
             ugfx_fill_rect(s, t->x, ry, t->w - bar, rh, sel_bg);
         else if (node == t->hovered)
             ugfx_fill_rect(s, t->x, ry, t->w - bar, rh,
                             uui_state_bg(t->bg, UUI_STATE_HOVER));
+        uint32_t row_bg = selected ? sel_bg
+                        : node == t->hovered ? uui_state_bg(t->bg, UUI_STATE_HOVER) : t->bg;
         // The drop target, in the accent -- the same outline the
         // fileview draws, so a drag reads the same over both.
         if (node == t->drop_node) uui_focus_ring(s, t->x, ry, t->w - bar, rh);
@@ -340,7 +392,7 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
             draw_expander(s, t->x + UUI_TREE_PAD_X +
                               t->nodes[node].depth * UUI_TREE_INDENT + 4,
                           ry + rh / 2, !uui_tree_is_collapsed(t, node),
-                          selected ? sel_fg : t->fg);
+                          selected && strong ? sel_fg : muted);
         } else if (t->nodes[node].depth > 0) {
             // A guide tick for a child row, so depth reads at a glance
             // without an expander to anchor it.
@@ -368,15 +420,40 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
                 ugfx_blit_alpha(s, bx, by, b->w, b->h, b->px, b->w);
         }
 
+        // The note and meter at the right edge -- each only where the
+        // whole label still fits: the name first, the note, the meter.
+        int right = t->x + t->w - bar - UUI_TREE_PAD_X - (rounded ? 6 : 0);
+        int ty = ry + (rh - ugfx_char_h()) / 2;
+        int need = tx + ugfx_text_width(nd->label) + 6;
+        if (nd->note) {
+            int nw = ugfx_text_width(nd->note);
+            if (right - nw >= need) {
+                right -= nw;
+                ugfx_draw_string(s, right, ty, nd->note, selected && strong ? sel_fg : muted,
+                                 row_bg);
+                right -= 6;
+            }
+        }
+        if (nd->meter_on && meters) {
+            int mw = meter_w(), mh = 3;
+            if (right - mw >= need) {
+                right -= mw;
+                int my = ry + (rh - mh) / 2;
+                ugfx_fill_rect(s, right, my, mw, mh, ugfx_blend(row_bg, UTHEME_BORDER, 70));
+                int pm = nd->meter_pm < 0 ? 0 : nd->meter_pm > 1000 ? 1000 : nd->meter_pm;
+                int fill = mw * pm / 1000;
+                if (fill < 1 && pm > 0) fill = 1;
+                ugfx_fill_rect(s, right, my, fill, mh, nd->meter_color);
+                right -= 6;
+            }
+        }
         // CLIPPED, always: a label longer than the pane must not run
         // into the page beside it. gfx_draw_string does not clip, and
         // that has caused the identical overlap bug twice already.
-        int avail = t->x + t->w - bar - tx - UUI_TREE_PAD_X;
+        int avail = right - tx;
         if (avail > 0)
-            ugfx_draw_string_clipped(s, tx, ry + (rh - ugfx_char_h()) / 2, avail,
-                                      t->nodes[node].label,
-                                      selected ? sel_fg : t->fg,
-                                      selected ? sel_bg : t->bg);
+            ugfx_draw_string_clipped(s, tx, ty, avail, nd->label,
+                                      selected ? sel_fg : t->fg, row_bg);
     }
     ugfx_clip_restore(s, &saved);
 
@@ -398,7 +475,7 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
     if (t->focused) {
         // The strong style draws NO ring on its row: the accent fill is
         // already the mark of where focus is (Windows' and Breeze's rows).
-        if (sel_ry >= 0 && strong) { /* the fill is the indicator */ }
+        if (sel_ry >= 0 && (strong || rounded)) { /* the fill or edge is the indicator */ }
         else if (sel_ry >= 0) uui_focus_ring(s, t->x, sel_ry, t->w - bar, rh);
         else             uui_focus_ring(s, t->x, t->y, t->w, t->h);
     }
@@ -426,6 +503,7 @@ int uui_tree_hit_expander(const struct uui_tree *t, int cx, int cy) {
 
 int uui_tree_hover(struct uui_tree *t, int cx, int cy) {
     int n = uui_tree_hit(t, cx, cy);
+    if (is_header(t, n)) n = -1;
     if (n == t->hovered) return 0;
     t->hovered = n;
     return 1;
@@ -433,7 +511,7 @@ int uui_tree_hover(struct uui_tree *t, int cx, int cy) {
 
 int uui_tree_click(struct uui_tree *t, int cx, int cy) {
     int node = uui_tree_hit(t, cx, cy);
-    if (node < 0) return 0;
+    if (node < 0 || is_header(t, node)) return 0;
     // THE EXPANDER TOGGLES WITHOUT NAVIGATING. Clicking the triangle to
     // see what is inside a section is not the same gesture as choosing
     // that section, and a tree that conflated them would change the
@@ -523,19 +601,32 @@ int uui_tree_key(struct uui_tree *t, int key) {
     int row = row_of_node(t, t->selected);
     int total = uui_tree_visible_count(t);
 
+    // A HEADING IS NOT A STOP: every move steps over one.
     switch (key) {
     case KEY_ARROW_UP:
-        if (row > 0) { t->selected = uui_tree_node_at_row(t, row - 1); reveal(t); return 1; }
+        for (int r = row - 1; r >= 0; r--) {
+            int n = uui_tree_node_at_row(t, r);
+            if (!is_header(t, n)) { t->selected = n; reveal(t); return 1; }
+        }
         return 0;
     case KEY_ARROW_DOWN:
-        if (row >= 0 && row < total - 1) {
-            t->selected = uui_tree_node_at_row(t, row + 1); reveal(t); return 1;
+        for (int r = row + 1; row >= 0 && r < total; r++) {
+            int n = uui_tree_node_at_row(t, r);
+            if (!is_header(t, n)) { t->selected = n; reveal(t); return 1; }
         }
         return 0;
     case KEY_HOME:
-        t->selected = uui_tree_node_at_row(t, 0); reveal(t); return 1;
+        for (int r = 0; r < total; r++) {
+            int n = uui_tree_node_at_row(t, r);
+            if (!is_header(t, n)) { t->selected = n; reveal(t); return 1; }
+        }
+        return 0;
     case KEY_END:
-        t->selected = uui_tree_node_at_row(t, total - 1); reveal(t); return 1;
+        for (int r = total - 1; r >= 0; r--) {
+            int n = uui_tree_node_at_row(t, r);
+            if (!is_header(t, n)) { t->selected = n; reveal(t); return 1; }
+        }
+        return 0;
     case KEY_ARROW_LEFT:
         // Collapse; or, if already collapsed (or a leaf), step OUT to
         // the parent. The two-step behaviour every desktop tree has --
@@ -649,6 +740,7 @@ static int tree_drag_over_op(void *w, int cx, int cy, const struct uui_drag *d) 
     struct uui_tree *t = (struct uui_tree *)w;
     int node = (d->kind == UUI_DRAG_FILES && cx != UUI_NOWHERE)
                    ? uui_tree_hit(t, cx, cy) : -1;
+    if (is_header(t, node)) node = -1;
     t->drop_node = node;
     return node >= 0;
 }

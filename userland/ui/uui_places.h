@@ -62,6 +62,11 @@ void uui_places_select_path(struct uui_places *p, const char *dir);
 int  uui_places_take(struct uui_places *p, char *out, int cap);
 // Row `i`'s rect, for tests and layout logs; 0 past the end.
 int  uui_places_row_rect(const struct uui_places *p, int i, int *x, int *y, int *w, int *h);
+// A device's usage colour (its state, through the theme's action roles)
+// and a short note for one line ("8.7G free", "read-only", "not kept")
+// -- the File Manager's navigation tree draws devices with these.
+uint32_t uui_places_bar_colour(const struct uui_place *r);
+void uui_places_short_note(const struct uui_place *r, char *out, int cap);
 
 struct uui_widget_ops;
 extern const struct uui_widget_ops uui_places_ops;

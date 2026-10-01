@@ -145,11 +145,22 @@ static uint32_t bg_of(const struct uui_places *p) {
 
 // A DRIVE'S BAR IS COLOURED BY WHAT IT IS, so the three read apart at a
 // glance -- and turns red when nearly full, Explorer's warning.
-static uint32_t bar_colour(const struct uui_place *r) {
+uint32_t uui_places_bar_colour(const struct uui_place *r) {
     if (r->total && r->used * 10 >= r->total * 9) return utheme_action(UTHEME_ACT_DANGER);
     if (!r->persistent) return utheme_action(UTHEME_ACT_EDIT);      // RAM: violet
     if (r->readonly)    return utheme_action(UTHEME_ACT_ARRANGE);   // read-only: orange
     return utheme_action(UTHEME_ACT_CREATE);                        // a disk: green
+}
+
+void uui_places_short_note(const struct uui_place *r, char *out, int cap) {
+    if (cap <= 0) return;
+    out[0] = '\0';
+    if (!r->device) return;
+    if (r->readonly) { snprintf(out, (size_t)cap, "read-only"); return; }
+    if (!r->persistent) { snprintf(out, (size_t)cap, "not kept"); return; }
+    char free_s[16];
+    human_size(free_s, sizeof free_s, r->total > r->used ? r->total - r->used : 0);
+    snprintf(out, (size_t)cap, "%s free", free_s);
 }
 
 static void op_draw(struct ugfx_surface *s, const void *w) {
@@ -200,7 +211,7 @@ static void op_draw(struct ugfx_surface *s, const void *w) {
             uint64_t used = r->used > r->total ? r->total : r->used;
             int fill = (int)((uint64_t)bar_w * used / r->total);
             if (fill < 1 && used) fill = 1;
-            ugfx_fill_rect(s, tx, bar_y, fill, 4, bar_colour(r));
+            ugfx_fill_rect(s, tx, bar_y, fill, 4, uui_places_bar_colour(r));
         }
         char free_s[16], total_s[16], line[64];
         human_size(free_s, sizeof free_s, r->total > r->used ? r->total - r->used : 0);

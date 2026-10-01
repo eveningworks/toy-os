@@ -99,6 +99,10 @@ void layout_all(int cw, int ch) {
     g_toolbar.border = chrome_line();
     g_status.bg = chrome();
     g_places.bg = places_bg();
+    g_tree.bg = places_bg();
+    g_tree.sel_bg = UTHEME_SELECTION;
+    g_tree.sel_style = UUI_SEL_ROUNDED;
+    g_tree.row_h = ugfx_char_h() + 10;
 
     // --- the status bar, with the view switch and Cancel at its end ----
     int vw, vh;
@@ -137,17 +141,14 @@ void layout_all(int cw, int ch) {
     widget_by_id(ID_DP_PROPS)->hidden = !g_dpane;
     if (g_dpane) details_layout(right_edge, top, dw, body_h);
 
-    // THE SIDE COLUMN is always there -- the places, with the folder tree
-    // under them when it is on -- and its divider is the old tree one.
+    // THE SIDE COLUMN is the navigation tree (fm_tree.c): the places, then
+    // the volumes, whose folders open under them when the folder tree is
+    // on. uui_places is not drawn here; it is the tree's source of rows.
     uui_splitter_set_track(&g_tree_split, 0, right_edge, minw,
                             (g_single ? 1 : 2) * minw + split_w);
     int side_w = uui_splitter_before(&g_tree_split);
-    int places_h;
-    uui_places_ops.natural_size(&g_places, 0, &places_h);
-    if (!g_tree_on || places_h > body_h) places_h = body_h;
-    uui_places_ops.set_geometry(&g_places, 0, top, side_w, places_h);
-    if (g_tree_on)
-        uui_tree_ops.set_geometry(&g_tree, 0, top + places_h, side_w, body_h - places_h);
+    uui_places_ops.set_geometry(&g_places, 0, top, side_w, 0);
+    uui_tree_ops.set_geometry(&g_tree, 0, top, side_w, body_h);
     uui_splitter_set_geometry(&g_tree_split, uui_splitter_pos(&g_tree_split),
                                top, split_w, body_h);
     int tx = side_w + split_w;
@@ -189,7 +190,8 @@ void layout_all(int cw, int ch) {
     widget_by_id(ID_RIGHT)->hidden = g_single && g_active != 1;
     widget_by_id(ID_ADDR_L)->hidden = g_single || widget_by_id(ID_LEFT)->hidden;
     widget_by_id(ID_ADDR_R)->hidden = g_single || widget_by_id(ID_RIGHT)->hidden;
-    widget_by_id(ID_TREE)->hidden = !g_tree_on;
+    widget_by_id(ID_TREE)->hidden = 0;
+    widget_by_id(ID_PLACES)->hidden = 1;
     widget_by_id(ID_PANE_SPLIT)->hidden = g_single;
 
     // The ACTIVE pane's outline, drawn by the widget itself so it stays
@@ -285,7 +287,7 @@ void log_layout(void) {
     uapp_logf_layout("files: layout view %d %d single %d tree %d %d\n",
           (int)g_pane[0].mode, (int)g_pane[1].mode, g_single, g_tree_on,
           g_tree_on ? g_tree_count : 0);
-    if (g_tree_on) {
+    {   // the side column is always the tree (fm_tree.c)
         uui_tree_ops.bounds(&g_tree, &x, &y, &w, &h);
         uapp_logf_layout("files: layout treebox %d %d %d %d %d %d\n", x, y, w, h,
               uui_tree_row_h(&g_tree), uui_tree_selected_id(&g_tree));
@@ -302,7 +304,8 @@ void log_layout(void) {
         for (int r = 0; r < vis; r++) {
             int node = uui_tree_node_at_row(&g_tree, g_tree.top + r);
             if (node < 0 || node >= g_tree_count) break;
-            uapp_logf_layout("files: layout treerow %d %s\n", r, g_tree_path[node]);
+            uapp_logf_layout("files: layout treerow %d %s\n", r,
+                             g_tree_path[node][0] ? g_tree_path[node] : "-");
         }
     }
     uapp_logf_layout("files: layout selected %s\n", sel ? sel : "-");

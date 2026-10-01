@@ -537,6 +537,11 @@ void path_sync(void) {
     if (!uui_pathbar_is_editing(&g_path) && strcmp(g_path.path, dir) != 0)
         uui_pathbar_set_path(&g_path, dir);
     uui_places_select_path(&g_places, dir);
+    // With the folder tree off the pane is flat, so a place or a volume
+    // follows the directory here; with it on, a navigation reveals it
+    // (on_pane_dir), and doing it here too would reopen a branch the
+    // user collapsed.
+    if (!g_tree_on) tree_select_path(dir);
     if (!g_search_on && strcmp(uui_textbox_text(&g_search), g_query[g_active]) != 0)
         uui_textbox_set_text(&g_search, g_query[g_active]);
     const char *base = (dir[0] == '/' && !dir[1]) ? "System" : k_path_basename(dir);
@@ -782,6 +787,7 @@ void do_command(struct uapp *a, int code) {
     case CMD_VIEW_TREE:
         g_tree_on = !g_tree_on;
         if (g_tree_on) tree_reveal_path(uui_fileview_dir(active()));
+        else { tree_rebuild(); tree_select_path(uui_fileview_dir(active())); }
         uconf_set(FILES_CONF, "tree", g_tree_on ? "1" : "0");
         g_seen_generation = sys_fs_generation();
         break;
@@ -1240,8 +1246,8 @@ static int on_tick(struct uapp *a) {
     if (gen != g_seen_generation) {
         g_seen_generation = gen;
         reload_panes();
-        if (g_tree_on) tree_rebuild(); // a dir can have appeared or gone
         uui_places_refresh(&g_places);  // free space moved, or a disk came
+        tree_rebuild();                 // ...and a dir can have appeared or gone
         refresh_status();
         changed = 1;
     }
@@ -1619,6 +1625,7 @@ int main(int argc, char **argv) {
     // remembered pair -- an argument is a statement about this launch.
     for (int i = 0; i < 2; i++) g_pane[i].on_dir_changed = on_pane_dir;
     if (g_tree_on) tree_reveal_path(uui_fileview_dir(active()));
+    else { tree_rebuild(); tree_select_path(uui_fileview_dir(active())); }
     // ASKED ONCE AT STARTUP: the broadcast only fires on a CHANGE, so an
     // app that opens after somebody else copied would show Paste greyed
     // until the next one.

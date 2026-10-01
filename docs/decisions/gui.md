@@ -9312,3 +9312,35 @@ system-wide rules. **It is a reference app, not a framework**: pieces
 become `userland/ui/` widgets when a second app needs them, as
 `uui_thumbstrip` did, and a redesign is still mocked up before it is
 coded.
+
+## The File Manager's side column is one navigation tree, and every volume is a root of it
+
+Chosen from mockups (2026-10-01) over Dolphin's collapsible sections
+and Thunar's Places/Folders switch. The left pane is ONE `uui_tree`
+(`userland/fm/fm_tree.c`): the places, a "This computer" heading, then
+each mounted volume with its free space as a note and a small meter,
+whose folders open beneath it. This is Windows 11 Explorer's navigation
+pane. The pane before it stacked the places list over a separate folder
+tree, which left the tree about a dozen rows and showed `/` as one
+more folder under the volumes that already named it.
+
+**A volume's mount point is not a folder of its parent's.** /boot is
+the Boot volume's root, so it is left out of System's children (as
+Explorer leaves D: out of C:). Without that, the same directory shows
+twice, open in one place and closed in the other. Collapsing a branch
+closes only paths on the same volume, so folding System leaves Boot
+open.
+
+**`uui_places` is not drawn in the File Manager; it is the tree's
+source.** It still reads the mounts (QUERY_FSINFO) and still draws the
+file chooser's side column. Its colour rule and a one-line note
+(`uui_places_bar_colour()`, `uui_places_short_note()`) are what the
+tree's volume rows show, so the two cannot disagree about a disk.
+
+**The folder-tree toggle keeps its meaning**: off, the volumes are plain
+rows and nothing opens; on, they are lazy parents. The widget gained a
+`UUI_TREE_HEADER` kind (a caption that selection, the arrow keys, hover
+and drops all step over), a note and meter per node, and
+`UUI_SEL_ROUNDED`. Meters are all or none: if one volume's name and
+note leave no room for its bar, no volume shows one. Chevrons replaced
+the filled triangles in every tree, so Help and Device Manager match.

@@ -40,6 +40,9 @@ enum uui_tree_kind {
                         // original contract, and the zero default)
     UUI_TREE_CLOSED,   // the APP owns expansion (a lazy tree): this node
     UUI_TREE_OPEN,     //   IS a parent and this is its current state
+    UUI_TREE_HEADER,   // a SECTION HEADING ("This computer"): drawn as a
+                        // caption, never selected, hovered, a parent or a
+                        // drop target, and skipped by the arrow keys
 };
 
 struct uui_tree_node {
@@ -70,6 +73,14 @@ struct uui_tree_node {
     // colour, so it reads without the colour. After `icon`, so a
     // positional initialiser that stops there still means "none".
     const char *badge;
+    // A short note at the row's right edge ("8.7G free", "read-only"),
+    // NULL for none; and a usage METER before it when `meter_on` --
+    // `meter_pm` per mille full, in `meter_color`. Explorer's This PC
+    // rows, shrunk to fit a tree row. After `badge`, for the same
+    // positional-initialiser reason.
+    const char *note;
+    int meter_on, meter_pm;
+    uint32_t meter_color;
 };
 
 struct uui_tree {
@@ -112,7 +123,11 @@ struct uui_tree {
     int sel_style;
 };
 
-enum { UUI_SEL_SOFT = 0, UUI_SEL_STRONG = 1 };
+// UUI_SEL_ROUNDED is the design language's selection (docs/gui-guidelines.md):
+// a soft fill with a 1px edge, rounded and inset from the sides; the
+// edge is the full accent while the tree has focus, and is its focus
+// ring. Hover is rounded to match.
+enum { UUI_SEL_SOFT = 0, UUI_SEL_STRONG = 1, UUI_SEL_ROUNDED = 2 };
 
 // THE EASY PATH IS THREE LINES, and it is the one most apps want:
 //

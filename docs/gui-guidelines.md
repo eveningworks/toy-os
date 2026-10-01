@@ -82,7 +82,7 @@ REAL CALLER, not a plausible one.
 | `uui_dropdown` | Many mutually-exclusive options, one visible |
 | `uui_slider` | An ORDERED enum, where "more" and "less" is the point |
 | `uui_listbox`, `uui_table` | Rows; rows with columns, a header and sorting |
-| `uui_tree` | Rows at a DEPTH, with collapsible parents -- navigation |
+| `uui_tree` | Rows at a DEPTH, with collapsible parents -- navigation. A `UUI_TREE_HEADER` row is a section caption; a node may carry a right-hand `note` and a usage meter; `UUI_SEL_ROUNDED` is the design language's selection (the File Manager's side column) |
 | `uui_thumbstrip` | A filmstrip: one row of thumbnails, one selected (the pictures come from `lib/uthumb.h`) |
 | `uui_label` | A line of text the LAYOUT reserves a row for |
 | `uui_textbox`, `utext` | One line of editable text; a document |
