@@ -4792,7 +4792,7 @@ every level draws into `wm_surface()` -- clamped against the rectangle
 
 The desktop's background menu is Open > (by the Start menu's
 categories), New folder, Paste (greyed with nothing to paste), Refresh,
-Sort by name, Icon size > (ticked), Desktop settings; an icon's is a
+Sort by name, Icon size > (ticked), System Settings; an icon's is a
 strip of Cut, Copy, Rename, Delete, then Open and Properties -- Windows
 11's. Each row's icon is coloured by what it does.
 

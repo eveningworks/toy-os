@@ -69,7 +69,7 @@ import port_guard  # noqa: E402
 from harness import Results  # noqa: E402
 
 BG_ROWS = ["Open", "-", "New folder", "Paste", "-", "Refresh", "Sort by name",
-           "Icon size", "-", "Desktop settings"]
+           "Icon size", "-", "System Settings"]
 EMPTY = (700, 300)          # a point of bare desktop at the default 1280x720
 GLASS_FILL = 56             # desktop.c's selected (not hovered) fill alpha
 

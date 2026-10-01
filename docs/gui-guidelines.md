@@ -551,7 +551,7 @@ The desktop shows a photograph, so nothing on it is a solid fill:
   strip, then Open and Properties. Over the background: Open > by the
   Start menu's categories (so there is no cap to fall off), the
   desktop's own verbs (New folder, Paste, Refresh, Sort, Icon size >),
-  then the way to its settings page.
+  then System Settings.
 - **Rename happens in place** (F2, or the strip): the caption becomes a
   field, Enter or a click elsewhere commits, Esc abandons. A launcher's
   caption is its `Name=`, so that is what changes -- KDE's rule.

@@ -1629,9 +1629,10 @@ static void menu_sort(void *ctx) {
     redraw_pending = 1;
 }
 
-// Desktop settings: System Settings, found by its app id so a renamed
-// entry still opens it. Both Windows ("Personalize") and KDE
-// ("Configure Desktop and Wallpaper") end their menu this way.
+// The last row opens System Settings, found by its app id so a renamed
+// entry still opens it, and called by the app's own name -- it opens the
+// whole app, not a desktop page. Windows ("Personalize") and KDE
+// ("Configure Desktop and Wallpaper") end their menu the same way.
 static void menu_settings(void *ctx) {
     (void)ctx;
     for (int i = 0; i < gui_app_registry_count; i++) {
@@ -1742,7 +1743,7 @@ void desktop_handle_right_click(int mx, int my) {
     items[k++] = (struct context_menu_item){ .label = "Icon size", .sub = sizes, .sub_count = 3,
                                              .icon = "tb-icons", .tint = UTHEME_ACT_VIEW };
     items[k++] = (struct context_menu_item){ .separator = 1 };
-    items[k++] = (struct context_menu_item){ .label = "Desktop settings", .on_select = menu_settings,
+    items[k++] = (struct context_menu_item){ .label = "System Settings", .on_select = menu_settings,
                                              .icon = "tb-gear" };
     context_menu_open_at(mx, my, items, k);
 }

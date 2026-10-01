@@ -739,7 +739,7 @@ def run(dbg, qmp, tmp, res):
     labels = [r["label"] for r in (menu or {}).get("rows", [])]
     res.check("right-click on the desktop opens a menu with Open, Refresh, Icon size and settings",
               menu is not None and menu.get("open") and
-              {"Open", "Refresh", "Icon size", "Desktop settings"} <= set(labels),
+              {"Open", "Refresh", "Icon size", "System Settings"} <= set(labels),
               f"rows={labels}")
     sub = None
     if menu and "Icon size" in labels:
