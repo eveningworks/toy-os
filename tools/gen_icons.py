@@ -1023,6 +1023,52 @@ def icon_tb_slideshow():
     return im
 
 
+def icon_tb_open():
+    # A folder, its flap open: Open... in the Audio Player.
+    im, d = _tb()
+    d.polygon([(4, 14), (24, 14), (30, 20), (56, 20), (56, 52), (4, 52)], outline=TB_INK, width=5)
+    d.polygon([(4, 52), (14, 30), (62, 30), (54, 52)], fill=TB_INK)
+    return im
+
+
+def icon_tb_shuffle():
+    # Two crossing paths, each ending in an arrowhead.
+    im, d = _tb()
+    d.line([(4, 16), (18, 16), (42, 48), (52, 48)], fill=TB_INK, width=6, joint="curve")
+    d.line([(4, 48), (18, 48), (42, 16), (52, 16)], fill=TB_INK, width=6, joint="curve")
+    d.polygon([(50, 6), (62, 16), (50, 26)], fill=TB_INK)
+    d.polygon([(50, 38), (62, 48), (50, 58)], fill=TB_INK)
+    return im
+
+
+def icon_tb_repeat():
+    # A loop with an arrowhead on each run.
+    im, d = _tb()
+    d.line([(10, 36), (10, 18), (50, 18)], fill=TB_INK, width=6, joint="curve")
+    d.line([(54, 28), (54, 46), (14, 46)], fill=TB_INK, width=6, joint="curve")
+    d.polygon([(46, 8), (60, 18), (46, 28)], fill=TB_INK)
+    d.polygon([(18, 36), (4, 46), (18, 56)], fill=TB_INK)
+    return im
+
+
+def icon_tb_playlist():
+    # Lines of a list, the last one shorter, and a play mark.
+    im, d = _tb()
+    for y, x1 in ((12, 58), (26, 58), (40, 30)):
+        d.line([6, y, x1, y], fill=TB_INK, width=6)
+    d.polygon([(38, 34), (60, 46), (38, 58)], fill=TB_INK)
+    return im
+
+
+def icon_tb_fullscreen():
+    # Four corners pointing out.
+    im, d = _tb()
+    for (x, y, dx, dy) in ((6, 6, 1, 1), (58, 6, -1, 1), (6, 58, 1, -1), (58, 58, -1, -1)):
+        d.line([x, y, x + 18 * dx, y], fill=TB_INK, width=6)
+        d.line([x, y, x, y + 18 * dy], fill=TB_INK, width=6)
+    return im
+
+
 def icon_tb_info():
     im, d = _tb()
     d.ellipse([4, 4, 60, 60], outline=TB_INK, width=6)
@@ -1477,6 +1523,11 @@ ICONS = {
     "tb-wallpaper": icon_tb_wallpaper,
     "tb-slideshow": icon_tb_slideshow,
     "tb-info": icon_tb_info,
+    "tb-open": icon_tb_open,
+    "tb-shuffle": icon_tb_shuffle,
+    "tb-repeat": icon_tb_repeat,
+    "tb-playlist": icon_tb_playlist,
+    "tb-fullscreen": icon_tb_fullscreen,
     "tb-back": icon_tb_back,
     "tb-forward": icon_tb_forward,
     "tb-refresh": icon_tb_refresh,

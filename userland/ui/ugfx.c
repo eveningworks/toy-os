@@ -1183,10 +1183,6 @@ void ugfx_draw_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
     geom_ellipse(&t, cx, cy, rx, ry, color, aa);
 }
 
-void ugfx_fill_circle(struct ugfx_surface *s, int cx, int cy, int r, uint32_t color) {
-    struct geom_target t = target_for(s);
-    geom_fill_circle(&t, cx, cy, r, color);
-}
 void ugfx_fill_ring(struct ugfx_surface *s, int cx, int cy,
                      int r_outer, int r_inner, fx_t from, fx_t to,
                      uint32_t color) {
@@ -1195,17 +1191,8 @@ void ugfx_fill_ring(struct ugfx_surface *s, int cx, int cy,
 }
 
 
-void ugfx_fill_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
-                        uint32_t color) {
-    struct geom_target t = target_for(s);
-    geom_fill_ellipse(&t, cx, cy, rx, ry, color);
-}
-
-void ugfx_fill_polygon(struct ugfx_surface *s, const int *xs, const int *ys,
-                        int count, uint32_t color) {
-    struct geom_target t = target_for(s);
-    geom_fill_polygon(&t, xs, ys, count, color);
-}
+// ugfx_fill_circle(), _ellipse() and _polygon() are ugfx_fill.c's:
+// anti-aliased, for every caller.
 
 // --- the screen -------------------------------------------------------
 //

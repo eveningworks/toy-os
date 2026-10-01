@@ -594,6 +594,8 @@ whenever a headline here tells you something you did not already know.
 - **A TRAY ITEM HAS NO HOVER STATE, AND LIGHTS UP ONLY WHILE IT IS HELD**
 - **THE ROUNDED RECT IS `uui_fill_round_rect()`, ONE RASTERISER, AND ITS
   ARCS BLEND AGAINST THE SURFACE**
+- **ugfx's FILLS ARE ANTI-ALIASED, AND A MESH MUST NOT USE THEM.**
+- **A MEDIA TRANSPORT IS `uui_transport`**
 - **A DATE OR A NUMBER SHOWN TO A PERSON GOES THROUGH `lib/udate.h` OR
   `lib/unum.h`, never a hand-written `%04u-%02u` or `%u.%u`**
 - **A SYSTEM SETTINGS PAGE'S EXTRAS ARE FOUND BY THE SETTING IT CARRIES**

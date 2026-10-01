@@ -3077,6 +3077,25 @@ real scanout hardware does. Do not write a pixel assertion for one.
   `UUI_CAPSULE` is half the short axis, and any larger radius clamps to
   it. It lived inside `uui_scrollbar.c` until the tray's pressed pill
   became its second real caller; `UUI_SB_CAPSULE` is now an alias.
+- **ugfx's FILLS ARE ANTI-ALIASED, AND A MESH MUST NOT USE THEM.**
+  `ugfx_fill_circle()`, `_ellipse()` and `_polygon()` blend their edges
+  by coverage for every caller (`ugfx_fill.c`, sixteen sub-scanlines,
+  checked against Pillow by `tools/ugfx_fill_hostcheck.py`); the
+  footprint is the aliased fill's, so swapping one for the other moves
+  nothing but the edge. Faces that share an edge -- Shapes, the teapot --
+  fill through `uui_canvas`/`geom_fill_*`, whose pixel-centre rule meets
+  exactly; two anti-aliased faces leave a seam. Do not hand-roll a
+  coverage loop in a widget: the transport's first version did, and the
+  library is now the one rasteriser.
+
+- **A MEDIA TRANSPORT IS `uui_transport`** -- previous, play/pause,
+  next, clicked like buttons (armed on press, committed on release over
+  the same part) and taken with `uui_transport_take()`. Its parts are
+  REPORTED (`<name>.prev/.play/.next`), so a test clicks what was laid
+  out. The Audio Player and the Image Viewer's slideshow pill both use
+  it; the pill's background is painted in `on_draw` so the widget lands
+  on top of it.
+
 - **A DATE OR A NUMBER SHOWN TO A PERSON GOES THROUGH `lib/udate.h` OR
   `lib/unum.h`, never a hand-written `%04u-%02u` or `%u.%u`.**
   `udate_format()` writes the LC_TIME locale's spelling (and ISO in "C",

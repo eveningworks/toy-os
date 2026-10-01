@@ -39,6 +39,8 @@
 #include "ui/uui_filedialog.h"
 #include "ui/uui_thumbstrip.h"
 #include "ui/uui_toolbar.h"
+#include "ui/uambient.h"
+#include "ui/uui_transport.h"
 #include "ui/uui_button.h"
 #include "ui/uapp.h"
 #include "ui/ulog.h"
@@ -53,7 +55,7 @@
 #define WALLPAPER_DIR "/usr/share/wallpapers"
 #define DEFAULT_DIR WALLPAPER_DIR
 
-enum { ID_MENU = 1, ID_TOOLBAR, ID_STRIP, ID_IMAGE, ID_WP_FILL, ID_WP_FIT };
+enum { ID_MENU = 1, ID_TOOLBAR, ID_STRIP, ID_IMAGE, ID_WP_FILL, ID_WP_FIT, ID_SLIDE_TP };
 
 enum {
     CMD_OPEN = 1, CMD_RELOAD, CMD_EXIT,
@@ -104,64 +106,19 @@ static int g_slide_ms = 5000;
 static int g_sx, g_sy, g_sw, g_sh;
 static int g_px0, g_py0, g_pw, g_ph;     // the properties panel
 struct hit { int x, y, w, h; };
-static struct hit g_pill_prev, g_pill_play, g_pill_next, g_pill_every;
+static struct hit g_pill, g_pill_every;
+static struct uui_transport g_slide_tp;   // the pill's previous / pause / next
 static int g_drag, g_drag_x, g_drag_y, g_dragged, g_mx = -1, g_my = -1;
 
 // --- the ambient colours ------------------------------------------------
+//
+// The stage takes its colours from the picture (ui/uambient.h, shared
+// with the Audio Player).
+static struct uambient g_amb;
+static struct uambient_stage g_stage;
 
-struct ambient { uint32_t centre, edge, strip, chrome, chrome_line, panel; };
-static struct ambient g_amb;
-
-static void ambient_default(void) {
-    g_amb.centre = ugfx_rgb(52, 52, 58);
-    g_amb.edge   = ugfx_rgb(22, 22, 26);
-    g_amb.strip  = ugfx_rgb(38, 38, 43);
-    g_amb.chrome = UTHEME_CHROME;
-    g_amb.chrome_line = ugfx_blend(UTHEME_CHROME, ugfx_rgb(0, 0, 0), 34);
-    g_amb.panel  = ugfx_blend(UTHEME_CHROME, ugfx_rgb(255, 255, 255), 110);
-}
-
-static int lum(uint32_t c) {
-    return (int)(((c >> 16) & 0xFF) * 3 + ((c >> 8) & 0xFF) * 6 + (c & 0xFF)) / 10;
-}
-
-// The picture's average, and the average of its darkest quarter, from a
-// 16x9 sample. The stage runs from a slightly darkened average at the
-// centre to a deep shade of the dark quarter at the edge -- so a sunset
-// sits in warm dusk and a seascape in deep teal.
-static void ambient_from(const struct uimg *im) {
-    struct uimg s;
-    if (!im || uimg_scale(im, 16, 9, &s) != 0) { ambient_default(); return; }
-    enum { N = 16 * 9 };
-    uint32_t px[N];
-    long r = 0, g = 0, b = 0;
-    for (int i = 0; i < N; i++) {
-        px[i] = s.px[i];
-        r += (px[i] >> 16) & 0xFF; g += (px[i] >> 8) & 0xFF; b += px[i] & 0xFF;
-    }
-    uimg_free(&s);
-    // The darkest quarter, by an insertion sort on luminance: 144 values.
-    for (int i = 1; i < N; i++) {
-        uint32_t v = px[i];
-        int j = i - 1;
-        while (j >= 0 && lum(px[j]) > lum(v)) { px[j + 1] = px[j]; j--; }
-        px[j + 1] = v;
-    }
-    long dr = 0, dg = 0, db = 0;
-    for (int i = 0; i < N / 4; i++) {
-        dr += (px[i] >> 16) & 0xFF; dg += (px[i] >> 8) & 0xFF; db += px[i] & 0xFF;
-    }
-    uint32_t avg = ugfx_rgb((uint8_t)(r / N), (uint8_t)(g / N), (uint8_t)(b / N));
-    uint32_t dark = ugfx_rgb((uint8_t)(dr * 4 / N), (uint8_t)(dg * 4 / N), (uint8_t)(db * 4 / N));
-    uint32_t black = ugfx_rgb(0, 0, 0), white = ugfx_rgb(255, 255, 255);
-    g_amb.centre = ugfx_blend(avg, black, 40);
-    g_amb.edge   = ugfx_blend(dark, black, 140);
-    g_amb.strip  = ugfx_blend(avg, black, 170);
-    // A FAINT wash on light chrome: dark text has to keep its contrast.
-    g_amb.chrome = ugfx_blend(UTHEME_CHROME, avg, 26);
-    g_amb.chrome_line = ugfx_blend(g_amb.chrome, black, 34);
-    g_amb.panel  = ugfx_blend(g_amb.chrome, white, 110);
-}
+static void ambient_default(void) { uambient_default(&g_amb); }
+static void ambient_from(const struct uimg *im) { uambient_from(&g_amb, im); }
 
 static void apply_chrome(void) {
     g_menu.bar_bg = g_amb.chrome;
@@ -171,36 +128,8 @@ static void apply_chrome(void) {
     g_strip.empty = ugfx_blend(g_amb.strip, ugfx_rgb(255, 255, 255), 24);
 }
 
-// The stage's radial ground, CACHED: computed once per size and colour
-// pair, blitted every frame after that.
-static uint32_t *g_grad;
-static int g_grad_w, g_grad_h;
-static uint32_t g_grad_c, g_grad_e;
-
 static void stage_paint(struct ugfx_surface *s, int x, int y, int w, int h) {
-    if (w <= 0 || h <= 0) return;
-    if (!g_grad || g_grad_w != w || g_grad_h != h ||
-        g_grad_c != g_amb.centre || g_grad_e != g_amb.edge) {
-        free(g_grad);
-        g_grad = malloc((size_t)w * (size_t)h * sizeof *g_grad);
-        if (!g_grad) { ugfx_fill_rect(s, x, y, w, h, g_amb.edge); return; }
-        g_grad_w = w; g_grad_h = h; g_grad_c = g_amb.centre; g_grad_e = g_amb.edge;
-        // An ellipse a little wider than the stage, centred just above
-        // the middle; t squared needs no square root and falls off as a
-        // lit-from-behind ground should.
-        int cx = w / 2, cy = h * 45 / 100;
-        long rx = (long)w * 65 / 100 + 1, ry = (long)h * 75 / 100 + 1;
-        for (int yy = 0; yy < h; yy++) {
-            long dy = (long)(yy - cy) * 256 / ry;
-            for (int xx = 0; xx < w; xx++) {
-                long dx = (long)(xx - cx) * 256 / rx;
-                long t = (dx * dx + dy * dy) >> 8;
-                if (t > 255) t = 255;
-                g_grad[(size_t)yy * w + xx] = ugfx_blend(g_grad_c, g_grad_e, (uint8_t)t);
-            }
-        }
-    }
-    ugfx_blit(s, x, y, w, h, g_grad, w);
+    uambient_paint(&g_stage, &g_amb, s, x, y, w, h);
 }
 
 // --- zoom ---------------------------------------------------------------
@@ -607,12 +536,14 @@ static struct uui_item g_widgets[] = {
     { .ops = &uui_thumbstrip_ops, .widget = &g_strip,   .id = ID_STRIP,   .name = "strip" },
     { .ops = &uui_button_ops,     .widget = &g_wp_fill, .id = ID_WP_FILL, .name = "wpfill" },
     { .ops = &uui_button_ops,     .widget = &g_wp_fit,  .id = ID_WP_FIT,  .name = "wpfit" },
+    { .ops = &uui_transport_ops,  .widget = &g_slide_tp, .id = ID_SLIDE_TP, .name = "slide", .hidden = 1 },
 };
 #define W_MENU 0
 #define W_TB 1
 #define W_STRIP 3
 #define W_FILL 4
 #define W_FIT 5
+#define W_SLIDE_TP 6
 
 // --- the slideshow ------------------------------------------------------
 
@@ -625,6 +556,7 @@ static void slideshow(struct uapp *a, int on) {
     g_widgets[W_MENU].hidden = g_widgets[W_TB].hidden = hide;
     g_widgets[W_STRIP].hidden = hide;
     g_widgets[W_FILL].hidden = g_widgets[W_FIT].hidden = hide || !g_props;
+    g_widgets[W_SLIDE_TP].hidden = !on;
     zoom_to(0, -1, -1);
     uapp_set_fullscreen(a, on);
     ulogf("imgview: slideshow %s\n", on ? "on" : "off");
@@ -752,52 +684,46 @@ static void fill_round(struct ugfx_surface *s, int x, int y, int w, int h, uint3
     ugfx_fill_circle(s, x + w - r - 1, y + r, r, c);
 }
 
-// The slideshow's floating controls, Esc hint and progress line.
+// The slideshow's floating pill -- the name, the transport (a widget,
+// ui/uui_transport.h, drawn by the router on top of this) and the
+// interval chip. Painted in on_draw so the widget lands ON it.
+static void draw_pill(struct ugfx_surface *s, int cw, int ch) {
+    if (!g_slide) return;
+    uint32_t pill = ugfx_rgb(18, 20, 28), fg = ugfx_rgb(232, 238, 248);
+    int lh = ugfx_char_h();
+    char label[96], every[16];
+    snprintf(label, sizeof label, "%s  -  %d of %d", g_cur >= 0 ? g_entries[g_cur].name : "",
+             g_cur + 1, g_count);
+    snprintf(every, sizeof every, "Every %d s", g_slide_ms / 1000);
+    int tw, th;
+    uui_transport_ops.natural_size(&g_slide_tp, &tw, &th);
+    int lw = ugfx_text_width(label), ew = ugfx_text_width(every) + lh;
+    int pw = lw + tw + ew + lh * 5, ph = th + 10;
+    int px = (cw - pw) / 2, py = ch - ph - 28;
+    fill_round(s, px, py, pw, ph, pill);
+    g_pill = (struct hit){ px, py, pw, ph };
+    int x = px + lh * 2, cy = py + ph / 2;
+    text_at(s, x, cy - lh / 2, lw, label, fg, pill);
+    x += lw + lh;
+    g_slide_tp.dark = 1;
+    g_slide_tp.playing = !g_paused;
+    uui_transport_ops.set_geometry(&g_slide_tp, x, py + 5, tw, th);
+    x += tw + lh / 2;
+    g_pill_every = (struct hit){ x, py + 5, ew, th };
+    fill_round(s, g_pill_every.x, cy - lh / 2 - 3, ew, lh + 6, ugfx_rgb(42, 58, 94));
+    text_at(s, g_pill_every.x + lh / 2, cy - lh / 2, ew, every, fg, ugfx_rgb(42, 58, 94));
+}
+
+// The Esc hint and the progress line, over everything.
 static void draw_slideshow(struct ugfx_surface *s, int cw, int ch) {
     if (!g_slide) return;
     uint32_t pill = ugfx_rgb(18, 20, 28), fg = ugfx_rgb(232, 238, 248);
-    uint32_t accent = ugfx_rgb(95, 143, 208), amber = ugfx_rgb(240, 182, 94);
+    uint32_t amber = ugfx_rgb(240, 182, 94);
     int lh = ugfx_char_h();
     const char *hint = "Esc to leave the slideshow";
     int hw = ugfx_text_width(hint) + lh * 2;
     fill_round(s, cw - hw - 16, 14, hw, lh + 10, pill);
     text_at(s, cw - hw - 16 + lh, 19, hw, hint, fg, pill);
-
-    char label[96], every[16];
-    snprintf(label, sizeof label, "%s  -  %d of %d", g_cur >= 0 ? g_entries[g_cur].name : "",
-             g_cur + 1, g_count);
-    snprintf(every, sizeof every, "Every %d s", g_slide_ms / 1000);
-    int bh = lh * 3, bw = bh;
-    int lw = ugfx_text_width(label), ew = ugfx_text_width(every) + lh;
-    int pw = lw + 3 * bw + ew + lh * 5, ph = bh + 10;
-    int px = (cw - pw) / 2, py = ch - ph - 28;
-    fill_round(s, px, py, pw, ph, pill);
-    int x = px + lh * 2;
-    text_at(s, x, py + (ph - lh) / 2, lw, label, fg, pill);
-    x += lw + lh;
-    g_pill_prev = (struct hit){ x, py + 5, bw, bh };
-    g_pill_play = (struct hit){ x + bw, py + 5, bw, bh };
-    g_pill_next = (struct hit){ x + 2 * bw, py + 5, bw, bh };
-    g_pill_every = (struct hit){ x + 3 * bw + lh / 2, py + 5, ew, bh };
-    int cy = py + ph / 2, r = bh / 2 - 2;
-    ugfx_fill_circle(s, g_pill_play.x + bw / 2, cy, r, accent);
-    // Previous / next chevrons, pause bars or a play triangle.
-    for (int k = 0; k < r / 2; k++) {
-        ugfx_fill_rect(s, g_pill_prev.x + bw / 2 - r / 4 + k, cy - k, 2, 1, fg);
-        ugfx_fill_rect(s, g_pill_prev.x + bw / 2 - r / 4 + k, cy + k, 2, 1, fg);
-        ugfx_fill_rect(s, g_pill_next.x + bw / 2 + r / 4 - k, cy - k, 2, 1, fg);
-        ugfx_fill_rect(s, g_pill_next.x + bw / 2 + r / 4 - k, cy + k, 2, 1, fg);
-    }
-    int pcx = g_pill_play.x + bw / 2;
-    if (g_paused) {
-        int xs[3] = { pcx - r / 3, pcx + r / 2, pcx - r / 3 }, ys[3] = { cy - r / 2, cy, cy + r / 2 };
-        ugfx_fill_polygon(s, xs, ys, 3, pill);
-    } else {
-        ugfx_fill_rect(s, pcx - r / 3, cy - r / 2, r / 4 + 1, r, pill);
-        ugfx_fill_rect(s, pcx + r / 6, cy - r / 2, r / 4 + 1, r, pill);
-    }
-    fill_round(s, g_pill_every.x, cy - lh / 2 - 3, ew, lh + 6, ugfx_rgb(42, 58, 94));
-    text_at(s, g_pill_every.x + lh / 2, cy - lh / 2, ew, every, fg, ugfx_rgb(42, 58, 94));
 
     unsigned long long now = sys_monotonic_ns() / 1000000ull;
     long frac = g_paused ? 0 : (long)((now - g_slide_t0) * (unsigned long long)cw / (unsigned)g_slide_ms);
@@ -811,6 +737,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     int cw = d->surface->w, ch = d->surface->h;
     layout_all(cw, ch);
     stage_paint(d->surface, g_sx, g_sy, g_sw, g_sh);
+    draw_pill(d->surface, cw, ch);
     if (!g_slide) {
         draw_props(d->surface);
         snprintf(g_stat_size, sizeof g_stat_size, "%s%s%s", g_stat_dims,
@@ -891,6 +818,17 @@ static void on_widget(struct uapp *a, int id, int reason) {
     }
     case ID_WP_FILL: if (reason == UUI_REASON_RELEASE) set_wallpaper(a, "fill"); return;
     case ID_WP_FIT:  if (reason == UUI_REASON_RELEASE) set_wallpaper(a, "fit");  return;
+    case ID_SLIDE_TP:
+        switch (uui_transport_take(&g_slide_tp)) {
+        case UUI_TRANSPORT_PREV: step(a, -1); break;
+        case UUI_TRANSPORT_NEXT: step(a, +1); break;
+        case UUI_TRANSPORT_PLAY:
+            g_paused = !g_paused;
+            g_slide_t0 = sys_monotonic_ns() / 1000000ull;
+            break;
+        }
+        uapp_redraw(a);
+        return;
     default: return;
     }
 }
@@ -904,8 +842,7 @@ static int in_hit(const struct hit *h, int x, int y) {
 }
 
 static int on_pill(int x, int y) {
-    return g_slide && (in_hit(&g_pill_prev, x, y) || in_hit(&g_pill_play, x, y) ||
-                       in_hit(&g_pill_next, x, y) || in_hit(&g_pill_every, x, y));
+    return g_slide && in_hit(&g_pill, x, y);
 }
 
 static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
@@ -936,12 +873,7 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
     g_drag = 0;
     // A pan that ENDS over a pill is not a click on it.
     if (!g_slide || g_dragged) return;
-    if (in_hit(&g_pill_prev, x, y))      step(a, -1);
-    else if (in_hit(&g_pill_next, x, y)) step(a, +1);
-    else if (in_hit(&g_pill_play, x, y)) {
-        g_paused = !g_paused;
-        g_slide_t0 = sys_monotonic_ns() / 1000000ull;
-    } else if (in_hit(&g_pill_every, x, y)) {
+    if (in_hit(&g_pill_every, x, y)) {
         g_slide_ms = g_slide_ms == 3000 ? 5000 : g_slide_ms == 5000 ? 10000 : 3000;
         g_slide_t0 = sys_monotonic_ns() / 1000000ull;
     } else return;
@@ -1117,6 +1049,6 @@ int main(int argc, char **argv) {
     uui_image_release(&g_view);
     uimg_free(&g_rimg);
     if (g_have_img) uimg_free(&g_img);
-    free(g_grad);
+    uambient_stage_free(&g_stage);
     return rc;
 }

@@ -539,12 +539,20 @@ void ugfx_draw_circle(struct ugfx_surface *s, int cx, int cy, int r,
                        uint32_t color, enum geom_aa aa);
 void ugfx_draw_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
                         uint32_t color, enum geom_aa aa);
+// THE FILLS ARE ANTI-ALIASED, for every caller -- Cairo's and
+// Direct2D's default, chosen 2026-10-01 after a play button and a
+// speaker icon read as jagged (ugfx_fill.c). The footprint is the
+// aliased fill's: an integer point is a pixel's CENTRE, and a circle
+// reaches r + 1/2 from it; only the edge pixels differ, blended by
+// coverage. A polygon is even-odd, at most 256 vertices.
+//
+// **NOT FOR A MESH.** Two anti-aliased faces sharing an edge each blend
+// it half way, and the background shows through as a seam -- which is
+// why uui_canvas (Shapes, the teapot) still fills through geom_fill_*,
+// whose pixel-centre rule lets faces meet exactly.
 void ugfx_fill_circle(struct ugfx_surface *s, int cx, int cy, int r, uint32_t color);
 void ugfx_fill_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
                         uint32_t color);
-// Even-odd scanline fill of a polygon, at most GEOM_POLY_MAX vertices --
-// see geom_fill_polygon() for the pixel-centre rule that lets two faces
-// share an edge without a seam.
 void ugfx_fill_polygon(struct ugfx_surface *s, const int *xs, const int *ys,
                         int count, uint32_t color);
 

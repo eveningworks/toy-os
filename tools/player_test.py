@@ -184,7 +184,7 @@ def run(dbg, qmp, tmp, res):
               f"client_pid {win.get('client_pid')} -- 0 would mean ring 0 drew it")
 
     lay = wait_layout(dbg, content,
-                      lambda l: l.has("pos") and l.has("vol") and l.has("play")
+                      lambda l: l.has("pos") and l.has("vol") and l.has("transport.play")
                       and l.has("list") and l.state is not None)
 
     # --- 1. it survived having no sound device ------------------------
@@ -210,12 +210,15 @@ def run(dbg, qmp, tmp, res):
     res.check("the player lists it", lay.has("list"), "no list widget reported")
 
     # --- 3. the controls are DRAWN, not merely present -----------------
+    # Against the STAGE just left of each control, not the window's
+    # corner: the stage is dark and the corner is light chrome, so a
+    # corner sample would count every pixel of an empty stage as ink.
     im = shot(qmp, tmp, "player.png")
-    bg = im.getpixel((content["x"] + content["w"] - 4, content["y"] + 4))
-    for name in ("play", "stop", "prev", "next", "pos", "vol"):
+    for name in ("transport.play", "transport.prev", "transport.next", "pos", "vol"):
         r = lay.screen_rect(name)
+        bg = im.getpixel((r[0] - 6, r[1] + r[3] // 2))
         res.check(f"the {name} control has ink on screen", ink(im, r, bg) > 20,
-                  f"rect {r} is indistinguishable from the background")
+                  f"rect {r} is indistinguishable from the stage beside it")
 
     # --- 4. uui_scale really takes a pointer ---------------------------
     #
@@ -276,13 +279,81 @@ def run(dbg, qmp, tmp, res):
     res.check("...the first row identified as MIDI",
               any(" -- midi, " in l and "first-boot.mid" in l for l in opened),
               f"log lines: {opened[-3:]}")
-    nx, ny, nw, nh = lay.screen_rect("next")
+    nx, ny, nw, nh = lay.screen_rect("transport.next")
     dbg.click(nx + nw // 2, ny + nh // 2)
     dbg.settle()
-    opened = [l for l in poll_logs(dbg) if "player: opened" in l]
+    logs = poll_logs(dbg)
+    opened = [l for l in logs if "player: opened" in l]
     res.check("...and Next identified the MP3",
               any(" -- mp3, " in l and "Layer III" in l for l in opened),
               f"log lines: {opened[-3:]}")
+    # THE TITLE IS THE TAG'S: the MP3's ID3 says "First Boot" by
+    # "toy-os"; a player showing file names would say "first-boot".
+    now = [l for l in logs if "player: now " in l]
+    res.check("...and its title and artist come from the ID3 tag",
+              any("player: now First Boot / toy-os" in l for l in now), f"{now[-2:]}")
+
+    # --- 6. repeat decides what Next does at the end --------------------
+    #
+    # The MP3 is the last track. Without repeat Next does nothing; with
+    # it, Next wraps to the first -- a property of the PLAY ORDER, which
+    # a Next that merely moved a list selection would not have.
+    #
+    # poll_logs() ACCUMULATES, so each check reads only what was logged
+    # after its own action: the whole log would already hold the opens
+    # this test made above, and both checks would pass whatever Next did.
+    time.sleep(0.5)
+    mark = len(poll_logs(dbg))
+    dbg.click(nx + nw // 2, ny + nh // 2)
+    dbg.settle()
+    time.sleep(0.5)
+    late = [l for l in poll_logs(dbg)[mark:] if "player: opened" in l]
+    res.check("at the last track Next does nothing without repeat", not late, f"{late[-2:]}")
+    mark = len(poll_logs(dbg))
+    dbg.key(ord("l"))
+    dbg.settle()
+    dbg.click(nx + nw // 2, ny + nh // 2)
+    dbg.settle()
+    time.sleep(0.5)
+    since = poll_logs(dbg)[mark:]
+    res.check("...and wraps to the first with it (L)",
+              any("player: repeat on" in l for l in since)
+              and any("player: opened" in l and "first-boot.mid" in l for l in since),
+              f"{[l for l in since if 'layout' not in l][-3:]}")
+    dbg.key(ord("l"))                     # leave the preference as it was
+    dbg.settle()
+
+    # --- 7. the playlist panel toggles, and the stage takes the room ----
+    sx = lay.screen_rect("transport.play")[0]
+    dbg.key(0x0C)                         # Ctrl+L
+    lay_off = wait_layout(dbg, content, lambda l: not l.has("list") and l.has("transport.play"))
+    res.check("Ctrl+L hides the playlist", not lay_off.has("list"))
+    res.check("...and the stage widens: the transport moves right",
+              lay_off.has("transport.play") and lay_off.screen_rect("transport.play")[0] > sx,
+              f"{sx} -> {lay_off.screen_rect('transport.play')[0] if lay_off.has('transport.play') else None}")
+    dbg.key(0x0C)
+    lay_on = wait_layout(dbg, content, lambda l: l.has("list"))
+    res.check("...and Ctrl+L brings it back", lay_on.has("list"))
+
+    # --- 8. full screen drops the chrome --------------------------------
+    #
+    # By the WINDOW and the app's own log, not the layout: the parser
+    # splits frames at the menu's line, and full screen has no menu.
+    st = dbg.json("gui state --json")
+    poll_logs(dbg)
+    dbg.key(0xB1)                         # F11
+    time.sleep(1.0)
+    dbg.settle()
+    win = dbg.window("Audio Player") or {}
+    res.check("F11 makes the window the whole screen",
+              any("player: full screen on" in l for l in poll_logs(dbg))
+              and win.get("w") == st["screen"]["w"], f"window w {win.get('w')}")
+    dbg.key(27)
+    time.sleep(1.0)
+    dbg.settle()
+    win = dbg.window("Audio Player") or {}
+    res.check("...and Esc gives it back", 0 < win.get("w", 0) < st["screen"]["w"],
+              f"window w {win.get('w')}")
 
     dbg.send("gui close Audio Player")
 

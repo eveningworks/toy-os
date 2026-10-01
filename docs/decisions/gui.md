@@ -9344,3 +9344,55 @@ and drops all step over), a note and meter per node, and
 `UUI_SEL_ROUNDED`. Meters are all or none: if one volume's name and
 note leave no room for its bar, no volume shows one. Chevrons replaced
 the filled triangles in every tree, so Help and Device Manager match.
+
+## ugfx's fills anti-alias by default, as Cairo's and Direct2D's do
+
+`ugfx_fill_circle()`, `_ellipse()` and `_polygon()` blend their edge
+pixels by coverage for every caller (`userland/ui/ugfx_fill.c`); there
+is no flag. Until 2026-10-01 they were geom's aliased fills, and three
+things drawn in one afternoon -- a play button, a speaker, a generated
+cover -- were each called out as jagged on sight.
+
+What the others do decided it. Cairo and Direct2D anti-alias every fill
+unless told not to; Qt makes it a per-painter hint that nearly every
+widget turns on; GDI and X11 core drawing never did, and look it. A
+per-surface switch (Qt's shape) was the alternative: it leaves every
+existing caller as it was until someone remembers, which is the failure
+being fixed. The footprint was kept -- an integer point is a pixel's
+centre and a circle reaches r + 1/2 -- so switching changed edges and
+nothing else.
+
+THE EXCEPTION IS A MESH: faces that share an edge each blend it half
+way and the ground shows through. `uui_canvas` (Shapes, the teapot)
+therefore still fills through `geom_fill_*` and its pixel-centre rule,
+and lines keep their per-call `GEOM_AA`. Coverage is sixteen
+sub-scanlines with exact horizontal spans in 1/256 px, a span's whole
+pixels through a difference array; `tools/ugfx_fill_hostcheck.py`
+holds it to Pillow at 64x.
+
+## The Audio Player is a stage with the cover as the hero
+
+Redesigned 2026-10-01 from mockups (P2 of three): the design language's
+anatomy -- a command bar coloured by role, the track on a stage tinted
+by its cover (the Image Viewer's ambient colours, now
+`ui/uambient.h`), the playlist as a panel on the RIGHT that the bar
+toggles, full screen dropping the chrome. Amberol's and GNOME Music's
+shape rather than Windows Media Player's library sidebar, because this
+player plays a folder, not a library.
+
+Four calls a future session would otherwise re-litigate:
+
+- **The play ORDER is separate from the list.** The list stays sorted
+  by name; shuffle permutes an index array with the playing track at its
+  head, so turning shuffle on never jumps away from what is playing, and
+  repeat decides what Next does at either end.
+- **Every track has a cover.** An embedded ID3 picture when there is one;
+  otherwise a tile coloured from the TITLE's hash, so the same track
+  always looks the same -- every file this image ships has no art.
+- **The spectrum is sixteen Goertzel filters, not an FFT**: a filter per
+  band is all a bar display needs, in integers (ring 3 has no floating
+  point), over the frames the sink is PLAYING (`usnd_peek()`, behind the
+  newest written by what is queued), so the bars match the sound.
+- **Tags are parsed in ring 3 by `lib/utags.h`**, untrusted input like
+  `ttf.h`: every length checked, an unknown encoding or an
+  unsynchronised tag skipped rather than guessed.

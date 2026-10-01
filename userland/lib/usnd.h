@@ -302,4 +302,10 @@ int  usnd_volume(void);
 // created and the daemon reads it once.
 void usnd_set_app_name(const char *name);
 
+// The `frames` frames (device format, interleaved stereo s16) the sink
+// is PLAYING now -- what a level meter or a spectrum draws. A snapshot
+// for display, not a recording: nothing guarantees it is contiguous
+// with the last call. Returns the frames copied, 0 while nothing plays.
+long usnd_peek(int16_t *dst, long frames);
+
 #endif

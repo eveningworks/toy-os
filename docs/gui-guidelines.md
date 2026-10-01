@@ -84,6 +84,7 @@ REAL CALLER, not a plausible one.
 | `uui_listbox`, `uui_table` | Rows; rows with columns, a header and sorting |
 | `uui_tree` | Rows at a DEPTH, with collapsible parents -- navigation. A `UUI_TREE_HEADER` row is a section caption; a node may carry a right-hand `note` and a usage meter; `UUI_SEL_ROUNDED` is the design language's selection (the File Manager's side column) |
 | `uui_thumbstrip` | A filmstrip: one row of thumbnails, one selected (the pictures come from `lib/uthumb.h`) |
+| `uui_transport` | Previous / play-pause / next, the round play button in the middle -- media (the Audio Player's stage, the Image Viewer's slideshow pill); `dark` for a dark or ambient ground |
 | `uui_label` | A line of text the LAYOUT reserves a row for |
 | `uui_textbox`, `utext` | One line of editable text; a document |
 | `uui_menubar`, `uui_statusbar` | Menus with submenus; status panes |
@@ -834,8 +835,18 @@ Lines, curves and rotation come from `kernel/lib/geom.c` (see
   -- it fails the day the shape grows, by painting over the app's own
   controls.
 
-**Anti-aliasing is a choice per call, and neither answer is the
-default.** `GEOM_AA` costs roughly 2-3x the pixels of `GEOM_ALIASED`
+**ugfx's FILLS ARE ANTI-ALIASED, ALWAYS** (`ugfx_fill_circle()`,
+`_ellipse()`, `_polygon()`, `userland/ui/ugfx_fill.c`) -- Cairo's and
+Direct2D's default, chosen 2026-10-01 when a play button, a speaker
+and a cover's note all read as jagged. An icon or a control drawn with
+them is smooth with nothing to remember. The one place that must NOT
+use them is a MESH: two anti-aliased faces sharing an edge each blend
+it half way and the background shows through as a seam, which is why
+`uui_canvas` still fills through `geom_fill_*` and its pixel-centre
+rule.
+
+**For LINES, and for `uui_canvas`, anti-aliasing is a choice per call.**
+`GEOM_AA` costs roughly 2-3x the pixels of `GEOM_ALIASED`
 and is what curves and diagonals should use in anything a person looks
 at closely. `GEOM_ALIASED` is right for large, fast-changing or
 throwaway drawing, and for anything axis-aligned, where AA does nothing

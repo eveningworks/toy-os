@@ -74,6 +74,22 @@ static int32_t g_acc[MIX_FRAMES * USND_CHANNELS];
 static int16_t g_scratch[MIX_FRAMES * USND_CHANNELS];
 static int16_t g_out[MIX_FRAMES * USND_CHANNELS];
 
+// THE TAP: the last TAP_FRAMES frames handed to the sink, so usnd_peek()
+// can return what is PLAYING -- `pending()` behind the newest written.
+// Larger than any sink ring here, or the playing frames would already
+// be overwritten.
+#define TAP_FRAMES 32768
+static int16_t g_tap[TAP_FRAMES * USND_CHANNELS];
+static uint64_t g_tap_written;
+
+static void tap_store(const int16_t *src, long frames) {
+    for (long i = 0; i < frames; i++) {
+        long at = (long)(g_tap_written++ % TAP_FRAMES) * USND_CHANNELS;
+        g_tap[at] = src[i * USND_CHANNELS];
+        g_tap[at + 1] = src[i * USND_CHANNELS + 1];
+    }
+}
+
 // --- mixing -----------------------------------------------------------
 
 // PER CHANNEL, because panning is a different gain left and right --
@@ -169,7 +185,9 @@ static void *worker_main(void *arg) {
                 if (room <= 0) break;
                 if (room > MIX_FRAMES) room = MIX_FRAMES;
                 mix(room);
-                if (g_sink->write(g_out, room) <= 0) break;
+                long wrote = g_sink->write(g_out, room);
+                if (wrote <= 0) break;
+                tap_store(g_out, wrote);
             }
         }
         pthread_mutex_unlock(&g_lock);
@@ -489,3 +507,26 @@ void usnd_set_volume(int pct) {
 }
 
 int usnd_volume(void) { return g_volume; }
+
+long usnd_peek(int16_t *dst, long frames) {
+    if (!g_ready || frames <= 0) return 0;
+    if (frames > TAP_FRAMES / 2) frames = TAP_FRAMES / 2;
+    pthread_mutex_lock(&g_lock);
+    long got = 0;
+    if (voices_active() && !g_st_paused) {
+        uint64_t pending = (uint64_t)g_sink->pending();
+        uint64_t end = g_tap_written > pending ? g_tap_written - pending : 0;
+        if (g_tap_written - end > TAP_FRAMES - (uint64_t)frames)
+            end = g_tap_written - (TAP_FRAMES - (uint64_t)frames);   // as near as is kept
+        if (end >= (uint64_t)frames) {
+            for (long i = 0; i < frames; i++) {
+                long at = (long)((end - (uint64_t)frames + (uint64_t)i) % TAP_FRAMES) * USND_CHANNELS;
+                dst[i * USND_CHANNELS] = g_tap[at];
+                dst[i * USND_CHANNELS + 1] = g_tap[at + 1];
+            }
+            got = frames;
+        }
+    }
+    pthread_mutex_unlock(&g_lock);
+    return got;
+}

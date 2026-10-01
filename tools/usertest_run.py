@@ -404,6 +404,9 @@ TESTS = [
     # strftime conversions, @modifier overrides and lib/udate.h/unum.h.
     # It WRITES `locale.region`/`locale.time_format` and puts them back.
     ("locale_test", 0, None, None),
+    # lib/utags.h: ID3v2.2-2.4, ID3v1 and the MIDI track name, on tags
+    # built byte by byte and on the music the image ships.
+    ("tags_test", 0, None, None),
     # The ten POSIX headers the dash port needed. Exit code is the
     # failure count. Run through the legacy loader, which has NO
     # scheduler slot -- which is why times() must not fail there.

@@ -152,6 +152,10 @@ TOOLS = [
     # library. Carries a --positive-control that must go red.
     ("ugfx_text",   "ugfx_text_hostcheck.py",  "text measurement + textbox geometry", False,
      None,                                                                                   False),
+    # ugfx_fill.c's anti-aliased circles, ellipses and polygons against
+    # Pillow at 64x. gcc and Pillow. Carries a --positive-control.
+    ("ugfx_fill",   "ugfx_fill_hostcheck.py",  "anti-aliased fills vs Pillow", False,
+     None,                                                                                   False),
     # The Terminal's shipped colour schemes against the ANSI -> VGA
     # permutation the loader applies, reimplemented here from the
     # parser's table rather than shared with it.

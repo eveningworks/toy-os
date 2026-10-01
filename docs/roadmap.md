@@ -486,7 +486,7 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~`rename()` as a directory operation, atomic through the journal~~ done
 - [x] ~~Raise `FS_PATH_MAX` (64)~~ -- 4096 now, with paths off the kernel stack
 - [ ] Report a name longer than 63 bytes from `readdir()` -- needs a releasing allocator or a variable-length dirent
-- [ ] Let the GUI apps open a path longer than 63 bytes -- five still hold a private `PATH_MAX_LEN` of 64
+- [ ] Let the GUI apps open a path longer than 63 bytes -- four still hold a private `PATH_MAX_LEN` of 64
 - [x] ~~Room in the inode for owner/mode (for Multi-user & file permissions) and `time_t` (POSIX compatibility)~~ done
 - [x] ~~Symlink FORMAT support (fast symlinks inline in the pointer area)~~ done
 - [ ] Symlink IMPLEMENTATION (create/read, backend-internal resolve loop with an ELOOP-style hop cap)
@@ -968,6 +968,7 @@ run on, not by order.
 - [x] ~~MIDI playback~~ DONE 2026-09-28 -- a SoundFont synth as `usnd`'s third codec row, a generated GM bank, a real one via `EXTRAS=1`
 - [ ] Reverb and chorus for the MIDI synth -- the CC91/CC93 sends are computed and dropped
 - [ ] A live MIDI output port in `soundd` -- for a USB MIDI keyboard, and Doom's music off its OPL
+- [x] ~~The Audio Player redesigned~~ DONE 2026-10-01 -- a stage with the cover, tags, a playlist panel, shuffle/repeat, a spectrum
 - [ ] Load the SoundFont off the caller's thread -- the first play of a 31 MB bank blocks the Player's UI
 - [ ] The SoundFont as a setting, rather than "any other `.sf2` outranks the built-in one"
 - [ ] RMID (`.rmi`), SF3 and DLS banks, GS/XG SysEx beyond a reset, linked SF2 modulators

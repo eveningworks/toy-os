@@ -1873,8 +1873,16 @@ window without going through it will find its layout polls timing out.
   scales have ink where the app says they are, and whether `uui_scale`
   takes a real pointer -- clicking the left and right ends of the volume
   track must move the reported volume, which is the new widget's only
-  test with a pointer in it. It can see nothing about sound. In
-  `gui_regress.py`.
+  test with a pointer in it. Since the redesign it also asks that the
+  stage's controls have ink against the STAGE beside them (the window
+  corner is light chrome, and would count an empty dark stage as ink),
+  that the MP3's title and artist come from its ID3 tag, that Next does
+  nothing at the last track without repeat and wraps with it, that
+  Ctrl+L hides the playlist and the stage widens, and that F11 makes the
+  window the screen. `poll_logs()` ACCUMULATES: a check reads only what
+  was logged after its own action, or the earlier opens pass it. It can
+  see nothing about sound (auto-advance needs a card: checked by hand).
+  In `gui_regress.py`.
 - **`gen_audio.py`** -- generates the WAV files that ship:
   `data/usr/share/sounds/*.wav` (the sound effects the Audio Player
   lists and Minesweeper plays) and `data/tests/sine1k.wav` (the
@@ -5576,6 +5584,18 @@ window without going through it will find its layout polls timing out.
   A control that reddens nothing has measured nothing, so it exits
   non-zero when none moved. Named by `ondemand_sweep.py`.
 
+- **`ugfx_fill_hostcheck.py`** -- compiles the real
+  `userland/ui/ugfx_fill.c` with the host gcc, records the alpha each
+  pixel is given through a stub `ugfx_blend_pixel()`, and compares the
+  coverage of circles, an ellipse and polygons against Pillow drawing
+  the same shapes at 64x and box-reducing -- the convention both sides
+  share is ugfx.h's (an integer point is a pixel's centre). Asserts the
+  footprint (inside full, outside empty), a GRADED edge, and per-pixel
+  and mean error within tolerances set from measurement. **The oracle's
+  resolution matters**: at 16x, Pillow's fills including their boundary
+  grew every shape by half a sample, a systematic +8 per edge pixel that
+  looked like this file's error. `--positive-control` rounds the alphas
+  to 0/255 (an aliased fill) and must go red. In `ondemand_sweep.py`.
 - **`ugfx_text_hostcheck.py`** -- compiles the real
   `userland/ui/ugfx_text.c` and `userland/ui/uui_textbox.c` with the
   host gcc against a SYNTHETIC proportional face and sweeps ~4,400
