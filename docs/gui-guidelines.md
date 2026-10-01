@@ -1083,14 +1083,20 @@ right thing:
 ## The pointer
 
 The cursor's shapes are DATA, not code: `/usr/share/cursors/<theme>/`,
-one file per shape, six names (`arrow`, `resize-h`, `resize-v`,
-`resize-diag`, `text`, `wait`). The rules, in the order they bite:
+one descriptor per shape, ten names (`arrow`, `text`, `wait`,
+`resize-h`, `resize-v`, `resize-diag`, `resize-diag2`, `hand`, `move`,
+`not-allowed` -- the last three are cursor-shape-v1's pointer, move and
+not-allowed, and a theme lacking one shows its arrow). The rules, in
+the order they bite:
 
-- **A shape file carries coverage, not colour.** Two masks -- outline
-  and fill -- coloured by the compositor at draw time. One shape set
-  therefore serves a light theme and a dark one. Don't bake a colour
-  into a theme, and don't add a per-theme colour key: colour is the
-  compositor's, which is what makes a theme reusable.
+- **A shape is MASKS or an IMAGE, Xcursor's split.** Masks (`default`,
+  `bold`) carry coverage, coloured by the compositor -- one set serves a
+  light theme and a dark one, so don't add a colour key to a mask
+  theme. An IMAGE theme (`graphite`, `accent`, `amber`, `aurora`)
+  carries straight-alpha ARGB in QOI files whose colours are its OWN,
+  rendered natively at 1x, 2x and 3x; it is chosen because it looks a
+  certain way, so the compositor composites it and paints nothing. Both
+  kinds come from `tools/gen_cursors.py`; never hand-draw one.
 - **Name a shape; never supply pixels.** This is the layer split every
   real system converged on (Windows' `SetCursor`, Wayland's
   `cursor-shape-v1`). An app that ships its own cursor art has to find,
@@ -1102,11 +1108,14 @@ one file per shape, six names (`arrow`, `resize-h`, `resize-v`,
 - **Testing it: a cursor being on screen proves nothing**, precisely
   because of that floor -- a theme that loads zero shapes still draws a
   perfect pointer. Assert the load count, or a pixel difference between
-  two states. See `tools/cursor_theme_test.py`.
+  two states. See `tools/cursor_theme_test.py`; the three gesture shapes
+  are asserted on the RESOLVED shape (`gui state`), in
+  `tools/cursor_shapes_test.py`.
 - **Size is a setting, not a consequence of the font size.** People pick
   a large pointer for reasons that have nothing to do with text size.
-  Scaling is integer nearest-neighbour, because a pointer wants a hard
-  edge.
+  An image theme loads its rendering FOR that size; masks, and an image
+  theme without one, scale by integer nearest-neighbour, because a
+  pointer wants a hard edge.
 
 
 ## Animation speed is one multiplier, not a duration per effect

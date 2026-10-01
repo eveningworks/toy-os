@@ -620,6 +620,11 @@ static int op_release(void *w, int x, int y) {
 static int op_wheel(void *w, int notches) {
     return uui_markdown_wheel((struct uui_markdown *)w, notches);
 }
+// A link wants the hand, as one does in every browser and help viewer.
+static int op_cursor(const void *w, int x, int y) {
+    return link_at((const struct uui_markdown *)w, x, y) >= 0 ? WIN_CURSOR_HAND
+                                                              : WIN_CURSOR_DEFAULT;
+}
 
 const struct uui_widget_ops uui_markdown_ops = {
     .draw = op_draw,
@@ -631,4 +636,5 @@ const struct uui_widget_ops uui_markdown_ops = {
     .motion = op_motion,
     .release = op_release,
     .wheel = op_wheel,
+    .cursor = op_cursor,
 };

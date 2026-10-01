@@ -86,6 +86,22 @@ static int target_under(int mx, int my) {
     return NOWHERE;
 }
 
+// Over something that will take NOTHING from a release here: another
+// window's title bar, or a window that is not a client's (the WM's own
+// popups). The source's own windows are excluded -- its toolkit decides
+// there -- and so is the desktop background, which takes files.
+int wm_dnd_refused_at(int mx, int my) {
+    if (!g_active) return 0;
+    for (int i = window_count - 1; i >= 0; i--) {
+        struct window *w = &windows[i];
+        if (w->state == WIN_MINIMIZED) continue;
+        if (!uui_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
+        if (g_src_pid && w->client_pid == g_src_pid) return 0;
+        return target_under(mx, my) == SOURCE;
+    }
+    return 0;
+}
+
 void wm_dnd_motion(int mx, int my, uint8_t buttons) {
     g_took_drop = 0;
     if (!g_active) return;

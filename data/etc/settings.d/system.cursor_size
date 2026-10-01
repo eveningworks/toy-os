@@ -6,8 +6,9 @@ Group=Mouse
 Default=normal
 Choices=normal,large,huge
 Description=How large the mouse pointer is drawn
-# The values are cursor_theme_config.c's g_sizes[] -- there is no
-# "small", and a Choice line naming one would simply never match.
+# The values are read by userland/wm/cursor_theme.c's adopt_settings()
+# (1x, 2x, 3x) -- there is no "small", and a Choice line naming one
+# would simply never match.
 Choice.normal=Normal
 Choice.large=Large
 Choice.huge=Huge

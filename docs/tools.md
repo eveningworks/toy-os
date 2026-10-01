@@ -2157,22 +2157,42 @@ window without going through it will find its layout polls timing out.
   image. **Into `data/`, NOT `seed/sync/`** -- that tree is gitignored
   and `make clean` deletes it, so the first version's themes were never
   committed and every checkout but the authoring one silently got the
-  built-in fallback. It is the authoring path for a new theme too
-  (a theme is a function returning shape name -> masks). It
+  built-in fallback. It is the authoring path for a new theme too: a
+  MASK theme is a function returning shape name -> masks, an IMAGE theme
+  a row of `IMAGE_THEMES` (fill, rim and busy-ring colours) drawn over
+  the shared supersampled geometry (`GEOM`) and rendered natively at
+  1x/2x/3x into QOI files that Pillow encodes. It
   EXTRACTS the default arrow from `userland/wm/wm_render.c`'s own baked
   arrays and ports the procedural resize shapes, so the files on disk
   cannot drift from the built-in fallback they mirror. `--check` fails
-  if they are stale.
-- **`cursor_theme_test.py`** -- cursor themes end to end (9 checks): the
+  if they are stale -- binary QOIs included, so a different Pillow that
+  encodes differently reads as stale (re-run and look at the art).
+- **`cursor_theme_test.py`** -- cursor themes end to end: the
   theme loads completely, switching it changes the drawn pointer, the
   size setting scales it by the right MAGNITUDE, returning to normal is
   pixel-exact, and a theme that does not exist still leaves a working
-  pointer. Read its docstring before editing: the built-in fallback
+  pointer. Every IMAGE theme (found from `data/cursors/`) loads all
+  shapes, paints its OWN opaque colours on the software sprite -- counted
+  as exact screen-pixel matches against its arrow QOI, with the mask
+  default as the control that must show none -- and loads its 2x
+  renderings at `large` (the loader's own report; area cannot tell a
+  2x file from a doubled 1x). It needs a guest WITHOUT a cursor plane,
+  since the plane is invisible to `screendump`, and checks that it has
+  one. Read its docstring before editing: the built-in fallback
   means "a cursor is on screen" proves nothing, so every check asserts a
   load count or a pixel difference. It also sets both settings
   explicitly at the start -- they persist to the disk image, so
   inheriting them makes every measurement relative to a silently wrong
   baseline. In `gui_regress.py`.
+- **`cursor_shapes_test.py`** -- the three gesture shapes, each at its
+  first caller: `hand` over a link in Help, `move` while a window is held
+  by its title bar, `not-allowed` while a desktop icon is dragged over a
+  title bar (which takes no drop). Asserts the RESOLVED shape (`gui state
+  --json` cursor.shape), each beside a control that must not show it --
+  the prose by the link, the title bar after the release, the desktop
+  and a client's content during the same drag. Presses only where no
+  window edge is within a margin: a press on a resize zone resizes the
+  window instead. In `gui_regress.py`.
 - **`cursor_ibeam_test.py`** -- named pointer shapes (~20 checks): a
   client naming its own (`WIN_REQ_CURSOR`), the compositor's clamp, and
   the one shape the compositor raises by itself. It covers all four ways

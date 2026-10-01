@@ -558,35 +558,20 @@ static void draw_cursor_wait(int x, int y) {
     }
 }
 
-// A themed shape: two coverage masks, coloured here rather than in the
-// file, scaled by whole multiples. Outline first and fill over it, the
-// same order draw_cursor_normal() uses and for the same reason -- a
-// pixel both masks touch ends up the fill's colour.
-//
-// Nearest-neighbour at integer scales only: a pointer wants a hard
-// edge, and a smoothly scaled mask reads as blurry rather than large.
+// A themed shape, either kind, through cursor_shape_argb() -- the same
+// pixels the hardware plane is defined from. A mask shape takes the
+// theme's white fill over a black rim; an image shape keeps its own
+// colours. Straight alpha, blended once per screen pixel.
 static void draw_cursor_themed(const struct cursor_shape *s, int x, int y,
                                 int scale) {
-    uint32_t fill = UTHEME_WHITE, outline = ugfx_rgb(0, 0, 0);
     int ox = x - s->hot_x * scale, oy = y - s->hot_y * scale;
-    for (int row = 0; row < s->h; row++) {
-        for (int col = 0; col < s->w; col++) {
-            unsigned char a = s->outline[row][col];
-            if (!a) continue;
-            for (int j = 0; j < scale; j++)
-                for (int i = 0; i < scale; i++)
-                    ugfx_blend_pixel(cursor_surface(), ox + col * scale + i, oy + row * scale + j,
-                                     outline, a);
-        }
-    }
-    for (int row = 0; row < s->h; row++) {
-        for (int col = 0; col < s->w; col++) {
-            unsigned char a = s->fill[row][col];
-            if (!a) continue;
-            for (int j = 0; j < scale; j++)
-                for (int i = 0; i < scale; i++)
-                    ugfx_blend_pixel(cursor_surface(), ox + col * scale + i, oy + row * scale + j,
-                                     fill, a);
+    int dw = s->w * scale, dh = s->h * scale;
+    uint32_t fill = UTHEME_WHITE;
+    for (int dy = 0; dy < dh; dy++) {
+        for (int dx = 0; dx < dw; dx++) {
+            uint32_t p = cursor_shape_argb(s, dx, dy, fill);
+            unsigned char a = (unsigned char)(p >> 24);
+            if (a) ugfx_blend_pixel(cursor_surface(), ox + dx, oy + dy, p & 0xFFFFFF, a);
         }
     }
 }
@@ -656,6 +641,9 @@ static enum wm_cursor_kind client_cursor_at(int mx, int my) {
         // same one rather than for a second drawing of the same idea.
         case WIN_CURSOR_RESIZE_H: return WM_CURSOR_H;
         case WIN_CURSOR_RESIZE_V: return WM_CURSOR_V;
+        case WIN_CURSOR_HAND:     return WM_CURSOR_HAND;
+        case WIN_CURSOR_MOVE:     return WM_CURSOR_MOVE;
+        case WIN_CURSOR_NOT_ALLOWED: return WM_CURSOR_NOT_ALLOWED;
         default: break;
         }
         break;
@@ -664,6 +652,11 @@ static enum wm_cursor_kind client_cursor_at(int mx, int my) {
 }
 
 static enum wm_cursor_kind resolve_cursor_kind(int mx, int my) {
+    // The WM's own gestures outrank geometry: a window being dragged by
+    // its title bar, and a drag hovering somewhere that takes no drop.
+    if (dragging >= 0) return WM_CURSOR_MOVE;
+    if (wm_dnd_refused_at(mx, my)) return WM_CURSOR_NOT_ALLOWED;
+
     int edges = 0;
     if (resizing >= 0) edges = resize_edges;
     else if (wm_find_resize_zone(mx, my, &edges) < 0) edges = 0;
