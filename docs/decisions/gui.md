@@ -8353,6 +8353,11 @@ demonstrate the fix.
 
 ## The Start menu is two columns with the search at the foot, and the power actions are not behind a folder
 
+**Partly superseded (2026-10-01)** by "The Start menu is Kickoff's whole
+shape", below: the search moved to a header and the power actions to a
+labelled footer. What this entry says about two panes still holds; its
+"no All folder, nothing scrolls" had already stopped being true.
+
 The menu was one flat column: every app that showed in it, then the
 three system actions. That is Windows 95's shape, and it scales exactly
 as well -- nineteen entries made it 22 rows tall, alphabetical within
@@ -9498,3 +9503,31 @@ Windows 11's desktop, and the hover state the desktop never had is the
 same wash, fainter. Both use `uui_glass_round_rect()`, which the
 rubber band now uses too: it was an outline only because the drawing
 layer once had no alpha blend.
+
+## The Start menu is Kickoff's whole shape: search in a header, two-line rows, power in a footer
+
+Chosen from mockups (2026-10-01) over Windows 11's pinned grid with a
+Recent section, and a full launcher grid with category chips. The two
+panes stay -- they are what keep a growing list legible without a
+whole screen -- and the rest follows Plasma 6's Kickoff.
+
+**The search is a HEADER**, beside a settings button. At the foot it
+sat above the Start button, which was the old argument; at the top it is
+where every current launcher puts it (Kickoff, Windows 11, GNOME), and
+typing goes to it with no click either way, so its place is about
+reading order, not reach.
+
+**An app row is two lines, the name and its `Comment=`.** The
+description strip under the list showed one row's comment at a time and
+only while that row was hovered; Kickoff shows every row's. The rows
+are taller, so the column shows eight and scrolls past that, and the
+tooltip is kept only for a comment the row had to cut.
+
+**The power actions are labelled footer buttons**, Shut down with its
+glyph and Restart with a chevron when a boot menu is behind it. They
+were rows in the folder rail under a divider -- "act" rows mixed with
+"select" rows; in the footer they are still one click from open, the
+reason they never went behind a Leave tab, and the rail is folders only.
+The row walk keeps its order and kinds (folders, actions, apps, the
+description, search, and now the settings button), so the keyboard,
+the hit test and every tool reading `gui menu --json` follow the move.

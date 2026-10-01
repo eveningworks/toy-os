@@ -656,6 +656,7 @@ static const char *menu_kind_name(int kind) {
     case START_ROW_ACTION:   return "action";
     case START_ROW_APP:      return "app";
     case START_ROW_DESC:     return "desc";
+    case START_ROW_SETTINGS: return "settings";
     default:                 return "search";
     }
 }

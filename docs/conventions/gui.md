@@ -1968,10 +1968,11 @@ this the obvious way), not from how much history it accumulated.
   delta. A tool that reads app output through the console works on both
   because of that, not by accident.
 - **THE START MENU SHOWS ONE FOLDER AT A TIME**, from the entries'
-  `Category=` key: a sidebar of the categories actually present, the
-  selected one's apps beside it, the system actions under a divider in
-  the sidebar's foot, and a search field across the bottom (KDE's
-  Kickoff and XFCE's Whisker in shape). Three things follow. **A folder
+  `Category=` key: a rail of the categories actually present, the
+  selected one's apps beside it as two-line rows (name and `Comment=`),
+  a header with the search field and a settings button, and the system
+  actions as labelled buttons in a footer (Plasma's Kickoff in shape).
+  Three things follow. **A folder
   exists exactly when something is in it** -- the sidebar is derived
   from the registry, so an empty folder is unrepresentable and an
   unknown key becomes its own folder rather than losing the app.

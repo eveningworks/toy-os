@@ -53,12 +53,13 @@ enum start_row_kind {
     START_ROW_CATEGORY = 0,
     START_ROW_ACTION,
     START_ROW_APP,
-    // The one-line description of whatever row the pointer or the
-    // keyboard is on, from the entry's `Comment=`. A status line, not a
-    // control: it is reported so a test can read it, and it is never
-    // hit-tested.
+    // The description of whatever row the pointer or the keyboard is
+    // on, from the entry's `Comment=` -- reported for its TEXT with an
+    // empty rect, since each app row now draws its own as a second line.
+    // Never hit-tested.
     START_ROW_DESC,
     START_ROW_SEARCH,
+    START_ROW_SETTINGS,   // the header's button: opens System Settings
 };
 
 // Walk every row the menu currently DRAWS, in one call per row: the

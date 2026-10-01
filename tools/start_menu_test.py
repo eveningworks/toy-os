@@ -200,9 +200,14 @@ def run(dbg, qmp, tmp, res):
               bool(apps) and min(a["x"] for a in apps) >= side_right,
               f"apps start at {min((a['x'] for a in apps), default=-1)}, "
               f"sidebar ends at {side_right}")
-    res.check("the search row spans the menu",
-              bool(search) and search[0]["w"] >= menu["w"] - 2,
-              f"search w={search[0]['w'] if search else None} menu w={menu['w']}")
+    # The header (Kickoff's shape): the field spans it beside the settings
+    # button, ABOVE the rail and the column.
+    gear = rows_of(menu, "settings")
+    res.check("the search field spans the header, beside its settings button",
+              bool(search) and bool(gear) and search[0]["w"] >= menu["w"] // 2
+              and search[0]["x"] + search[0]["w"] <= gear[0]["x"]
+              and search[0]["y"] + search[0]["h"] <= min((c["y"] for c in cats), default=0),
+              f"search={search[:1]} settings={gear[:1]}")
     res.check("a folder is selected to begin with",
               any(c["selected"] for c in cats),
               f"selected: {[c['label'] for c in cats if c['selected']]}")
@@ -331,9 +336,11 @@ def run(dbg, qmp, tmp, res):
 
     # --- 8b. the tooltip --------------------------------------------------
     #
-    # A LONG description is the case worth testing: Crash Test's runs
-    # past the strip, so the strip must MARK the cut and the tooltip
-    # must carry the rest.
+    # Each app row prints its own description as a second line now, so
+    # the tooltip is only for one the row had to CUT. Every shipped
+    # Comment= fits at the default font, so what is checked is the other
+    # half: a row whose line fits raises NO tooltip, however long it
+    # rests -- a tooltip repeating the row would cover the next one.
     try:
         dbg.menu_app_row("Crash Test")
         row = next(r for r in rows_of(dbg.menu(), "app")
@@ -343,26 +350,12 @@ def run(dbg, qmp, tmp, res):
     if row:
         dbg.warp_cursor(qmp, row["cx"], row["cy"])
         full = dbg.menu().get("description") or ""
-        res.check("the strip reports the whole description",
+        res.check("the menu reports the hovered app's whole description",
                   len(full) > 40, f"{full!r}")
         time.sleep(1.2)
         tip = dbg.json("gui tooltip --json")
-        res.check("after a pause the tooltip carries the full text",
-                  tip.get("open") and tip.get("text") == full,
-                  f"{tip.get('open')} {tip.get('text')!r}")
-        # THE PIXELS, because "the WM says it is open" is not "it is on
-        # screen": the box is drawn over the desktop, so the rect it
-        # claims must differ from the frame taken before it appeared.
-        if tip.get("open"):
-            box = (tip["x"], tip["y"], tip["x"] + tip["w"], tip["y"] + tip["h"])
-            with_tip = qmp.stable_pixels(os.path.join(tmp, "tip-on.png"), box=box)
-            dbg.warp_cursor(qmp, act["cx"], act["cy"])   # a row with no comment
-            time.sleep(0.4)
-            without = qmp.stable_pixels(os.path.join(tmp, "tip-off.png"), box=box)
-            res.check("...and it is DRAWN, not just reported",
-                      with_tip != without)
-            res.check("...and moving off it takes it down",
-                      not dbg.json("gui tooltip --json").get("open"))
+        res.check("...and raises no tooltip for a line the row shows whole",
+                  not tip.get("open"), f"{tip.get('open')} {tip.get('text')!r}")
 
     # --- 9. scrolling a folder taller than the pane ------------------------
     dbg.menu_select_folder("All Apps")

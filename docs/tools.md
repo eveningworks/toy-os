@@ -2642,7 +2642,9 @@ window without going through it will find its layout polls timing out.
   result and the folder. The pixel half: typing CHANGES the search
   field's own rect while a sidebar action row stays byte-identical --
   "it responds" is not "it is drawn", and the neighbour is half the
-  assertion. It also covers what PERSISTS: a pin made
+  assertion. Since the Kickoff layout it also asserts the field spans
+  the header beside its settings button, and that a description the row
+  shows whole raises NO tooltip. It also covers what PERSISTS: a pin made
   through the row's own context menu is read back from
   `/etc/start-menu.conf` through an independent path (`sh cat`), and
   then the guest is REBOOTED and asked again -- the only version of that

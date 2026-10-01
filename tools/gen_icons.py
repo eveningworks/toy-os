@@ -1116,6 +1116,14 @@ def icon_tb_pin():
     return im
 
 
+def icon_tb_power():
+    # The IEC power symbol: a ring open at the top, a bar through the gap.
+    im, d = _tb()
+    d.arc([8, 10, 56, 58], start=-60, end=240, fill=TB_INK, width=6)
+    d.line([32, 4, 32, 32], fill=TB_INK, width=7)
+    return im
+
+
 def icon_tb_info():
     im, d = _tb()
     d.ellipse([4, 4, 60, 60], outline=TB_INK, width=6)
@@ -1581,6 +1589,7 @@ ICONS = {
     "tb-restore": icon_tb_restore,
     "tb-close": icon_tb_close,
     "tb-pin": icon_tb_pin,
+    "tb-power": icon_tb_power,
     "tb-back": icon_tb_back,
     "tb-forward": icon_tb_forward,
     "tb-refresh": icon_tb_refresh,
