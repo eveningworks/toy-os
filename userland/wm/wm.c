@@ -1027,7 +1027,8 @@ void wm_run(void) {
             if (redraw_pending || wm_debug_work_pending()) wait_ms = 0;
             // A ghost in flight wants a frame every WM_ANIM_FRAME_MS, not
             // the idle park (wm_anim.h).
-            if (wm_anim_active() && wait_ms > WM_ANIM_FRAME_MS) wait_ms = WM_ANIM_FRAME_MS;
+            if ((wm_anim_active() || start_menu_animating()) && wait_ms > WM_ANIM_FRAME_MS)
+                wait_ms = WM_ANIM_FRAME_MS;
 
             // Through the channel when there is one, so a client's
             // message defeats this park exactly as a kernel event does

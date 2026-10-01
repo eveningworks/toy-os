@@ -28,6 +28,10 @@ void wm_anim_poll_config(void);
 int  wm_anim_enabled(void);
 
 int  wm_anim_active(void);   // how many ghosts are in flight
+// A base duration through `desktop.animation_speed`, for anything else
+// that animates (the Start menu's scrollbar): 0 when animations are off
+// or instant, so a tween of that length simply lands.
+unsigned wm_anim_ms(unsigned base_ms);
 // Ghost `i` (0..WM_ANIM_MAX-1) as drawn THIS frame: its rect and alpha,
 // or 0 when that slot is idle. `gui state --json` reports them so a
 // test can ask where a ghost is instead of racing a screenshot.

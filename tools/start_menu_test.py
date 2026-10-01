@@ -427,6 +427,22 @@ def run(dbg, qmp, tmp, res):
         res.check("the bar widens with the pointer on it, and only then",
                   rest and hov and not rest["wide"] and hov["wide"],
                   f"rest={rest and rest['wide']} on it={hov and hov['wide']}")
+        # ANIMATED: the widening is a tween (0..256), and leaving starts
+        # a linger before it shrinks -- so right after leaving it is still
+        # full, and a moment later it is thin again.
+        time.sleep(0.6)
+        full = bar(dbg.menu())
+        dbg.send(f"gui warp {cx - 120} {b['y'] + b['h'] // 2}")
+        time.sleep(0.1)
+        lingering = bar(dbg.menu())
+        time.sleep(1.5)
+        thin = bar(dbg.menu())
+        res.check("...it eases to full width, lingers after the pointer leaves, then thins",
+                  full and lingering and thin and full["grow"] == 256
+                  and lingering["grow"] == 256 and thin["grow"] == 0,
+                  f"full={full and full['grow']} lingering={lingering and lingering['grow']} "
+                  f"then={thin and thin['grow']}")
+        dbg.warp_cursor(qmp, cx, b["thumb_y"] + 4)
         dbg.drag(cx, b["thumb_y"] + 4, cx, b["y"] + b["h"] - 2, steps=24)
         m = dbg.menu()
         res.check("dragging the thumb to the bottom scrolls to the last page",

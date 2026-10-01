@@ -154,6 +154,11 @@ static unsigned anim_duration_ms(void) {
 // the five entry points below cannot disagree about it.
 static int anim_wanted(void) { return g_enabled && anim_duration_ms() > 0; }
 
+unsigned wm_anim_ms(unsigned base_ms) {
+    if (!anim_wanted()) return 0;
+    return (unsigned)((unsigned long long)base_ms * anim_duration_ms() / WM_ANIM_MS);
+}
+
 // The surface every wm_surface() call draws into while a snapshot is
 // being rendered (wm_internal.h).
 struct ugfx_surface *g_wm_surface_override;

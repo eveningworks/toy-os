@@ -1,5 +1,7 @@
 // See start_menu.h.
 #include "start_menu.h"
+#include "lib/utween.h"
+#include "wm_anim.h"
 #include "ui/uui_popup.h"
 #include "wm_shadow.h"
 #include "start_store.h"
@@ -162,6 +164,18 @@ static int sb_page;               // -1 / +1 while a track click repeats, else 0
 static uint64_t sb_next;          // when that repeat fires next, in ticks
 #define SB_REPEAT_DELAY 40        // 400 ms, then
 #define SB_REPEAT_EVERY 8         // every 80 ms -- Windows' typematic shape
+
+// THE WIDENING IS A TWEEN, 0 (thin) to SB_FULL (the full bar): out over
+// SB_GROW_MS at normal speed, back only after the pointer has been gone
+// SB_LINGER_MS -- Windows 11's and GNOME's overlay bars wait, so a hand
+// drifting off the bar does not snatch it away. Both go through
+// desktop.animation_speed (wm_anim_ms()); "instant" lands at once.
+#define SB_FULL      256
+#define SB_GROW_MS   150
+#define SB_LINGER_MS 400
+static struct utween sb_tw;       // the widening, 0..SB_FULL
+static int sb_want;               // where it is heading: 1 wide, 0 thin
+static uint64_t sb_collapse_ns;   // when a pending shrink starts, else 0
 
 // The breathing room above the first row and below the last, which a
 // menu whose rows sit flush against its border does not have.
@@ -472,6 +486,29 @@ static int sb_max_first(const struct sm_layout *L) {
 }
 
 static int sb_offset(const struct sm_layout *L) { return sb_max_first(L) - scroll; }
+
+static unsigned long long sb_now(void) { return sys_monotonic_ns(); }
+
+// Head for wide (1) or thin (0). Widening starts now; thinning is
+// scheduled, and a return before it fires cancels it.
+static void sb_set_wide(int want) {
+    unsigned long long now = sb_now();
+    if (want) {
+        sb_collapse_ns = 0;
+        if (!sb_want) utween_retarget(&sb_tw, SB_FULL, wm_anim_ms(SB_GROW_MS), now);
+    } else if (sb_want && !sb_collapse_ns) {
+        unsigned linger = wm_anim_ms(SB_LINGER_MS);
+        sb_collapse_ns = now + (unsigned long long)linger * 1000000ull + 1;
+    }
+    if (want) sb_want = 1;
+}
+
+static int sb_amount(void) { return utween_value(&sb_tw, sb_now()); }
+
+// The menu is mid-widening, or waiting to thin: the WM must not park.
+int start_menu_animating(void) {
+    return start_menu_open && (utween_active(&sb_tw) || sb_collapse_ns);
+}
 
 static void sb_scroll_to(const struct sm_layout *L, int first) {
     int m = sb_max_first(L);
@@ -843,8 +880,10 @@ int start_menu_hover_at(int mx, int my) {
     if (sb_rect(&L, &bx, &by, &bw, &bh) && uui_hit(bx, by, bw, bh, mx, my)) {
         wm_tooltip_cancel();
         hover_token = TOK_SCROLLBAR;
+        sb_set_wide(1);
         return hover_token;
     }
+    if (!sb_drag) sb_set_wide(0);
     int n = row_at(mx, my);
     track_tooltip(&L, n);
     if (n < 0) { hover_token = 0; return 0; }
@@ -907,6 +946,11 @@ void start_menu_open_now(void) {
 }
 
 void start_menu_close(void) {
+    sb_drag = sb_page = 0;
+    sb_want = 0;
+    sb_collapse_ns = 0;
+    utween_start(&sb_tw, 0, 0, 0, sb_now());   // a menu opens with the bar thin
+
     if (!start_menu_open) return;
     wm_tooltip_cancel();   // it describes a row that is about to not exist
     start_menu_open = 0;
@@ -1113,15 +1157,23 @@ void start_menu_draw(int mx, int my) {
     int bx, by, bw, bh;
     if (sb_rect(&L, &bx, &by, &bw, &bh)) {
         int total_rows = pane_count();
-        if (sb_drag || hover_token == TOK_SCROLLBAR) {
-            uui_scrollbar_draw(s, bx, by, bw, bh, total_rows, L.pane_rows, sb_offset(&L),
-                               ugfx_blend(pane_bg, fg, 24),
-                               ugfx_blend(pane_bg, fg, sb_drag ? 170 : 130), 0);
-        } else {
-            int ty, th;
-            uui_scrollbar_thumb_rect(by, bh, total_rows, L.pane_rows, sb_offset(&L), &ty, &th, bw, 0);
-            uui_fill_round_rect(s, bx + bw - 4, ty, 3, th, UUI_CAPSULE, UTHEME_OUTLINE);
+        int e = sb_amount();   // 0 thin .. SB_FULL wide, eased
+        int ty, th;
+        uui_scrollbar_thumb_rect(by, bh, total_rows, L.pane_rows, sb_offset(&L), &ty, &th, bw, 0);
+        // Thin: a 3 px thumb on the column's edge. Wide: uui_scrollbar's
+        // own groove and inset thumb. Every frame in between is the two
+        // blended -- the groove grows in from the edge as it darkens.
+        if (e > 0) {
+            int gw = 3 + (bw - 3) * e / SB_FULL;
+            uui_fill_round_rect(s, bx + bw - gw, by, gw, bh, UUI_CAPSULE,
+                                ugfx_blend(pane_bg, fg, (uint8_t)(24 * e / SB_FULL)));
         }
+        int inset = uui_scrollbar_thumb_inset(bw);
+        int tw = 3 + (bw - 2 * inset - 3) * e / SB_FULL;
+        int tr = (bx + bw - 1) - (inset - 1) * e / SB_FULL;   // the thumb's right edge
+        uint32_t wide_c = ugfx_blend(pane_bg, fg, sb_drag ? 170 : 130);
+        uui_fill_round_rect(s, tr - tw + 1, ty, tw, th, UUI_CAPSULE,
+                            ugfx_blend(UTHEME_OUTLINE, wide_c, (uint8_t)(255 * e / SB_FULL)));
     }
 }
 
@@ -1198,6 +1250,7 @@ int start_menu_handle_click(int mx, int my) {
                 sb_next = sys_ticks() + SB_REPEAT_DELAY;
             }
             hover_token = TOK_SCROLLBAR;
+            sb_set_wide(1);
             start_menu_damage();
             redraw_pending = 1;
             return 1;
@@ -1351,6 +1404,18 @@ int start_menu_key(int key, uint8_t mods) {
 }
 
 void start_menu_update(void) {
+    // THE SCROLLBAR'S TWEEN: a shrink whose linger has run out starts
+    // now, and every frame of a widening or a shrink repaints the card.
+    if (start_menu_open && sb_collapse_ns && sb_now() >= sb_collapse_ns) {
+        sb_collapse_ns = 0;
+        sb_want = 0;
+        utween_retarget(&sb_tw, 0, wm_anim_ms(SB_GROW_MS), sb_now());
+    }
+    if (start_menu_animating()) {
+        start_menu_damage();
+        redraw_pending = 1;
+    }
+
     if (flash_row < 0) return;
     if (sys_ticks() >= flash_until) {
         // THROUGH start_menu_close(), not by clearing the flag here.
@@ -1374,6 +1439,7 @@ void start_menu_update_press(int mx, int my, uint8_t buttons) {
     if (!(buttons & 0x1) || !sb_rect(&L, &bx, &by, &bw, &bh)) {
         sb_drag = 0;
         sb_page = 0;
+        if (!uui_hit(bx, by, bw, bh, mx, my)) { hover_token = 0; sb_set_wide(0); }
         start_menu_damage();
         redraw_pending = 1;
         return;
@@ -1399,6 +1465,8 @@ int start_menu_scrollbar(int *x, int *y, int *w, int *h, int *thumb_y, int *thum
     layout(&L);
     if (!sb_rect(&L, x, y, w, h)) return 0;
     uui_scrollbar_thumb_rect(*y, *h, pane_count(), L.pane_rows, sb_offset(&L), thumb_y, thumb_h, *w, 0);
-    *wide = sb_drag || hover_token == TOK_SCROLLBAR;
+    *wide = sb_want;
     return 1;
 }
+
+int start_menu_scrollbar_grow(void) { return start_menu_open ? sb_amount() : 0; }

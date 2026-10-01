@@ -730,8 +730,9 @@ static void cmd_menu(struct dbg_out *o, int json) {
         int sbx, sby, sbw, sbh, sbty, sbth, sbwide;
         if (start_menu_scrollbar(&sbx, &sby, &sbw, &sbh, &sbty, &sbth, &sbwide))
             dbg_out_printf(o, "{\"label\":\"\",\"kind\":\"scrollbar\",\"x\":%d,\"y\":%d,\"w\":%d,"
-                              "\"h\":%d,\"thumb_y\":%d,\"thumb_h\":%d,\"wide\":%s}%s",
+                              "\"h\":%d,\"thumb_y\":%d,\"thumb_h\":%d,\"wide\":%s,\"grow\":%d}%s",
                            sbx, sby, sbw, sbh, sbty, sbth, sbwide ? "true" : "false",
+                           start_menu_scrollbar_grow(),
                            total ? "," : "");
         for (int i = 0; i < total; i++) {
             const char *label; int kind, x, y, w, h, sel;

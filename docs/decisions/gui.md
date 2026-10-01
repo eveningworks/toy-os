@@ -9542,7 +9542,11 @@ the hit test and the drag arithmetic are `uui_scrollbar`'s stateless
 helpers, and the drag and a held groove click (which pages, then
 repeats, Windows' and KDE's default) run from the overlay registry's
 press op. The bar's rect is the hit zone, so it takes a click before
-the row under it.
+the row under it. **The widening is animated**: a 0..256 tween, out over
+150 ms and back only after the pointer has been gone 400 ms (Windows
+11's and GNOME's bars wait the same way), both through
+`desktop.animation_speed` via `wm_anim_ms()`, so "instant" lands at
+once; while it runs the WM waits a frame, not its idle park.
 
 ## A gallery's pictures are the caller's painter, and Preview= is read by the client
 

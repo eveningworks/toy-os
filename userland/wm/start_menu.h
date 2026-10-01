@@ -159,5 +159,9 @@ void start_menu_update_press(int mx, int my, uint8_t buttons);
 // The app column's scrollbar: its rect, the thumb's (y, h), and whether
 // it is drawn wide (pointer on it, or a drag). 0 when the column fits.
 int start_menu_scrollbar(int *x, int *y, int *w, int *h, int *thumb_y, int *thumb_h, int *wide);
+// How far it has widened, 0 (thin) .. 256 (full) -- the tween's value now.
+int start_menu_scrollbar_grow(void);
+// A widening or a pending shrink in flight: the WM wants a frame soon.
+int start_menu_animating(void);
 
 #endif
