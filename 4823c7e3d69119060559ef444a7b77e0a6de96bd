@@ -1,0 +1,1 @@
+fixed: Keys typed while a Terminal is opening no longer land in front of the shell's banner.
