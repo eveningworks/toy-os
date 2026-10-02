@@ -17,7 +17,7 @@ here, so every assertion is about one packet and needs no GDB installed:
   - a hardware WRITE watchpoint on the tick counter fires, and says so
     (`T05thread:<tid>;watch:<addr>;`);
   - every process is a thread: `qfThreadInfo` lists the kernel context
-    (0x3e8) and pid 1, `qThreadExtraInfo` names it `init`, and `g` on a
+    (0x8000, SCHED_PID_MAX) and pid 1, `qThreadExtraInfo` names it `init`, and `g` on a
     PARKED thread marks the registers nobody saved as unavailable, and
     memory is read in the SELECTED thread's address space -- init's and
     tosh's first bytes at 0x8000000000 are each their own ELF's;
@@ -322,7 +322,7 @@ def steps(inst, disk, log, res, rsp):
 
     threads = rsp.cmd("qfThreadInfo")
     res.check("qfThreadInfo lists the kernel context and pid 1",
-              threads.startswith("m3e8,") and "1" in threads[5:].split(","), threads)
+              threads.startswith("m8000,") and "1" in threads[6:].split(","), threads)
     extra = rsp.cmd("qThreadExtraInfo,1")
     name = bytes.fromhex(extra).decode(errors="replace") if re.fullmatch(r"[0-9a-f]+", extra) else extra
     res.check("qThreadExtraInfo names pid 1 `init`", name.startswith("init, "), name)
