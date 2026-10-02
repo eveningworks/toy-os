@@ -287,19 +287,20 @@ PLACE -- it keeps its pid, its failure count and its backoff. Matching on
 would look "not running" and be started a second time.
 
 **WHEN the rescan happens, stated exactly, because it is not "immediately".**
-init rescans on every pass of its loop -- and with a service running it
-BLOCKS in `waitpid(-1)` between passes, consuming nothing. So a change to
-this directory is noticed the next time init WAKES, which is when one of
-its children exits (or, with no children at all, within 250 ms).
+init parks on its request channel between passes, consuming nothing, and
+wakes for a `service` request, a child's exit, a backoff falling due, or
+after at most two seconds (`CHAN_WAIT_MS`). A change to this directory
+is noticed at the next of those -- and REMOVING a descriptor then killing
+the service works, because the kill is itself the wake-up.
 
-That is deliberate rather than an oversight: a periodic rescan would mean
-init polling forever on an idle machine, which is the whole thing
-`SYS_SLEEP` exists to avoid. It also lands the right way round for the
-case that matters -- REMOVING a descriptor and then killing the service
-works, because the kill is itself the wake-up. ADDING one while the
-desktop is up waits for something to happen, and **`service reload` is
-how you stop waiting**: it sends init the `SIGHUP` that breaks its
-`waitpid`, which is what a `HUP` has meant to an init since SysV.
+**A NEW DESCRIPTOR WAITS A SECOND BEFORE ITS FIRST START** (`SETTLE_MS`),
+and every later arrival restarts that second for all the new ones still
+waiting, so files copied in one after another start as one set, in their
+`After=`/`Before=` order. Started on the first file alone, a service
+would run before its ordering partner was even loaded. Removals and edits
+are not delayed. **`service reload` skips the wait**: it rings init's
+doorbell, and any request loads at once -- the role an explicit
+`daemon-reload` has on systemd, which never loads a unit by itself.
 
 **A DESCRIPTOR MUST APPEAR WHOLE.** Because a rescan can happen on any
 filesystem change, a file built up line by line in this directory can be

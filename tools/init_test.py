@@ -419,7 +419,12 @@ def main():
               bool(row) and row[1] != "zombie" and row[2] == "init", str(row))
 
         # --- adoption and reaping ------------------------------------
-        baseline = set(vm.ps())
+        # Without the `ps` doing the listing: it is in every table it
+        # prints, under a new pid each time.
+        def others():
+            return {p: v for p, v in vm.ps().items() if v[2] != "ps"}
+
+        baseline = set(others())
         vm.sh("spawn /tests/orphan_test 4")
 
         # The children are short-lived and init's reap is driven by the
@@ -428,7 +433,7 @@ def main():
         deadline = time.time() + 15
         table = {}
         while time.time() < deadline:
-            table = vm.ps()
+            table = others()
             if set(table) == baseline:
                 break
             time.sleep(0.5)
@@ -684,6 +689,12 @@ def main():
             # `ordz ordy ordx` this asserts. A move makes the descriptor
             # appear whole, which is what a real system tells you to do
             # with a unit file for the same reason.
+            #
+            # EVERY FILE IS BUILT BEFORE ANY IS MOVED, so a group's moves
+            # come back to back: init holds a fresh descriptor for its
+            # SETTLE_MS, restarted by each arrival, and a group whose
+            # moves straddle it is started part-way (`ordp ordr ordq`,
+            # every run, when the writes sat between the moves).
             for grp in groups:
                 for name, order_key in grp:
                     vm.sh(f"write /var/tmp/{name} Name={name}")
@@ -691,6 +702,8 @@ def main():
                     vm.sh(f"append /var/tmp/{name} Restart=no")
                     if order_key:
                         vm.sh(f"append /var/tmp/{name} {order_key}")
+            for grp in groups:
+                for name, _ in grp:
                     vm.sh(f"mv /var/tmp/{name} /etc/services.d/{name}")
 
             vm.sh("service reload")   # wake init, as above

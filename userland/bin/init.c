@@ -133,6 +133,18 @@
 // own wait the same way, against its clients' timers.
 #define CHAN_WAIT_MS 2000
 
+// A DESCRIPTOR ADDED AFTER BOOT WAITS THIS LONG BEFORE ITS FIRST START,
+// and each later arrival restarts the wait for every one still waiting,
+// so a set copied in one file after another starts as a set. Started on
+// the first file alone, a service runs before an After=/Before= partner
+// is even loaded -- an order init cannot take back. Removals and edits
+// are NOT delayed (rm-then-kill must not restart the service), and
+// any `service` request (`reload` among them) ends the wait, as an
+// explicit daemon-reload is the only thing that loads a unit in systemd.
+#define SETTLE_MS 1000
+static int g_booted;   // the boot's own scan is done; later ones settle
+static int g_arrived;  // a scan added a fresh descriptor
+
 #define CONTROL_PATH   TMP_RUNDIR "/init.ctl"
 #define STATUS_PATH    TMP_RUNDIR "/init.status"
 
@@ -231,6 +243,7 @@ struct service {
     int  pid;          // 0 when not running
     unsigned long long started_ms;
     unsigned long long due_ms;  // when it may next be started
+    int  fresh;        // its descriptor arrived after boot; see SETTLE_MS
     int  fast_failures;
     int  started_once;
     // What the last run RETURNED, which is the only thing that tells a
@@ -413,6 +426,7 @@ static void load_service(const char *file) {
         s = &g_svc[g_svc_count++];
         k_memset(s, 0, sizeof *s);
         k_strlcpy(s->name, name, sizeof s->name);
+        if (g_booted) s->fresh = g_arrived = 1;
     }
     s->seen = 1;
     s->disabled = 0;
@@ -644,6 +658,13 @@ static void build_order(void) {
     }
 }
 
+// Sets when every fresh, never-started service may first start -- one
+// moment for all of them, so start_due() starts them in g_order.
+static void hold_fresh(unsigned long long due) {
+    for (int i = 0; i < g_svc_count; i++)
+        if (g_svc[i].fresh && !g_svc[i].started_once) g_svc[i].due_ms = due;
+}
+
 // Scans /etc/services.d and reconciles it against what is running.
 // `announce` keeps the boot message off every subsequent rescan.
 static void load_services(int announce) {
@@ -677,10 +698,13 @@ static void load_services(int announce) {
         if (announce) sys_eprint("init: no services in " SERVICES_DIR "\n");
     }
 
+    g_arrived = 0;
     for (int i = 0; i < n; i++) {
         if (g_ents[i].is_dir) continue;
         load_service(g_ents[i].name);
     }
+    g_booted = 1;
+    if (g_arrived) hold_fresh(now_ms() + SETTLE_MS);
 
     // A DESCRIPTOR THAT HAS GONE AWAY DISABLES ITS SERVICE, and does not
     // stop it. That is systemd's `disable`, not `stop`, and the split is
@@ -1364,6 +1388,7 @@ int main(void) {
             // the branch below does not rescan a second time for it.
             services_changed();
             load_services(0);
+            hold_fresh(0);   // an explicit reload does not settle
         } else if (services_changed()) {
             // Rescan before deciding what to start, so a descriptor
             // added or removed since the last pass is honoured on this
