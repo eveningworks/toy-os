@@ -13,6 +13,7 @@
 #include "network_popup.h"
 #include "remote_popup.h"
 #include "wm_overlay.h"
+#include "crash_notice.h"
 #include "osk.h"
 #include "wm_debug.h"
 #include "start_menu.h"
@@ -1199,6 +1200,12 @@ static void cmd_state(struct dbg_out *o, int json) {
             dbg_out_printf(o, "%s\"%s\":%s", i ? "," : "", overlay_label(i),
                          wm_overlay_is_open(i) ? "true" : "false");
         dbg_out_write(o, "},");
+        int det[4], reo[4];
+        const char *nt = crash_notice_describe(det, reo);
+        if (nt)
+            dbg_out_printf(o, "\"notice\":{\"title\":\"%s\",\"details\":[%d,%d,%d,%d],"
+                              "\"reopen\":[%d,%d,%d,%d]},", nt,
+                           det[0], det[1], det[2], det[3], reo[0], reo[1], reo[2], reo[3]);
         dbg_out_printf(o, "\"dragging\":%d,\"resizing\":%d,\"content_pressed\":%d,",
                      dragging, resizing, content_pressed);
         // Resize proposals sent since boot -- see wm.c. One per drag

@@ -16,6 +16,7 @@
 #include "confirm_dialog.h"
 #include "osk.h"
 #include "wm_tooltip.h"
+#include "crash_notice.h"
 #include "ui/uui_primitives.h" // uui_hit
 
 // The two that take no cursor, adapted rather than changed: their
@@ -31,6 +32,7 @@ static int open_network(void) { return network_open; }
 static int open_remote(void)  { return remote_open; }
 static int open_confirm(void) { return confirm_dialog_open; }
 static int open_osk(void)     { return osk_open; }
+static int open_notice(void)  { return crash_notice_open; }
 
 // MOST MODAL FIRST. This order is the click priority -- a modal dialog
 // takes a click before a menu does -- and drawing walks it BACKWARDS,
@@ -49,34 +51,38 @@ static const struct wm_overlay g_overlays[] = {
     // about to make, which is the one thing every toolkit gets wrong
     // about them. No hover op either; it is not a control.
     { "tooltip",  open_tooltip,  wm_tooltip_draw,  tooltip_click,
-      0, wm_tooltip_damage, wm_tooltip_rect, 0, 0, 0, wm_tooltip_cancel, 0, 0 },
+      0, wm_tooltip_damage, wm_tooltip_rect, 0, 0, 0, wm_tooltip_cancel, 0, 0, 0 },
     // The taskbar's window preview (wm_peek.h): above every menu, since
     // it only opens while none is up, and its click falls through when
     // it lands outside the card.
     { "peek",     open_peek,     wm_peek_draw,     wm_peek_click,
-      wm_peek_hover_at,          wm_peek_damage,          wm_peek_rect, 0, 0, 0, wm_peek_close, 0, 0 },
+      wm_peek_hover_at,          wm_peek_damage,          wm_peek_rect, 0, 0, 0, wm_peek_close, 0, 0, 0 },
     { "confirm",  open_confirm,  draw_confirm,     confirm_dialog_handle_click,
-      confirm_dialog_hover_at,   confirm_dialog_damage,   0 /* a full repaint, on purpose */, confirm_dialog_update_press, 0, 0, 0, 0, 0 },
+      confirm_dialog_hover_at,   confirm_dialog_damage,   0 /* a full repaint, on purpose */, confirm_dialog_update_press, 0, 0, 0, 0, 0, 0 },
     { "context",  open_context,  context_menu_draw, context_menu_handle_click,
       context_menu_hover_at,     context_menu_damage,     0 /* a rect per submenu level */, 0, 0, context_menu_key, context_menu_close, 0,
-      context_menu_contains },
+      context_menu_contains, 0 },
     { "start",    open_start,    start_menu_draw,  start_menu_handle_click,
-      start_menu_hover_at,       start_menu_damage,       start_menu_rect, start_menu_update_press, start_menu_wheel, start_menu_key, start_menu_close, 0, 0 },
+      start_menu_hover_at,       start_menu_damage,       start_menu_rect, start_menu_update_press, start_menu_wheel, start_menu_key, start_menu_close, 0, 0, 0 },
     { "calendar", open_calendar, calendar_draw,    calendar_handle_click,
-      calendar_hover_at,         calendar_damage,         calendar_rect, 0, 0, 0, calendar_close, 0, 0 },
+      calendar_hover_at,         calendar_damage,         calendar_rect, 0, 0, 0, calendar_close, 0, 0, 0 },
     { "volume",   open_volume,   volume_draw,      volume_handle_click,
-      volume_hover_at,           volume_damage,           volume_rect, volume_update_press, 0, 0, volume_close, volume_opened, 0 },
+      volume_hover_at,           volume_damage,           volume_rect, volume_update_press, 0, 0, volume_close, volume_opened, 0, 0 },
     { "brightness", open_brightness, brightness_draw, brightness_handle_click,
-      brightness_hover_at,       brightness_damage,       brightness_rect, brightness_update_press, 0, 0, brightness_close, 0, 0 },
+      brightness_hover_at,       brightness_damage,       brightness_rect, brightness_update_press, 0, 0, brightness_close, 0, 0, 0 },
     { "network",  open_network,  network_draw,     network_handle_click,
-      network_hover_at,          network_damage,          network_rect, 0, 0, 0, network_close, 0, 0 },
+      network_hover_at,          network_damage,          network_rect, 0, 0, 0, network_close, 0, 0, 0 },
     { "remote",   open_remote,   remote_draw,      remote_handle_click,
-      remote_hover_at,           remote_damage,           remote_rect, 0, 0, 0, remote_close, 0, 0 },
+      remote_hover_at,           remote_damage,           remote_rect, 0, 0, 0, remote_close, 0, 0, 0 },
+    // Under every menu (drawn before them), above the windows: a crash
+    // notice in the corner. Passive -- see wm_overlay.h.
+    { "notice",   open_notice,   crash_notice_draw, crash_notice_handle_click,
+      crash_notice_hover_at,     crash_notice_damage,     crash_notice_rect, 0, 0, 0, 0, 0, 0, 1 },
     // LAST, so it is the least modal: a menu overlapping the keyboard
     // takes the click and paints on top. No `close` op -- a keyboard
     // must survive the click that puts the caret where it is typing.
     { "osk",      open_osk,      osk_draw,         osk_handle_click,
-      osk_hover_at,              osk_damage,              osk_rect, osk_update_press, 0, 0, 0, 0, 0 },
+      osk_hover_at,              osk_damage,              osk_rect, osk_update_press, 0, 0, 0, 0, 0, 0 },
 };
 #define OVERLAY_COUNT ((int)(sizeof g_overlays / sizeof g_overlays[0]))
 
@@ -91,7 +97,7 @@ void wm_overlay_set_parent(const char *name) { g_parent = name; }
 
 int wm_overlay_any_open(void) {
     for (int i = 0; i < OVERLAY_COUNT; i++)
-        if (g_overlays[i].is_open()) return 1;
+        if (!g_overlays[i].passive && g_overlays[i].is_open()) return 1;
     return 0;
 }
 const char *wm_overlay_parent(void) { return g_parent; }

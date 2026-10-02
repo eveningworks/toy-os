@@ -173,6 +173,12 @@ struct wm_overlay {
     // Is (mx, my) on the overlay? For one whose area is not `rect` -- a
     // menu with a submenu open is two panels. NULL: `rect` answers.
     int (*contains)(int mx, int my);
+
+    // PASSIVE: it takes clicks on its own cards and is otherwise not "a
+    // menu being open" -- wm_overlay_any_open() skips it, so a crash
+    // notice sitting in the corner does not stop a game's keys or a
+    // full-screen scanout. 0 for every menu and popup.
+    int passive;
 };
 
 // Draws every open overlay, least modal first. Called once per frame

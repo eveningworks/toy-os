@@ -40,6 +40,7 @@
 #include "calendar_popup.h"
 #include "volume_popup.h"
 #include "brightness_popup.h"
+#include "crash_notice.h"
 #include "network_popup.h"
 #include "remote_popup.h"
 #include "wm_overlay.h"
@@ -971,6 +972,7 @@ void wm_run(void) {
     osk_init();   // its tray item, beside the clock's
     volume_tray_init();   // the tray's second item, after the clock takes slot 0
     brightness_tray_init();
+    crash_notice_init();   // after the app list: a notice names the app
     network_tray_init();  // furthest right of the non-clock items
     remote_tray_init();   // hidden unless somebody is connected
 
@@ -1100,6 +1102,7 @@ void wm_run(void) {
         wm_anim_poll_config();   // `desktop.animations`, same poll
         volume_poll_config();   // the level and the device list, and the debounced write
         brightness_poll_config();
+        crash_notice_poll();
 
         // Drain everything the kernel has queued for us, then read the
         // position out of it. One pump per frame, fully draining -- see
