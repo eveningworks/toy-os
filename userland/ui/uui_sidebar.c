@@ -290,8 +290,11 @@ void uui_sidebar_draw(struct ugfx_surface *surf, const struct uui_sidebar *s) {
             // identical overlap bug has shipped twice).
             ugfx_draw_string_clipped(surf, tx, ry + (rh - ugfx_char_h()) / 2,
                                       avail, s->rows[row].label,
-                                      heading ? s->heading_fg
-                                              : (selected ? s->sel_fg : s->fg),
+                                      // SELECTED WINS over the heading colour,
+                                      // or a selectable heading row reads dark
+                                      // on an accent fill.
+                                      selected ? s->sel_fg
+                                               : (heading ? s->heading_fg : s->fg),
                                       selected ? s->sel_bg : s->bg);
         ugfx_set_font(was);
     }

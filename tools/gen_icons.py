@@ -687,6 +687,28 @@ def icon_tb_more():
     return im
 
 
+def icon_tb_find():
+    # The lens alone: zoom-in's without the plus.
+    im, d = _tb()
+    _tb_lens(d)
+    return im
+
+
+def icon_tb_menu():
+    # Three bars -- the menu button every app with a hidden menu bar has.
+    im, d = _tb()
+    for y in (14, 29, 44):
+        d.rounded_rectangle([8, y, 56, y + 7], radius=3, fill=TB_INK)
+    return im
+
+
+def icon_tb_chevron():
+    # A small down chevron, for a button that opens a list.
+    im, d = _tb()
+    d.line([18, 24, 32, 40, 46, 24], fill=TB_INK, width=7, joint="curve")
+    return im
+
+
 def icon_tb_refresh():
     im, d = _tb()
     d.arc([10, 10, 54, 54], start=30, end=300, fill=TB_INK, width=8)
@@ -1614,6 +1636,9 @@ ICONS = {
     "tb-view": icon_tb_view,
     "tb-pane": icon_tb_pane,
     "tb-more": icon_tb_more,
+    "tb-find": icon_tb_find,
+    "tb-menu": icon_tb_menu,
+    "tb-chevron": icon_tb_chevron,
     "file-text": icon_file_text,
     "file-doc": icon_file_doc,
     "file-image": icon_file_image,
