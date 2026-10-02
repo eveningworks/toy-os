@@ -348,8 +348,7 @@ static void do_default_action(int pid, int sig, uint64_t *regs) {
         // space (safe -- the process is leaving anyway), then hand the
         // CPU to whatever is next. Does not return in the ordinary
         // sense; isr_common resumes wherever scheduler_on_exit() pointed.
-        syscall_process_exit_cleanup(vmm_current_pml4());
-        scheduler_on_exit(code);
+        scheduler_exit_group(code);
         return;
     }
 

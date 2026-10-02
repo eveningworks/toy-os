@@ -4585,9 +4585,14 @@ a kmutex) raises a pending SIGKILL instead of zombifying it -- Linux's
 D state. Its C frames may hold the filesystem lock, and abandoning them
 leaks it: every later file call in the machine waits forever. The
 signal is delivered on the return to ring 3 once the call completes, so
-the process finishes its I/O and then dies. **A thread GROUP is not
-covered**: a sibling parked mid-call when the group exits is released
-where it stands (`docs/bugs.md`).
+the process finishes its I/O and then dies. **AND SO DOES A GROUP WITH
+ANY THREAD PARKED MID-CALL**, whether it is killed or exits
+(`group_defer_death()`, Linux's `exit_group()`): every other thread gets
+a pending SIGKILL, the address space stays, the leader waits as a zombie
+nobody may reap (`group_dying`), and the LAST thread out runs the real
+exit. So a whole-process exit is `scheduler_exit_group()`, never the pair
+`syscall_process_exit_cleanup()` + `scheduler_on_exit()` -- that pair
+tears the address space down under a sibling still inside the kernel.
 
 ## A QUERY RECORD OVER `QUERY_RECORD_MAX` IS REFUSED AT EVERY READ, SILENTLY
 

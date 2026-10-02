@@ -6,6 +6,7 @@
 #include "remote_log.h" // a session created from a socket is a REMOTE session
 #include "win_role.h"
 #include "syscall.h" // syscall_process_kill_cleanup()
+#include "vmm.h"     // vmm_current_pml4() -- the exiting group's address space
 #include "diag.h"     // diag_provider_gone() -- drop a dead service's name
 #include "kfmt.h"      // klog_printf, vga_printf
 #include "signal.h"     // signal_send() -- SIGCHLD to a parent, see notify_parent()
@@ -102,16 +103,86 @@ static void slot_release(int idx) {
 // Freed outright rather than zombied: a thread is not waitable by
 // anything outside its own process, so a corpse nobody can reap would
 // hold its slot for the rest of the boot. Their kernel stacks are
-// simply never resumed again -- the same thing scheduler_kill() does to
-// a process parked mid-syscall, and sound for the same reason: a
-// trapframe lives on its own slot's stack and nothing outside the slot
-// points at it.
+// simply never resumed again, which is sound ONLY because no sibling is
+// parked mid-call by now -- every caller asks group_defer_death() first,
+// since a mid-call thread's frames may hold the disk or a mount lock.
 void group_release_threads(int leader) {
     for (int i = 0; i < MAX_PROCS; i++) {
         if (i == leader) continue;
         if (procs[i].state == SCHED_UNUSED) continue;
         if (procs[i].tgid == leader + 1) slot_release(i);
     }
+}
+
+static int in_group(int i, int leader) {
+    return procs[i].state != SCHED_UNUSED && procs[i].state != SCHED_ZOMBIE &&
+           (i == leader || procs[i].tgid == leader + 1);
+}
+
+// How many of `leader`'s threads other than `except` are PARKED MID-CALL
+// -- Linux's D state. READY counts: woken but not yet resumed, it is
+// still inside those frames (scheduler_kill() says why).
+static int group_parked(int leader, int except) {
+    int n = 0;
+    for (int i = 0; i < MAX_PROCS; i++)
+        if (i != except && in_group(i, leader) && procs[i].parked_in_kernel) n++;
+    return n;
+}
+
+// **A THREAD PARKED MID-CALL IS NEVER FREED WHERE IT STANDS.** Its C
+// frames may hold a mount's lock across a disk wait, or the disk's own
+// lock, and freeing it orphans that lock: every later file call in the
+// machine then waits forever (System Update killed mid-check froze the
+// desktop that way). So the group dies the way Linux's exit_group()
+// does it: every other thread gets a pending SIGKILL and leaves the
+// kernel on its own, the address space stays until the last one has,
+// and the leader waits as an unreapable zombie. Returns 1 when deferred.
+static int group_defer_death(int leader, int except, int code) {
+    if (!group_parked(leader, except)) return 0;
+    if (!procs[leader].group_dying) {
+        procs[leader].group_dying = 1;
+        procs[leader].group_exit_code = code;   // the FIRST death's reason
+        klog_printf("sched: pid %d dies once its threads leave the kernel (%d mid-call)\n",
+                    leader + 1, group_parked(leader, except));
+    }
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (i == except || !in_group(i, leader)) continue;
+        procs[i].stopped = 0;   // it must be able to finish the call
+        scheduler_signal_raise(i + 1, SIGKILL);
+    }
+    return 1;
+}
+
+void scheduler_exit_group(int code) {
+    if (current_index < 0) return;
+    int me = current_index;
+    int leader = leader_index(me);
+    if (!group_defer_death(leader, me, code)) {
+        // The last thread out of a deferred death reports the first one's
+        // reason, and the whole teardown happens here.
+        if (procs[leader].group_dying) code = procs[leader].group_exit_code;
+        syscall_process_exit_cleanup(vmm_current_pml4());
+        scheduler_on_exit(code);
+        return;
+    }
+
+    // DEFERRED: leave without touching the address space a sibling is
+    // still inside. A thread's slot simply goes; the leader's stays as the
+    // unreapable zombie that holds the pid for the parent.
+    scheduler_preempt_disable();
+    if (me == leader) {
+        if (procs[me].state != SCHED_ZOMBIE) alive_count--;
+        procs[me].state = SCHED_ZOMBIE;
+    } else {
+        slot_release(me);
+    }
+    scheduler_preempt_enable();
+    sched_switch_begin();
+    bill_current();
+    current_index = -1;
+    int next = find_next_runnable(rotation_pos);
+    if (next == ROT_KERNEL) { switch_to_kernel(me); return; }
+    switch_to(me, next);
 }
 
 void scheduler_on_exit(int code) {
@@ -152,6 +223,7 @@ void scheduler_on_exit(int code) {
     if (procs[leader].state != SCHED_ZOMBIE) alive_count--;
     procs[leader].state = SCHED_ZOMBIE;
     procs[leader].exit_code = code;
+    procs[leader].group_dying = 0;   // reapable from here
 
     // A REMOTE SESSION ENDS WHEN ITS LEADER DOES, whether it said
     // goodbye or the link dropped -- a no-op for every other process,
@@ -365,7 +437,7 @@ enum sched_poll_result scheduler_poll_any(int parent_pid, int *out_pid,
         if (is_thread(i)) continue;
         if (procs[i].ppid != parent_pid) continue;
         any_children = 1;
-        if (procs[i].state == SCHED_ZOMBIE) {
+        if (procs[i].state == SCHED_ZOMBIE && !procs[i].group_dying) {
             if (out_pid) *out_pid = i + 1;
             if (out_exit_code) *out_exit_code = procs[i].exit_code;
             reap_audit(i, "poll_any");
@@ -410,15 +482,14 @@ int scheduler_kill(int pid, int exit_code) {
     // wait, and zombifying it now abandons them with the lock taken:
     // every later file call in the machine then waits forever. So the
     // kill becomes a pending SIGKILL, delivered on its return to ring 3
-    // once the call completes. (A deferred kill reports SIGKILL whatever
-    // `exit_code` said; the one that matters, Force Quit's, already is.)
+    // once the call completes, and the exit reports this `exit_code`
+    // (group_defer_death() keeps it).
     // READY COUNTS TOO: woken but not yet resumed, it is still inside
     // those frames -- and since a mid-call wake waits its turn (see
     // wake_slot()), that window is a slice long, not a few instructions.
-    if (procs[slot].parked_in_kernel) {
-        procs[slot].stopped = 0;   // it must be able to finish the call
-        return scheduler_signal_raise(pid, SIGKILL);
-    }
+    // AND THE SAME FOR ANY THREAD OF IT: a sibling parked mid-call holds
+    // those frames just as the leader would (group_defer_death()).
+    if (group_defer_death(slot, -1, exit_code)) return 1;
 
     // A STOPPED PROCESS IS STILL KILLABLE, which is the reason SIGKILL
     // is exempt from suspension everywhere: a job suspended by Ctrl-Z
@@ -472,6 +543,8 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
     if (pid < 1 || pid > MAX_PROCS) return SCHED_POLL_INVALID;
     int slot = pid - 1;
 
+    if (procs[slot].state == SCHED_ZOMBIE && procs[slot].group_dying)
+        return SCHED_POLL_RUNNING;   // a thread is still leaving the kernel
     if (procs[slot].state == SCHED_ZOMBIE) {
         if (out_exit_code) *out_exit_code = procs[slot].exit_code;
         reap_audit(slot, "poll");

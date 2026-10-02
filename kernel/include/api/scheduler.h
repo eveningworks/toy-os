@@ -110,6 +110,14 @@ void scheduler_trap_exit(uint64_t *regs);
 // else entirely once isr_common's epilogue runs.
 void scheduler_on_exit(int code);
 
+// THE CALLING THREAD ENDS ITS WHOLE PROCESS -- exit(), a fatal signal, a
+// ring-3 fault -- address space included. Use this, not the pair
+// syscall_process_exit_cleanup() + scheduler_on_exit(): if another thread
+// of the process is parked mid-call (holding a mount or disk lock), the
+// teardown waits until that thread has left the kernel, and the last one
+// out runs it (sched_exit.c, group_defer_death()). Does not return.
+void scheduler_exit_group(int code);
+
 // Non-zero (1-based pid) if the syscall currently being handled came
 // from a scheduler-managed process; 0 otherwise (legacy
 // process_run_ring3 path, or no process at all -- e.g. a stray int
@@ -1237,6 +1245,8 @@ void scheduler_test_release(int idx);
 // Give a slot parked above a deadline, and say whether it parked
 // MID-CALL (scheduler_block_kernel_until()) or at a syscall entry.
 void scheduler_test_park_deadline(int idx, uint64_t wake_at_ns, int in_kernel);
+// Make a parked slot a THREAD of another parked slot's process.
+void scheduler_test_make_thread(int idx, int leader);
 // The state of one slot, as a PROC_STATE_* value. -1 for a bad index.
 int  scheduler_test_state(int idx);
 // Claim a free slot the way spawn/fork/thread create do, and give it back.

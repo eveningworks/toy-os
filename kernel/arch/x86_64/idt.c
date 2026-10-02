@@ -712,15 +712,14 @@ static void isr_dispatch_body(uint64_t *regs) {
                           : "returning control to whatever ran it.\n\n");
             vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
 
-            syscall_process_exit_cleanup(vmm_current_pml4());
-
             if (scheduler_current_pid()) {
                 // Same "crashed, no real exit code to report" case
                 // scheduler_on_exit()'s own comment already covers --
                 // nothing consumes the code today either way.
-                scheduler_on_exit(-1);
+                scheduler_exit_group(-1);
                 return; // g_next_kernel_rsp now points elsewhere; isr_common's epilogue resumes it
             } else {
+                syscall_process_exit_cleanup(vmm_current_pml4());
                 process_context_recover(); // never returns
             }
         }

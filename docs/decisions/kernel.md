@@ -8742,3 +8742,51 @@ power), so a power cut during the apply is finished by the next boot.
 the Linux answer, which would let a library update apply live. That is a
 change to rename, delete and the fault path together, and this feature
 did not need it.
+
+## A process with a thread parked mid-call dies when that thread leaves the kernel
+
+A single-threaded process killed while parked inside kernel code already
+died on its way out rather than where it slept -- Linux's D state -- so
+that its C frames could release the locks they held. Its THREADS were not
+covered: `group_release_threads()` freed every sibling where it stood,
+and a sibling parked in a disk wait holds the disk lock (`g_ata_lock`)
+and often a mount's lock. System Update hashes files on a pthread from
+the moment it opens; killing it mid-check left `g_ata_lock` owned by a
+pid that no longer existed, toywm blocked on it while holding the root
+mount's lock, and the whole desktop froze for good (reproduced 1 in 1,
+the owner read with gdb).
+
+**What Linux does.** `exit_group()` does not free sibling threads; it
+sends each one SIGKILL (`zap_other_threads()`) and lets each leave the
+kernel at a safe point. The `mm` is refcounted (`mm_users`), so the
+address space lives until the last thread drops it, and the group leader
+stays an unreapable zombie until its thread group is empty
+(`delay_group_leader()`).
+
+**toy-os copies that shape without the refcount.** Whoever ends a process
+-- `scheduler_kill()` for a victim, `scheduler_exit_group()` for the
+running thread's exit, fault or fatal signal -- first asks whether any
+OTHER thread of the group is parked mid-call. If none is, nothing changes.
+If one is, the death is deferred: every other thread gets a pending
+SIGKILL (a mid-call one keeps it until its call completes, which is
+`scheduler_signal_raise()`'s existing rule), the address space and fds
+are left alone, the leader's slot becomes a ZOMBIE that `scheduler_poll()`
+refuses to reap (`group_dying`), and the first death's exit code is kept.
+The last thread out sees no parked sibling and runs the ordinary exit --
+cleanup, zombie, parent notified -- with that code.
+
+**Why "is a sibling parked" instead of a count of live threads**: a
+thread in ring 3 or parked at a syscall ENTRY holds nothing, and freeing
+it outright is what the code always did and is still correct; only a
+context with live kernel frames can be holding a lock. Asking the one
+question that matters keeps the common exit exactly as fast and as
+simple as it was.
+
+**The one shape that must not come back**: the pair
+`syscall_process_exit_cleanup()` + `scheduler_on_exit()` at an exit call
+site. It destroys the address space before anything can ask about
+siblings, so every whole-process exit goes through
+`scheduler_exit_group()`. Measured after the fix: ten kills of System
+Update at delays from 0.5 to 10 s, seven of them landing mid-call and
+deferred, the desktop alive after all ten and nothing left unreaped.
+

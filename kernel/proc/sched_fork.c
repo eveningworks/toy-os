@@ -409,6 +409,7 @@ int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
     // Nothing has announced anything yet. See the field's comment: this
     // is the same slot-reuse hazard signal_state_reset() covers.
     procs[slot].ready = 0;
+    procs[slot].group_dying = 0;
     // THE GROUP: what the caller asked for, else the spawner's, else a
     // group of this process's own. The third case is the kernel context
     // -- init, the demo, a KTEST -- which has no group to lend, and

@@ -95,6 +95,13 @@ struct sched_process {
     // its own C code carrying on -- there is no ring-3 loop involved
     // and its trapframe is not a return value to be written.
     uint8_t parked_in_kernel;
+    // THE GROUP IS DYING BUT A THREAD IS STILL IN THE KERNEL (leaders
+    // only). Set when an exit or a kill finds a sibling parked mid-call;
+    // the leader is then a ZOMBIE nobody may reap, the address space
+    // lives on, and the LAST thread out runs the real exit with
+    // `group_exit_code`. Linux's delay_group_leader().
+    uint8_t group_dying;
+    int group_exit_code;
     int preempt_depth;    // this context's scheduler_preempt_disable()
                           // nesting -- see g_preempt_depth
     uint64_t offcpu_tsc;  // TSC ticks spent switched away, summed --

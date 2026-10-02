@@ -255,12 +255,24 @@ int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
         signal_state_reset(i);
         procs[i].pgid = i + 1;
         procs[i].sid = i + 1;
+        procs[i].tgid = i + 1;     // a process; scheduler_test_make_thread() changes that
+        procs[i].group_dying = 0;
+        // NOTHING REAL TO TEAR DOWN: a kill that is not deferred runs the
+        // full teardown, and a stale address space or parent here would
+        // be some earlier process's.
+        procs[i].pml4_phys = 0;
+        procs[i].ppid = 0;
         procs[i].prio = 0;
         procs[i].vruntime = g_min_vruntime;
         procs[i].parked_in_kernel = 0;   // a mid-call park is asked for, never inherited
         return i;
     }
     return -1;
+}
+
+void scheduler_test_make_thread(int idx, int leader) {
+    if (idx < 0 || idx >= MAX_PROCS || leader < 0 || leader >= MAX_PROCS) return;
+    procs[idx].tgid = leader + 1;
 }
 
 int  scheduler_test_slot_claim(void)     { return slot_claim(); }
@@ -304,6 +316,8 @@ void scheduler_test_release(int idx) {
     procs[idx].isr_depth = 0;
     procs[idx].preempt_depth = 0;
     procs[idx].parked_in_kernel = 0;
+    procs[idx].group_dying = 0;
+    procs[idx].tgid = idx + 1;
     k_memset(&procs[idx].kctx, 0, sizeof procs[idx].kctx);
     // Cleared on the way out as well as on the way in. Belt and braces
     // is not the reason: an UNUSED slot with a pending bit is a slot the

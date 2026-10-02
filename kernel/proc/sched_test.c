@@ -502,6 +502,44 @@ KTEST("sched", "a kill waits for a context WOKEN mid-call, not only a parked one
     KTEST_ASSERT(pending & (1u << SIGKILL));
 }
 
+KTEST("sched", "a kill waits for ANY thread parked mid-call, not only the leader") {
+    // A thread parked mid-call holds what its C frames hold -- the disk
+    // lock, a mount's -- and freeing it with its process orphans that
+    // lock for the rest of the boot. Measured: System Update killed while
+    // its worker thread hashed files froze the desktop. The leader here
+    // is parked at a syscall entry, so only the THREAD makes the kill wait.
+    uint64_t tf_l[SCHED_TF_SLOTS] = {0}, tf_t[SCHED_TF_SLOTS] = {0};
+    static const char chan_l, chan_t;
+
+    scheduler_preempt_disable();
+    int l = scheduler_test_park(tf_l, &chan_l, SCHED_WAIT_NET);
+    int t = scheduler_test_park(tf_t, &chan_t, SCHED_WAIT_DISK);
+    int state_l = -1, state_t = -1, polled = -1, rc = -1;
+    uint32_t pend_l = 0, pend_t = 0;
+    if (l >= 0 && t >= 0) {
+        scheduler_test_make_thread(t, l);
+        scheduler_test_park_deadline(t, 0, 1);   // the thread: mid-call
+        rc = scheduler_kill(l + 1, 9);
+        state_l = scheduler_test_state(l);
+        state_t = scheduler_test_state(t);
+        pend_l = scheduler_signal_pending(l + 1);
+        pend_t = scheduler_signal_pending(t + 1);
+        polled = (int)scheduler_poll(l + 1, 0);
+    }
+    scheduler_test_release(t);
+    scheduler_test_release(l);
+    (void)scheduler_test_take_resched();
+    scheduler_preempt_enable();
+
+    if (l < 0 || t < 0) KTEST_SKIP("fewer than two free process slots");
+    KTEST_ASSERT_EQ(rc, 1);                          // accepted...
+    KTEST_ASSERT_EQ(state_t, PROC_STATE_BLOCKED);    // ...the thread lives on
+    KTEST_ASSERT(pend_t & (1u << SIGKILL));          // and dies on its way out
+    KTEST_ASSERT(pend_l & (1u << SIGKILL));          // the leader too
+    KTEST_ASSERT(state_l != PROC_STATE_ZOMBIE);
+    KTEST_ASSERT_EQ(polled, (int)SCHED_POLL_RUNNING); // nothing to reap yet
+}
+
 KTEST("sched", "a slot being built is never handed out twice") {
     // A spawn claims its slot and then SLEEPS reading the ELF. The slot
     // stayed UNUSED meanwhile, so a second spawn took the same one and

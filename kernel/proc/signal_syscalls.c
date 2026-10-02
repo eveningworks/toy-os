@@ -156,8 +156,7 @@ int sys_sigreturn(struct syscall_ctx *c) {
     // Killed with SIGSEGV rather than handed an error code, because
     // there is no register left that a caller could read one out of.
     klog_printf("signal: pid %d called sigreturn with no valid frame\n", pid);
-    syscall_process_exit_cleanup(vmm_current_pml4());
-    scheduler_on_exit(SIGNAL_EXIT_BASE + SIGSEGV);
+    scheduler_exit_group(SIGNAL_EXIT_BASE + SIGSEGV);
     return 1; // never reached; keeps the dispatcher from writing a result
 }
 
