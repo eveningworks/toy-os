@@ -204,6 +204,18 @@ struct session {
     // THE SHELL HAS EXITED AND THE TAB WAS KEPT (`on_exit=keep`): reaped,
     // its last output still on screen, Enter starts a new shell in it.
     int exited;
+
+    // TYPE-AHEAD IS HELD UNTIL THE SHELL FIRST SPEAKS. A pty starts with
+    // the line discipline echoing (abi/tty_abi.h), and tosh only turns
+    // that off once it has loaded -- so keys typed while it loads were
+    // echoed by the kernel ahead of the banner AND redrawn by tosh at its
+    // prompt. Held here, they arrive after the shell has set up its
+    // terminal however it likes. on_tick lets them go after a couple of
+    // seconds for a shell that never prints.
+    int spoke;
+    char held[256];
+    int nheld;
+    unsigned long long started_ns;
     // A HAND-GIVEN TITLE OUTRANKS THE SHELL'S. Konsole's rule: once you
     // name a tab, its shell's OSC sequences stop moving the label --
     // otherwise the next `cd` silently undoes the rename.
@@ -1109,6 +1121,8 @@ static void *reader_main(void *arg) {
 // Move whatever the reader has published into the parser. Returns 1 if
 // anything arrived, so the caller repaints only when there is something
 // new.
+static void release_held(struct session *s);
+
 static int drain(struct session *s) {
     int got = 0;
     for (;;) {
@@ -1119,6 +1133,7 @@ static int drain(struct session *s) {
         vt_write(s, &c, 1);
         got = 1;
     }
+    if (got && !s->spoke) release_held(s);
     return got;
 }
 
@@ -1203,6 +1218,7 @@ static int session_start(int slot, const char *shell, const char *dir) {
     }
     s->index = slot;
     s->master = -1;
+    s->started_ns = sys_monotonic_ns();
     s->cursor_shown = 1;
     ansi_init(&s->vt, VT_FG, VT_BG);
     vt_reset_screen(s);
@@ -1953,6 +1969,12 @@ static void apply_conf(const struct term_conf *next) {
 // with nothing to announce it. Closed, it costs nothing.
 static int on_tick(struct uapp *a) {
     (void)a;
+    unsigned long long now = sys_monotonic_ns();
+    for (int i = 0; i < MAX_TABS; i++) {
+        struct session *hs = g_slot[i];
+        if (hs && hs->live && !hs->spoke && now - hs->started_ns > 2000000000ull)
+            release_held(hs);
+    }
     int repaint = uui_toolbar_tick(&g_tb) | g_panel_open;
     if (!g_conf.cursor_blink) {
         if (g_caret_on) return repaint;
@@ -2166,9 +2188,27 @@ static void reap_dead_tabs(void) {
 // SENDS THE SAME BYTE THE KEY DOES rather than reaching for
 // sys_kill(): Ctrl-C is interpreted by kernel/tty/ldisc.c, which is
 // what makes it reach the foreground JOB rather than the shell.
+// Every keystroke-shaped write to a shell goes through here, so type-ahead
+// held before the shell first spoke keeps its order. Past the hold buffer
+// a key is written at once: losing it would be worse than an early echo.
+static void pty_send(struct session *s, const char *buf, int n) {
+    if (!s || s->master < 0 || n <= 0) return;
+    if (!s->spoke && s->nheld + n <= (int)sizeof s->held) {
+        memcpy(s->held + s->nheld, buf, (size_t)n);
+        s->nheld += n;
+        return;
+    }
+    sys_write(s->master, buf, (size_t)n);
+}
+
+static void release_held(struct session *s) {
+    s->spoke = 1;
+    if (s->nheld > 0 && s->master >= 0) sys_write(s->master, s->held, (size_t)s->nheld);
+    s->nheld = 0;
+}
+
 static void send_byte(char b) {
-    struct session *s = active();
-    if (s && s->master >= 0) sys_write(s->master, &b, 1);
+    pty_send(active(), &b, 1);
 }
 
 // PASTING INTO A TERMINAL IS TYPING. The characters go to the pty as
@@ -2195,7 +2235,7 @@ static void do_paste(void) {
     // ONE write, not one per character: a syscall per byte for a
     // pasted paragraph is thousands of kernel entries, and the pty
     // takes the run happily.
-    sys_write(s->master, txt, (size_t)n);
+    pty_send(s, txt, n);
 }
 
 static unsigned menu_item_flags(int code) {
@@ -2484,10 +2524,10 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     if (IS_PRINTABLE_KEY(key) && (mods & KEY_MOD_CTRL)) return;
     if ((mods & KEY_MOD_ALT) && !(key >= KEY_ARROW_UP && key <= KEY_PRINT_SCREEN) &&
         s->master >= 0)
-        sys_write(s->master, "\x1b", 1);
+        pty_send(s, "\x1b", 1);
     char seq[TERMKEY_MAX];
     int n = termkey_encode(key, seq, sizeof seq);
-    if (n > 0 && s->master >= 0) sys_write(s->master, seq, (size_t)n);
+    if (n > 0) pty_send(s, seq, n);
 
     // NO DRAIN HERE ANY MORE. The echo comes back through the discipline
     // and the reader thread is already blocked waiting for it, so it
