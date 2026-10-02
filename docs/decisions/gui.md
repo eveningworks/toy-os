@@ -5387,6 +5387,11 @@ The widget draws it rather than the caller baking it into a label,
 because a label is not owned and a shell rewrites its own
 asynchronously.
 
+**The Terminal no longer numbers its tabs** (2026-10-02, the
+maintainer's call in the one-bar redesign). The cost is the one above:
+two tabs in the same directory read alike again. `numbered` stays in the
+widget for a strip that wants it.
+
 **Every colour is the theme's, which is what the page-colour version
 could not be.** `page_bg` had to be supplied by the caller, because the
 widget cannot know what an app paints below it — so a dark mode would
@@ -5397,6 +5402,52 @@ from `utheme_current()`, swapping the palette moves the whole strip.
 accent.** Computing where to break it would be a second piece of
 arithmetic that has to agree with the fill to the pixel, which is the
 shape of the close-box bug this widget's own comments warn about.
+
+## The Terminal is one bar, and its menu bar hides behind a button
+
+Chosen from mockups on 2026-10-02 (the Terminal redesign canvas) over
+the app design language's full anatomy -- menu bar, coloured command
+bar, status bar -- and over the same bar with a Session panel open by
+default.
+
+**Every other app here wears menu bar, command bar and status bar; the
+Terminal deliberately does not.** In a terminal a row of chrome is a row
+taken from the program running in it, so Windows Terminal, GNOME
+Console and Ptyxis all put the tabs, a new-tab split button and a menu
+button in ONE row and drop the menu bar. Konsole keeps one, and lets it
+be hidden. toy-os follows the first group: the bar holds the tabs, "+"
+and a ▾ listing `/etc/shells`, Find, the Session-panel toggle and ☰.
+The menu bar still exists, hidden by default (`menubar=on` shows it);
+F10 reveals it, and the ☰ menu holds the same commands, so hiding the
+bar hides no command.
+
+**The tabs could not move into the title bar** as Windows Terminal's
+do: the window manager draws it (server-side decoration), and a client
+that drew its own would be client-side decoration, a separate project.
+
+**The selected tab keeps the light lift** (the tab-strip entry above).
+The merged dark tab was mocked up again for this layout -- no light menu
+bar above it, a grey page rather than black -- and the maintainer chose
+the lift anyway.
+
+**The Session panel is the toy-os addition.** None of the three
+terminals shows the tab's process; here a right-hand panel does (the
+shell, its pid and group, the processes under it, scrollback use, and
+Interrupt / Send EOF / Force quit), because the shell in a tab being a
+real process on a real pty is what this terminal is. It is read from
+`SYS_PROC_INFO` on each paint and repainted on the tick while open.
+
+**Find is a toolkit widget that asks rather than searches.**
+`uui_findbar` draws the query, the "N of M" readout and the buttons and
+reports events; the app finds. A terminal's virtual buffer and a
+document are searched differently, and a widget that searched one would
+not fit the other.
+
+**Options is a window of its own**, File Manager Options' sidebar of
+pages, replacing a dialog drawn inside the terminal. The old placement
+was argued from a client being unable to open a second window, which
+`uapp_window_open()` has since made untrue; the terminal stays visible
+beside the window either way.
 
 ## A focus indicator is one helper in the theme's accent, drawn by the widget
 

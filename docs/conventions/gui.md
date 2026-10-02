@@ -3904,9 +3904,11 @@ open menu outranks whatever else wants the keyboard. Terminal needs that
 ordering explicitly: every key it does not claim is a byte for the shell.
 
 **A HIDEABLE MENU BAR NEEDS A WAY BACK, AND F10 IS IT.** Terminal's
-View > Menu Bar hides the row (Konsole's, because in a terminal a row of
-chrome is a row of the product), and F10 REVEALS a hidden bar as well as
-opening it, so the toggle is never a one-way door. Konsole's own
+menu bar is HIDDEN by default and View > Menu Bar hides it again once
+shown (in a terminal a row of chrome is a row of the product), and F10
+REVEALS a hidden bar as well as opening it, so the toggle is never a
+one-way door. The bar's ☰ button holds every menu command, so a hidden
+menu bar hides none of them. Konsole's own
 Ctrl+Shift+M is unavailable here: Ctrl folds `M` to 0x0D, so the binding
 would be indistinguishable from Shift+Enter (`api/keyboard.h`).
 

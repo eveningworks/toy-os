@@ -88,6 +88,7 @@ REAL CALLER, not a plausible one.
 | `uui_transport` | Previous / play-pause / next, the round play button in the middle -- media (the Audio Player's stage, the Image Viewer's slideshow pill); `dark` for a dark or ambient ground |
 | `uui_label` | A line of text the LAYOUT reserves a row for |
 | `uui_textbox`, `utext` | One line of editable text; a document |
+| `uui_findbar` | Find: a query, "N of M", previous / next, close. It reports what was asked; the app searches and sets the count (the Terminal's floating find) |
 | `uui_menubar`, `uui_statusbar` | Menus with submenus; status panes |
 | `uui_layout`, `uui_scrollview` | Arrangement; a viewport onto more than fits |
 | `uui_setting_row` | One setting as a card: name and description left, its control right (or under) |

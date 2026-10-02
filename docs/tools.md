@@ -2361,6 +2361,16 @@ window without going through it will find its layout polls timing out.
 - **`uterm_test.py`** -- drives the RING-3 Terminal, which is a real
   TERMINAL EMULATOR now: a pty with `/bin/tosh` on the far end.
 
+  **Its `b` block is the one-bar chrome** -- the Session panel by F9 and
+  by its button, find (with a query that cannot match as the control,
+  and the cursor field proving the typing never reached the shell), the
+  ☰ and ▾ menus, a new tab starting in the last tab's folder, and the
+  Options window. It reads the bar's buttons from `tbbtn` lines the app
+  logs itself (the toolbar describes buttons only when it overflows),
+  and it does NOT call `prime_layout()`: with the menu bar hidden, that
+  helper's two F10s show the bar and then OPEN a menu, which swallows
+  every key after it.
+
   **Its TAB checks open their own window**, because `run()` ends by
   closing the first one with Alt+F4 -- three of them passed against
   nothing on the first run, reading STALE log lines from the window that

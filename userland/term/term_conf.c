@@ -159,7 +159,7 @@ int term_scheme_list(char names[][TERM_NAME_MAX],
 
 void term_conf_defaults(struct term_conf *c) {
     memset(c, 0, sizeof *c);
-    strlcpy(c->scheme, "default", sizeof c->scheme);
+    strlcpy(c->scheme, "slate", sizeof c->scheme);
     c->font_size = 0;          // follow system.font_size
     c->scrollback = 240;
     c->cursor = TERM_CURSOR_BLOCK;
@@ -172,8 +172,13 @@ void term_conf_defaults(struct term_conf *c) {
     // Code's terminal both ship it off too; Konsole and GNOME Terminal
     // ship it on, so this is a real split and not a lone opinion.
     c->cursor_blink = 0;
-    c->margin = 6;
-    c->menubar = 1;
+    c->menubar = 0;         // the bar's menu button holds every command
+    c->panel = 0;
+    c->scrollbar = 1;
+    c->cols = 120;          // Windows Terminal's default grid
+    c->rows = 30;
+    c->newtab_dir = TERM_NEWTAB_HERE;
+    c->keep_on_exit = 0;
     c->copy_on_select = 1;
     c->scroll_on_output = 1;
     c->confirm_close = 1;
@@ -228,7 +233,17 @@ void term_conf_load(struct term_conf *c) {
     }
 
     get_int("scrollback", &c->scrollback, TERM_SB_MIN, TERM_SB_MAX);
-    get_int("margin", &c->margin, TERM_MARGIN_MIN, TERM_MARGIN_MAX);
+    get_int("cols", &c->cols, TERM_COLS_MIN, TERM_COLS_MAX);
+    get_int("rows", &c->rows, TERM_ROWS_MIN, TERM_ROWS_MAX);
+
+    char sv[TERM_SHELL_MAX];
+    if (etc_config_buf_get(&g_buf, "shell", sv, sizeof sv) && sv[0] == '/')
+        strlcpy(c->shell, sv, sizeof c->shell);
+    char nv[16];
+    if (etc_config_buf_get(&g_buf, "new_tab_dir", nv, sizeof nv))
+        c->newtab_dir = strcmp(nv, "home") == 0 ? TERM_NEWTAB_HOME : TERM_NEWTAB_HERE;
+    if (etc_config_buf_get(&g_buf, "on_exit", nv, sizeof nv))
+        c->keep_on_exit = strcmp(nv, "keep") == 0;
 
     char cv[16];
     if (etc_config_buf_get(&g_buf, "cursor", cv, sizeof cv) && cv[0])
@@ -237,6 +252,8 @@ void term_conf_load(struct term_conf *c) {
 
     get_bool("cursor_blink", &c->cursor_blink);
     get_bool("menubar", &c->menubar);
+    get_bool("panel", &c->panel);
+    get_bool("scrollbar", &c->scrollbar);
     get_bool("copy_on_select", &c->copy_on_select);
     get_bool("scroll_on_output", &c->scroll_on_output);
     get_bool("confirm_close", &c->confirm_close);
@@ -266,7 +283,15 @@ int term_conf_save(const struct term_conf *c, const struct term_conf *old) {
     if (strcmp(c->scheme, old->scheme) != 0) n += put("scheme", c->scheme, &failed);
     if (c->font_size != old->font_size) n += put_int("font_size", c->font_size, &failed);
     if (c->scrollback != old->scrollback) n += put_int("scrollback", c->scrollback, &failed);
-    if (c->margin != old->margin) n += put_int("margin", c->margin, &failed);
+    if (strcmp(c->shell, old->shell) != 0) n += put("shell", c->shell, &failed);
+    if (c->cols != old->cols) n += put_int("cols", c->cols, &failed);
+    if (c->rows != old->rows) n += put_int("rows", c->rows, &failed);
+    if (c->newtab_dir != old->newtab_dir)
+        n += put("new_tab_dir", c->newtab_dir == TERM_NEWTAB_HOME ? "home" : "here", &failed);
+    if (c->keep_on_exit != old->keep_on_exit)
+        n += put("on_exit", c->keep_on_exit ? "keep" : "close", &failed);
+    if (c->panel != old->panel) n += put_bool("panel", c->panel, &failed);
+    if (c->scrollbar != old->scrollbar) n += put_bool("scrollbar", c->scrollbar, &failed);
     if (c->cursor != old->cursor) n += put("cursor", cursor_word(c->cursor), &failed);
     if (c->cursor_blink != old->cursor_blink) n += put_bool("cursor_blink", c->cursor_blink, &failed);
     if (c->menubar != old->menubar) n += put_bool("menubar", c->menubar, &failed);
@@ -276,4 +301,37 @@ int term_conf_save(const struct term_conf *c, const struct term_conf *old) {
 
     ulogf("uterm: conf save %d key(s)%s\n", n, failed ? " (a write failed)" : "");
     return failed ? -1 : n;
+}
+
+// --- /etc/shells ------------------------------------------------------
+//
+// One absolute path per line, `#` comments -- the Unix file, and what
+// chsh and GDM read. Only paths that exist are offered: a listed shell
+// that is not installed would be a menu row that opens a tab and closes
+// it again.
+int term_shells_list(char paths[][TERM_SHELL_MAX], int max) {
+    int n = 0;
+    static char buf[1024];
+    int got = 0;
+    int fd = sys_open(TERM_SHELLS_PATH, 0);
+    if (fd >= 0) {
+        got = sys_read(fd, buf, sizeof buf - 1);
+        sys_close(fd);
+    }
+    if (got < 0) got = 0;
+    buf[got] = '\0';
+    for (char *line = buf; *line && n < max; ) {
+        char *end = strchr(line, '\n');
+        if (end) *end = '\0';
+        while (*line == ' ' || *line == '\t') line++;
+        int len = (int)strlen(line);
+        while (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\r')) line[--len] = '\0';
+        struct sys_stat st;
+        if (line[0] == '/' && len < TERM_SHELL_MAX && sys_stat(line, &st) == 0)
+            strlcpy(paths[n++], line, TERM_SHELL_MAX);
+        if (!end) break;
+        line = end + 1;
+    }
+    if (n == 0 && max > 0) strlcpy(paths[n++], "/bin/tosh", TERM_SHELL_MAX);
+    return n;
 }

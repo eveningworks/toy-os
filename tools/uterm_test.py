@@ -44,8 +44,11 @@ TITLE = "Terminal"
 SPAWN_PATH = "/bin/wm/apps/uterm"   # spawned directly -- see run()
 SPAWN_TIMEOUT_S = 15.0
 
-# The terminal draws light text on black, so "ink" is anything not black.
-BG = (0, 0, 0)
+# The default scheme is Slate (data/usr/share/terminal/slate.scheme):
+# light text on #232629, so "ink" is anything not that page colour, and
+# reverse video is a band of the default foreground.
+BG = (0x23, 0x26, 0x29)
+FG = (0xFC, 0xFC, 0xFC)
 
 # terminal.c's scrollbar colours -- Plasma's dark pair.
 TRACK = (49, 54, 59)
@@ -95,7 +98,7 @@ def cyan_pixels(qmp, tmp, name, box):
     """Pixels of the DIRECTORY colour `ls` uses (ANSI cyan).
 
     Cyan is the one colour nothing else in a terminal produces: the
-    default text is grey (r == g == b) and the background is black, so
+    default text is grey (r == g == b) and the page is a near-neutral dark grey, so
     "green and blue well above red" is only ever a coloured run. Counted
     rather than measured as a run, because a directory name is a few
     characters and there is no solid band to find.
@@ -117,8 +120,7 @@ def bar_run(qmp, tmp, name, box):
     """The longest horizontal RUN of the reverse-video colour.
 
     `ESC[7m` swaps foreground and background, so a status bar is a solid
-    band of the default foreground (light grey, 0xAAAAAA) with black
-    letters on it. Counting PIXELS of that colour does not distinguish a
+    band of the default foreground (FG) with page-coloured letters on it. Counting PIXELS of that colour does not distinguish a
     bar from ordinary text -- glyphs are drawn in the same grey, and a
     screenful of them scores thousands. What only a filled background
     produces is a long unbroken RUN: a glyph is a few pixels wide, a bar
@@ -145,8 +147,8 @@ def bar_run(qmp, tmp, name, box):
             base = y * w * 3
             for x in range(w):
                 i = base + x * 3
-                if (abs(raw[i] - 0xAA) < 12 and abs(raw[i + 1] - 0xAA) < 12
-                        and abs(raw[i + 2] - 0xAA) < 12):
+                if (abs(raw[i] - FG[0]) < 12 and abs(raw[i + 1] - FG[1]) < 12
+                        and abs(raw[i + 2] - FG[2]) < 12):
                     run += 1
                     if run > best:
                         best = run
@@ -155,9 +157,11 @@ def bar_run(qmp, tmp, name, box):
     return best
 
 
-def ink(qmp, tmp, name, box):
+def ink(qmp, tmp, name, box, thresh=30):
     """Non-background pixels in the box -- a proxy for how much text is
-    on screen, which is all this test needs."""
+    on screen, which is all this test needs. `thresh` is how far from the
+    page a pixel must be; the scrollbar's track sits 18 units off Slate's
+    page, so a check about the track asks for less."""
     from PIL import Image
     p = os.path.abspath(os.path.join(tmp, name))
     qmp.screenshot(p)
@@ -165,8 +169,8 @@ def ink(qmp, tmp, name, box):
     with Image.open(p) as im:
         raw = im.convert("RGB").crop(box).tobytes()
         for i in range(0, len(raw), 3):
-            if (abs(raw[i] - BG[0]) > 30 or abs(raw[i + 1] - BG[1]) > 30
-                    or abs(raw[i + 2] - BG[2]) > 30):
+            if (abs(raw[i] - BG[0]) > thresh or abs(raw[i + 1] - BG[1]) > thresh
+                    or abs(raw[i + 2] - BG[2]) > thresh):
                 n += 1
     return n
 
@@ -849,8 +853,15 @@ def check_chrome(dbg, qmp, res):
     res.check("c2. clicking + opens a tab", tab_count(dbg) == before + 1,
               f"tabs {before} -> {tab_count(dbg)}")
 
-    res.check("c3. the menu bar is shown by default",
-              layout_field(dbg, "menu") == 1,
+    # HIDDEN BY DEFAULT since the one-bar redesign: the bar's menu button
+    # holds every command (check_bar). F10 shows it for the rest of this.
+    res.check("c3. the menu bar is hidden by default",
+              layout_field(dbg, "menu") == 0,
+              f"menu {layout_field(dbg, 'menu')}")
+    dbg.send(f"gui key {KEY_F10}")
+    time.sleep(0.8)
+    dbg.settle()
+    res.check("c3a. F10 shows it", layout_field(dbg, "menu") == 1,
               f"menu {layout_field(dbg, 'menu')}")
 
     title0 = rect(dbg, "menu.title", 0)
@@ -958,6 +969,155 @@ def check_chrome(dbg, qmp, res):
     res.check("c13. F10 brings a hidden menu bar back",
               layout_field(dbg, "menu") == 1,
               f"menu {layout_field(dbg, 'menu')}")
+
+
+# The bar's toolbar, by index (terminal.c's TB_*).
+TB_NEWTAB, TB_FIND, TB_PANEL, TB_MENU = 0, 1, 2, 3
+# The ☰ menu's rows, by index -- burger_items[] in terminal.c, separators
+# counted. If a row is added there, these move.
+BURGER_NEW_TAB = 0
+BURGER_OPTIONS = 13
+KEY_F9 = "0xb0"
+
+
+def ctx_item(dbg, index):
+    """A row of the bar's popup: `uterm: layout ctx.item 0 <i> x y w h`."""
+    for l in reversed(dbg.logs("uterm: layout ctx.item ", clear=False)):
+        v = [int(n) for n in l.split("uterm: layout ctx.item ")[1].split()[:6]]
+        if v[0] == 0 and v[1] == index:
+            return v[2:]
+    return None
+
+
+def check_bar(dbg, qmp, res):
+    """The one-bar redesign: the Session panel, find, the ☰ and ▾ menus,
+    a new tab starting where the last one stood, and Options.
+
+    Asserted on the app's own layout fields (`panel`, `find`, `hits`,
+    `cols`, `tabs`) and rects, never pixels: each is a state the code
+    decides, and the line reports it. The find check carries its own
+    control -- a query that cannot match must report 0 hits, or "hits >
+    0" would pass on a count that is never reset.
+    """
+    # NO prime_layout(): its two F10s show the hidden bar and then OPEN a
+    # menu, which eats the keys below. A fresh window logs its whole
+    # layout on its first frame.
+    win = fresh_terminal(dbg, res, "b")
+    if not win:
+        return
+
+    cols0 = layout_field(dbg, "cols")
+    dbg.send(f"gui key {KEY_F9}")
+    time.sleep(0.6)
+    dbg.settle()
+    res.check("b1. F9 opens the Session panel", layout_field(dbg, "panel") == 1,
+              f"panel {layout_field(dbg, 'panel')}")
+    res.check("b2. ...and the grid gives it room",
+              (layout_field(dbg, "cols") or 0) < (cols0 or 0),
+              f"cols {cols0} -> {layout_field(dbg, 'cols')}")
+    dbg.send(f"gui key {KEY_F9}")
+    time.sleep(0.6)
+    dbg.settle()
+    res.check("b3. F9 again closes it and the columns come back",
+              layout_field(dbg, "panel") == 0 and layout_field(dbg, "cols") == cols0,
+              f"panel {layout_field(dbg, 'panel')} cols {layout_field(dbg, 'cols')}")
+
+    panel_btn = rect(dbg, "tbbtn", TB_PANEL)
+    res.check("b4. the bar reports its panel button", panel_btn is not None)
+    if panel_btn:
+        dbg.click(*centre(win, panel_btn))
+        time.sleep(0.6)
+        dbg.settle()
+        res.check("b5. the bar's button opens the panel too",
+                  layout_field(dbg, "panel") == 1,
+                  f"panel {layout_field(dbg, 'panel')}")
+        dbg.click(*centre(win, panel_btn))
+        time.sleep(0.6)
+        dbg.settle()
+
+    # --- find ---------------------------------------------------------
+    cursor0 = layout_field(dbg, "cursor")
+    dbg.send("gui key 0x06 shift")   # Ctrl+Shift+F
+    time.sleep(0.6)
+    dbg.settle()
+    res.check("b6. Ctrl+Shift+F opens find", layout_field(dbg, "find") == 1,
+              f"find {layout_field(dbg, 'find')}")
+    type_text(dbg, "tosh")           # the banner says "tosh -- the toy-os shell"
+    time.sleep(0.6)
+    dbg.settle()
+    res.check("b7. a query on screen is found",
+              (layout_field(dbg, "hits") or 0) >= 1,
+              f"hits {layout_field(dbg, 'hits')}")
+    res.check("b8. ...and the typing went to the query, not the shell",
+              layout_field(dbg, "cursor") == cursor0,
+              f"cursor {cursor0} -> {layout_field(dbg, 'cursor')}")
+    type_text(dbg, "zqzq")
+    time.sleep(0.6)
+    dbg.settle()
+    res.check("b9. the control: a query that cannot match finds nothing",
+              layout_field(dbg, "hits") == 0, f"hits {layout_field(dbg, 'hits')}")
+    dbg.send("gui key 0x1b")
+    time.sleep(0.6)
+    dbg.settle()
+    res.check("b10. Esc closes find", layout_field(dbg, "find") == 0,
+              f"find {layout_field(dbg, 'find')}")
+
+    # --- the ☰ menu ----------------------------------------------------
+    menu_btn = rect(dbg, "tbbtn", TB_MENU)
+    res.check("b11. the bar reports its menu button", menu_btn is not None)
+    if not menu_btn:
+        return
+    before = tab_count(dbg)
+    dbg.logs("uterm: layout ctx.item ", clear=True)
+    dbg.click(*centre(win, menu_btn))
+    dbg.settle()
+    row = ctx_item(dbg, BURGER_NEW_TAB)
+    res.check("b12. the menu button opens the menu", row is not None)
+    if row:
+        dbg.click(*centre(win, row))
+        time.sleep(1.2)
+        dbg.settle()
+        res.check("b13. its New Tab opens a tab", tab_count(dbg) == before + 1,
+                  f"tabs {before} -> {tab_count(dbg)}")
+
+    # --- ▾: a named shell, starting where this tab stands ---------------
+    type_line(dbg, "cd /etc")
+    dbg.logs("uterm: tab ", clear=True)
+    newtab_btn = rect(dbg, "tbbtn", TB_NEWTAB)
+    before = tab_count(dbg)
+    if newtab_btn:
+        dbg.logs("uterm: layout ctx.item ", clear=True)
+        dbg.click(*centre(win, newtab_btn))
+        dbg.settle()
+        row = ctx_item(dbg, 0)       # the first shell /etc/shells lists
+        res.check("b14. the new-tab button lists the shells", row is not None)
+        if row:
+            dbg.click(*centre(win, row))
+            time.sleep(1.5)
+            dbg.settle()
+            res.check("b15. picking one opens a tab", tab_count(dbg) == before + 1,
+                      f"tabs {before} -> {tab_count(dbg)}")
+            titles = dbg.logs("uterm: tab ", clear=False)
+            res.check("b16. ...whose shell starts in this tab's folder",
+                      any(l.endswith("title /etc") for l in titles[-1:]),
+                      f"titles {titles[-3:]}")
+
+    # --- Options -------------------------------------------------------
+    dbg.logs("uterm: layout ctx.item ", clear=True)
+    dbg.click(*centre(win, menu_btn))
+    dbg.settle()
+    row = ctx_item(dbg, BURGER_OPTIONS)
+    res.check("b17. the menu reports its Options row", row is not None)
+    if row:
+        dbg.click(*centre(win, row))
+        time.sleep(1.2)
+        dbg.settle()
+        res.check("b18. Options opens its own window",
+                  dbg.window("Terminal Options") is not None)
+        dbg.send("gui key 0x1b")
+        time.sleep(0.8)
+        dbg.settle()
+        res.check("b19. Esc closes it", dbg.window("Terminal Options") is None)
 
 
 def check_meta(dbg, qmp, res):
@@ -1078,8 +1238,8 @@ def check_tab_legibility(dbg, qmp, res):
     from identical labels are pixel-identical unless something else
     distinguishes them -- which is the "moving identical content is
     pixel-identical" trap in docs/gui-guidelines.md, arriving from the
-    other side. c16 asserts they differ; only the tab NUMBER can make
-    that true here.
+    other side. A check that they differ (c16) went with the tab
+    numbers, which the maintainer removed in the one-bar redesign.
 
     c17 reads the two fills as VALUES rather than looking at them, with
     the resting tab beside it as the control -- a selection marked by a
@@ -1134,12 +1294,6 @@ def check_tab_legibility(dbg, qmp, res):
             # short of the first glyph.
             return im.getpixel((c["x"] + t[0] + 3,
                                 c["y"] + t[1] + t[3] // 2))
-
-        # Tabs 0 and 1 are both RESTING and both labelled "/" -- so
-        # anything that tells them apart has to be drawn by the widget.
-        res.check("c16. two resting tabs with the same label still differ",
-                  crop(tabs[0]) != crop(tabs[1]),
-                  "they render identically, so nothing distinguishes them")
 
         sel = layout_field(dbg, "sel")
         if sel is None or not 0 <= sel < 3:
@@ -1319,15 +1473,15 @@ def check_scrollbar(dbg, qmp, tmp, res):
     # THE TRACK IS ACTUALLY PAINTED, read as pixels rather than assumed
     # from the rect: a reported rect proves the app computed one, not
     # that anything reached the screen. The control is the strip of
-    # background just LEFT of the bar, which must stay black -- half the
+    # background just LEFT of the bar, which must stay the page -- half the
     # assertion is the neighbour staying put.
     c = win["content"]
     gutter = ink(qmp, tmp, "sb_gutter.png",
                  (c["x"] + bar[0], c["y"] + bar[1],
-                  c["x"] + bar[0] + bar[2], c["y"] + bar[1] + bar[3]))
+                  c["x"] + bar[0] + bar[2], c["y"] + bar[1] + bar[3]), thresh=8)
     beside = ink(qmp, tmp, "sb_gutter.png",
                  (c["x"] + bar[0] - bar[2], c["y"] + bar[1],
-                  c["x"] + bar[0], c["y"] + bar[1] + bar[3]))
+                  c["x"] + bar[0], c["y"] + bar[1] + bar[3]), thresh=8)
     area = bar[2] * bar[3]
     res.check("s2. the track is painted, and the margin beside it is not",
               gutter > area // 2 and beside < area // 10,
@@ -1624,9 +1778,10 @@ def prefs_checks(dbg, qmp, tmp, win, res):
         # rect -- zero while it is closed. A missing line means it never
         # reached the widget array, which is how a modal silently stops
         # being routed at all.
-        res.check("p1. the prefs dialog is declared and closed",
-                  layout_rect(dbg, "prefs") == (0, 0, 0, 0),
-                  f"prefs rect {layout_rect(dbg, 'prefs')}")
+        # The Options window is a window of its own now, not a declared
+        # dialog: closed means no window by that title.
+        res.check("p1. the Options window is closed",
+                  dbg.window("Terminal Options") is None)
         res.check("p2. so is the close confirmation",
                   layout_rect(dbg, "quit-ask") == (0, 0, 0, 0),
                   f"quit-ask rect {layout_rect(dbg, 'quit-ask')}")
@@ -1758,6 +1913,7 @@ def main():
         check_scrollbar(dbg, qmp, args.tmp, res)
         check_selection(dbg, qmp, args.tmp, res)
         check_resize(dbg, qmp, args.tmp, res)
+        check_bar(dbg, qmp, res)
     finally:
         dbg.close()
 

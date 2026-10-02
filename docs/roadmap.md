@@ -698,6 +698,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Mouse text selection in the Terminal, and copy from it~~ DONE 2026-09-07 -- drag/word/line, copy-on-select, Ctrl+Shift+C
 - [x] ~~A scrollbar on the Terminal, so the scrollback is visible~~ DONE 2026-09-07 -- a reserved gutter, Konsole's shape
 - [x] ~~Terminal preferences: schemes, its own font size, scrollback, cursor~~ DONE 2026-09-14 -- `/etc/terminal.conf` and a modal
+- [x] ~~Terminal redesign: one bar, find, a Session panel, an Options window~~ DONE 2026-10-02 -- menu bar behind ☰
 - [x] ~~A monospace font family separate from the interface's~~ DONE 2026-09-14 -- `system.font_mono`, `ugfx_font_mono()`
 - [x] ~~A proportional interface face by default, once labels and hit-testing are checked against one~~ DONE 2026-09-14 -- `liberation-sans`
 - [ ] A per-tab colour scheme, which is what a Konsole profile really is

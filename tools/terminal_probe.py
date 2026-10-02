@@ -86,6 +86,16 @@ CTRL = {c: f"0x{ord(c) - ord('a') + 1:02x}" for c in "abcdefghijklmnopqrstuvwxyz
 ESC, RET = "0x1b", "0x0d"
 PAGE_UP, PAGE_DOWN = "0x93", "0x94"    # api/keyboard.h
 
+# The default scheme's page (data/usr/share/terminal/slate.scheme's
+# Color0). A pixel within a few units of it is background.
+PAGE = (0x23, 0x26, 0x29)
+
+
+def is_page(raw, i):
+    return (abs(raw[i] - PAGE[0]) < 8 and abs(raw[i + 1] - PAGE[1]) < 8
+            and abs(raw[i + 2] - PAGE[2]) < 8)
+
+
 FIXTURE = "/tests/sample.txt"          # 401 numbered lines -- trap 1
 PROBE = "/probe.txt"
 
@@ -126,7 +136,7 @@ class Terminal:
                                    f"taskbar: {w['y']}+{w['h']} > {floor}")
         c = w["content"]
         # The GRID, not the content rect (trap 2's WM rect, cut down): the
-        # menu bar and tab strip above it are a light full-width band
+        # tab bar (and the menu bar, when shown) above it is a light full-width band
         # that read as a pager's status bar, and the scrollbar beside it
         # is not background. Both edges are the app's own layout line.
         chrome, bar_x = None, None
@@ -194,10 +204,10 @@ class Terminal:
         """How many rows of a capture contain anything but background.
 
         The capture is raw RGB for the content box, so a row is
-        `width * 3` bytes. Background is black in a terminal, which is
-        what makes "has ink" a byte test rather than a comparison
-        against another frame -- and therefore what lets this see a page
-        that is WRONG rather than merely different.
+        `width * 3` bytes. The page is one known colour (PAGE, the default
+        scheme's), which is what makes "has ink" a pixel test rather than
+        a comparison against another frame -- and therefore what lets
+        this see a page that is WRONG rather than merely different.
         """
         w = self.box[2] - self.box[0]
         h = self.box[3] - self.box[1]
@@ -206,7 +216,7 @@ class Terminal:
         for y in range(h):
             base = y * stride
             row = raw[base:base + stride]
-            if any(row[i] for i in range(0, len(row), 9)):
+            if any(not is_page(row, i) for i in range(0, len(row) - 2, 9)):
                 inked += 1
         # Rows are pixels; report them as TEXT rows so the number in a
         # failure means something to a person reading it.
@@ -464,9 +474,9 @@ def probe_pixels(t, tmp):
     cleared = t.moved(tmp, "ctrl_l", lambda: t.key(CTRL["l"]))
     check("Ctrl-L repaints the screen", cleared > 10.0, f"{cleared:.2f}% moved")
     after = t.frame(tmp, "after_clear")
-    blank = sum(1 for i in range(0, len(after), 7) if after[i] == 0)
-    frac = 100.0 * blank / max(1, len(after) // 7)
-    # A cleared terminal is a prompt on black. A screen that merely
+    blank = sum(1 for i in range(0, len(after) - 2, 21) if is_page(after, i))
+    frac = 100.0 * blank / max(1, len(after) // 21)
+    # A cleared terminal is a prompt on the page. A screen that merely
     # scrolled by one line still holds a screenful of text.
     check("...and what is left is a cleared screen, not a scrolled one",
           frac > 90.0, f"{frac:.1f}% of the area is background")

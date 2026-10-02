@@ -1,0 +1,6 @@
+# The login shells this system offers, one path per line -- the Unix
+# file chsh and display managers read. The GUI Terminal lists these in
+# its "New tab with" menu and its Options; a path that is not installed
+# is skipped.
+/bin/tosh
+/bin/dash

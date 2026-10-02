@@ -3028,3 +3028,17 @@ that had never worked.**
   `df`, the taskbar). Tests that set `locale.*` restore what they read,
   and the default region stays ISO so an untouched machine prints what
   it always did.
+
+**2026-10-02 (the Terminal redesign): A HELPER BUILT ON A DEFAULT BREAKS
+WHEN THE DEFAULT MOVES, AND IT BREAKS SOMEWHERE ELSE.** Two of
+`uterm_test.py`'s helpers encoded defaults rather than asserting them.
+`prime_layout()` pressed F10 twice to re-emit the layout block, which
+toggled the menu bar off and on -- until the bar was hidden by default,
+when the same two keys showed it and then OPENED a menu, and every key
+after that was eaten by the menu: the find checks failed, not the
+helper. And `ink()` counted anything 30 units off black as text; Slate's
+page is 41 off black, so every pixel would have counted as ink and the
+before/after comparisons could no longer see a command's output (fixed
+before it ran; the scrollbar check, at 18 units, did fail). When a default changes, grep the
+harness for the old value (`(0, 0, 0)`, `0xAA`, `menu == 1`) before
+reading the first failure.

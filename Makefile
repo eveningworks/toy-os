@@ -898,7 +898,7 @@ $(LIBC): $(LIBC_OBJS)
 EXTRA_OBJS_uiclient   =
 EXTRA_OBJS_calculator =
 EXTRA_OBJS_notepad    =
-EXTRA_OBJS_terminal   = term/term_conf term/term_prefs
+EXTRA_OBJS_terminal   = term/term_conf term/term_prefs term/term_panel
 # Shapes keeps its teapot mesh in userland/shapes/, outside the program
 # directories for the reason userland/fm/ is (see EXTRA_OBJS_files).
 EXTRA_OBJS_gfxdemo    = shapes/teapot
@@ -1969,6 +1969,8 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	# seeded once -- the kernel used to carry the table and write the
 	# file itself, and nothing in ring 0 reads the offsets now.
 	cp data/etc/timezones $(SEED_DIR)/sync/etc/timezones
+	# /etc/shells: the shells the Terminal offers (userland/term/term.h).
+	cp data/etc/shells $(SEED_DIR)/sync/etc/shells
 	# /etc/locales: the regional formats, the same kind of shipped table
 	# (userland/libc/locale.c reads it).
 	cp data/etc/locales $(SEED_DIR)/sync/etc/locales

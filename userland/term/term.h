@@ -60,28 +60,44 @@ int term_scheme_list(char names[][TERM_NAME_MAX],
 
 enum term_cursor_shape { TERM_CURSOR_BLOCK = 0, TERM_CURSOR_UNDER, TERM_CURSOR_BAR };
 
+// Where a new tab's shell starts: the home directory, or wherever the
+// selected tab's shell last said it was (its OSC title).
+enum term_newtab_dir { TERM_NEWTAB_HERE = 0, TERM_NEWTAB_HOME };
+
+#define TERM_SHELL_MAX 64   // a path from /etc/shells
+
 // One field per key in /etc/terminal.conf. Ints rather than strings
 // because every consumer wants a number; the file's words are resolved
 // once, on load.
 struct term_conf {
     char scheme[TERM_NAME_MAX];
+    char shell[TERM_SHELL_MAX]; // "" = the system shell (`system.shell`)
     int font_size;        // 0 = follow the desktop's system.font_size
     int scrollback;       // lines kept above the screen
     int cursor;           // enum term_cursor_shape
     int cursor_blink;
-    int margin;           // pixels between the grid and the window edge
     int menubar;          // is the bar shown when a window opens
+    int panel;            // is the Session panel shown when a window opens
+    int scrollbar;        // draw the scrollbar (and reserve its gutter)
+    int cols, rows;       // the grid a new window opens at
+    int newtab_dir;       // enum term_newtab_dir
+    int keep_on_exit;     // a tab whose shell exits stays, until closed
     int copy_on_select;
     int scroll_on_output;
     int confirm_close;    // ask before closing a window with more than one tab
 };
 
+// Between the grid and the window edge, in pixels.
+#define TERM_MARGIN 6
+
 #define TERM_FONT_MIN 8
 #define TERM_FONT_MAX 32
 #define TERM_SB_MIN 100
 #define TERM_SB_MAX 10000
-#define TERM_MARGIN_MIN 0
-#define TERM_MARGIN_MAX 24
+#define TERM_COLS_MIN 40
+#define TERM_COLS_MAX 300
+#define TERM_ROWS_MIN 10
+#define TERM_ROWS_MAX 100
 
 // The shipped defaults -- what a machine with no /etc/terminal.conf
 // runs, and what the file is compared against when saving.
@@ -99,26 +115,45 @@ void term_conf_load(struct term_conf *c);
 // of ten unchanged keys is ten whole-file rewrites.
 int term_conf_save(const struct term_conf *c, const struct term_conf *old);
 
-// --- the Preferences dialog (term_prefs.c) ----------------------------
+// The shells /etc/shells lists, in file order. Returns the count. A
+// missing file still offers SHELL_FALLBACK, so the list is never empty.
+#define TERM_SHELLS_PATH "/etc/shells"
+#define TERM_SHELLS_MAX  8
+int term_shells_list(char paths[][TERM_SHELL_MAX], int max);
+
+// --- the Options window (term_prefs.c) --------------------------------
 //
-// It owns its own uui_dialog. The app hands the item to its widget
-// array, keeps the bounds up to date, and asks after each change
-// whether a commit has happened.
+// A modal window of its own -- File Manager Options' shape: a sidebar of
+// pages over Defaults / OK / Cancel. OK hands the edited copy to
+// `on_commit`; Cancel and Esc forget it.
+
+struct uapp;
+void term_prefs_open(struct uapp *a, const struct term_conf *c,
+                     void (*on_commit)(const struct term_conf *next));
+int  term_prefs_is_open(void);
+
+// --- the Session panel (term_panel.c) ---------------------------------
+
+enum { TERM_PANEL_INTR = 0, TERM_PANEL_EOF, TERM_PANEL_KILL, TERM_PANEL_BUTTONS };
+#define TERM_PANEL_ID_BASE 40   // the buttons' widget ids, in that order
+
+struct term_panel_info {
+    const char *shell;    // its path
+    const char *cwd;      // "" when the shell never said
+    const char *scheme;   // the scheme's label
+    int pid;              // the shell; its group is the same number
+    int exited;           // the shell has gone and the tab is being kept
+    int cols, rows;
+    int sb_count, sb_cap;
+};
 
 struct uui_item;
-
-void term_prefs_init(void);
-struct uui_item *term_prefs_item(void);
-int  term_prefs_is_open(void);
-void term_prefs_set_bounds(int x, int y, int w, int h);
-void term_prefs_open(const struct term_conf *c);
-
-// Forwarded from the app's on_widget(). Moves the dialog's key focus
-// onto a clicked control and notices the OK button.
-void term_prefs_widget(int id, int reason);
-
-// 1 when OK was pressed since the last call, with `out` filled from the
-// controls; 0 otherwise. TAKEN, so a second call does not apply twice.
-int  term_prefs_take(struct term_conf *out);
+struct ugfx_surface;
+void term_panel_init(void);
+int  term_panel_width(void);          // font-derived
+struct uui_item *term_panel_item(int i);
+void term_panel_layout(int x, int y, int w, int h);
+void term_panel_set_exited(int exited);
+void term_panel_draw(struct ugfx_surface *s, const struct term_panel_info *in);
 
 #endif // TERM_H

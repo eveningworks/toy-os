@@ -82,6 +82,9 @@
 #include "ui/uui_menubar.h"
 #include "ui/uui_textbox.h"
 #include "ui/uui_dialog.h"
+#include "ui/uui_toolbar.h"
+#include "ui/uui_findbar.h"
+#include <unistd.h>   // chdir/getcwd, around a new tab's spawn
 #include "keyboard.h"
 #include "ansi.h"   // the kernel's parser, compiled into libuapp too
 #include "font_faces.h"   // FONT_FACE_DIR, for a private atlas
@@ -96,8 +99,8 @@
 // terminal still opens at -- xterm, GNOME Terminal, Konsole, macOS
 // Terminal, all 80x24 -- is inherited rather than chosen, and this
 // window is resizable anyway.
-#define WIN_COLS 120
-#define WIN_ROWS 30
+// The grid a window opens at is /etc/terminal.conf's `cols`/`rows`
+// (120x30 by default, Windows Terminal's).
 
 #define SHELL_FALLBACK "/bin/tosh"
 
@@ -130,7 +133,7 @@ static const char *shell_path(char *buf, size_t cap) {
 // number with an indirection in front of it.
 static struct term_conf g_conf;
 static struct term_scheme g_scheme;
-static int g_margin = 6;
+static const int g_margin = TERM_MARGIN;
 static int g_sb_rows = 240;   // scrollback lines kept above the screen
 #define SB_ROWS g_sb_rows
 
@@ -193,6 +196,14 @@ struct session {
     int child;                  // the shell's pid, for reaping and `ps`
 
     char title[TITLE_MAX];
+    // Where the shell last said it was standing: its OSC title when that
+    // is an absolute path, which is what tosh sends. A new tab opened
+    // "here" starts in it, and the Session panel shows it.
+    char cwd[TITLE_MAX];
+    char shell[TERM_SHELL_MAX];  // what was spawned, for a restart and the panel
+    // THE SHELL HAS EXITED AND THE TAB WAS KEPT (`on_exit=keep`): reaped,
+    // its last output still on screen, Enter starts a new shell in it.
+    int exited;
     // A HAND-GIVEN TITLE OUTRANKS THE SHELL'S. Konsole's rule: once you
     // name a tab, its shell's OSC sequences stop moving the label --
     // otherwise the next `cd` silently undoes the rename.
@@ -250,7 +261,9 @@ enum {
     CMD_INTR, CMD_EOF,
     CMD_TOP, CMD_BOTTOM, CMD_MENUBAR,
     CMD_NEXT_TAB, CMD_PREV_TAB,
-    CMD_PREFS,
+    CMD_PREFS, CMD_FIND, CMD_PANEL,
+    CMD_MENU_BUTTON, CMD_NEWTAB_MENU,   // the bar's two popups
+    CMD_SHELL_BASE = 100,               // + an index into /etc/shells
 };
 
 static const struct uui_menu_item file_items[] = {
@@ -276,17 +289,19 @@ static const struct uui_menu_item edit_items[] = {
     UUI_MENU("Paste",      CMD_PASTE,      "Ctrl+Shift+V"),
     UUI_MENU_SEP,
     UUI_MENU("Select All", CMD_SELECT_ALL, 0),
+    UUI_MENU("Find...",    CMD_FIND,       "Ctrl+Shift+F"),
     UUI_MENU_SEP,
     // GNOME Terminal's placement. Konsole calls it Settings > Configure
     // Konsole and Windows Terminal hangs it off the tab strip; Edit is
     // the one of the three this menu bar already has.
-    UUI_MENU("Preferences...", CMD_PREFS, 0),
+    UUI_MENU("Options...", CMD_PREFS, 0),
 };
 
 static const struct uui_menu_item view_items[] = {
     UUI_MENU("Scroll to Top",    CMD_TOP,    "PgUp"),
     UUI_MENU("Scroll to Bottom", CMD_BOTTOM, "PgDn"),
     UUI_MENU_SEP,
+    UUI_MENU("Session Panel",    CMD_PANEL,   "F9"),
     UUI_MENU("Menu Bar",         CMD_MENUBAR, "F10"),
 };
 
@@ -304,7 +319,68 @@ static const struct uui_menu_item menu_bar[] = {
 };
 
 static struct uui_menubar g_menu;
-static int g_menu_shown = 1;
+static int g_menu_shown;
+
+// --- the bar: tabs on the left, these on the right --------------------
+//
+// **THE MENU BAR IS HIDDEN BY DEFAULT AND THE ☰ BUTTON HOLDS ALL OF IT**
+// -- Windows Terminal's and GNOME Console's shape: a terminal's chrome
+// rows are rows taken from the terminal. The ☰ menu is the menu bar's
+// commands flattened, so hiding the bar hides no command; F10 brings the
+// bar back.
+static const struct uui_menu_item term_sub_items[] = {
+    UUI_MENU("Clear Screen",     CMD_CLEAR_SCREEN, 0),
+    UUI_MENU("Clear Scrollback", CMD_CLEAR_SB,     0),
+    UUI_MENU("Reset Terminal",   CMD_RESET,        0),
+    UUI_MENU_SEP,
+    UUI_MENU("Send Interrupt",   CMD_INTR, "Ctrl-C"),
+    UUI_MENU("Send EOF",         CMD_EOF,  "Ctrl-D"),
+    UUI_MENU_SEP,
+    UUI_MENU("Previous Tab",     CMD_PREV_TAB, "Ctrl+PgUp"),
+    UUI_MENU("Next Tab",         CMD_NEXT_TAB, "Ctrl+PgDn"),
+};
+static const struct uui_menu_item burger_items[] = {
+    UUI_MENU_ICON("New Tab",   CMD_NEW_TAB,   "Ctrl+Shift+T", "tb-new",   UTHEME_ACT_CREATE),
+    UUI_MENU("Close Tab",      CMD_CLOSE_TAB, "Ctrl+Shift+W"),
+    UUI_MENU_SEP,
+    UUI_MENU_ICON("Copy",      CMD_COPY,      "Ctrl+Shift+C", "tb-copy",  UTHEME_ACT_EDIT),
+    UUI_MENU_ICON("Paste",     CMD_PASTE,     "Ctrl+Shift+V", "tb-paste", UTHEME_ACT_EDIT),
+    UUI_MENU("Select All",     CMD_SELECT_ALL, 0),
+    UUI_MENU_ICON("Find...",   CMD_FIND,      "Ctrl+Shift+F", "tb-find",  UTHEME_ACT_VIEW),
+    UUI_MENU_SEP,
+    UUI_MENU("Rename Tab...",  CMD_RENAME,    0),
+    UUI_SUBMENU("Terminal",    term_sub_items),
+    UUI_MENU_SEP,
+    UUI_MENU_ICON("Session Panel", CMD_PANEL, "F9",           "tb-pane",  UTHEME_ACT_VIEW),
+    UUI_MENU("Menu Bar",       CMD_MENUBAR,   "F10"),
+    UUI_MENU_ICON("Options...", CMD_PREFS,    0,              "tb-gear",  0),
+    UUI_MENU_SEP,
+    UUI_MENU("Exit",           CMD_EXIT,      "Alt+F4"),
+};
+
+// The ▾ beside the "+": a new tab with a named shell. Rebuilt from
+// /etc/shells each time it opens, so an installed shell appears without
+// a restart.
+static char g_shells[TERM_SHELLS_MAX][TERM_SHELL_MAX];
+static int g_nshells;
+static struct uui_menu_item g_newtab_items[TERM_SHELLS_MAX + 2];
+
+enum { TB_NEWTAB = 0, TB_FIND, TB_PANEL, TB_MENU, TB_COUNT };
+static const struct uui_toolbar_item tb_items[TB_COUNT] = {
+    { "tb-chevron", "New tab with",          CMD_NEWTAB_MENU, 0, 0,          0, 0 },
+    { "tb-find",    "Find (Ctrl+Shift+F)",   CMD_FIND,        0, UUI_TB_END, 0, UTHEME_ACT_VIEW },
+    { "tb-pane",    "Session panel (F9)",    CMD_PANEL,       0, 0,          0, UTHEME_ACT_VIEW },
+    { "tb-menu",    "Menu",                  CMD_MENU_BUTTON, 0, 0,          0, 0 },
+};
+static struct uui_toolbar g_tb;
+
+// The popups those two buttons open: a menu with no bar strip
+// (uui_menubar_open_at()'s rule -- never the bar's own instance).
+static struct uui_menubar g_ctx;
+
+static struct uui_findbar g_find;
+static int g_find_open;
+static int g_panel_open;
 
 // --- renaming a tab ---------------------------------------------------
 //
@@ -333,6 +409,9 @@ static int g_rename_slot = -1;
 #define ID_MENU 1
 #define ID_TABS 2
 #define ID_QUIT_ASK 3
+#define ID_CTX 4
+#define ID_TB 5
+#define ID_FIND 6
 
 // Closing a window with more than one tab ASKS, which is Konsole's
 // "confirm when closing a window with multiple tabs" and GNOME
@@ -350,11 +429,18 @@ static int modal_up(void) {
     return term_prefs_is_open() || uui_dialog_is_open(&g_quit_ask);
 }
 enum { QUIT_YES = 1, QUIT_NO };
-static struct uui_item g_widgets[] = {
-    { .ops = &uui_menubar_ops, .widget = &g_menu,  .id = ID_MENU, .name = "menu" },
-    { .ops = &uui_tabs_ops,    .widget = &g_strip, .id = ID_TABS, .name = "tabs" },
-    { 0 },   // filled with term_prefs_item() in on_open
-    { .ops = &uui_dialog_ops, .widget = &g_quit_ask, .id = ID_QUIT_ASK, .name = "quit-ask" },
+// The ☰/▾ popup goes FIRST of all, for the menu bar's reason: it drops
+// over the strip and the grid.
+enum { W_CTX, W_MENU, W_TABS, W_TB, W_FIND, W_PANEL0, W_QUIT = W_PANEL0 + TERM_PANEL_BUTTONS,
+       W_COUNT };
+static struct uui_item g_widgets[W_COUNT] = {
+    [W_CTX]  = { .ops = &uui_menubar_ops, .widget = &g_ctx,   .id = ID_CTX,  .name = "ctx" },
+    [W_MENU] = { .ops = &uui_menubar_ops, .widget = &g_menu,  .id = ID_MENU, .name = "menu" },
+    [W_TABS] = { .ops = &uui_tabs_ops,    .widget = &g_strip, .id = ID_TABS, .name = "tabs" },
+    [W_TB]   = { .ops = &uui_toolbar_ops, .widget = &g_tb,    .id = ID_TB,   .name = "tb" },
+    [W_FIND] = { .ops = &uui_findbar_ops, .widget = &g_find,  .id = ID_FIND, .name = "find" },
+    // W_PANEL0.. are term_panel_item(), copied in on_open
+    [W_QUIT] = { .ops = &uui_dialog_ops, .widget = &g_quit_ask, .id = ID_QUIT_ASK, .name = "quit-ask" },
 };
 
 static struct uapp *g_app;
@@ -384,12 +470,27 @@ static int chrome_h(void);
 // selected text underneath an open dialog, which is not a modal. Every
 // input handler in this file asks, and so does the caret.
 static int bar_w(void) {
+    if (!g_conf.scrollbar) return 0;   // hidden: no gutter either
     const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
     int w = 0, h = 0;
     uui_scrollbar_natural_size(&w, &h);
     ugfx_set_font(was);
     return w;
 }
+
+// The Session panel's width while it is open, in the UI face for the
+// same reason as bar_w(). The grid gives it room rather than being
+// covered (docs/gui-guidelines.md's side panel).
+static int panel_w(void) {
+    if (!g_panel_open) return 0;
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
+    int w = term_panel_width();
+    ugfx_set_font(was);
+    return w;
+}
+
+// Where the grid's area ends on the right: the window, less the panel.
+static int grid_right(int win_w) { return win_w - panel_w(); }
 
 // Where the bar is, given the window. The ONE geometry function draw,
 // hit-testing and the drag maths all call -- two derivations is the
@@ -403,7 +504,7 @@ static int bar_w(void) {
 // the gap costs no cells.
 static void bar_rect(int win_w, int win_h, int *x, int *y, int *w, int *h) {
     *w = bar_w();
-    *x = win_w - *w - g_margin;
+    *x = grid_right(win_w) - *w - g_margin;
     *y = chrome_h() + g_margin;
     *h = win_h - *y - g_margin;
     if (*h < 1) *h = 1;
@@ -923,6 +1024,9 @@ static void session_default_title(struct session *s, char *dst) {
 }
 
 static void vt_title(struct session *s) {
+    // A PATH IS ALSO WHERE THE SHELL IS -- tosh's title is its cwd. Taken
+    // before the lock test: a renamed tab still knows where its shell is.
+    if (s->vt.osc[0] == '/') strlcpy(s->cwd, s->vt.osc, sizeof s->cwd);
     if (s->title_locked) return;
     char want[TITLE_MAX];
     int i = 0;
@@ -1063,7 +1167,9 @@ static void tabs_refresh(void) {
     g_strip.selected = sel;
 }
 
-static int session_start(int slot) {
+// `shell` NULL means the configured one; `dir` NULL leaves the shell in
+// this process's own directory.
+static int session_start(int slot, const char *shell, const char *dir) {
     struct session *s = g_slot[slot];
     if (!s) {
         s = (struct session *)malloc(sizeof *s);
@@ -1126,8 +1232,15 @@ static int session_start(int slot) {
     // shell has to own it on behalf of everything it starts -- including
     // a second shell. See abi/syscall_abi.h's SPAWN_SETSID.
     char shbuf[SETTING_ABI_VALUE_MAX];
-    s->child = sys_spawn_flags(shell_path(shbuf, sizeof shbuf), 0, -1, 0,
-                               PGID_NEW, SPAWN_SETSID);
+    if (!shell) shell = g_conf.shell[0] ? g_conf.shell : shell_path(shbuf, sizeof shbuf);
+    strlcpy(s->shell, shell, sizeof s->shell);
+    // THE CHILD INHERITS OUR CWD, so a new tab's directory is set by
+    // standing in it for the spawn -- the same dance as the fds above.
+    char back[TITLE_MAX * 2];
+    int moved = dir && getcwd(back, sizeof back) && chdir(dir) == 0;
+    if (moved) strlcpy(s->cwd, dir, sizeof s->cwd);
+    s->child = sys_spawn_flags(s->shell, 0, -1, 0, PGID_NEW, SPAWN_SETSID);
+    if (moved) chdir(back);
     if (in0  >= 0) { sys_dup2(in0, 0);  sys_close(in0); }
     if (out1 >= 0) { sys_dup2(out1, 1); sys_close(out1); }
     if (err2 >= 0) { sys_dup2(err2, 2); sys_close(err2); }
@@ -1184,7 +1297,7 @@ static void session_stop(struct session *s) {
     // kernel defines. Killing the shell is what ends that read.
 }
 
-static int open_tab(void) {
+static int open_tab_with(const char *shell) {
     int slot = -1;
     for (int i = 0; i < MAX_TABS; i++) {
         struct session *s = g_slot[i];
@@ -1196,7 +1309,17 @@ static int open_tab(void) {
     }
     if (slot < 0) return 0;
     if (g_ntabs >= MAX_TABS) return 0;
-    if (!session_start(slot)) return 0;
+    // A recycled slot's master is still open: its reader has finished
+    // with it, and nothing else would ever close it.
+    if (g_slot[slot] && g_slot[slot]->master >= 0) {
+        sys_close(g_slot[slot]->master);
+        g_slot[slot]->master = -1;
+    }
+    const char *dir = 0;
+    struct session *cur = active();
+    if (g_conf.newtab_dir == TERM_NEWTAB_HOME) dir = "/home";
+    else if (cur && cur->cwd[0]) dir = cur->cwd;
+    if (!session_start(slot, shell, dir)) return 0;
     // APPENDED, so a new tab is always the RIGHT-HAND one whatever slot
     // it got -- see tabs_refresh() on what walking the slots did instead.
     g_tab_slot[g_ntabs] = slot;
@@ -1205,6 +1328,8 @@ static int open_tab(void) {
     tabs_refresh();
     return 1;
 }
+
+static int open_tab(void) { return open_tab_with(0); }
 
 static void close_tab(int tab) {
     if (tab < 0 || tab >= g_ntabs) return;
@@ -1232,14 +1357,23 @@ static int menubar_h(void) {
 // creates is no control at all. The cost is one row of chrome on a
 // single-shell window and a geometry that no longer jumps when a second
 // tab opens, which is the half worth having.
+// The bar row: as tall as the taller of the strip and the toolbar.
+// UI face, as everything chrome-shaped here is.
+static int tabbar_h(void) {
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
+    int h = uui_tabs_height(), th = uui_toolbar_height(&g_tb);
+    ugfx_set_font(was);
+    return th > h ? th : h;
+}
+
 static int chrome_h(void) {
     // The same rule as bar_w(): the menu bar and the tab strip are the
     // toolkit's, drawn in the UI face, and this is asked both inside
     // and outside the grid-font bracket.
     const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
-    int h = menubar_h() + uui_tabs_height();
+    int h = menubar_h();
     ugfx_set_font(was);
-    return h;
+    return h + tabbar_h();
 }
 
 static void draw_run(struct ugfx_surface *s, int x, int y,
@@ -1293,6 +1427,135 @@ static void draw_row(struct ugfx_surface *s, const struct cell *row, int y,
     }
 }
 
+// --- find ---------------------------------------------------------------
+//
+// **A HIT IS A LINE IN THE VIRTUAL BUFFER**, the selection's coordinates
+// (see struct selpoint), so a hit in the scrollback and one on the screen
+// are found, drawn and scrolled to by the same arithmetic. Case is
+// ignored, as Konsole's and Windows Terminal's default is. Matches do not
+// overlap.
+//
+// THE HITS GO STALE WHEN OUTPUT SCROLLS THE BUFFER, so they are found
+// again after every drain while the bar is open (on_user) -- cheap at
+// this buffer's size, and simpler than shifting them.
+#define FIND_MAX 512   // past it the count reads as a floor ("512 found")
+
+struct findhit { int line, col; };
+static struct findhit g_hits[FIND_MAX];
+static int g_nhits;
+static int g_hit_cur = -1;   // index into g_hits, -1 for none
+static int g_find_len;
+
+static char fold(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
+
+// `keep` holds the current hit where it was when it is still there --
+// what new output arriving under an open find bar wants.
+static void find_run(struct session *s, int keep) {
+    const char *q = uui_findbar_query(&g_find);
+    int n = (int)strlen(q);
+    struct findhit was = { -1, -1 };
+    if (keep && g_hit_cur >= 0) was = g_hits[g_hit_cur];
+    g_nhits = 0;
+    g_hit_cur = -1;
+    g_find_len = n;
+    if (s && n > 0 && n <= g_cols) {
+        int total = s->sb_count + g_rows;
+        for (int line = 0; line < total && g_nhits < FIND_MAX; line++) {
+            const struct cell *row = virt_row(s, line);
+            if (!row) continue;
+            for (int c = 0; c + n <= g_cols && g_nhits < FIND_MAX; c++) {
+                int k = 0;
+                while (k < n && fold(row[c + k].ch) == fold(q[k])) k++;
+                if (k < n) continue;
+                g_hits[g_nhits].line = line;
+                g_hits[g_nhits].col = c;
+                g_nhits++;
+                c += n - 1;
+            }
+        }
+    }
+    // The NEWEST hit by default: what a person searching a terminal is
+    // after is almost always the output they just saw scroll past.
+    if (g_nhits) g_hit_cur = g_nhits - 1;
+    for (int i = 0; keep && i < g_nhits; i++)
+        if (g_hits[i].line == was.line && g_hits[i].col == was.col) { g_hit_cur = i; break; }
+    g_find.matches = g_nhits;
+    g_find.current = g_hit_cur + 1;
+}
+
+// Scroll so the current hit is on screen, centred when it was not.
+static void find_reveal(struct session *s) {
+    if (!s || g_hit_cur < 0) return;
+    int line = g_hits[g_hit_cur].line;
+    int top = s->sb_count - s->sb_view;
+    if (line >= top && line < top + g_rows) return;
+    int want = s->sb_count - (line - g_rows / 2);
+    if (want > s->sb_count) want = s->sb_count;
+    if (want < 0) want = 0;
+    s->sb_view = want;
+}
+
+static void find_step(struct session *s, int delta) {
+    if (g_nhits <= 0) return;
+    g_hit_cur = (g_hit_cur + delta + g_nhits) % g_nhits;   // wraps, as every find does
+    g_find.current = g_hit_cur + 1;
+    find_reveal(s);
+}
+
+static void find_open(void) {
+    g_find_open = 1;
+    uui_findbar_activate(&g_find);
+    find_run(active(), 0);
+}
+
+static void find_close(void) {
+    g_find_open = 0;
+    uui_textbox_set_active(&g_find.field, 0);
+    g_nhits = 0;
+    g_hit_cur = -1;
+}
+
+// The hits on screen, over the text. Yellow for a hit, orange for the
+// current one -- the pair every editor uses -- with the text redrawn
+// dark, which reads on a light scheme and a dark one alike.
+static void draw_hits(struct ugfx_surface *s, struct session *ses, int top) {
+    if (!g_find_open || g_find_len <= 0) return;
+    int cw = cell_w(), ch = cell_h();
+    int first = ses->sb_count - ses->sb_view;
+    for (int i = 0; i < g_nhits; i++) {
+        int r = g_hits[i].line - first;
+        if (r < 0 || r >= g_rows) continue;
+        const struct cell *row = virt_row(ses, g_hits[i].line);
+        if (!row) continue;
+        int c0 = g_hits[i].col, n = g_find_len;
+        if (c0 + n > g_cols) n = g_cols - c0;
+        int x = g_margin + c0 * cw, y = top + g_margin + r * ch;
+        uint32_t hl = i == g_hit_cur ? ugfx_rgb(246, 116, 0) : ugfx_rgb(253, 188, 75);
+        ugfx_fill_rect(s, x, y, n * cw, ch, hl);
+        char text[TITLE_MAX * 2];
+        if (n >= (int)sizeof text) n = (int)sizeof text - 1;
+        for (int k = 0; k < n; k++) text[k] = row[c0 + k].ch;
+        text[n] = '\0';
+        ugfx_draw_string(s, x, y, text, ugfx_rgb(35, 38, 41), hl);
+    }
+}
+
+// --- the Session panel ---------------------------------------------------
+
+static void draw_panel(struct ugfx_surface *s, struct session *ses) {
+    struct term_panel_info in = {
+        .shell = ses ? ses->shell : "",
+        .cwd = ses ? ses->cwd : "",
+        .scheme = g_scheme.label,
+        .pid = ses ? ses->child : 0,
+        .exited = ses ? ses->exited : 1,
+        .cols = g_cols, .rows = g_rows,
+        .sb_count = ses ? ses->sb_count : 0, .sb_cap = SB_ROWS,
+    };
+    term_panel_set_exited(in.exited);
+    term_panel_draw(s, &in);
+}
+
 static void draw(struct ugfx_surface *s, int focused) {
     struct session *ses = active();
     int top = chrome_h();
@@ -1305,7 +1568,12 @@ static void draw(struct ugfx_surface *s, int focused) {
     // ONLY THE GRID AREA, not the whole surface: the toolkit paints the
     // tab strip after this runs, and a full-surface fill here would wipe
     // whatever it had already put down (ui/uapp.c's draw order).
-    ugfx_fill_rect(s, 0, top, s->w, s->h - top, VGA_RGB[VT_BG]);
+    int gr = grid_right(s->w);
+    ugfx_fill_rect(s, 0, top, gr, s->h - top, VGA_RGB[VT_BG]);
+    // The bar's ground, under the strip and the toolbar: the strip sits
+    // at its foot, and the air above it is this.
+    ugfx_fill_rect(s, 0, menubar_h(), s->w, tabbar_h(), UTHEME_WINDOW_BG);
+    if (g_panel_open) draw_panel(s, ses);
     if (!ses) { ugfx_set_font(was_font); return; }
 
     int ch = cell_h(), cw = cell_w();
@@ -1322,6 +1590,7 @@ static void draw(struct ugfx_surface *s, int focused) {
         sel_cols(line, &sc0, &sc1);
         draw_row(s, row, top + g_margin + r * ch, sc0, sc1);
     }
+    draw_hits(s, ses, top);
 
     // The scrollbar. TOTAL is the whole virtual buffer -- scrollback plus
     // the screen -- and the offset is sb_view unconverted, because a
@@ -1336,9 +1605,10 @@ static void draw(struct ugfx_surface *s, int focused) {
     // scheme avoids by doing exactly this.
     int bx, by, bw, bh;
     bar_rect(s->w, s->h, &bx, &by, &bw, &bh);
-    uui_scrollbar_draw(s, bx, by, bw, bh,
-                        ses->sb_count + g_rows, g_rows, ses->sb_view,
-                        ugfx_rgb(49, 54, 59), ugfx_rgb(118, 121, 124), 0);
+    if (bw > 0)
+        uui_scrollbar_draw(s, bx, by, bw, bh,
+                            ses->sb_count + g_rows, g_rows, ses->sb_view,
+                            ugfx_rgb(49, 54, 59), ugfx_rgb(118, 121, 124), 0);
 
     // The caret, only while FOCUSED and only while the program wants it
     // shown (`ESC[?25l` hides it -- a full-screen program parking the
@@ -1346,7 +1616,7 @@ static void draw(struct ugfx_surface *s, int focused) {
     // An unfocused window -- or one under a modal -- drawing a caret
     // claims to be taking input that is going somewhere else.
     if (focused && ses->cursor_shown && ses->sb_view == 0 && g_caret_on
-            && !modal_up()) {
+            && !modal_up() && !ses->exited) {
         int cx = g_margin + ses->cc * cw, cy = top + g_margin + ses->cr * ch;
         if (g_conf.cursor == TERM_CURSOR_UNDER) {
             int t = ch / 8 + 1;
@@ -1394,6 +1664,9 @@ static int chrome_moved(void) {
             + 313 * g_menu_shown
             + 1021 * uui_menubar_depth(&g_menu)
             + 4093 * (g_menu.open_root + 1)
+            + 8191 * uui_menubar_depth(&g_ctx)
+            + 16381 * g_panel_open
+            + 32749 * g_find_open
             + 65537 * g_strip.w;
     if (sig == prev) return 0;
     prev = sig;
@@ -1409,7 +1682,7 @@ static void log_layout(void) {
     // has to stay one**: tools/uterm_test.py reads it with
     // `split()[0]`, so a row/column PAIR there parses as neither. Extra
     // fields are safe after it and are what a tabbed window adds.
-    char b[192];
+    char b[256];
     // The CHROME's height, so a pixel check aiming at the grid does not
     // guess where it starts -- the menu bar's arrival moved that edge
     // and a hardcoded band would have gone on comparing the strip.
@@ -1422,10 +1695,12 @@ static void log_layout(void) {
     // one that distinguishes "highlighted" from "would be copied".
     snprintf(b, sizeof b,
              "uterm: layout cursor %d rows %d cols %d tabs %d sel %d menu %d "
-             "chrome %d rename %d sbview %d sbcount %d selbytes %d\n",
+             "chrome %d rename %d sbview %d sbcount %d selbytes %d "
+             "find %d hits %d cur %d panel %d exited %d\n",
              s->cr * g_cols + s->cc, g_rows, g_cols, g_ntabs,
              g_strip.selected, g_menu_shown, chrome_h(), g_rename_open,
-             s->sb_view, s->sb_count, sel_measure(s, 0, 0));
+             s->sb_view, s->sb_count, sel_measure(s, 0, 0),
+             g_find_open, g_nhits, g_hit_cur + 1, g_panel_open, s->exited);
     uapp_log_layout_line(b);
 
     // The chrome's rects, the same grammar Notepad reports -- a test
@@ -1461,6 +1736,15 @@ static void log_layout(void) {
     for (int i = 0; i < g_ntabs; i++) {
         char b[64];
         snprintf(b, sizeof b, "uterm: layout tabslot %d %d\n", i, g_tab_slot[i]);
+        uapp_log_layout_line(b);
+    }
+    // The bar's buttons: the toolbar describes them only when it
+    // overflows, and a test clicking the ☰ needs to be told where it is.
+    for (int i = 0; i < TB_COUNT; i++) {
+        int x, y, w, h;
+        if (!uui_toolbar_item_rect(&g_tb, i, &x, &y, &w, &h)) continue;
+        char b[80];
+        snprintf(b, sizeof b, "uterm: layout tbbtn %d %d %d %d %d\n", i, x, y, w, h);
         uapp_log_layout_line(b);
     }
 }
@@ -1527,10 +1811,32 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     // The whole content area, so a menu that will not fit below the bar
     // may flip or slide against the window rather than off it.
     uui_menubar_set_bounds(&g_menu, 0, 0, s->w, s->h);
-    term_prefs_set_bounds(0, 0, s->w, s->h);
+    uui_menubar_set_bounds(&g_ctx, 0, 0, s->w, s->h);
+    uui_toolbar_set_bounds(&g_tb, 0, 0, s->w, s->h);
     uui_dialog_set_bounds(&g_quit_ask, 0, 0, s->w, s->h);
-    uui_tabs_set_geometry(&g_strip, 0, mh, s->w, uui_tabs_height());
-    g_widgets[0].hidden = !g_menu_shown;
+
+    // The bar: the toolbar at its natural width on the right, the strip
+    // in what is left, at the bar's foot so its baseline meets the
+    // toolbar's.
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
+    int bh = tabbar_h(), th = uui_tabs_height(), tbw = 0, tbh = 0;
+    uui_toolbar_natural_size(&g_tb, &tbw, &tbh);
+    uui_toolbar_ops.set_geometry(&g_tb, s->w - tbw, mh, tbw, bh);
+    uui_tabs_set_geometry(&g_strip, 0, mh + bh - th, s->w - tbw, th);
+
+    // Find floats at the grid's top right, clear of the scrollbar.
+    int fw = 0, fh = 0;
+    uui_findbar_natural_size(&g_find, &fw, &fh);
+    int room = grid_right(s->w) - bar_w() - 4 * g_margin;
+    if (fw > room) fw = room;
+    uui_findbar_set_geometry(&g_find, grid_right(s->w) - bar_w() - 2 * g_margin - fw,
+                             chrome_h() + g_margin, fw, fh);
+    if (g_panel_open) term_panel_layout(grid_right(s->w), chrome_h(), panel_w(), s->h - chrome_h());
+    ugfx_set_font(was);
+
+    g_widgets[W_MENU].hidden = !g_menu_shown;
+    g_widgets[W_FIND].hidden = !g_find_open;
+    for (int i = 0; i < TERM_PANEL_BUTTONS; i++) g_widgets[W_PANEL0 + i].hidden = !g_panel_open;
     draw(s, uapp_focused(a));
     log_layout();
 }
@@ -1573,7 +1879,7 @@ static void size_changed(int w, int h) {
     // THE GUTTER COMES OFF THE WIDTH, and default_size() adds it back --
     // the two are inverses and a bar counted in only one of them is a
     // window that opens one column narrower than it asks for.
-    int cols = (w - 2 * g_margin - bar_w()) / cw;
+    int cols = (grid_right(w) - 2 * g_margin - bar_w()) / cw;
     if (rows < 2) rows = 2;
     if (cols < 8) cols = 8;
     // Grow the buffers to fit; on a failed malloc keep the old
@@ -1621,7 +1927,6 @@ static void apply_conf(const struct term_conf *next) {
     int old_fg = VT_FG, old_bg = VT_BG;
     int scheme_moved = strcmp(next->scheme, g_conf.scheme) != 0 || !g_scheme.label[0];
     g_conf = *next;
-    g_margin = g_conf.margin;
     if (scheme_moved) {
         term_scheme_load(g_conf.scheme, &g_scheme);
         remap_default_pair(old_fg, old_bg);
@@ -1643,10 +1948,13 @@ static void apply_conf(const struct term_conf *next) {
 // blink interval; two wake-ups a second is the honest cost, against the
 // 33 this window paid before its reader threads landed. With blinking
 // off it returns 0 every time and nothing repaints.
+// THE OPEN PANEL REPAINTS ON THE SAME TICK: its process states change
+// with nothing to announce it. Closed, it costs nothing.
 static int on_tick(struct uapp *a) {
     (void)a;
+    int repaint = uui_toolbar_tick(&g_tb) | g_panel_open;
     if (!g_conf.cursor_blink) {
-        if (g_caret_on) return 0;
+        if (g_caret_on) return repaint;
         g_caret_on = 1;
         return 1;
     }
@@ -1819,7 +2127,23 @@ static int drain_all(void) {
 static void reap_dead_tabs(void) {
     for (int i = 0; i < MAX_TABS; i++) {
         struct session *s = g_slot[i];
-        if (!s || !s->live || !s->eof) continue;
+        if (!s || !s->live || !s->eof || s->exited) continue;
+        // KEPT: reaped, and the tab stays with what the shell last said
+        // -- GNOME Terminal's "hold the terminal open". The note is
+        // written THROUGH THE PARSER, so it lands in the grid and the
+        // scrollback like any other line.
+        if (g_conf.keep_on_exit) {
+            int status = 0;
+            if (s->child > 0) sys_waitpid(s->child, &status);
+            s->child = 0;
+            s->exited = 1;
+            char note[96];
+            snprintf(note, sizeof note,
+                     "\r\n\x1b[0;2m[shell exited with status %d -- Enter starts a new one]\x1b[0m\r\n",
+                     status);
+            vt_write(s, note, (int)strlen(note));
+            continue;
+        }
         session_stop(s);
         tabs_refresh();
     }
@@ -1835,6 +2159,7 @@ static void reap_dead_tabs(void) {
 #define CTRL_SHIFT_W 0x17
 #define CTRL_SHIFT_V 0x16
 #define CTRL_SHIFT_C 0x03
+#define CTRL_SHIFT_F 0x06
 
 // One byte to the shell, the way a keystroke would arrive. THE MENU
 // SENDS THE SAME BYTE THE KEY DOES rather than reaching for
@@ -1875,6 +2200,8 @@ static void do_paste(void) {
 static unsigned menu_item_flags(int code) {
     switch (code) {
     case CMD_MENUBAR:   return g_menu_shown ? UUI_MI_CHECKED : 0;
+    case CMD_PANEL:     return g_panel_open ? UUI_MI_CHECKED : 0;
+    case CMD_FIND:      return g_find_open ? UUI_MI_CHECKED : 0;
     case CMD_NEXT_TAB:
     case CMD_PREV_TAB:  return g_ntabs > 1 ? 0 : UUI_MI_DISABLED;
     case CMD_PASTE:     return g_clip_has_text ? 0 : UUI_MI_DISABLED;
@@ -1899,8 +2226,62 @@ static void on_clipboard_cb(struct uapp *a, int op, unsigned serial) {
     uapp_redraw(a);
 }
 
+static void on_prefs_commit(const struct term_conf *next);
+
+// The ▾ list: one row per installed shell, the configured one marked
+// with the binding that opens it, then Options.
+static void open_newtab_menu(void) {
+    g_nshells = term_shells_list(g_shells, TERM_SHELLS_MAX);
+    char sys[SETTING_ABI_VALUE_MAX];
+    const char *def = g_conf.shell[0] ? g_conf.shell : shell_path(sys, sizeof sys);
+    int n = 0;
+    for (int i = 0; i < g_nshells; i++) {
+        const char *base = strrchr(g_shells[i], '/');
+        g_newtab_items[n++] = (struct uui_menu_item){
+            .label = base ? base + 1 : g_shells[i],
+            .accel = strcmp(g_shells[i], def) == 0 ? "Ctrl+Shift+T" : 0,
+            .code = CMD_SHELL_BASE + i, .icon = "tb-new", .tint = UTHEME_ACT_CREATE };
+    }
+    g_newtab_items[n++] = (struct uui_menu_item)UUI_MENU_SEP;
+    g_newtab_items[n++] = (struct uui_menu_item)UUI_MENU_ICON("Options...", CMD_PREFS, 0, "tb-gear", 0);
+    int x, y, w, h;
+    uui_toolbar_item_rect(&g_tb, TB_NEWTAB, &x, &y, &w, &h);
+    uui_menubar_open_at(&g_ctx, g_newtab_items, n, x, y + h);
+}
+
+static void open_burger_menu(void) {
+    int x, y, w, h;
+    uui_toolbar_item_rect(&g_tb, TB_MENU, &x, &y, &w, &h);
+    // Right-aligned under the button: the popup slides left off the
+    // window edge by itself (the bounds rect), so ask for its right end.
+    uui_menubar_open_at(&g_ctx, burger_items,
+                        (int)(sizeof burger_items / sizeof burger_items[0]), x + w, y + h);
+}
+
+// The bar's own commands. Returns 0 for any other code.
+static int bar_command(struct uapp *a, int code) {
+    if (code >= CMD_SHELL_BASE && code < CMD_SHELL_BASE + g_nshells) {
+        open_tab_with(g_shells[code - CMD_SHELL_BASE]);
+    } else if (code == CMD_FIND) {
+        if (g_find_open) uui_findbar_activate(&g_find);
+        else find_open();
+    } else if (code == CMD_PANEL) {
+        g_panel_open = !g_panel_open;
+        size_changed(uapp_width(a), uapp_height(a));
+    } else if (code == CMD_MENU_BUTTON) {
+        open_burger_menu();
+    } else if (code == CMD_NEWTAB_MENU) {
+        open_newtab_menu();
+    } else {
+        return 0;
+    }
+    uapp_redraw(a);
+    return 1;
+}
+
 static void do_command(struct uapp *a, int code) {
     struct session *s = active();
+    if (bar_command(a, code)) return;
     switch (code) {
     case CMD_NEW_TAB:   open_tab(); break;
     case CMD_CLOSE_TAB: close_tab(g_strip.selected); break;
@@ -1945,8 +2326,8 @@ static void do_command(struct uapp *a, int code) {
     case CMD_MENUBAR:   g_menu_shown = !g_menu_shown; size_changed(uapp_width(a), uapp_height(a)); break;
     case CMD_PREFS:
         uui_menubar_close(&g_menu);   // a modal owns the input
-        term_prefs_set_bounds(0, 0, uapp_width(a), uapp_height(a));
-        term_prefs_open(&g_conf);
+        uui_menubar_close(&g_ctx);
+        term_prefs_open(a, &g_conf, on_prefs_commit);
         break;
     case CMD_NEXT_TAB:  step_tab(+1); break;
     case CMD_PREV_TAB:  step_tab(-1); break;
@@ -1967,13 +2348,32 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     }
 
     // --- an open menu owns it next ------------------------------------
-    if (uui_menubar_is_open(&g_menu)) {
+    struct uui_menubar *open_menu = uui_menubar_is_open(&g_ctx) ? &g_ctx
+                                  : uui_menubar_is_open(&g_menu) ? &g_menu : 0;
+    if (open_menu) {
         int code;
-        if (uui_menubar_key(&g_menu, key, &code)) {
+        if (uui_menubar_key(open_menu, key, &code)) {
             if (code >= 0) do_command(a, code);
             uapp_redraw(a);
             return;
         }
+    }
+
+    if ((mods & KEY_MOD_SHIFT) && key == CTRL_SHIFT_F) { do_command(a, CMD_FIND); return; }
+    if (key == KEY_F9) { do_command(a, CMD_PANEL); return; }
+
+    // --- then an open find bar: typing goes to the query, not the shell
+    if (g_find_open && uui_findbar_key(&g_find, key, mods)) {
+        struct session *fs = active();
+        switch (uui_findbar_take(&g_find)) {
+        case UUI_FIND_CHANGED: find_run(fs, 0); find_reveal(fs); break;
+        case UUI_FIND_NEXT:    find_step(fs, +1); break;
+        case UUI_FIND_PREV:    find_step(fs, -1); break;
+        case UUI_FIND_CLOSE:   find_close(); break;
+        default: break;
+        }
+        uapp_redraw(a);
+        return;
     }
 
     // F10 REVEALS A HIDDEN BAR AS WELL AS OPENING IT, so hiding the menu
@@ -2016,6 +2416,22 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 
     struct session *s = active();
     if (!s) return;
+
+    // A KEPT TAB WHOSE SHELL HAS EXITED has nobody to type at: Enter
+    // starts a new shell in it, in the same place, and nothing else does
+    // anything. Once its reader has let go of the slot.
+    if (s->exited) {
+        if ((key == '\n' || key == '\r') && s->done) {
+            char shell[TERM_SHELL_MAX], dir[TITLE_MAX];
+            strlcpy(shell, s->shell, sizeof shell);
+            strlcpy(dir, s->cwd, sizeof dir);
+            if (s->master >= 0) { sys_close(s->master); s->master = -1; }
+            if (!session_start(s->index, shell, dir[0] ? dir : 0)) ulog("uterm: could not restart the shell\n");
+            tabs_refresh();
+            uapp_redraw(a);
+        }
+        return;
+    }
 
     // PAGE UP/DOWN SCROLL AND ARE NOT THE SHELL'S. Everything else --
     // including the arrows, Home, End and every Ctrl combination -- goes
@@ -2074,6 +2490,7 @@ static int on_user(struct uapp *a, int a0, int a1) {
     (void)a; (void)a0; (void)a1;
     int painted = drain_all();
     reap_dead_tabs();
+    if (g_find_open && painted) find_run(active(), 1);
     return painted;
 }
 
@@ -2085,6 +2502,7 @@ static void tab_selected(void *ctx, int index) {
     // session has its own scrollback -- so carrying it across a switch
     // would highlight whatever happened to be at those line numbers.
     sel_clear();
+    if (g_find_open) find_run(active(), 0);
     if (g_app) uapp_redraw(g_app);
 }
 
@@ -2104,9 +2522,39 @@ static void tab_new(void *ctx) {
 // in the widget and taken here (ui/uui_menubar.h). Only the menu reports
 // this way -- the strip's own callbacks say what happened directly.
 static void on_widget(struct uapp *a, int id, int reason) {
-    if (id == ID_MENU) {
-        int code = uui_menubar_take_code(&g_menu);
+    (void)reason;
+    if (id == ID_MENU || id == ID_CTX) {
+        int code = uui_menubar_take_code(id == ID_MENU ? &g_menu : &g_ctx);
         if (code >= 0) do_command(a, code);
+        return;
+    }
+    if (id == ID_TB) {
+        int code = uui_toolbar_take_code(&g_tb);
+        if (code >= 0) do_command(a, code);
+        return;
+    }
+    if (id == ID_FIND) {
+        struct session *fs = active();
+        switch (uui_findbar_take(&g_find)) {
+        case UUI_FIND_NEXT:  find_step(fs, +1); break;
+        case UUI_FIND_PREV:  find_step(fs, -1); break;
+        case UUI_FIND_CLOSE: find_close(); break;
+        default: break;
+        }
+        uapp_redraw(a);
+        return;
+    }
+    if (id >= TERM_PANEL_ID_BASE && id < TERM_PANEL_ID_BASE + TERM_PANEL_BUTTONS) {
+        struct session *ps = active();
+        if (!ps || ps->exited) return;
+        switch (id - TERM_PANEL_ID_BASE) {
+        case TERM_PANEL_INTR: send_byte(0x03); break;
+        case TERM_PANEL_EOF:  send_byte(0x04); break;
+        // SIGKILL, the Task Manager's Force Quit: the shell may be
+        // ignoring everything politer, which is why the button exists.
+        case TERM_PANEL_KILL: if (ps->child > 0) sys_kill(ps->child, SIGKILL); break;
+        }
+        uapp_redraw(a);
         return;
     }
     if (id == ID_QUIT_ASK) {
@@ -2118,17 +2566,17 @@ static void on_widget(struct uapp *a, int id, int reason) {
         }
         return;
     }
-    term_prefs_widget(id, reason);
-    struct term_conf next;
-    if (!term_prefs_take(&next)) return;
+}
 
+// OK in the Options window.
+static void on_prefs_commit(const struct term_conf *next) {
     // SAVED BEFORE APPLIED, and the old copy is what says which keys
     // moved -- term_conf_save() writes only those, because uconf_set()
     // rewrites the whole document per call.
     struct term_conf old = g_conf;
-    if (term_conf_save(&next, &old) < 0)
+    if (term_conf_save(next, &old) < 0)
         ulog("uterm: /etc/terminal.conf could not be written; the change is this session only\n");
-    apply_conf(&next);
+    apply_conf(next);
 }
 
 // A press the router did not consume. Its only job is the rename prompt:
@@ -2186,6 +2634,7 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
     struct session *ses = active();
     if (!ses) return;
     if (y < chrome_h()) return;   // the strips route themselves
+    if (x >= grid_right(uapp_width(a))) return;   // the panel's buttons route themselves
 
     int bx, by, bw, bh;
     bar_rect(uapp_width(a), uapp_height(a), &bx, &by, &bw, &bh);
@@ -2246,7 +2695,8 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     // menu is down -- its rows lie over the grid.
     int sbx, sby, sbw, sbh;
     bar_rect(uapp_width(a), uapp_height(a), &sbx, &sby, &sbw, &sbh);
-    if (y >= chrome_h() && x >= 0 && x < sbx && !uui_menubar_is_open(&g_menu))
+    if (y >= chrome_h() && x >= 0 && x < sbx && !uui_menubar_is_open(&g_menu)
+            && !uui_menubar_is_open(&g_ctx))
         uapp_set_cursor(a, WIN_CURSOR_TEXT);
 
     if (g_bar_grab >= 0) {
@@ -2311,16 +2761,19 @@ static void on_open_cb(struct uapp *a) {
     // the half that needs a window to exist.
     apply_conf(&g_conf);
     g_menu_shown = g_conf.menubar;
-    term_prefs_init();
-    g_widgets[2] = *term_prefs_item();
     uui_dialog_init(&g_quit_ask);
+    uui_menubar_init(&g_ctx, 0, 0);
+    g_ctx.item_flags = menu_item_flags;
+    uui_findbar_init(&g_find);
+    g_find.pill = 1;
+    term_panel_init();
+    for (int i = 0; i < TERM_PANEL_BUTTONS; i++) g_widgets[W_PANEL0 + i] = *term_panel_item(i);
 
     uui_tabs_init(&g_strip, g_tablabels, 0, 0);
     g_strip.on_select = tab_selected;
     g_strip.on_close  = tab_closed;
     g_strip.on_new    = tab_new;
     g_strip.show_new  = 1;
-    g_strip.numbered  = 1;   // every tab in one directory reports the same title
 
     clip_refresh();   // the broadcast only fires on a CHANGE, so ask once
     uui_menubar_init(&g_menu, menu_bar,
@@ -2362,8 +2815,8 @@ static int on_close_cb(struct uapp *a) {
 // g_menu -- chrome_h() is safe only because both halves of it are pure
 // font arithmetic.
 static void default_size(int *w, int *h) {
-    *w = WIN_COLS * cell_w() + 2 * g_margin + bar_w();
-    *h = WIN_ROWS * cell_h() + chrome_h() + 2 * g_margin;
+    *w = g_conf.cols * cell_w() + 2 * g_margin + bar_w() + panel_w();
+    *h = g_conf.rows * cell_h() + chrome_h() + 2 * g_margin;
 }
 
 int main(void) {
@@ -2373,8 +2826,15 @@ int main(void) {
     // at 120x30 of the configured cell; read in on_open and it opens at
     // the desktop's size and then loses rows to the bigger font.
     term_conf_load(&g_conf);
-    g_margin = g_conf.margin;
     term_scheme_load(g_conf.scheme, &g_scheme);
+    // Before uapp_run() too: default_size() measures the bar and the
+    // panel, and runs before on_open.
+    g_panel_open = g_conf.panel;
+    uui_toolbar_init(&g_tb, tb_items, TB_COUNT);
+    g_tb.item_flags = menu_item_flags;
+    g_tb.accent_latch = 1;   // the open panel reads as a latched toggle
+    g_tb.bg = UTHEME_WINDOW_BG;
+    g_tb.border = UTHEME_BORDER;   // continues the strip's baseline
 
     struct uapp_desc desc = {
         .title   = "Terminal",
@@ -2395,7 +2855,7 @@ int main(void) {
         .tick_ms = 500,
         .on_tick = on_tick,
         .widgets = g_widgets,
-        .widget_count = (int)(sizeof g_widgets / sizeof g_widgets[0]),
+        .widget_count = W_COUNT,
         .on_open = on_open_cb,
         .on_draw = on_draw,
         .on_draw_over = on_draw_over,
