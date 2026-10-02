@@ -299,11 +299,22 @@ int paging_unmap_kernel_page(uint64_t vaddr) {
         for (int i = 0; i < guard_table_count; i++) {
             if (guard_table_pde[i] == (int)pde_index) { pt = guard_tables[i]; break; }
         }
-        if (!pt) {
-            if (guard_table_count >= MAX_GUARD_TABLES) return 0;
+        int fresh = !pt;   // a REUSED pool table keeps the guards it already holds
+        if (!pt && guard_table_count < MAX_GUARD_TABLES) {
             pt = guard_tables[guard_table_count];
             guard_table_pde[guard_table_count] = (int)pde_index;
             guard_table_count++;
+        } else if (!pt) {
+            // PAST THE BOOT POOL: a chunk of kernel stacks allocated after
+            // boot (scheduler.c, slot_grow()). paging_enforce_wx() -- the
+            // only thing that re-merges a split PDE, and the reason the
+            // pool remembers its tables -- has run by then, so a table
+            // from the frame allocator is never looked for again.
+            uint64_t f = pmm_alloc_frame(PMM_ZONE_DMA32);
+            if (!f) return 0;
+            pt = (uint64_t *)(uintptr_t)f;
+        }
+        if (fresh) {
             uint64_t base = (uint64_t)pde_index * HUGE_SIZE;
             for (int i = 0; i < 512; i++) {
                 uint64_t addr = base + (uint64_t)i * 4096;

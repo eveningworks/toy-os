@@ -28,6 +28,9 @@
 #include "process.h" // process_context_is_armed()
 #include "signal_abi.h" // SIGKILL -- a deferred kill is a pending one
 
+// sched_internal.h's SCHED_SLOT_CHUNK, which this file cannot include.
+#define SCHED_SLOT_CHUNK_TEST 64
+
 // The silent long-running spinner this test drives -- see
 // userland/spin_test.c for why it has to be silent (this test's own
 // report is parsed off the same serial console).
@@ -163,7 +166,7 @@ KTEST("sched", "a scheduled process survives a legacy process running alongside"
         // gate, where the difference between starved, parked and left
         // unschedulable is the whole question.
         struct proc_info pi;
-        for (int i = 0; i < SCHED_MAX_PROCS; i++) {
+        for (int i = 0; i < scheduler_slot_end(); i++) {
             if (scheduler_proc_info(i, &pi) == 1 && pi.pid == pid) {
                 klog_printf("sched_test: pid %d stuck -- state=%u wait=%u "
                             "cpu_ns=%llu cur=%d preempt=%d armed=%d\n",
@@ -219,6 +222,37 @@ KTEST("sched", "the guard page is BELOW the stack, not inside it") {
     // Slot 1's stack starts a whole stack plus a whole guard above
     // slot 0's, which is what leaves room for a guard between them.
     KTEST_ASSERT_EQ(b1 - b0, (uint64_t)scheduler_kstack_kib() * 1024 + 4096);
+}
+
+KTEST("sched", "a slot past the first chunk gets its own guarded kernel stack") {
+    // Kernel stacks are allocated 64 slots at a time, at run time, and the
+    // guard page below each is unmapped then -- past the boot pool of page
+    // tables. A chunk whose guards were skipped would boot and run every
+    // test above, and turn the first deep call chain into silent
+    // corruption of the stack below.
+    static uint64_t tf[SCHED_SLOT_CHUNK_TEST + 1][SCHED_TF_SLOTS];
+    static const char chan;
+    int got[SCHED_SLOT_CHUNK_TEST + 1];
+    int n = 0, far = -1;
+    scheduler_preempt_disable();
+    while (n <= SCHED_SLOT_CHUNK_TEST) {
+        int s = scheduler_test_park(tf[n], &chan, SCHED_WAIT_EVENT);
+        if (s < 0) break;
+        got[n++] = s;
+        if (s >= SCHED_SLOT_CHUNK_TEST) { far = s; break; }
+    }
+    uint64_t base = far >= 0 ? scheduler_kstack_base(far) : 0;
+    uint64_t guard_leaf = base ? paging_kernel_leaf(base - 4096) : 1;
+    uint64_t stack_leaf = base ? paging_kernel_leaf(base) : 0;
+    for (int i = 0; i < n; i++) scheduler_test_release(got[i]);
+    (void)scheduler_test_take_resched();
+    scheduler_preempt_enable();
+
+    if (scheduler_max_procs() <= SCHED_SLOT_CHUNK_TEST)
+        KTEST_SKIP("the process limit is one chunk on this machine");
+    KTEST_ASSERT(far >= SCHED_SLOT_CHUNK_TEST);
+    KTEST_ASSERT_EQ(guard_leaf & 1, 0);   // the guard: not present
+    KTEST_ASSERT(stack_leaf & 1);         // the stack itself: there
 }
 
 // --- wait channels ---------------------------------------------------

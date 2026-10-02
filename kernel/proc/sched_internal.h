@@ -27,9 +27,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// See api/scheduler.h -- one definition, shared with everything that
-// sizes a table per process.
-#define MAX_PROCS        SCHED_MAX_PROCS
+// THE SLOT TABLE IS SIZED FROM RAM (g_max_procs, set in scheduler_init())
+// and EVERY SCAN STOPS AT g_slot_end, one past the highest slot ever used,
+// so a loop over the table costs what is in use rather than the limit. A
+// slot at or past g_slot_end is UNUSED and unclaimed by construction.
+#define MAX_PROCS        g_slot_end
+// Kernel stacks and the heavy per-slot part are allocated this many slots
+// at a time, on demand, and kept: peak use stays allocated (at most 1/8 of
+// RAM by the limit's construction), and a freed stack never has to have
+// its guard page mapped back.
+#define SCHED_SLOT_CHUNK 64
 // The per-process kernel stacks, one struct kstack each -- guard page,
 // canary and poison fill all come from kernel/kstack.h, which the
 // legacy loader (process.c) shares so the two cannot drift. It was 8
@@ -74,6 +81,17 @@
 // scheduler_block_current() below for why a blocking syscall in this
 // kernel has to deschedule rather than wait in place.
 enum sched_state { SCHED_UNUSED = 0, SCHED_READY, SCHED_RUNNING, SCHED_ZOMBIE, SCHED_BLOCKED };
+
+// The heavy per-slot part, allocated with the slot's kernel stack.
+struct sched_slot_ext {
+    char exec_path[FS_PATH_MAX];   // see sched_process.ext
+    // This process's current directory (scheduler.h's struct sched_cwd).
+    // Armed at creation from whatever spawned it, so a child starts
+    // where its parent was standing -- the property that makes
+    // `mkdir docs` typed in a subdirectory mean the same thing to a
+    // /bin program as to a shell builtin.
+    struct sched_cwd cwd;
+};
 
 struct sched_process {
     enum sched_state state;
@@ -257,10 +275,10 @@ struct sched_process {
     // beside it. This replaced a `uint32_t ignored` bitmask, which was
     // the right shape while SIG_DFL and SIG_IGN were the only answers.
     //
-    // Costs 768 bytes per slot -- 48 KB of BSS across all 64. Paid
-    // rather than compressed (a handler list keyed by signal, say)
-    // because indexing by signal number is what every reader wants and
-    // this kernel has 64 slots, not 64 thousand.
+    // Costs 768 bytes per slot, in the table allocated for the whole
+    // process limit. Paid rather than compressed (a handler list keyed by
+    // signal, say) because indexing by signal number is what every reader
+    // wants.
     struct k_sigaction actions[SIGNAL_MAX + 1];
     // This process's group. Never 0 for a live slot: a child inherits
     // its spawner's, and one the kernel started leads its own.
@@ -333,7 +351,15 @@ struct sched_process {
     // misdeclared. Windows falls back to the executable for exactly
     // this, and Wayland's app_id is only trustworthy because a
     // compositor matches it against a .desktop FILE.
-    char exec_path[FS_PATH_MAX];
+    //
+    // Kept in `ext` with the current directory (struct sched_slot_ext):
+    // they are 8 KiB of what a slot was, and the table is allocated for
+    // the whole limit.
+    struct sched_slot_ext *ext;
+
+    struct kstack *kstack;   // this slot's kernel stack, from its chunk
+    uint32_t kstack_peak;    // deepest use seen, for `kstack`
+    uint8_t claimed;         // slot_claim()'s, until published or abandoned
 
     // Timer ticks this process has been the RUNNING one for. Cumulative
     // and monotonic; a percentage is the DIFFERENCE between two reads
@@ -360,12 +386,6 @@ struct sched_process {
     // compositor asks for a whole screen of back buffer on its first
     // line (M41 stage 4b), which is how this surfaced.
     struct sched_mm mm;
-    // This process's current directory (scheduler.h's struct sched_cwd).
-    // Armed at creation from whatever spawned it, so a child starts
-    // where its parent was standing -- the property that makes
-    // `mkdir docs` typed in a subdirectory mean the same thing to a
-    // /bin program as to a shell builtin.
-    struct sched_cwd cwd;
     // This process's x87/SSE registers while it isn't the one running.
     // 16-byte aligned because FXSAVE/FXRSTOR #GP otherwise -- see fpu.h,
     // including why only ring-3 processes need one of these at all.
@@ -375,13 +395,14 @@ struct sched_process {
 // ---- shared state -----------------------------------------------------
 
 // scheduler.c
-extern struct kstack kstacks[MAX_PROCS];
-extern struct sched_process procs[MAX_PROCS];
+extern struct sched_process *procs;   // g_max_procs of them
+extern int g_max_procs;    // the limit, from RAM
+extern int g_slot_end;     // one past the highest slot ever used
+extern int g_slots_ready;  // slots that have a kernel stack (whole chunks)
 extern int g_init_pid;
 extern int current_index;
 extern volatile int alive_count;
 extern int rotation_pos;
-extern uint32_t kstack_peak[MAX_PROCS];
 extern int g_need_resched;
 extern uint64_t kernel_vruntime;
 extern uint64_t g_min_vruntime;
@@ -419,8 +440,9 @@ void reparent_children(int dead_pid);
 void signal_state_reset(int slot);
 
 // The kernel context's place in the rotation -- see scheduler.c, "THE
-// KERNEL CONTEXT AS A ROTATION PARTICIPANT".
-#define ROT_KERNEL MAX_PROCS
+// KERNEL CONTEXT AS A ROTATION PARTICIPANT". A constant, not "the slot past
+// the end": the end moves.
+#define ROT_KERNEL (-2)
 
 // **THE SWITCH CRITICAL SECTION RUNS WITH INTERRUPTS OFF, AND NOTHING
 // TURNS THEM BACK ON** -- the `iretq` that completes the handover

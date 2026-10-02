@@ -80,7 +80,7 @@ class Ps(gdb.Command):
     def invoke(self, arg, from_tty):
         procs = gdb.parse_and_eval("procs")
         cur = int(gdb.parse_and_eval("current_index"))
-        n = int(procs.type.range()[1]) + 1
+        n = int(gdb.parse_and_eval("g_slot_end"))   # procs is a pointer now
         print(f"{'PID':>5} {'PPID':>5}  {'STATE':<8} NAME")
         if cur < 0:
             print(f"{'-':>5} {'-':>5}  {'running':<8} (the kernel context)")
@@ -99,7 +99,7 @@ class Ps(gdb.Command):
 
 def slot_of(procs, pid):
     """The slot whose pid field is `pid`, or None -- a pid is not an index."""
-    for i in range(int(procs.type.range()[1]) + 1):
+    for i in range(int(gdb.parse_and_eval("g_slot_end"))):
         if int(procs[i]["state"]) != 0 and int(procs[i]["pid"]) == pid:
             return procs[i]
     return None
@@ -197,7 +197,7 @@ class Symbols(gdb.Command):
         if p is None:
             print(f"toy-symbols: no process with pid {tid}")
             return
-        path = p["exec_path"].string()
+        path = p["ext"]["exec_path"].string()
         elf = panic_resolve.elf_for_program(path)
         if not elf:
             print(f"toy-symbols: pid {tid} ({path}): no ELF under build/userland")

@@ -23,6 +23,7 @@
 // and the park. That is a property of this kernel being single-core,
 // not of the design -- an SMP port needs a real lock around the pair,
 // and this comment is where that will be looked for.
+#include "heap.h"   // kzalloc -- the wakeword table, sized at first use
 #include "syscalls.h"
 #include "syscall_abi.h"
 #include "errno.h"
@@ -99,15 +100,21 @@ int sys_futex_wake(struct syscall_ctx *c) {
 
 // PER SLOT, with the owner's pid: a lookup checks it, so a slot reused by
 // another process never inherits the last one's word.
-static struct {
+//
+// SIZED FOR THE PROCESS LIMIT on the first registration (a syscall, so
+// the heap is safe); every reader treats a NULL table as "nobody
+// registered", which keeps futex_note_ready() callable from anywhere.
+struct wakeword {
     int pid;
     uint64_t phys;   // 0 = this process registered none
     uint64_t pml4;   // whose it is, so a teardown can drop it
-} g_wakeword[SCHED_MAX_PROCS];
+};
+static struct wakeword *g_wakeword;
+static int g_ww_cap;
 
 static int ww_slot(int pid) {
     int s = scheduler_pid_slot(pid);
-    return s >= 0 && g_wakeword[s].pid == pid ? s : -1;
+    return s >= 0 && s < g_ww_cap && g_wakeword[s].pid == pid ? s : -1;
 }
 
 void futex_note_ready(int pid) {
@@ -128,7 +135,7 @@ uint64_t futex_wakeword_phys(int pid) {
 }
 
 void futex_wakeword_release(uint64_t pml4_phys) {
-    for (int i = 0; i < SCHED_MAX_PROCS; i++)
+    for (int i = 0; i < g_ww_cap; i++)
         if (g_wakeword[i].pml4 == pml4_phys) {
             g_wakeword[i].pid = 0;
             g_wakeword[i].phys = 0;
@@ -139,6 +146,13 @@ void futex_wakeword_release(uint64_t pml4_phys) {
 static void ww_set(int pid, uint64_t phys, uint64_t pml4) {
     int s = scheduler_pid_slot(pid);
     if (s < 0) return;
+    if (!g_wakeword) {
+        int cap = scheduler_max_procs();
+        g_wakeword = kzalloc((uint32_t)cap * sizeof *g_wakeword);
+        if (!g_wakeword) return;
+        g_ww_cap = cap;
+    }
+    if (s >= g_ww_cap) return;
     g_wakeword[s].pid = phys ? pid : 0;
     g_wakeword[s].phys = phys;
     g_wakeword[s].pml4 = phys ? pml4 : 0;

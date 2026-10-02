@@ -67,7 +67,7 @@ KTEST("orphan", "a group nobody is in is not orphaned -- it does not exist") {
     // The distinction matters: "orphaned" drives a read to EIO, and a
     // pgid with no members would otherwise refuse reads for a group
     // that was never there.
-    KTEST_ASSERT(!scheduler_pgid_orphaned(SCHED_MAX_PROCS + 7));
+    KTEST_ASSERT(!scheduler_pgid_orphaned(SCHED_PID_MAX));
     KTEST_ASSERT(!scheduler_pgid_orphaned(0));
     KTEST_ASSERT(!scheduler_pgid_orphaned(-1));
 }

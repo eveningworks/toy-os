@@ -11,15 +11,13 @@
 #include "scheduler.h"
 #include <stddef.h>
 
-// The pids are CHOSEN AT RUN TIME, not named. Every window-server pid
-// is one a real process can hold -- WIN_SERVER_MAX_PIDS is
-// SCHED_MAX_PROCS -- so there is no synthetic number that is safe, and
-// pid 3 (what this file used to hardcode) is what toywm gets on an
+// The pids are CHOSEN AT RUN TIME, not named: any number below
+// SCHED_PID_MAX may be a real process's, and pid 3 (what this file used to hardcode) is what toywm gets on an
 // ordinary boot: the fixture was creating and destroying windows on the
 // live desktop's own list.
 static int spare_pids(int *client, int *comp) {
     *client = *comp = 0;
-    for (int p = SCHED_MAX_PROCS - 1; p > 0; p--) {
+    for (int p = SCHED_PID_MAX - 1; p > 0; p--) {
         if (scheduler_pid_valid(p)) continue; // valid counts a zombie, which is what we want
         if (!*client) { *client = p; continue; }
         *comp = p;

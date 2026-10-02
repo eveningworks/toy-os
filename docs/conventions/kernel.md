@@ -176,9 +176,11 @@ this the obvious way), not from how much history it accumulated.
   Ring 0 only -- a ring-3 RIP belongs to some userland ELF, and
   resolving it against the kernel image would be confidently wrong.
 - **Kernel stacks are 16 KiB, have a GUARD PAGE, and carry a CANARY**
-  (`kernel/proc/scheduler.c`). They are their own page-aligned array,
-  not a member of `struct sched_process`, so the page below each one can
-  be unmapped -- Linux's `CONFIG_VMAP_STACK`. Three things ride with it.
+  (`kernel/proc/scheduler.c`). They are allocated 64 at a time as slots
+  are first needed (`slot_grow()`), never inside `struct sched_process`,
+  so the page below each one can be unmapped -- Linux's
+  `CONFIG_VMAP_STACK` -- and a chunk is kept once used, so a guard page
+  is never mapped back. Three things ride with it.
   **The `#DF` gate runs on an IST** (`gdt.c`'s `df_stack`, `tss.ist[0]`,
   set in `idt_init()`): without it an overflow triple-faults and the
   machine reboots with nothing printed, because the push that would

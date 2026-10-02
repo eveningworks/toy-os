@@ -29,14 +29,14 @@ int scheduler_kstack_info(int idx, struct sched_kstack_info *out) {
     out->state      = (int)procs[idx].state;
     out->size       = PROC_KSTACK_SIZE;
     out->base       = kernel_stack_base(idx);
-    out->guard      = (uint64_t)&kstacks[idx].guard[0];
+    out->guard      = (uint64_t)&procs[idx].kstack->guard[0];
     out->kernel_rsp = procs[idx].kernel_rsp;
     out->wait_reason = procs[idx].wait_reason;
     k_strlcpy(out->name, procs[idx].name, sizeof out->name);
     if (procs[idx].state == SCHED_UNUSED) return 1;
 
-    out->used = kstack_used(&kstacks[idx], &kstack_peak[idx]);
-    out->canary_ok = kstack_canary_ok(&kstacks[idx]);
+    out->used = kstack_used(procs[idx].kstack, &procs[idx].kstack_peak);
+    out->canary_ok = kstack_canary_ok(procs[idx].kstack);
 
     // The saved trapframe, which is the thing a resume will iretq from.
     // Bounds-checked against this slot's own stack rather than trusted:
@@ -99,8 +99,8 @@ void scheduler_kstack_track_syscall(int nr) {
 
     uint32_t used, before;
     if (current_index >= 0) {
-        before = kstack_peak[current_index];
-        used = kstack_used(&kstacks[current_index], &kstack_peak[current_index]);
+        before = procs[current_index].kstack_peak;
+        used = kstack_used(procs[current_index].kstack, &procs[current_index].kstack_peak);
     } else if (process_context_is_armed()) {
         before = process_kstack_peak();
         // The LEGACY loader's process: no scheduler slot, but its

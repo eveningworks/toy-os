@@ -31,7 +31,7 @@ WHY A SLOT COUNT IS THE ASSERTION. A zombie is only ever cleared by
 somebody waiting for it, so before init a process whose parent died
 first held its slot forever -- invisible until the table filled up, at
 which point the desktop silently stopped launching anything. That
-failure has already happened here once (MAX_PROCS was 4). Counting the
+failure has already happened here once (the table was 4 slots). Counting the
 table before and after is the only check that sees it, because every
 individual process behaves perfectly either way.
 

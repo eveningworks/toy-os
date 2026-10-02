@@ -6284,9 +6284,8 @@ thing anyone proposes. The damage is done on the way IN: by the time a
 test holds the role, the grant is already revoked and the mappings are
 already gone. There is nothing left to put back.
 
-**A safe pid does not exist either.** `WIN_SERVER_MAX_PIDS` is
-`SCHED_MAX_PROCS`, so every window-server pid is one a real process can
-hold -- and pid 3, which the fixture used to hardcode, is exactly what
+**A safe pid does not exist either.** Every number below `SCHED_PID_MAX`
+is one a real process can hold -- and pid 3, which the fixture used to hardcode, is exactly what
 `toywm` gets on an ordinary boot. So the fixture was also creating and
 destroying windows on the live desktop's own list. The pids are chosen
 at run time from what the scheduler says is free.

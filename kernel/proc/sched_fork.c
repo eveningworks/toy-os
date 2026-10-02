@@ -435,7 +435,7 @@ int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
     // name and CPU time showing up on its successor would be a
     // reporting bug that looks like a scheduling one.
     proc_name_from_path(procs[slot].name, sizeof procs[slot].name, path);
-    k_strlcpy(procs[slot].exec_path, path ? path : "", sizeof procs[slot].exec_path);
+    k_strlcpy(procs[slot].ext->exec_path, path ? path : "", sizeof procs[slot].ext->exec_path);
     procs[slot].cpu_ns = 0;
     // Armed here, at creation, rather than by a separate "set up this
     // process's heap" call the way the legacy loader does it: an init
@@ -457,7 +457,7 @@ int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
     // for the kernel context too (the legacy loader's single slot), so
     // this needs no special case for a process the shell's `spawn`
     // started.
-    k_strlcpy(procs[slot].cwd.path, scheduler_cwd(), sizeof procs[slot].cwd.path);
+    k_strlcpy(procs[slot].ext->cwd.path, scheduler_cwd(), sizeof procs[slot].ext->cwd.path);
 
     // WHAT A REMOTE SESSION STARTS IS RECORDED, auditd's execve shape --
     // here rather than in sys_spawn() because every spawn funnels
@@ -576,14 +576,14 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
     procs[slot].ready   = 0;
     procs[slot].cpu_ns  = 0;
     k_strlcpy(procs[slot].name, procs[leader].name, sizeof procs[slot].name);
-    k_strlcpy(procs[slot].exec_path, procs[leader].exec_path,
-              sizeof procs[slot].exec_path);
+    k_strlcpy(procs[slot].ext->exec_path, procs[leader].ext->exec_path,
+              sizeof procs[slot].ext->exec_path);
     // The heap and the cwd belong to the GROUP and are read through the
     // leader (scheduler_current_mm/_cwd). Zeroed rather than copied, so
     // a reader that forgets gets an obvious 0 instead of a second copy
     // that drifts.
     k_memset(&procs[slot].mm, 0, sizeof procs[slot].mm);
-    procs[slot].cwd.path[0] = '\0';
+    procs[slot].ext->cwd.path[0] = '\0';
     procs[slot].state = SCHED_READY;
     slot_unclaim(slot);
     alive_count++;
@@ -613,16 +613,23 @@ int scheduler_fork(const uint64_t *regs) {
     int slot = slot_claim();
     if (slot < 0) return -EAGAIN;
 
-    uint64_t pinned[MAX_PROCS + 1];
+    // Counted first and ALLOCATED: one per blocked thread of the group,
+    // which is a stack array of the whole table at the process limit.
+    int want = 1;
+    for (int i = 0; i < MAX_PROCS; i++)
+        if (procs[i].state == SCHED_BLOCKED && procs[i].tgid == procs[leader].pid) want++;
+    uint64_t *pinned = kmalloc((uint32_t)want * sizeof *pinned);
+    if (!pinned) { slot_unclaim(slot); return -ENOMEM; }
     int npin = 0;
     uint64_t ww = futex_wakeword_phys(procs[leader].pid);
     if (ww) pinned[npin++] = ww;
-    for (int i = 0; i < MAX_PROCS; i++) {
+    for (int i = 0; i < MAX_PROCS && npin < want; i++) {
         if (procs[i].state != SCHED_BLOCKED || procs[i].tgid != procs[leader].pid) continue;
         if (procs[i].wait_chan) pinned[npin++] = (uint64_t)(uintptr_t)procs[i].wait_chan;
     }
     struct vmm_fork_opts o = { pinned, npin, fork_inherits_borrowed, &procs[leader].mm };
     uint64_t as = vmm_fork_address_space(procs[leader].pml4_phys, &o);
+    kfree(pinned);
     if (!as) { slot_unclaim(slot); return -ENOMEM; }
     if (mmap_inherit_shm(as, &procs[leader].mm) < 0) {
         vmm_destroy_address_space(as);
@@ -665,8 +672,8 @@ int scheduler_fork(const uint64_t *regs) {
     // parent owned -- which is the whole point of having sessions.
     procs[slot].sid     = procs[leader].sid;
     k_strlcpy(procs[slot].name, procs[leader].name, sizeof procs[slot].name);
-    k_strlcpy(procs[slot].exec_path, procs[leader].exec_path,
-              sizeof procs[slot].exec_path);
+    k_strlcpy(procs[slot].ext->exec_path, procs[leader].ext->exec_path,
+              sizeof procs[slot].ext->exec_path);
     procs[slot].cpu_ns = 0;
     k_memcpy(&procs[slot].mm, &procs[leader].mm, sizeof procs[slot].mm);
     // ...which copied the region POINTER. Give the child its own, or
@@ -682,7 +689,7 @@ int scheduler_fork(const uint64_t *regs) {
         slot_unclaim(slot);
         return -1;
     }
-    k_memcpy(&procs[slot].cwd, &procs[leader].cwd, sizeof procs[slot].cwd);
+    k_memcpy(&procs[slot].ext->cwd, &procs[leader].ext->cwd, sizeof procs[slot].ext->cwd);
     procs[slot].state = SCHED_READY;
     slot_unclaim(slot);
     alive_count++;
@@ -738,7 +745,7 @@ int scheduler_exec(const char *path, const char *argvec, size_t argvec_len,
     fpu_restore(procs[me].fpu);     // ...so the CPU's state is loaded here too
     mm_reset(me, image_end);
     proc_name_from_path(procs[me].name, sizeof procs[me].name, path);
-    k_strlcpy(procs[me].exec_path, path ? path : "", sizeof procs[me].exec_path);
+    k_strlcpy(procs[me].ext->exec_path, path ? path : "", sizeof procs[me].ext->exec_path);
 
     // The caller's own trapframe, rewritten: it resumes at the new
     // image's entry with every register clear, as a spawn's first frame.

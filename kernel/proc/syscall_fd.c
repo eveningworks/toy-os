@@ -97,7 +97,26 @@ struct fd_space {
     // Same split as Linux's.
     uint8_t  cloexec[FD_MAX];
 };
-static struct fd_space *g_spaces[FD_SPACE_CEILING];
+// Grown by doubling, as g_desc is, up to the process limit plus the
+// kernel's own few: one table per live address space.
+static struct fd_space **g_spaces;
+static int g_spaces_cap;
+
+static int spaces_grow(void) {
+    int ceiling = scheduler_max_procs() + 4;
+    int cap = g_spaces_cap ? g_spaces_cap * 2 : 32;
+    if (cap > ceiling) cap = ceiling;
+    if (cap <= g_spaces_cap) return 0;
+    struct fd_space **n = kzalloc((uint32_t)cap * sizeof *n);
+    if (!n) return 0;
+    if (g_spaces) {
+        k_memcpy(n, g_spaces, (uint32_t)g_spaces_cap * sizeof *n);
+        kfree(g_spaces);
+    }
+    g_spaces = n;
+    g_spaces_cap = cap;
+    return 1;
+}
 
 int fd_desc_alloc(const struct fd_ops *ops, int aux_idx) {
     for (int i = 0; ; i++) {
@@ -146,7 +165,7 @@ void fd_set_kernel_tty(struct tty *t) { g_kernel_tty = t; }
 struct tty *fd_kernel_tty(void) { return g_kernel_tty; }
 
 static struct fd_space *space_find(uint64_t pml4) {
-    for (int i = 0; i < FD_SPACE_CEILING; i++)
+    for (int i = 0; i < g_spaces_cap; i++)
         if (g_spaces[i] && g_spaces[i]->pml4 == pml4) return g_spaces[i];
     return NULL;
 }
@@ -160,9 +179,13 @@ int fd_space_open(uint64_t pml4) {
     // than by a number somebody picked.
     struct fd_space *sp = NULL;
     int slot = -1;
-    for (int i = 0; i < FD_SPACE_CEILING; i++) {
+    for (int i = 0; i < g_spaces_cap; i++) {
         if (g_spaces[i] && !g_spaces[i]->pml4) { sp = g_spaces[i]; slot = i; break; }
         if (!g_spaces[i] && slot < 0) slot = i;
+    }
+    if (!sp && slot < 0) {
+        int at = g_spaces_cap;
+        if (spaces_grow()) slot = at;
     }
     if (!sp) {
         if (slot < 0) {

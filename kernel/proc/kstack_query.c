@@ -30,7 +30,7 @@ _Static_assert(QUERY_KSTACK_NAME_MAX == SCHED_KSTACK_NAME_MAX,
 // and both functions below have to walk.
 static int kstack_at(int want, struct sched_kstack_info *out) {
     int seen = 0;
-    for (int i = 0; i < SCHED_MAX_PROCS; i++) {
+    for (int i = 0; i < scheduler_slot_end(); i++) {
         if (!scheduler_kstack_info(i, out)) break;
         if (out->state == 0) continue;
         if (seen == want) return 1;
@@ -50,7 +50,7 @@ static int legacy_present(struct sched_kstack_info *out) {
 static int kstack_count(void) {
     struct sched_kstack_info k;
     int live = 0;
-    for (int i = 0; i < SCHED_MAX_PROCS; i++) {
+    for (int i = 0; i < scheduler_slot_end(); i++) {
         if (!scheduler_kstack_info(i, &k)) break;
         if (k.state != 0) live++;
     }

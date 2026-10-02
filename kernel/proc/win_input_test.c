@@ -39,7 +39,7 @@
 
 // A pid no process holds, to give the role to for a queue-only test.
 static int spare_pid(void) {
-    for (int p = SCHED_MAX_PROCS - 1; p > 0; p--)
+    for (int p = SCHED_PID_MAX - 1; p > 0; p--)
         if (!scheduler_pid_valid(p)) return p;
     return 0;
 }
@@ -189,7 +189,7 @@ KTEST("win_input", "a role change empties the queue") {
 static void report_stuck(int pid, int sampled_blocked, int samples) {
     struct proc_info pi;
     int found = 0;
-    for (int i = 0; i < SCHED_MAX_PROCS; i++) {
+    for (int i = 0; i < scheduler_slot_end(); i++) {
         if (scheduler_proc_info(i, &pi) == 1 && pi.pid == pid) { found = 1; break; }
     }
     if (!found) { klog_printf("win_input: pid %d has no slot at all\n", pid); return; }
@@ -252,7 +252,7 @@ KTEST("win_input", "a ring-3 process blocks in SYS_WAIT_EVENT and is woken") {
     while (coarse_ticks() - start < TIMEOUT_TICKS) {
         if (scheduler_poll(pid, &exit_code) == SCHED_POLL_EXITED) { exited = 1; break; }
         struct proc_info pi;
-        for (int i = 0; i < SCHED_MAX_PROCS; i++) {
+        for (int i = 0; i < scheduler_slot_end(); i++) {
             if (scheduler_proc_info(i, &pi) == 1 && pi.pid == pid) {
                 samples++;
                 if (pi.state == PROC_STATE_BLOCKED) blocked++;

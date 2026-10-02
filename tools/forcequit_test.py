@@ -31,7 +31,7 @@ SLOT REAPING
 Force quit is worth little if it works four times per boot. A launched
 ring-3 client used to leak its scheduler slot (nothing polled it -- the
 Terminal's children are reaped by the ring-3 shell's waitpid, but a
-Start-menu launch has no shell), and with MAX_PROCS at 4 the fifth
+Start-menu launch has no shell), and with the table at 4 slots (then) the fifth
 launch silently did nothing. Measured before it was fixed: the fifth
 `gui open Shapes` produced no window. So this runs SIX spawn/force-quit
 cycles, and a regression shows up as a spawn that stops working.
@@ -312,7 +312,7 @@ def run(dbg, qmp, tmp, res):
     # --- repeatable ------------------------------------------------------
     #
     # The real assertion about scheduler_kill() + reaping: a killed
-    # process must give its slot back. MAX_PROCS is 4, so a leak shows up
+    # process must give its slot back. The table was 4 slots once, so a leak showed up
     # as a spawn that stops producing a window part-way through.
     ok_cycles = 0
     for _ in range(CYCLES):

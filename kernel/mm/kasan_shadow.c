@@ -159,7 +159,7 @@ void kasan_unpoison_stack_below(uint64_t sp) {
     if (sp > (uint64_t)(uintptr_t)stack_bottom && sp <= (uint64_t)(uintptr_t)stack_top) {
         lo = (uint64_t)(uintptr_t)stack_bottom;
     } else {
-        for (int i = 0; i < SCHED_MAX_PROCS && !lo; i++) {
+        for (int i = 0; i < scheduler_slot_end() && !lo; i++) {
             uint64_t base = scheduler_kstack_base(i);
             if (sp > base && sp <= base + KSTACK_BYTES) lo = base;
         }

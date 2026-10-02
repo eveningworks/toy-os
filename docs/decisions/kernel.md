@@ -5712,9 +5712,9 @@ separately. As a slot with one extra field, a thread is schedulable, has
 a kernel stack, can be traced and shows up in `ps` with no work at all.
 
 What it costs is honest and worth stating: **a thread consumes a process
-slot**, so 64 is the total across all programs, and a program that
-creates a thread per connection would exhaust it. Raising the number is
-a `#define`; the per-slot cost is a 16 KiB kernel stack plus 512 bytes
+slot**, so the process limit is the total across all programs (64 when
+written; computed from RAM since 2026-10-02), and a program that creates
+a thread per connection would exhaust it. The per-slot cost is a 16 KiB kernel stack plus 512 bytes
 of FP state plus a 768-byte signal table.
 
 **The fd table needed no change**, which is the best evidence the shape
@@ -8072,9 +8072,9 @@ So here: descriptions are allocated one at a time behind a pointer
 table that doubles, a descriptor table is allocated per live address
 space, and the ceilings are what remain -- 1024 descriptions and 256
 descriptors, for the reason `fs.file-max` exists, so one runaway
-process cannot spend the kernel heap. FD_SPACE_CEILING is derived from
-`SCHED_MAX_PROCS` rather than picked: an address space that holds fds
-belongs to a process, plus the legacy `run` loader.
+process cannot spend the kernel heap. The fd-space table grows to the
+process limit plus a few rather than a picked number: an address space
+that holds fds belongs to a process, plus the legacy `run` loader.
 
 **Why still keyed by CR3, and not moved into the process slot.** That
 was the tempting version and it breaks the legacy loader, which has no
@@ -8820,4 +8820,55 @@ Linux. The kernel debugger's thread for the kernel context moved from
 This is the step that lets the process TABLE become RAM-sized (a later
 entry): with no code deriving one from the other, the table's size and
 the pid space are independent.
+
+## The process table is sized from RAM, and kernel stacks come 64 at a time
+
+The process table was a static array of 64 slots, each embedding its
+exec path and current directory (8 KiB of the 9.8 a slot was), beside a
+static array of 64 guarded 20 KiB kernel stacks. 64 was a number, not a
+property of the machine: a laptop with 8 GiB stopped launching at the
+same count as a 512 MiB VM, and a leak of 36 zombies was enough to stop
+the desktop opening anything.
+
+**What real systems do.** Linux computes `threads-max` at boot so that
+task structures and stacks may use at most an eighth of RAM
+(`set_max_threads()`, floor 20) and allocates each task as it is created.
+Windows has no fixed count at all: kernel memory is the limit.
+
+**toy-os takes Linux's limit and allocates in between.** The limit is
+`RAM / 8 / (slot + stack + ext)`, floored at one chunk (64, what the
+table always had) and capped at `SCHED_PROCS_CEILING` (8192, so the pid
+space always has room for each slot's pid, group and session): 2212 at
+512 MiB, 8192 at 2 GiB. Then, the choice the maintainer made between
+three shapes:
+
+- **The slot table is allocated whole at boot, but slim**: the exec path
+  and current directory moved into a per-slot `ext`, so a slot is 1.6 KiB
+  and the whole table 13 MiB at the cap. Eager, so every scan can index
+  `procs[]` with no lookup and nothing can find a slot half-allocated.
+- **Kernel stacks and `ext` come in chunks of 64**, allocated the first
+  time a slot past the last chunk is claimed (`slot_grow()`, under the
+  preemption guard -- the frame allocator and the page split sleep on
+  nothing). Each stack's guard page is unmapped as its chunk arrives;
+  past the boot pool of four page tables, the split takes a table from
+  the frame allocator.
+- **A chunk is kept once used.** Freeing one would mean mapping its guard
+  pages back before handing the frames on, a primitive nothing else
+  needs; peak use stays allocated, and is at most an eighth of RAM by
+  the limit's construction. The rejected alternatives were everything
+  eager (236 MiB pinned at 2 GiB for slots most boots never use) and
+  everything freed on demand (that missing primitive).
+
+**Every scan stops at `g_slot_end`**, one past the highest slot ever
+used, so a loop over the table costs what has been used rather than the
+limit -- the timer tick walks the table, and 8192 slots per tick would
+have been the cost of a feature nobody uses. It only rises, which keeps
+it race-free; a machine that once ran 200 processes scans 200.
+
+**Three things that scaled with the table had to change shape**, and
+each would have failed only at a size no test reached: fork's list of
+pinned frames was a stack array of the whole table (64 KiB at the cap,
+past the 16 KiB stack) and is counted and allocated; futex's wakeword
+table is allocated at the first registration; the fd-space table grows
+by doubling like the descriptor table beside it.
 

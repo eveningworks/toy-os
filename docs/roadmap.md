@@ -206,7 +206,7 @@ only expensive part of it.
 - [x] ~~`fork()`-style address-space duplication (copy-on-write)~~ DONE 2026-09-11 -- `SYS_FORK`, `/tests/fork_test`
 - [x] ~~`exec()`-style in-place process replacement~~ DONE 2026-09-11 -- `SYS_EXEC` takes `struct spawn_msg`; loads before it tears down
 - [x] ~~`wait()`/exit-status reporting for a parent process~~ DONE -- `SYS_WAITPID` takes an out-parameter for the exit code
-- [ ] Real PID allocation rather than a fixed table -- `SCHED_MAX_PROCS` is 64, not the 4 this line claimed for a long time
+- [x] ~~Real PID allocation rather than a fixed table~~ DONE 2026-10-02 -- pids cycle; the table is sized from RAM
 - [x] ~~Larger/growable user stack~~ DONE 2026-08-23 -- 8 MiB reserved, grown on fault; four pages is the starting working set
 - [x] ~~Copy-on-write page-fault handler~~ DONE 2026-09-11 -- `vmm_fault_in()` carries the error code; `copy_user()` un-shares too
 - [x] ~~`argv`/`envp` passed to a new process~~ DONE -- `SYS_SPAWN` takes both (an env BLOB), and crt0 lands on an argc/argv stack

@@ -12,7 +12,7 @@
 
 static int spare_pids(int *a, int *b) {
     *a = *b = 0;
-    for (int p = SCHED_MAX_PROCS - 1; p > 0; p--) {
+    for (int p = SCHED_PID_MAX - 1; p > 0; p--) {
         if (scheduler_pid_valid(p)) continue;
         if (!*a) { *a = p; continue; }
         *b = p;

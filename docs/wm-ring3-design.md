@@ -163,8 +163,8 @@ intervals. `scheduler_kill`/`scheduler_poll` for force-quit and reaping
 are done. And
 `MAX_PROCS` was **4** when this was written -- the WM itself would have
 taken one, leaving three for the entire desktop, when a terminal running
-a command is already two. It is `SCHED_MAX_PROCS` = 64 now, so this
-particular blocker is gone.
+a command is already two. The limit is computed from RAM now (thousands),
+so this particular blocker is gone.
 
 ### The consequence that is not in the roadmap
 
@@ -545,7 +545,7 @@ half of them have since landed for their own reasons):
 - **The tick and process syscalls -- DONE.** `SYS_TICKS` (monotonic),
   `SYS_PROC_INFO` and `SYS_KILL`, built for Task Manager. `scheduler_
   poll` was already reachable.
-- **`MAX_PROCS` -- long since raised** to `SCHED_MAX_PROCS` = 64.
+- **`MAX_PROCS` -- long since raised**, and computed from RAM since 2026-10-02.
 - **A ring-3 allocator -- DECIDED, NOT BUILT.** Note the original
   blocker text below is WRONG and stayed wrong for a while: it said the
   WM's per-window state is `kmalloc`'d, which traced to

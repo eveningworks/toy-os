@@ -25,19 +25,12 @@
 // exactly what it always did.
 
 // One-time setup. Call once from kernel_main, before apps_start().
-// How many ring-3 processes can exist at once.
-//
-// Was 4, which was not a design decision so much as a number nobody had
-// revisited: each slot embeds an 8 KiB kernel stack and 512 bytes of FPU
-// state, so the whole table is about 8.8 KiB per process. At 4 that was
-// 35 KiB and the desktop stopped launching anything after four windows;
-// at 64 it is ~560 KiB against a kernel .bss already 13 MiB (the GUI back
-// buffer), which is a rounding error for sixteen times the headroom.
-//
-// **Anything sizing a per-process table must use this**, not a literal.
-// win_server.c did carry its own 4 with a comment saying "MAX_PROCS
-// (scheduler.c)", which is a copy waiting to be forgotten.
-#define SCHED_MAX_PROCS 64
+// HOW MANY PROCESSES CAN EXIST AT ONCE is not a constant: it is computed
+// from RAM at boot (scheduler_max_procs(), at most an eighth of memory
+// for process structures, as Linux's threads-max), and the table is
+// allocated then. **Anything sizing a per-process table asks
+// scheduler_max_procs()**, and a walk of the table by slot stops at
+// scheduler_slot_end().
 
 // PIDS CYCLE: 1 .. SCHED_PID_MAX-1, each new one past the last, wrapping
 // to SCHED_PID_RESERVED -- Linux's pid_max and RESERVED_PIDS -- and
@@ -46,6 +39,14 @@
 // and init, spawned first, stays pid 1 for the whole boot.
 #define SCHED_PID_MAX      32768
 #define SCHED_PID_RESERVED 300
+
+// The most processes the table is ever sized for, whatever the RAM:
+// SCHED_PID_MAX leaves room for each one's pid, group and session.
+#define SCHED_PROCS_CEILING 8192
+
+// One past the highest slot in use so far -- what a walk of the table by
+// slot needs to cover. Not the limit: that is scheduler_max_procs().
+int scheduler_slot_end(void);
 
 void scheduler_init(void);
 
@@ -148,7 +149,7 @@ int scheduler_current_pid(void);
 //   - **A PROCESS DIES AS A WHOLE.** exit(), a fault, and a kill by any
 //     of its tids all end every thread in the group, because there is
 //     one address space and the teardown destroys it.
-//   - **A tid is a pid**, from the same 1..SCHED_MAX_PROCS space, so a
+//   - **A tid is a pid**, from the same pid space, so a
 //     thread costs a process slot.
 
 // The PROCESS on the CPU, where scheduler_current_pid() is the THREAD.
@@ -437,7 +438,7 @@ void scheduler_demo_run(void);
 // Spawns `path` (optional whitespace-separated `args`, NULL/"" for
 // none -- same convention as elf_run_from_fs()'s, see elf_run.h) as a
 // new scheduler-managed process and returns IMMEDIATELY with a 1-based
-// pid (> 0), or 0 on any setup failure (no free slot -- SCHED_MAX_PROCS
+// pid (> 0), or 0 on any setup failure (no free slot -- the process limit
 // -- missing/invalid ELF, or arguments too long to fit the process's
 // one stack page). Unlike elf_run_from_fs(), does not block: the
 // process runs preemptively alongside whatever called this, and the

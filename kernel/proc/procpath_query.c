@@ -19,14 +19,14 @@ _Static_assert(sizeof(struct query_procpath) <= QUERY_RECORD_MAX,
 
 static int procpath_count(void) {
     int n = 0;
-    for (int slot = 0; slot < SCHED_MAX_PROCS; slot++)
+    for (int slot = 0; slot < scheduler_slot_end(); slot++)
         if (scheduler_mm_for_pid(scheduler_slot_pid(slot))) n++;
     return n;
 }
 
 static int procpath_fill(int index, void *out) {
     if (index < 0) return 0;
-    for (int slot = 0; slot < SCHED_MAX_PROCS; slot++) {
+    for (int slot = 0; slot < scheduler_slot_end(); slot++) {
         int pid = scheduler_slot_pid(slot);
         if (!scheduler_mm_for_pid(pid)) continue;
         if (index--) continue;

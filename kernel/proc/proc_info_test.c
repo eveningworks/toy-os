@@ -42,7 +42,14 @@ KTEST("procinfo", "an empty slot is a SUCCESSFUL report of pid 0") {
     struct proc_info info;
     k_memset(&info, 0xAA, sizeof info);
 
-    int last = scheduler_max_procs() - 1;
+    // An EMPTY slot below the end of the table (the walk stops at
+    // scheduler_slot_end(), so the empty slots that matter are inside it).
+    int last = -1;
+    for (int i = scheduler_slot_end() - 1; i >= 0 && last < 0; i--) {
+        struct proc_info probe;
+        if (scheduler_proc_info(i, &probe) && probe.pid == 0) last = i;
+    }
+    if (last < 0) KTEST_SKIP("every slot below the end is in use");
     KTEST_ASSERT_EQ(scheduler_proc_info(last, &info), 1);
     KTEST_ASSERT_EQ(info.pid, 0);
     KTEST_ASSERT_EQ(info.state, (uint32_t)PROC_STATE_UNUSED);

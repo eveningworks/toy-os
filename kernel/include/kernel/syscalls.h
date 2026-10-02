@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "syscall_table.h"
 #include "fs.h" // FS_PATH_MAX -- struct open_file's name
-#include "scheduler.h" // SCHED_MAX_PROCS -- the fd-space ceiling is derived from it
+#include "scheduler.h"
 
 struct tty; // kernel/tty.h -- fd_tty() below, without dragging it in here
 
@@ -87,11 +87,10 @@ struct tty; // kernel/tty.h -- fd_tty() below, without dragging it in here
 #define FD_DESC_MAX  1024 // open-file DESCRIPTIONS, system-wide ceiling
 #define FD_MAX       256  // DESCRIPTORS per address space (0..255)
 
-// NOT AN ARBITRARY NUMBER, and no longer a table size: an address
-// space that can hold fds belongs to a process, so the bound is the
-// process table plus the legacy `run` loader, which has no scheduler
-// slot and is exactly why these are keyed by CR3 (see below).
-#define FD_SPACE_CEILING (SCHED_MAX_PROCS + 4)
+// The fd-space table grows to the process limit plus a few: an address
+// space that can hold fds belongs to a process, plus the legacy `run`
+// loader, which has no scheduler slot and is exactly why these are keyed
+// by CR3 (syscall_fd.c, spaces_grow()).
 
 // The three every process starts with. Not magic numbers any more --
 // just the descriptors fd_space_open() pre-fills.

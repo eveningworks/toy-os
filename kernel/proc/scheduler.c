@@ -107,6 +107,7 @@
 #include "ata.h"       // ata_idle() -- the idle work scheduler_idle() owns
 #include "input.h"     // input_poll_sources() -- ditto, for a device with no IRQ
 #include "string.h" // k_strlcpy -- proc_name_from_path()
+#include "pmm.h"    // the table and the stack chunks
 
 // The thread pointer belonging to the KERNEL CONTEXT -- which in
 // practice means a ring-3 process the legacy elf_run.c loader is
@@ -122,8 +123,6 @@ static uint64_t kernel_fs_base;
 // this replaced -- g_next_kernel_rsp, then a per-dispatch resume slot
 // with a deferred (slot, depth) nomination beside it -- is gone with
 // it; see docs/blocking-design.md.
-
-struct kstack kstacks[MAX_PROCS];
 
 // "/bin/wm/demos/uidemo" -> "uidemo". A task manager column is a few
 // characters wide, so the last component is the useful part and the
@@ -151,7 +150,15 @@ _Static_assert(sizeof(((struct mmap_region *)0)->path) == FS_PATH_STORED_MAX,
                "mmap_region.path is a STORED path (fs.h): 32 per process, so it "
                "takes the smaller bound and mmap REFUSES anything longer");
 
-struct sched_process procs[MAX_PROCS];
+// THE TABLE, sized from RAM in scheduler_init(): g_max_procs slots, of
+// which g_slots_ready have a kernel stack, and g_slot_end bounds every scan
+// (sched_internal.h, MAX_PROCS). NULL and 0 before init, so an early scan
+// is an empty loop.
+struct sched_process *procs;
+int g_max_procs;
+int g_slot_end;
+int g_slots_ready;
+static int g_guards_on;   // scheduler_guard_pages_init() has run
 
 // A SLOT BEING BUILT IS CLAIMED, and only the allocators look. A spawn
 // picks a slot and then reads the ELF from disk, which SLEEPS -- and the
@@ -161,8 +168,7 @@ struct sched_process procs[MAX_PROCS];
 // released, so the parent read forever (argv_test in block(pipe), about
 // 1 suite run in 5). Linux's TASK_NEW is the same idea as a state; a
 // flag only the allocators consult keeps every other scan of the table
-// seeing "not a process" without auditing each one.
-static uint8_t g_slot_claimed[MAX_PROCS];
+// seeing "not a process" without auditing each one (procs[i].claimed).
 
 // pid -> slot + 1, or 0. Kept by slot_claim() and slot_free() alone.
 static uint16_t g_pid_slot[SCHED_PID_MAX];
@@ -190,31 +196,68 @@ static int pid_alloc(void) {
     return 0;
 }
 
-int slot_claim(void) {
-    uint64_t f;
-    __asm__ volatile ("pushfq; popq %0; cli" : "=r"(f) :: "memory");
-    int slot = -1;
-    for (int i = 0; i < MAX_PROCS; i++) {
-        if (procs[i].state == SCHED_UNUSED && !g_slot_claimed[i]) {
-            int pid = pid_alloc();   // the one place a pid is chosen
-            if (!pid) break;
-            g_slot_claimed[i] = 1;
-            procs[i].pid = pid;
-            g_pid_slot[pid] = (uint16_t)(i + 1);
-            slot = i;
-            break;
-        }
+// The next SCHED_SLOT_CHUNK slots' kernel stacks and ext parts, or 0.
+// Under the preemption guard rather than with interrupts off: the frame
+// allocator and the page split sleep on nothing, and a kernel-context
+// spawner cannot park. g_slots_ready moves LAST, so no scan sees a slot
+// without its stack.
+static int slot_grow(void) {
+    if (!procs || g_slots_ready >= g_max_procs) return 0;
+    int n = g_max_procs - g_slots_ready;
+    if (n > SCHED_SLOT_CHUNK) n = SCHED_SLOT_CHUNK;
+    uint64_t kpages = ((uint64_t)n * sizeof(struct kstack) + 4095) / 4096;
+    uint64_t epages = ((uint64_t)n * sizeof(struct sched_slot_ext) + 4095) / 4096;
+    uint64_t kphys = pmm_alloc_contiguous(kpages, PMM_ZONE_ANY);
+    if (!kphys) return 0;
+    uint64_t ephys = pmm_alloc_contiguous(epages, PMM_ZONE_ANY);
+    if (!ephys) { pmm_free_contiguous(kphys, kpages); return 0; }
+    struct kstack *ks = (struct kstack *)(uintptr_t)kphys;   // identity-mapped
+    struct sched_slot_ext *ex = (struct sched_slot_ext *)(uintptr_t)ephys;
+    k_memset(ex, 0, epages * 4096);
+    int base = g_slots_ready;
+    for (int i = 0; i < n; i++) {
+        procs[base + i].kstack = &ks[i];
+        procs[base + i].ext = &ex[i];
+        if (g_guards_on) kstack_guard_arm(&ks[i]);
     }
-    __asm__ volatile ("pushq %0; popfq" :: "r"(f) : "memory", "cc");
-    return slot;
+    g_slots_ready = base + n;
+    return 1;
+}
+
+int slot_claim(void) {
+    for (int attempt = 0; attempt < 2; attempt++) {
+        uint64_t f;
+        __asm__ volatile ("pushfq; popq %0; cli" : "=r"(f) :: "memory");
+        int slot = -1;
+        for (int i = 0; i < g_slots_ready; i++) {
+            if (procs[i].state == SCHED_UNUSED && !procs[i].claimed) {
+                int pid = pid_alloc();   // the one place a pid is chosen
+                if (!pid) break;
+                procs[i].claimed = 1;
+                procs[i].pid = pid;
+                g_pid_slot[pid] = (uint16_t)(i + 1);
+                if (i >= g_slot_end) g_slot_end = i + 1;   // before anyone can see it
+                slot = i;
+                break;
+            }
+        }
+        __asm__ volatile ("pushq %0; popfq" :: "r"(f) : "memory", "cc");
+        if (slot >= 0) return slot;
+        if (attempt) return -1;
+        scheduler_preempt_disable();
+        int grew = slot_grow();
+        scheduler_preempt_enable();
+        if (!grew) return -1;
+    }
+    return -1;
 }
 
 // Published (its state is no longer UNUSED) or abandoned: either way the
 // claim is over.
 void slot_unclaim(int slot) {
-    if (slot < 0 || slot >= MAX_PROCS) return;
+    if (slot < 0 || slot >= g_slots_ready) return;
     if (procs[slot].state == SCHED_UNUSED) slot_free(slot);   // abandoned
-    g_slot_claimed[slot] = 0;
+    procs[slot].claimed = 0;
 }
 
 // THE ONE WAY A SLOT BECOMES FREE: its pid goes with it, so no lookup can
@@ -317,21 +360,17 @@ int leader_index(int idx) {
 }
 
 uint64_t kernel_stack_top(int idx) {
-    return kstack_top(&kstacks[idx]);
+    return kstack_top(procs[idx].kstack);
 }
 
 uint64_t kernel_stack_base(int idx) {
-    return kstack_base(&kstacks[idx]);
+    return kstack_base(procs[idx].kstack);
 }
-
-// How deep each slot's stack has ever been, in bytes. Only ever grows
-// within one process's life; reset when the slot starts a new one.
-uint32_t kstack_peak[MAX_PROCS];
 
 // Called wherever a stack starts a new life. The trapframe the spawn
 // path has just written at the top is what `reserve_top` protects.
 void kstack_arm_slot(int idx) {
-    kstack_arm(&kstacks[idx], TRAPFRAME_WORDS * 8, &kstack_peak[idx]);
+    kstack_arm(procs[idx].kstack, TRAPFRAME_WORDS * 8, &procs[idx].kstack_peak);
 }
 
 // The canary check. Deliberately fatal rather than a log line: the
@@ -340,7 +379,7 @@ void kstack_arm_slot(int idx) {
 // suspect -- and carrying on is exactly how the original bug presented,
 // as a fault in an innocent process several context switches later.
 static void kstack_verify(int idx) {
-    if (kstack_canary_ok(&kstacks[idx])) return;
+    if (kstack_canary_ok(procs[idx].kstack)) return;
     klog_printf("KERNEL STACK OVERFLOW: slot %d (pid %d, \"%s\") overran its "
                 "%d-byte stack -- canary at %lx destroyed\n",
                 idx, procs[idx].pid, procs[idx].name, PROC_KSTACK_SIZE,
@@ -355,37 +394,64 @@ static void kstack_verify(int idx) {
 }
 
 uint64_t scheduler_kstack_base(int idx) {
-    if (idx < 0 || idx >= MAX_PROCS) return 0;
+    if (idx < 0 || idx >= g_slots_ready) return 0;
     return kernel_stack_base(idx);
 }
+
+int scheduler_slot_end(void) { return g_slot_end; }
 
 // Unmaps the guard page below every kernel stack. Called from
 // kernel_main() AFTER paging_enforce_wx(), which rewrites every PDE and
 // would otherwise put the huge page back.
 void scheduler_guard_pages_init(void) {
     int ok = 0;
-    for (int i = 0; i < MAX_PROCS; i++) {
-        if (kstack_guard_arm(&kstacks[i])) ok++;
+    for (int i = 0; i < g_slots_ready; i++) {
+        if (kstack_guard_arm(procs[i].kstack)) ok++;
     }
-    klog_printf("sched: %d/%d kernel-stack guard pages armed (%d KiB stacks, "
-                "guards %lx..%lx)\n",
-                ok, MAX_PROCS, PROC_KSTACK_SIZE / 1024,
-                (uint64_t)&kstacks[0].guard[0],
-                (uint64_t)&kstacks[MAX_PROCS - 1].guard[PROC_KSTACK_GUARD]);
+    g_guards_on = 1;   // every later chunk arms its own
+    klog_printf("sched: %d/%d kernel-stack guard pages armed (%d KiB stacks); "
+                "the limit is %d processes, stacks allocated %d at a time\n",
+                ok, g_slots_ready, PROC_KSTACK_SIZE / 1024, g_max_procs, SCHED_SLOT_CHUNK);
 }
 
 // Which slot's guard page contains `addr`, or -1. The fault reporter
 // asks, so a page fault on a guard page is reported as what it is
 // instead of as an anonymous #PF in the middle of the kernel.
 int scheduler_kstack_guard_slot(uint64_t addr) {
-    for (int i = 0; i < MAX_PROCS; i++) {
-        if (kstack_guard_contains(&kstacks[i], addr)) return i;
+    for (int i = 0; i < g_slots_ready; i++) {
+        if (kstack_guard_contains(procs[i].kstack, addr)) return i;
     }
     return -1;
 }
 
+// LINUX'S SHAPE (kernel/fork.c, set_max_threads()): process structures may
+// use at most an eighth of RAM. Floored at one chunk, so a small machine
+// keeps what toy-os always had; capped so pids can never run out
+// (SCHED_PID_MAX is four times the ceiling: own pid, pgid, sid, spare).
+static int limit_from_ram(void) {
+    uint64_t ram = pmm_total_frames() * pmm_frame_size();
+    uint64_t per = sizeof(struct sched_process) + sizeof(struct kstack) +
+                   sizeof(struct sched_slot_ext);
+    uint64_t n = ram / 8 / per;
+    if (n < SCHED_SLOT_CHUNK) n = SCHED_SLOT_CHUNK;
+    if (n > SCHED_PROCS_CEILING) n = SCHED_PROCS_CEILING;
+    return (int)n;
+}
+
 void scheduler_init(void) {
-    for (int i = 0; i < MAX_PROCS; i++) procs[i].state = SCHED_UNUSED;
+    g_max_procs = limit_from_ram();
+    uint64_t pages = ((uint64_t)g_max_procs * sizeof(struct sched_process) + 4095) / 4096;
+    uint64_t phys = pmm_alloc_contiguous(pages, PMM_ZONE_ANY);
+    if (!phys) {   // a smaller table beats no scheduler
+        g_max_procs = SCHED_SLOT_CHUNK;
+        pages = ((uint64_t)g_max_procs * sizeof(struct sched_process) + 4095) / 4096;
+        phys = pmm_alloc_contiguous(pages, PMM_ZONE_ANY);
+    }
+    procs = (struct sched_process *)(uintptr_t)phys;
+    if (procs) k_memset(procs, 0, pages * 4096);
+    g_slot_end = 0;
+    g_slots_ready = 0;
+    slot_grow();   // the first chunk now, so boot keeps a guaranteed 64
     current_index = -1;
     rotation_pos = ROT_KERNEL;
     // Permanently armed from here on -- see this file's top comment on
@@ -519,10 +585,15 @@ int find_next_runnable(int start) {
 
     // Scanned in rotation order from `start`, so among equals the next
     // one along wins, which is the old round-robin.
-    int pick = -1;
+    int pick = ROT_KERNEL, found = 0;
     uint64_t pv = 0;
-    for (int i = 1; i <= MAX_PROCS + 1; i++) {
-        int idx = (start + i + MAX_PROCS + 1) % (MAX_PROCS + 1);
+    // Positions 0 .. MAX_PROCS-1 are slots and MAX_PROCS is the kernel's;
+    // `start` may be ROT_KERNEL, -1, or past an end that has since moved.
+    int npos = MAX_PROCS + 1;
+    int from = (start < 0 || start >= MAX_PROCS) ? MAX_PROCS : start;
+    for (int i = 1; i <= npos; i++) {
+        int pos = (from + i) % npos;
+        int idx = pos == MAX_PROCS ? ROT_KERNEL : pos;
         if (idx == ROT_KERNEL) {
             if (!kernel_slot_runnable() || best != 0) continue;
             vr_place(ROT_KERNEL);   // idling left it behind: owed one slice, not the idle
@@ -532,9 +603,11 @@ int find_next_runnable(int start) {
             continue;
         }
         uint64_t v = *vr_of(idx);
-        if (pick < 0 || v < pv) { pick = idx; pv = v; }
+        // `found`, not `pick < 0`: ROT_KERNEL is negative, so choosing the
+        // kernel must not read as having chosen nothing.
+        if (!found || v < pv) { pick = idx; pv = v; found = 1; }
     }
-    if (pick < 0) return ROT_KERNEL;
+    if (!found) return ROT_KERNEL;
     if (pv > g_min_vruntime) g_min_vruntime = pv;
     return pick;
 }
@@ -853,7 +926,7 @@ int scheduler_mark_current_ready(void) {
     return 1;
 }
 
-int scheduler_max_procs(void) { return MAX_PROCS; }
+int scheduler_max_procs(void) { return g_max_procs; }
 int scheduler_live_count(void) { return alive_count; }
 
 // CPU time is billed by MEASURING IT, not by counting ticks.
@@ -1507,7 +1580,7 @@ int scheduler_exec_path(int pid, char *out, unsigned cap) {
     // REFUSE rather than truncate: callers match on this string to
     // decide which program a window belongs to, and a shortened path
     // matches the wrong one.
-    if (k_strlcpy(out, p->exec_path, cap) >= cap) { out[0] = '\0'; return 0; }
+    if (k_strlcpy(out, p->ext->exec_path, cap) >= cap) { out[0] = '\0'; return 0; }
     return out[0] ? 1 : 0;
 }
 
@@ -1546,7 +1619,7 @@ struct sched_cwd *scheduler_current_cwd(void) {
     if (current_index < 0) return 0;
     // The leader's, for scheduler_current_mm()'s reason: `cd` in one
     // thread moves the whole process, which is what chdir() means.
-    return &procs[leader_index(current_index)].cwd;
+    return &procs[leader_index(current_index)].ext->cwd;
 }
 
 // The memory map behind a given address space. Walks the table because the

@@ -276,8 +276,9 @@ generalizes that last step: `isr_common` now reloads `rsp` from a global,
 `scheduler_tick()` (called on every timer tick, vector 32, but only when
 armed) or `scheduler_on_exit()` (called from the exit syscall, only for
 scheduler-managed processes) ever point it somewhere else -- another
-process's saved register block, or back to the shell. Up to four
-processes (`MAX_PROCS`) can be READY at once, each with its own
+process's saved register block, or back to the shell. Up to the process
+limit (computed from RAM; four when this was written) can be READY at
+once, each with its own
 dedicated kernel stack used as `TSS.RSP0` while it runs, so a preempting
 interrupt always lands on that process's own stack rather than one
 shared with anything else. `userland/tests/counter_a.c` / `counter_b.c` --

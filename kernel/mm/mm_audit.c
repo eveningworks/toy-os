@@ -30,7 +30,7 @@ uint64_t mm_audit_report(void) {
     int spaces = 0;
 
     vga_write("Auditing live address spaces against the frame allocator...\n");
-    for (int slot = 0; slot < SCHED_MAX_PROCS; slot++) {
+    for (int slot = 0; slot < scheduler_slot_end(); slot++) {
         uint64_t as = scheduler_slot_pml4(slot);
         if (!as) continue; // empty slot, or a zombie whose space is gone
 
@@ -129,7 +129,7 @@ static void audit_pick_cb(uint64_t va, uint64_t frame, void *ctx) {
 // Walks every live address space, counting dangling mappings and
 // capturing the `want`-th. Returns the total seen.
 static uint64_t audit_walk(struct audit_pick *p) {
-    for (int slot = 0; slot < SCHED_MAX_PROCS; slot++) {
+    for (int slot = 0; slot < scheduler_slot_end(); slot++) {
         uint64_t as = scheduler_slot_pml4(slot);
         if (!as) continue; // empty slot, or a zombie whose space is gone
         p->pid = (uint64_t)scheduler_slot_pid(slot);

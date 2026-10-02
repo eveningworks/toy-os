@@ -65,7 +65,7 @@ Result = Results
 def close_everything(dbg, timeout=10.0):
     """Close every window AND wait for the processes behind them to go.
 
-    MAX_PROCS is 4 (scheduler.c) and most registry entries are launchers,
+    the process table was 4 slots then (scheduler.c) and most registry entries are launchers,
     so walking the whole registry exhausts the process table unless each
     app's process is actually gone before the next one starts. A closed
     WINDOW is not yet an exited PROCESS -- the client has to notice the
