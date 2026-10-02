@@ -459,8 +459,8 @@ static int sm_action_w(int i) {
 static void layout(struct sm_layout *L) {
     int ch = ugfx_char_h();
     L->item_h = ch * 2 + 10;
-    // The DETAILED row sets the menu's footprint in every list style, so
-    // switching style changes what is in the column, not the card.
+    // The DETAILED row sets the height cap in every list style, and the
+    // width in Detailed and Grid; Compact is narrower (below).
     int det_h = ch * 4;
     L->app_h = g_cfg.list == SM_LIST_COMPACT ? L->item_h
              : g_cfg.list == SM_LIST_GRID ? sm_grid_icon() + ch + 22 : det_h;
@@ -495,8 +495,16 @@ static void layout(struct sm_layout *L) {
         int n = ugfx_text_width(gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name);
         if (n > app_label) app_label = n;
     }
-    L->pane_w = app_label + 16 + SM_ICON_COL(det_h);
-    if (L->pane_w < ch * 34) L->pane_w = ch * 34;   // the same floor, room for the line under it
+    // COMPACT FITS ITS NAMES: a one-line row has no description to
+    // book room for, so the column is as wide as the widest name (and
+    // the footer below sets the real floor). Detailed and Grid keep the
+    // floor that leaves room for the line under a name.
+    if (g_cfg.list == SM_LIST_COMPACT) {
+        L->pane_w = app_label + 16 + SM_ICON_COL(L->app_h);
+    } else {
+        L->pane_w = app_label + 16 + SM_ICON_COL(det_h);
+        if (L->pane_w < ch * 34) L->pane_w = ch * 34;   // the same floor, room for the line under it
+    }
 
     // THE FOOTER MUST HOLD ITS BUTTONS and the version beside them.
     int foot_need = ugfx_text_width("toy-os " TOYOS_VERSION) + 3 * ch;

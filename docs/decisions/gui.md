@@ -9595,11 +9595,12 @@ change can never re-lay-out rows under the pointer. A per-frame
 generation poll (cursor_theme.c's shape) buys nothing a popup that opens
 fresh each time needs.
 
-**Every list style keeps the Detailed card's footprint.** Width and the
-height cap are measured on the two-line row in all three styles, so
-Compact shows more rows and Grid more apps in the same card rather than
-the menu changing size with a setting -- Windows' "more pins" layout
-does the same.
+**The height cap is the Detailed card's in every style; Compact is
+narrower.** Detailed and Grid share the card, so Grid shows more apps in
+the same space. Compact first kept that width too, and the column was
+mostly empty beside one-line names; it now fits its names (2026-10-02,
+chosen from mockups), and the footer's version and power buttons set its
+floor, about 460 px against 638.
 
 **Recent off forgets.** Off stops recording AND removes the recorded
 launches from `/etc/start-menu.conf`, as Windows clears its list when

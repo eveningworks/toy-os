@@ -701,7 +701,7 @@ void wm_handle_right_click(int mx, int my) {
                 .on_select = ctx_toggle_pin, .ctx = app, .icon = "tb-pin" };
             item[2] = (struct context_menu_item){ .label = "Add to desktop",
                                                   .on_select = ctx_add_to_desktop, .ctx = app,
-                                                  .icon = "place-desktop", .tint = UTHEME_ACT_CREATE };
+                                                  .icon = "tb-desktop-add", .tint = UTHEME_ACT_CREATE };
             context_menu_open_at(mx, my, item, 3);
         }
         return;

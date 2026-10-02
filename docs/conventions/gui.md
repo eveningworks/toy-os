@@ -2037,8 +2037,8 @@ this the obvious way), not from how much history it accumulated.
   (detailed | compact | grid), `start_opens`, `start_recent`,
   `start_hover`, `start_power`. A change applies at the next open, so
   nothing re-lays-out under the pointer. Every list style keeps the
-  DETAILED footprint (width and height cap), so switching style changes
-  what is in the column, not the card. `start_power` offers a TAIL of
+  DETAILED height cap, and Detailed and Grid its width; COMPACT fits its
+  names, so its card narrows to what the footer's buttons need. `start_power` offers a TAIL of
   `wm_system_actions[]` -- `foot_count()`/`foot_action()` -- to the
   footer AND to search. `start_recent=off` FORGETS: launches are
   unrecorded and the stored ones removed (`start_menu_recent_on()`,

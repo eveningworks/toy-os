@@ -1017,6 +1017,18 @@ def icon_tb_wallpaper():
     return im
 
 
+def icon_tb_desktop_add():
+    # A monitor on its stand with a plus on the screen: "Add to desktop".
+    # Symbolic like every tb- glyph, so a menu's tint recolours it whole.
+    im, d = _tb()
+    d.rounded_rectangle([4, 8, 60, 46], radius=4, outline=TB_INK, width=6)
+    d.line([32, 16, 32, 38], fill=TB_INK, width=6)
+    d.line([21, 27, 43, 27], fill=TB_INK, width=6)
+    d.rectangle([28, 46, 36, 54], fill=TB_INK)
+    d.rectangle([18, 54, 46, 60], fill=TB_INK)
+    return im
+
+
 def icon_tb_slideshow():
     im, d = _tb()
     d.polygon([(16, 8), (56, 32), (16, 56)], fill=TB_INK)
@@ -1576,6 +1588,7 @@ ICONS = {
     "tb-rotate-left": icon_tb_rotate_left,
     "tb-rotate-right": icon_tb_rotate_right,
     "tb-wallpaper": icon_tb_wallpaper,
+    "tb-desktop-add": icon_tb_desktop_add,
     "tb-slideshow": icon_tb_slideshow,
     "tb-info": icon_tb_info,
     "tb-open": icon_tb_open,

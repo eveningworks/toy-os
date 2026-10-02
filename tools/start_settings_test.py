@@ -7,9 +7,9 @@ cannot answer. The settings are read once per OPEN, so every check
 reopens. What a broken version would still pass, per setting:
 
   * start_list: Detailed is one column of tall rows; Compact is one
-    column of SHORTER rows showing MORE apps; Grid is several columns,
-    more apps again -- and the card's FOOTPRINT is the same in all
-    three. A grid that reported cells but drew a list fails the pixel
+    column of SHORTER rows showing MORE apps, on a NARROWER card of the
+    same height whose footer still holds its buttons; Grid is several
+    columns, more apps again, on the Detailed card. A grid that reported cells but drew a list fails the pixel
     check (the first cell's rect holds an icon, which a list row's left
     end at that spot does not).
   * Grid keyboard: Down selects the first cell, Right the next, Down a
@@ -121,14 +121,18 @@ def run(dbg, qmp, tmp, res):
               len({r["x"] for r in comp}) == 1 and comp and det and comp[0]["h"] < det[0]["h"]
               and len(comp) > len(det),
               f"compact {len(comp)} x {comp[0]['h'] if comp else '-'}, detailed {len(det)} x {det[0]['h'] if det else '-'}")
-    res.check("...on the same card", (m["w"], m["h"]) == foot, f"{(m['w'], m['h'])} vs {foot}")
+    acts = rows_of(m, "action")
+    res.check("...on a narrower card of the same height, its footer buttons inside it",
+              m["w"] < foot[0] - 100 and m["h"] == foot[1] and len(acts) == 3
+              and all(m["x"] <= r["x"] and r["x"] + r["w"] <= m["x"] + m["w"] for r in acts),
+              f"{(m['w'], m['h'])} vs {foot}, actions {[(r['x'], r['w']) for r in acts]}")
     set_key(dbg, "start_list", "grid")
     m = reopen(dbg)
     grid = rows_of(m, "app")
     cols = len({r["x"] for r in grid})
     res.check("Grid is several columns, more apps than Compact shows",
               cols >= 3 and len(grid) > len(comp), f"{cols} columns, {len(grid)} cells")
-    res.check("...on the same card", (m["w"], m["h"]) == foot, f"{(m['w'], m['h'])} vs {foot}")
+    res.check("...on the Detailed card", (m["w"], m["h"]) == foot, f"{(m['w'], m['h'])} vs {foot}")
     # DRAWN as a grid: the second cell's rect holds its icon and label. In
     # a list that rect is the right end of the first row's pill -- blank.
     if len(grid) > 1:
