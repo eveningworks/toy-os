@@ -17,7 +17,7 @@
 
 <p align="center">
   <img src="screenshots/readme/desktop.png" alt="toy-os desktop: the Start menu open on All Apps, over the Image Viewer, the File Manager, the Task Manager and a Terminal" width="49%">
-  <img src="screenshots/readme/shell.png" alt="toy-os Terminal: `doc ls` rendering the ls manual page, headings and code spans styled, paged" width="49%">
+  <img src="screenshots/readme/apps.png" alt="toy-os apps: a shaded teapot in Shapes, an MP3 playing in the Audio Player, Minesweeper, the Calculator and the Device Manager showing each device's driver" width="49%">
 </p>
 
 ---
