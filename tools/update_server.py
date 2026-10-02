@@ -51,6 +51,14 @@ with none -- and the CLIENT cuts it at its own build, as apt-listchanges
 cuts a changelog at the installed version. A trailer with any other kind
 is left out with a warning, never guessed at.
 
+A commit that went out WITHOUT one gets it as a git note, which changes
+no SHA (`git notes` is how Gerrit keeps its review data on commits):
+
+    git notes --ref=release add -m "fixed: <text>" <sha>
+    git push origin refs/notes/release
+
+one `<kind>: <text>` per line, read the same way as the trailer.
+
 The `dev` manifest is GENERATED from the staging tree `make iso` seeds on
 every request, never kept beside it -- a list maintained by hand is a
 pointer somebody forgets to update. The trees and the new-files-only rule
@@ -101,6 +109,7 @@ UNIT_TEMPLATE = os.path.join(REPO, "tools", "systemd", UNIT_NAME)
 VERSION_H = os.path.join(REPO, "kernel", "include", "api", "version.h")
 NOTE_KINDS = ("new", "improved", "fixed")
 NOTES_COMMITS = 200       # how far back a machine can be and still get "since your build"
+NOTES_REF = "refs/notes/release"   # notes added AFTER the commit, one `<kind>: <text>` per line
 
 
 class Unavailable(Exception):
@@ -255,18 +264,22 @@ def release_notes(build_id, limit=NOTES_COMMITS):
     lines = ["# toy-os release notes", f"# commit {build_id}"]
     try:
         out = subprocess.run(
-            ["git", "log", f"-n{limit}", "--abbrev=8",
-             "--format=%h%x1f%(trailers:key=Release-note,valueonly,separator=%x1e)%x1d", rev],
+            ["git", "log", f"-n{limit}", "--abbrev=8", f"--notes={NOTES_REF}",
+             "--format=%h%x1f%(trailers:key=Release-note,valueonly,separator=%x1e)%x1f%N%x1d",
+             rev],
             cwd=REPO, check=True, capture_output=True, text=True).stdout
     except (OSError, subprocess.CalledProcessError):
         return "\n".join(lines) + "\n"
     for rec in out.split("\x1d"):
-        sha, _, values = rec.strip("\n").partition("\x1f")
+        sha, _, rest = rec.strip("\n").partition("\x1f")
         if not sha:
             continue
+        trailers, _, noted = rest.partition("\x1f")
         said = 0
-        for v in values.split("\x1e"):
+        for v in trailers.split("\x1e") + noted.splitlines():
             v = " ".join(v.split())          # a folded trailer is one line
+            if v.lower().startswith("release-note:"):
+                v = v[len("release-note:"):].strip()
             if not v:
                 continue
             kind, sep, text = v.partition(":")

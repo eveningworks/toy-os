@@ -665,7 +665,11 @@ this the obvious way), not from how much history it accumulated.
   lines for several changes; any other kind is dropped with a warning by
   `update_server.py`, never guessed at. It goes with the trailers at the
   END of the message (`git interpret-trailers` reads only the last
-  paragraph), before `Co-Authored-By:`.
+  paragraph), before `Co-Authored-By:`. **A commit already pushed
+  without one gets a GIT NOTE, never a rewrite**: `git notes
+  --ref=release add -m "fixed: <text>" <sha>`, then `git push origin
+  refs/notes/release` -- one `<kind>: <text>` per line, read like the
+  trailer, and no SHA changes.
 
 ## A `.d` FILE MUST NEVER BE REMAKEABLE, OR make BUILDS THE WRONG FILE AND STILL EXITS 0
 

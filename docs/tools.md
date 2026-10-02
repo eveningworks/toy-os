@@ -798,7 +798,8 @@ manual steps to be worth automating:
   open); a QEMU guest reaches it as `10.0.2.2`. The test tools mount one
   source at the root instead (`make_handler({"": ...})`). **`GET
   <ch>/notes`** is the release notes: `release_notes()` reads the
-  `Release-note:` trailers of the build's last 200 commits (`git log`
+  `Release-note:` trailers and `refs/notes/release` git notes (for a
+  commit pushed without a trailer) of the build's last 200 commits (`git log`
   from `TOYOS_BUILD_ID` in `version.h`, not HEAD), one line per commit;
   `--publish` freezes them as `notes` in the snapshot, and an older
   snapshot answers 404. The manifest carries `# commit` for the same

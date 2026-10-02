@@ -69,8 +69,8 @@ version -- wrapped to the terminal:
 This machine's build is the `# commit` of the manifest it last applied
 (`/var/lib/update/installed`), or the commit `/bin/update` itself was
 built from when there is no record yet. The notes are the commits'
-`Release-note:` lines (`docs/conventions/build.md`); a commit without
-one is only counted. A server with no notes -- a build published before
+`Release-note:` lines, or a `refs/notes/release` git note added later
+(`docs/conventions/build.md`); a commit with neither is only counted. A server with no notes -- a build published before
 they existed -- prints none, and that is not an error. The System
 Update window shows the same text on its **What's new** tab, before and
 after an install.
