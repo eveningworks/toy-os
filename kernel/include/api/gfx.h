@@ -349,6 +349,13 @@ int gfx_set_double_buffered(int enabled);
 // buffering is off.
 void gfx_present(void);
 
+// Loads a SCANOUT's pixels into the back buffer, faded toward black by
+// `dim`/255, turns double buffering on and marks it all dirty -- so the
+// next present shows that frame. For the dead desktop's last frame
+// (vga.h's hold). Returns 0 with no back buffer.
+int gfx_load_frame(uint64_t addr, uint32_t pitch, uint32_t w, uint32_t h,
+                   uint8_t src_bpp, uint8_t dim);
+
 // Times `iterations` full-screen fills of the VISIBLE framebuffer and
 // returns the total in TSC cycles. Deliberately bypasses the back buffer
 // and the dirty-rect machinery: what it measures is the one thing that

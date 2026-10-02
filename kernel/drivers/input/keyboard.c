@@ -653,6 +653,9 @@ int keyboard_getchar_mods(uint8_t *out_mods) {
         // why the tick and the present are deliberately NOT part of it.
         // Suspending the READ was not enough; the loop body had to stop
         // drawing too.
+        // A held screen (vga.h) whose desktop never came back: the
+        // console takes the screen AND the keyboard.
+        if (vga_hold_expired()) keyboard_suspend_blocking(0);
         if (!keyboard_blocking_suspended()) {
             vga_cursor_tick();
         }

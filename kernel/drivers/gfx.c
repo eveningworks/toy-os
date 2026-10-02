@@ -544,6 +544,30 @@ int gfx_set_double_buffered(int enabled) {
 // that gets the full benefit of both halves is the cursor-only-moved case
 // (see wm_render_cursor_move() in userland/wm/wm_render.c): a handful of
 // pixels touched, a handful of pixels blitted, instead of a full frame.
+int gfx_load_frame(uint64_t addr, uint32_t src_pitch, uint32_t w, uint32_t h,
+                   uint8_t src_bpp, uint8_t dim) {
+    if (!addr || !gfx_set_double_buffered(1)) return 0;
+    int rows = (int)h < height ? (int)h : height;
+    int cols = (int)w < width ? (int)w : width;
+    unsigned keep = 255u - dim;
+    for (int y = 0; y < height; y++) {
+        uint32_t *d = back_buffer + (uint32_t)y * (uint32_t)width;
+        const uint8_t *s = (const uint8_t *)(uintptr_t)addr + (uint64_t)y * src_pitch;
+        for (int x = 0; x < width; x++) {
+            uint32_t c = 0;
+            if (y < rows && x < cols)
+                c = src_bpp == 32 ? ((const uint32_t *)s)[x]
+                                  : (uint32_t)s[3 * x] | ((uint32_t)s[3 * x + 1] << 8)
+                                    | ((uint32_t)s[3 * x + 2] << 16);
+            uint32_t r = ((c >> 16) & 0xFF) * keep / 255, g = ((c >> 8) & 0xFF) * keep / 255,
+                     b = (c & 0xFF) * keep / 255;
+            d[x] = (r << 16) | (g << 8) | b;
+        }
+    }
+    dirty_x0 = 0; dirty_y0 = 0; dirty_x1 = width; dirty_y1 = height;
+    return 1;
+}
+
 void gfx_present(void) {
     if (!double_buffered) return;
     if (dirty_x1 <= dirty_x0) return; // nothing touched since the last present

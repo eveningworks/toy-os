@@ -42,6 +42,11 @@ int win_surface_grant(int pid, uint64_t pml4, uint32_t *out_w, uint32_t *out_h,
 // rather than only the ones that granted.
 void win_surface_revoke(int pid);
 
+// Puts the scanout `pid`'s desktop is SHOWING into the console's back
+// buffer, dimmed, and starts vga.h's hold over it. Before the revoke,
+// which flips to buffer 0. Returns 1 when the screen is now held.
+int win_surface_hold_frame(int pid);
+
 // After a mode change: re-grants the current holder (if any) at the new
 // geometry, keeping every address it had mapped. 1 on success or when
 // there is no holder.

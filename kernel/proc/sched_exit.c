@@ -164,7 +164,7 @@ void scheduler_on_exit(int code) {
     // polling it -- otherwise a crashed client leaves a window that
     // draws stale pixels and answers no input. A no-op when no server
     // is registered, which is every non-GUI boot.
-    win_server_client_gone(leader + 1);
+    win_server_client_died(leader + 1, code);
     diag_provider_gone(leader + 1);
 
     // Its children lose their parent before anything can reuse this
@@ -440,7 +440,7 @@ int scheduler_kill(int pid, int exit_code) {
     // reasons -- see its comments. A killed client's windows must come
     // off the screen now rather than at reap, or a dead process leaves a
     // window drawing stale pixels and answering no input.
-    win_server_client_gone(pid);
+    win_server_client_died(pid, exit_code);
     diag_provider_gone(pid);   // ...and any diagnostic name it held
     notify_parent(procs[slot].ppid);
 

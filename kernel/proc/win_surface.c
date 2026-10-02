@@ -11,6 +11,7 @@
 #include "win_proto.h"
 #include "vmm.h"
 #include "gfx.h"
+#include "vga.h"         // vga_hold_begin() -- the dead desktop's frame
 #include "display.h"
 #include "klog.h"
 #include "kfmt.h" // klog_printf
@@ -200,6 +201,15 @@ int win_surface_grant(int pid, uint64_t pml4, uint32_t *out_w, uint32_t *out_h,
     klog_printf("win_surface: granted the framebuffer to pid %d (%u pages x %d scanout%s)\n",
                 pid, (unsigned)pages, count, count == 1 ? "" : "s");
     return 1;
+}
+
+int win_surface_hold_frame(int pid) {
+    if (!g_holder || g_holder != pid) return 0;
+    struct display_surface surf;
+    display_scanout_at(g_front, &surf);
+    // 45% darker: the frame reads as "not live" and the card stands out.
+    if (!gfx_load_frame(surf.addr, surf.pitch, surf.width, surf.height, surf.bpp, 115)) return 0;
+    return vga_hold_begin();
 }
 
 void win_surface_revoke(int pid) {

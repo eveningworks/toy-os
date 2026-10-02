@@ -21,6 +21,8 @@
 #include "mouse.h"       // mouse_set_position() -- WIN_REQ_WARP_POINTER
 #include "vga.h"         // vga_resume() -- hand the screen back (R7)
 #include "kfmt.h"        // klog_printf
+#include "ksignal.h"     // signal_dumps_core() -- a crash, not a kill
+#include "signal_abi.h"  // SIGNAL_EXIT_BASE
 #include <stddef.h>
 
 #include "scheduler.h" // SCHED_MAX_PROCS
@@ -406,6 +408,20 @@ void win_server_setting_changed(uint32_t generation) {
 }
 void win_server_fswatch_fired(int id) { broadcast(WIN_EV_FSWATCH, id, 0); }
 
+static int g_dying_code;   // win_server_client_died()'s, for the hold decision
+
+// A CRASH, not a kill: a fault (-1) or a signal whose default dumps core.
+// A SIGTERM is someone asking the desktop to go, and gets the console back.
+static int died_of_crash(int code) {
+    return code < 0 || (code > SIGNAL_EXIT_BASE && signal_dumps_core(code - SIGNAL_EXIT_BASE));
+}
+
+void win_server_client_died(int pid, int exit_code) {
+    g_dying_code = exit_code;
+    win_server_client_gone(pid);
+    g_dying_code = 0;
+}
+
 void win_server_client_gone(int pid) {
     if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return;
 
@@ -440,12 +456,16 @@ int win_server_compositor_pid(void) { return g_comp_pid; }
 // ring notices the compositor's beacon has gone (uchan_client_server_
 // alive) and closes itself, the way a Wayland client sees its socket
 // close. The kernel keeps no list to tell.
-static void compositor_gone(void) {
-    // Hand the screen back. Reaching here means nobody else is drawing
-    // it, so the last frame the dead desktop left is all the user would
-    // otherwise have -- indistinguishable from a hang. The console owns
-    // its own double buffering, so this repaints rather than inheriting
-    // whatever state the compositor left.
+static void compositor_gone(int held) {
+    // A DESKTOP THAT DIED keeps its last frame up, dimmed and labelled,
+    // while init restarts it (vga.h's hold) -- the console flashing up
+    // for that moment told nobody anything. One that LEFT (Exit to shell,
+    // a clean exit) hands the screen straight back: the console repaints
+    // rather than inheriting whatever the compositor left.
+    if (held) {
+        klog_write("win: compositor died -- holding its last frame until a desktop is back\n");
+        return;
+    }
     vga_resume();
     klog_write("win: compositor gone -- console restored\n");
 }
@@ -456,7 +476,11 @@ int win_server_set_compositor(int pid, uint64_t pml4) {
     // NO MAPPINGS TO DROP: a compositor's view of a window is its own
     // mmap of the client's object, and it goes when that process's
     // address space does.
+    int held = 0;
     if (g_comp_pid && g_comp_pml4) {
+        // BEFORE the revoke, which flips to buffer 0: the frame to hold is
+        // the one on screen now.
+        if (pid == 0 && died_of_crash(g_dying_code)) held = win_surface_hold_frame(g_comp_pid);
         // The framebuffer grant goes the same way and for the same
         // reason: it belongs to the ROLE, not to the process. This is
         // the one place the role is cleared -- deregistration, a kill
@@ -493,12 +517,17 @@ int win_server_set_compositor(int pid, uint64_t pml4) {
     // readers stop consuming: the physical shell sits at a prompt behind
     // the desktop and was draining the same ring, so keys typed at the
     // desktop were being run by an invisible shell (see keyboard.h).
-    keyboard_suspend_blocking(pid != 0);
+    //
+    // A HELD screen keeps the keyboard from the console too: keys typed
+    // while the desktop restarts must not reach the shell hidden behind
+    // it. vga_hold_expired() gives it back if no desktop returns.
+    keyboard_suspend_blocking(pid != 0 || held);
+    if (pid != 0) vga_hold_end(0);   // a new desktop takes the screen over
 
     // AFTER the registration is cleared, not before: compositor_gone()
     // pushes events and repaints, and anything it reaches must already
     // see "there is no compositor" rather than a half-cleared one.
-    if (was_held && pid == 0) compositor_gone();
+    if (was_held && pid == 0) compositor_gone(held);
     return 1;
 }
 

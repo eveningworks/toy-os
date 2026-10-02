@@ -419,8 +419,12 @@ void vga_present_force(void) {
     present_now();
 }
 
+static int g_held;              // the dead desktop's last frame is on screen
+static uint64_t g_held_until;   // coarse tick when the console takes it back
+
 void vga_present(void) {
     if (!fb_mode) return;
+    if (g_held) return;   // the held frame (vga_hold_begin) is the screen's
     // THE DESKTOP OWNS THE SCREEN. Without this, any ring-3 process
     // writing to fd 1 blits the text console over the whole desktop --
     // DOOM's startup banner was the visible case, `dmesg` covers 100% of
@@ -760,6 +764,72 @@ void vga_resume(void) {
     // "the desktop is gone, show the console" must not be silently
     // skippable by a future reordering.
     vga_present_force();
+}
+
+// A card with rounded corners: gfx has no rounded fill, and this is its
+// one kernel caller.
+static void fill_round(int x, int y, int w, int h, int r, uint32_t c) {
+    gfx_fill_rect(x + r, y, w - 2 * r, h, c);
+    gfx_fill_rect(x, y + r, r, h - 2 * r, c);
+    gfx_fill_rect(x + w - r, y + r, r, h - 2 * r, c);
+    gfx_fill_circle(x + r, y + r, r, c);
+    gfx_fill_circle(x + w - r - 1, y + r, r, c);
+    gfx_fill_circle(x + r, y + h - r - 1, r, c);
+    gfx_fill_circle(x + w - r - 1, y + h - r - 1, r, c);
+}
+
+int vga_hold_begin(void) {
+    if (!fb_mode) return 0;
+    static const char title[] = "Restarting the desktop";
+    static const char sub[] = "It stopped unexpectedly. Your windows will close.";
+    int ch = gfx_char_h(), pad = ch;
+    int spin = ch + ch / 2;
+    gfx_set_bold(1);
+    int tw = gfx_text_width(title);
+    gfx_set_bold(0);
+    int sw = gfx_text_width(sub);
+    if (sw > tw) tw = sw;
+    int w = pad + spin + pad + tw + pad + pad / 2, h = 2 * pad + 2 * ch + ch / 2;
+    int x = (gfx_width() - w) / 2, y = (gfx_height() - h) / 2;
+    fill_round(x, y, w, h, ch / 2, gfx_rgb(150, 160, 176));
+    fill_round(x + 1, y + 1, w - 2, h - 2, ch / 2 - 1, gfx_rgb(244, 244, 246));
+    // A still spinner: nothing runs to turn it, so it says "busy" by
+    // shape -- a light ring with a quarter of it in the accent, from the
+    // top round to the right. The arc is dots along the ring's middle,
+    // close enough to read as one stroke; sines in thousandths, every
+    // 7.5 degrees, since the kernel has no floating point.
+    static const int SIN[13] = { 0, 131, 259, 383, 500, 609, 707, 793, 866, 924, 966, 991, 1000 };
+    int cx = x + pad + spin / 2, cy = y + h / 2, r = spin / 2, t = r / 3;
+    gfx_fill_circle(cx, cy, r, gfx_rgb(205, 220, 240));
+    gfx_fill_circle(cx, cy, r - t, gfx_rgb(244, 244, 246));
+    int mid = r - t / 2;
+    for (int i = 0; i <= 12; i++)
+        gfx_fill_circle(cx + mid * SIN[i] / 1000, cy - mid * SIN[12 - i] / 1000, t / 2,
+                        gfx_rgb(70, 110, 160));
+    int tx = x + pad + spin + pad, ty = y + pad;
+    gfx_set_bold(1);
+    gfx_draw_string(tx, ty, title, gfx_rgb(20, 20, 20), gfx_rgb(244, 244, 246));
+    gfx_set_bold(0);
+    gfx_draw_string(tx, ty + ch + ch / 2, sub, gfx_rgb(74, 74, 82), gfx_rgb(244, 244, 246));
+    present_now();
+    g_held = 1;
+    g_held_until = coarse_ticks() + (uint64_t)VGA_HOLD_S * COARSE_HZ;
+    return 1;
+}
+
+void vga_hold_end(int resume) {
+    if (!g_held) return;
+    g_held = 0;
+    if (resume) vga_resume();
+}
+
+int vga_held(void) { return g_held; }
+
+int vga_hold_expired(void) {
+    if (!g_held || coarse_ticks() < g_held_until) return 0;
+    klog_write("console: no desktop came back -- the console has the screen\n");
+    vga_hold_end(1);
+    return 1;
 }
 
 void vga_reflow(void) {

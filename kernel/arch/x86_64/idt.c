@@ -683,8 +683,12 @@ static void isr_dispatch_body(uint64_t *regs) {
         //
         // _force, because the ordinary present does nothing while a
         // compositor owns the screen -- which would hide every panic
-        // that happens under a running desktop.
-        vga_present_force();
+        // that happens under a running desktop. **A RING-3 CRASH IS NOT
+        // A PANIC**: the system carries on, so it takes the ordinary
+        // present, which leaves a running desktop's screen alone (the
+        // report is in /var/crash and the klog).
+        if (recoverable) vga_present();
+        else             vga_present_force();
 
         if ((cs & 3) == 3 && ring3_hook) {
             ring3_hook(vector, error_code, cs, cr2);

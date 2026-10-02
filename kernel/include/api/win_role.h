@@ -64,6 +64,10 @@ int win_server_request(int pid, struct win_request_msg *req);
 // needs nothing here -- its windows are the compositor's, which learns
 // of the death from its own channel scan.
 void win_server_client_gone(int pid);
+// The same, from a DEATH, with its exit code: a compositor that dies
+// with a non-zero one (a crash, a kill) leaves its last frame held while
+// init restarts it (vga.h). A clean exit -- Exit to shell -- does not.
+void win_server_client_died(int pid, int exit_code);
 
 // --- the compositor role -------------------------------------------
 //
