@@ -45,7 +45,7 @@ const char *ufiletype_name(const char *name, int is_dir) {
     return i < 0 ? "File" : TYPES[i].name;
 }
 
-// A FOLDER OF A KNOWN KIND, by its NAME -- Breeze's folder-music and
+// A FOLDER OF A KNOWN KIND, by its NAME -- Plasma's folder-music and
 // Explorer's special folders, which key on the well-known names the same
 // way. The names cover the home places and this system's own
 // /usr/share; anything else is the plain folder.

@@ -47,7 +47,7 @@ SPAWN_TIMEOUT_S = 15.0
 # The terminal draws light text on black, so "ink" is anything not black.
 BG = (0, 0, 0)
 
-# terminal.c's scrollbar colours -- Breeze's dark pair.
+# terminal.c's scrollbar colours -- Plasma's dark pair.
 TRACK = (49, 54, 59)
 
 HEX = {" ": "0x20", "/": "0x2f", ".": "0x2e", "-": "0x2d", "_": "0x5f"}

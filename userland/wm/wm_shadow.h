@@ -4,7 +4,7 @@
 // DROP SHADOWS UNDER WINDOWS AND POPUPS, drawn by the compositor into
 // the scene BEFORE the window that casts them, so the window's rounded
 // corners (corners_save/corners_round) reveal shadow rather than
-// desktop. Mutter and Breeze both pre-render a blurred rounded rect
+// desktop. Mutter and Plasma both pre-render a blurred rounded rect
 // and 9-slice it; nothing blurs per frame here either -- the falloff
 // is a table and each corner a cached tile.
 //

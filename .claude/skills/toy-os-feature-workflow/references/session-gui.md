@@ -642,7 +642,7 @@ theme token of their own, `tab_rest`, when "darker" was asked for.
 ## "Subtle" is judged against KDE, not against nothing (2026-09-02)
 
 A corner radius of a third of the line height (5 px) was built as
-"subtle rounded corners" and read as still square; half (8 px, Breeze's
+"subtle rounded corners" and read as still square; half (8 px, Plasma's
 default) was right. The two-tone bevel read as a Windows 95 panel once
 corners rounded; one hairline in the theme's border colour was right.
 The maintainer's reference for chrome is KDE and Windows 11: when a

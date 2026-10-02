@@ -478,7 +478,7 @@ struct btn_rects { int min_x, max_x, close_x, y, size; };
 struct btn_rects title_buttons(const struct window *win);
 
 // The app icon at the FAR LEFT of a title bar -- Windows' system-menu
-// icon, KWin/Breeze's and XFWM's window-menu button. Returns the
+// icon, KWin's and XFWM's window-menu button. Returns the
 // decoded picture (borrowed from icon_cache.h -- never freed, never
 // held across an icon_cache_invalidate()) and fills the square it
 // occupies, or NULL when this window shows none.

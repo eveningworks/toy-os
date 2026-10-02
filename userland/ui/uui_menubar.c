@@ -113,7 +113,7 @@ static void level_size(const struct uui_menu_item *items, int count,
     if (widest_accel) w += accel_gap() + widest_accel;
     int sw = 2 + 2 * air() + ns * strip_btn_w() + (ns > 0 ? (ns - 1) * air() : 0);
     if (w < sw) w = sw;
-    if (w < unit() * 16) w = unit() * 16; // Windows' and Breeze's floor: a card, not a tag
+    if (w < unit() * 16) w = unit() * 16; // Windows' and Plasma's floor: a card, not a tag
 
     *out_w = w;
     *out_h = h;
@@ -454,7 +454,7 @@ static void draw_tick(struct ugfx_surface *s, int x, int y, int sz, uint32_t c) 
 }
 
 // A chevron, not a filled triangle: the submenu mark of Windows 11 and
-// Breeze, stroked at the label's weight.
+// Plasma, stroked at the label's weight.
 static void draw_chevron(struct ugfx_surface *s, int cx, int cy, uint32_t c) {
     int r = ugfx_char_h() / 3;
     if (r < 3) r = 3;

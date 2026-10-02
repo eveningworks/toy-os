@@ -272,7 +272,7 @@ int tray_left(void) { return tray_walk(-1, 0, 0, 0, 0); }
 // --- hover and the pressed ground ----------------------------------------
 //
 // A tray item lights on HOVER and darker while HELD, as the strip's own
-// buttons do -- Windows 11's and Breeze's rule. (It was press-only, the
+// buttons do -- Windows 11's and Plasma's rule. (It was press-only, the
 // macOS menu-bar rule, until the taskbar redesign gave every control on
 // the strip a hover.) Nothing latches: the ground clears on release even
 // when the click opened a popup.

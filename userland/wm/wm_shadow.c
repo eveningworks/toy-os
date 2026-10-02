@@ -16,13 +16,13 @@ static uint32_t g_seen_generation;
 
 // Radius (how far the shadow reaches), darkness (the alpha at the edge
 // of the casting rect, of 255) and downward offset, per kind. In LINE
-// HEIGHTS so they scale with the chrome: Breeze's active shadow is
+// HEIGHTS so they scale with the chrome: Plasma's active shadow is
 // about a title bar tall.
 static void params(enum wm_shadow_kind kind, int *r, int *a, int *oy) {
     int lh = ugfx_char_h();
     if (lh <= 0) lh = 14;
     switch (kind) {
-    // Breeze's default shadow strength is 50%; its inactive shadow is
+    // Plasma's default shadow strength is 50%; its inactive shadow is
     // smaller and lighter, which is how depth says which window is up.
     case WM_SHADOW_FOCUSED:  *r = lh * 3 / 2; *a = 128; break;
     case WM_SHADOW_INACTIVE: *r = lh;         *a = 72;  break;
@@ -146,7 +146,7 @@ void wm_shadow_draw(int x, int y, int w, int h, int corner_r, enum wm_shadow_kin
     // bar or the control that opened it, and a shadow reaching up over
     // that bar reads as the bar changing when the menu opens (a rounded
     // card tried every side, and menubar_test caught the next title
-    // darkening). Windows' menus and Breeze's both keep it below.
+    // darkening). Windows' menus and Plasma's both keep it below.
     int bx0 = sx - r, bx1 = sx + w + r, by0 = sy - r, by1 = sy + h + r;
     if (kind == WM_SHADOW_POPUP && by0 < y) by0 = y;
     if (bx0 < 0) bx0 = 0;

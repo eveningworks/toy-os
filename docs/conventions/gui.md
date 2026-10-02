@@ -158,7 +158,7 @@ this the obvious way), not from how much history it accumulated.
     high at EVERY size. Draw from `cx - h` to `cx + h` inclusive --
     always odd, always centred, at any font.
   - **HAIRLINE STROKES AT THIS SIZE.** A 2px wall around a 6px square
-    leaves a 2px hole and stops reading as an outline; Adwaita, Breeze
+    leaves a 2px hole and stops reading as an outline; Adwaita, Plasma
     and Segoe MDL2 are all 1px here.
 
 - **AN ICON COLUMN IN A SIDEBAR IS PER SIDEBAR, NOT PER ROW.**
@@ -510,9 +510,9 @@ this the obvious way), not from how much history it accumulated.
   the compositor repaints everything under the damage box back to
   front (`docs/decisions/gui.md`); nothing else knows a corner is
   transparent, and nothing needs to. **The radius is half the line
-  height**, 8 px at the default font (Breeze's; a third was tried and
+  height**, 8 px at the default font (Plasma's; a third was tried and
   read as square), and **a maximized window is
-  square** -- Breeze's and Windows 11's rule both. **Hit testing stays
+  square** -- Plasma's and Windows 11's rule both. **Hit testing stays
   rectangular**: a click in a corner belongs to the window. Two
   consequences for tests: a pixel sampled at a window's outermost
   corner is backdrop now, so sample inward; and a test that COUNTS
@@ -766,7 +766,7 @@ this the obvious way), not from how much history it accumulated.
   a `thumb_radius` in pixels; `UUI_SB_CAPSULE` means half the short axis,
   and any radius is clamped to that. `uui_scrollbar_draw()` is
   `uui_scrollbar_draw_styled()` with `uui_scrollbar_style_default` --
-  capsule on both parts, which is Breeze's groove and handle
+  capsule on both parts, which is Plasma's groove and handle
   (`drawRoundedRect(rect, 0.5 * w, 0.5 * w)`) and what Konsole therefore
   shows. A radius per part rather than a round/square flag because that
   is what the systems this copies actually express: `border-radius` on
@@ -3130,7 +3130,7 @@ real scanout hardware does. Do not write a pixel assertion for one.
   UUI_STATE_PRESSED)` for exactly as long as the left button is down on
   it: nothing on hover, and nothing latched afterwards -- a popup the
   press opened does NOT keep its item lit. That is the macOS menu-bar
-  rule, not Windows 11's or Breeze's, both of which also highlight on
+  rule, not Windows 11's or Plasma's, both of which also highlight on
   hover; `docs/decisions.md` has why. Three mechanical things.
   `tray_update_press()` runs every wm_run() tick, not on the button-down
   edge, because the pill has to go out on a release or a drag off the
@@ -3279,7 +3279,7 @@ real scanout hardware does. Do not write a pixel assertion for one.
 - **A WINDOW'S TITLE BAR CARRIES ITS APP ICON, AND `title_icon()` IS THE
   ONE ANSWER FOR BOTH DRAWING AND CLICKING.** The far-left square of
   every title bar is the app's icon -- Windows' system-menu icon,
-  Breeze's and XFWM's window-menu button. The client never supplies one:
+  Plasma's and XFWM's window-menu button. The client never supplies one:
   it is resolved from the window's `app_id` through
   `wm_window_icon_name()` (in `wm.c`, not `wm_taskbar.c` -- the taskbar
   was merely the first asker), exactly as Wayland's
@@ -4551,7 +4551,7 @@ labelled `" "` cannot be passed as a console token.
   which is what a vertical `uui_scrollbar`'s offset means
   (`uui_scrollbar.h`), so unlike `uui_listbox` there is no conversion --
   and a conversion added "for symmetry" would put the thumb at the wrong
-  end. **The colours are Breeze's DARK pair** (`#31363b` track,
+  end. **The colours are Plasma's DARK pair** (`#31363b` track,
   `#76797c` thumb) rather than the toolkit theme's: this page is the
   ANSI palette on black by definition, and Notepad's near-white bar down
   the side of it would be the brightest thing on the window. And **the

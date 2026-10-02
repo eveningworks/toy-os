@@ -14,7 +14,7 @@ said, because the reason is the useful part.
 **The Image Viewer (`userland/gui/apps/imgview.c`) is the reference,
 and the File Manager (`files.c`, `userland/fm/`) the second example**
 -- agreed 2026-10-01 as the look for every new app and every redesign.
-It is Windows 11 and KDE Breeze in SHAPE (Photos, Gwenview, Dolphin;
+It is Windows 11 and KDE Plasma in SHAPE (Photos, Gwenview, Dolphin;
 Mica's quiet chrome), drawn with this theme's roles. Mock a redesign
 up on a Design canvas first, in this palette and with real data.
 
@@ -291,7 +291,7 @@ A scrollbar looks trivial and has more behaviour than any other control
 here. This section is the specification, written down because the
 implementation has been rebuilt under it twice and each time something
 in this list quietly stopped being true. Every point below is how
-Windows, KDE/Breeze, macOS and GTK all behave -- they differ on looks,
+Windows, KDE, macOS and GTK all behave -- they differ on looks,
 not on any of this. If a change makes one of these false, the change is
 wrong even if it builds and even if the bar still moves.
 
@@ -377,7 +377,7 @@ SCROLL GLIDES AS A DISPLACEMENT".
 
 **Looks, as distinct from the nine behaviours above: the SHAPE is the
 app's.** `struct uui_scrollbar_style` carries a radius per part, and the
-default is `UUI_SB_CAPSULE` on both -- Breeze's groove and handle, which
+default is `UUI_SB_CAPSULE` on both -- Plasma's groove and handle, which
 is what Konsole shows. An app that wants something squarer passes its
 own style to `uui_scrollbar_draw_styled()`; nothing about the nine
 points changes with it, and the hit test stays rectangular, so a click
@@ -511,7 +511,7 @@ Esc. `KEY_F10` focuses the bar -- Windows' own second binding.
 **How a menu LOOKS: one card, for every menu.** An app's menu bar
 dropdown, its right-click menu, the desktop's, the window menu and the
 taskbar's are all `uui_menubar`, so they are one design -- Windows 11's
-(chosen from mockups on 2026-10-01, Breeze and a dark shell beside it):
+(chosen from mockups on 2026-10-01, Plasma and a dark shell beside it):
 
 - **The card** (`ui/uui_popup.h`): a step lighter than the chrome, a
   1px hairline, corners rounded at five-eighths of the line height
@@ -800,7 +800,7 @@ every state change lands in one frame as before.
 
 Every window casts a drop shadow onto whatever is beneath it, and the
 focused window's is larger and darker than an inactive one's -- the
-Mutter/DWM/macOS treatment, at Breeze's default strength. Menus and
+Mutter/DWM/macOS treatment, at Plasma's default strength. Menus and
 flyouts cast a small one, following their rounded corners but never above
 their top edge -- a menu hangs from its bar, and a shadow over the bar
 reads as the bar changing. Maximized and fullscreen windows cast none;

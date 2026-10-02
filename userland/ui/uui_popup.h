@@ -63,7 +63,7 @@ struct ugfx_surface *uui_popup_surface(int id);
 
 // --- the popup's SHAPE, one answer for every popup ----------------------
 //
-// Windows 11's and Breeze's menus, dropdown lists and tooltips share one
+// Windows 11's and Plasma's menus, dropdown lists and tooltips share one
 // rounded, hairline-edged card. The compositor rounds a popup SURFACE's
 // corners itself (wm_render.c, as it does a window's) at this radius, so
 // a widget drawing into a surface paints a SQUARE card and lets the

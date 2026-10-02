@@ -291,7 +291,7 @@ static int row_text_x(const struct uui_tree *t, int node) {
 }
 
 // A CHEVRON, two pixels thick: right when collapsed, down when expanded
-// -- Windows 11's and Breeze's disclosure mark, in a muted colour so the
+// -- Windows 11's and Plasma's disclosure mark, in a muted colour so the
 // labels lead. Drawn, not spelled, so it does not depend on the font.
 static void draw_expander(struct ugfx_surface *s, int cx, int cy, int open,
                            uint32_t col) {
@@ -474,7 +474,7 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
     // vanish is not one.
     if (t->focused) {
         // The strong style draws NO ring on its row: the accent fill is
-        // already the mark of where focus is (Windows' and Breeze's rows).
+        // already the mark of where focus is (Windows' and Plasma's rows).
         if (sel_ry >= 0 && (strong || rounded)) { /* the fill or edge is the indicator */ }
         else if (sel_ry >= 0) uui_focus_ring(s, t->x, sel_ry, t->w - bar, rh);
         else             uui_focus_ring(s, t->x, t->y, t->w, t->h);

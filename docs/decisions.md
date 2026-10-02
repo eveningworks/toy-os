@@ -589,7 +589,7 @@ first before re-litigating it from scratch.
 - [The taskbar's layout is four independent settings over one layout function, and a floating panel deflates rather than the band moving](decisions/gui.md#the-taskbars-layout-is-four-independent-settings-over-one-layout-function-and-a-floating-panel-deflates-rather-than-the-band-moving)
 - [Taskbar peek is content thumbnails, rescaled on present, held by open order](decisions/gui.md#taskbar-peek-is-content-thumbnails-rescaled-on-present-held-by-open-order)
 - [Taskbar buttons drag to reorder, live, and a drop commits a rank](decisions/gui.md#taskbar-buttons-drag-to-reorder-live-and-a-drop-commits-a-rank)
-- [The greys are a ladder with the page in the middle, macOS/Windows 10 spacing, not Breeze's](decisions/gui.md#the-greys-are-a-ladder-with-the-page-in-the-middle-macoswindows-10-spacing-not-breezes)
+- [The greys are a ladder with the page in the middle, macOS/Windows 10 spacing, not Plasma's](decisions/gui.md#the-greys-are-a-ladder-with-the-page-in-the-middle-macoswindows-10-spacing-not-plasmas)
 - [Smooth scrolling is a displacement that eases to zero, not an animated position](decisions/gui.md#smooth-scrolling-is-a-displacement-that-eases-to-zero-not-an-animated-position)
 - [Shadows are a cached corner tile and a falloff table, drawn under the window, and part of its damage](decisions/gui.md#shadows-are-a-cached-corner-tile-and-a-falloff-table-drawn-under-the-window-and-part-of-its-damage)
 - [Window animations are ghosts: one snapshot, scaled and faded, in place of the window](decisions/gui.md#window-animations-are-ghosts-one-snapshot-scaled-and-faded-in-place-of-the-window)

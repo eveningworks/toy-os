@@ -6,7 +6,7 @@ WHAT IS UNDER TEST
 ------------------
 A tray item (userland/wm/wm_tray.c) draws a rounded fill behind itself
 while the pointer rests on it and another while the left button is held
-on it -- Windows 11's and Breeze's rule, and the taskbar's own buttons'.
+on it -- Windows 11's and Plasma's rule, and the taskbar's own buttons'.
 (Press-only, the macOS menu-bar rule, until the 2026-09-29 redesign.)
 
 The clock is the item driven here because it is the one item that is

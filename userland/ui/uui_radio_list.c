@@ -94,7 +94,7 @@ void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l)
         // A CIRCLE, which is what says "one of these" -- a square marker
         // reads as a checkbox. Ring then field then dot, each a capsule
         // blended over the one before; the chosen one takes the accent,
-        // as Breeze and Windows 11 both draw it.
+        // as Plasma and Windows 11 both draw it.
         int m = radio_marker(l);
         int my = cy + (radio_row_h(l) - m) / 2;
         uint32_t ring = i == selected && !l->disabled ? UTHEME_ACCENT

@@ -205,7 +205,7 @@ static int btn_stroke(int size) {
     // THIN, and thin is right here rather than a compromise. At a
     // 14-pixel button a 2px wall around a 6px square leaves a 2px hole,
     // so the maximize glyph stops reading as an outline and becomes a
-    // blob. Adwaita, Breeze and the Segoe MDL2 set are all hairline at
+    // blob. Adwaita, Plasma and the Segoe MDL2 set are all hairline at
     // this size for the same reason. It thickens on a big font, where a
     // 1px line would disappear.
     int t = size / 12;
@@ -276,7 +276,7 @@ static void draw_max_icon(int x, int y, int size, uint32_t color) {
 }
 
 // Restore, shown in the maximize button's place WHILE MAXIMIZED: two
-// overlapping squares, Windows' and Breeze's glyph, so the button says
+// overlapping squares, Windows' and Plasma's glyph, so the button says
 // what the next click does.
 static void draw_restore_icon(int x, int y, int size, uint32_t color) {
     int cx = btn_cx(x, size), cy = btn_cy(y, size);
@@ -886,7 +886,7 @@ int wm_cursor_shape_changed(int mx, int my) {
 // --- rounded corners --------------------------------------------------
 //
 // A window that is not maximized has its four corners rounded, KDE
-// Breeze's and Windows 11's frame; a maximized one is square, as both
+// Plasma's and Windows 11's frame; a maximized one is square, as both
 // make it. The compositor repaints everything under the damage box
 // back to front (docs/decisions/gui.md), so what lies under a corner --
 // wallpaper or a lower window -- is already on the surface when this
@@ -896,12 +896,12 @@ int wm_cursor_shape_changed(int mx, int my) {
 // rather than against a guessed colour.
 //
 // THE RADIUS IS FONT-DERIVED (half the line height, 8 px at the default
-// font -- Breeze's), so it scales with the chrome. Hit testing stays
+// font -- Plasma's), so it scales with the chrome. Hit testing stays
 // rectangular on purpose: a click in a corner still belongs to the
 // window, as it does on every real desktop.
 
 #define CORNER_MAX_R 16
-// ONE OUTLINE COLOUR ALL THE WAY ROUND, the theme's border: Breeze,
+// ONE OUTLINE COLOUR ALL THE WAY ROUND, the theme's border: Plasma,
 // Windows 11 and macOS draw a single hairline, and the two-tone bevel
 // this replaced read as a raised Windows 95 panel once the corners
 // rounded.
@@ -1032,7 +1032,7 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     }
 
     // THE APP ICON, and the title shifted past it -- Windows' system
-    // menu icon and Breeze's window-menu button, in the same corner
+    // menu icon and Plasma's window-menu button, in the same corner
     // both put it. Drawn BEFORE the width budget below is computed, so
     // the title is truncated against the room the icon actually left;
     // appending chrome after a truncation is this codebase's

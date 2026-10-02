@@ -580,7 +580,7 @@ static void ctx_add_to_desktop(void *ctx) { desktop_add_launcher((const struct g
 //
 // TWO WAYS IN, ONE IMPLEMENTATION. A right-click anywhere on the window
 // opens it, and so does a LEFT-click on the title bar's app icon, which
-// is what Windows' system menu and Breeze's window-menu button do. They
+// is what Windows' system menu and Plasma's window-menu button do. They
 // used to be one call site; a second one is exactly where two copies of
 // a rule stop agreeing -- Close in particular has to stay
 // wm_request_close() (ASK the client) rather than close_window() (seize

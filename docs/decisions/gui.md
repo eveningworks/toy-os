@@ -497,7 +497,7 @@ has:
 
 - **X11's Xcursor** has both a mask cursor (bitmap + mask, the server
   colours it) and the ARGB cursor that every modern theme uses, one
-  image per nominal size plus a hotspot. Breeze, Adwaita and Bibata are
+  image per nominal size plus a hotspot. Plasma, Adwaita and Bibata are
   all ARGB.
 - **Windows' `.cur`/`.ani`** carry 32-bit ARGB per size; the old
   monochrome AND/XOR cursor survives beside it. Windows 11's "pointer
@@ -4109,7 +4109,7 @@ so a test asserts on what the compositor actually did instead of
 re-deriving the geometry and drifting from it.
 
 **Clicking it opens the window menu**, which is what Windows' system
-menu, KWin/Breeze's window-menu button and XFWM all do with that
+menu, KWin's window-menu button and XFWM all do with that
 corner. It opens on button-DOWN -- `docs/gui-guidelines.md` names a
 menu as the documented exception to arm-then-commit-on-release -- and
 it is anchored under the icon rather than at the cursor, because a menu
@@ -5153,8 +5153,8 @@ cross a process boundary later, which a pointer would have closed.
 ## Window corners are rounded by blending over the saved backdrop, not by a mask the compositor has to understand
 
 The maintainer asked for subtle rounded corners on windows that are
-not maximized (2026-09-02). KDE's Breeze and Windows 11 both do this,
-and both square the corners of a maximized window; Breeze does it in
+not maximized (2026-09-02). KDE Plasma and Windows 11 both do this,
+and both square the corners of a maximized window; Plasma does it in
 the decoration plugin and DWM in the compositor, and either way the
 compositor knows the window's shape.
 
@@ -5169,7 +5169,7 @@ corner is on the surface the moment a window starts to paint. The
 renderer copies those few pixels aside, lets the window paint its
 rectangle, then blends them back by a quarter-disc's coverage. No
 other code learns that a corner is transparent. Hit testing stays
-rectangular, which is also what Breeze and DWM do -- a click in the
+rectangular, which is also what Plasma and DWM do -- a click in the
 corner is the window's.
 
 The cost is honest: four small squares saved and blended per window
@@ -5179,7 +5179,7 @@ change is `wm_render_cursor_move()`'s save-under, which never repaints
 windows and therefore never sees a corner.
 
 The radius is font-derived (`ugfx_char_h() / 2`, 8 px at the default
-font, Breeze's) because every other chrome measurement here is -- a
+font, Plasma's) because every other chrome measurement here is -- a
 third, the tab strip's radius, shipped first and the maintainer read
 it as still square -- and hard pixels were
 rejected for the same reason the title buttons are discs: at this size
@@ -8523,7 +8523,7 @@ no-grab rule, re-arming on a move -- and not the code.
 Every tray item fills with a rounded `uui_state_bg(bar,
 UUI_STATE_HOVER)` while the pointer rests on it and
 `UUI_STATE_PRESSED` while the left button is held on it -- Windows 11's
-and Breeze's rule, and the one the strip's window buttons follow.
+and Plasma's rule, and the one the strip's window buttons follow.
 
 **It was press-only until 2026-09-29**, the macOS menu-bar rule, at the
 maintainer's request -- argued at the time on the tray being a strip
@@ -8688,7 +8688,7 @@ by `open_seq`, 150 ms, so a slot that changes again mid-glide continues
 from where the button is. `desktop.animations` off makes every move a
 jump.
 
-## The greys are a ladder with the page in the middle, macOS/Windows 10 spacing, not Breeze's
+## The greys are a ladder with the page in the middle, macOS/Windows 10 spacing, not Plasma's
 
 The default palette's neutral rungs, brightest first: `field_bg` (a
 text box, a list) sits well above the page; `panel_bg` is the page an
@@ -8700,13 +8700,13 @@ raised; chrome and faces read as recessed.
 
 **Why the page moved down.** The page had been 245 against a 255
 field -- a ten-level fill delta, weaker than any shipping light theme
-(Breeze 239/252, Windows 10 240/255, macOS 236/255) -- and the
+(Plasma 239/252, Windows 10 240/255, macOS 236/255) -- and the
 maintainer read a text box as barely a box. The ground is 236 now, the
 macOS value, with every rung below it moved by about the same amount
 so the ordering is unchanged.
 
-**Why faces stay DARKER than the page rather than flipping to Breeze's
-shape.** Breeze and Windows 11 draw a button lighter than its window
+**Why faces stay DARKER than the page rather than flipping to Plasma's
+shape.** Plasma and Windows 11 draw a button lighter than its window
 and give it an outline; this toolkit's buttons are flat fills with no
 outline, so a lighter face would need a border drawn on every button
 to keep its edge, and every button on the desktop would change
@@ -8794,7 +8794,7 @@ menu, a tray flyout -- casts a small one. `desktop.shadows` turns them
 all off.
 
 **Why no blur.** Mutter renders one blurred rounded rect per size class
-and 9-slices it; Breeze ships a tile set. Neither blurs per frame, and a
+and 9-slices it; Plasma ships a tile set. Neither blurs per frame, and a
 software compositor with a 7 ms full frame on the laptop cannot afford
 to either. Here the falloff past an edge is a quadratic table and each
 corner a tile of `(radius + corner radius)^2` alphas computed once per
@@ -8814,8 +8814,8 @@ after the window would need a second pass under the arcs.
 **Why the focused shadow differs.** Mutter, DWM and macOS all draw the
 active window's shadow larger and darker; it says which window is up
 without reading a title bar, which matters most when the title bars are
-the same colour. Breeze's default strength is 50%, which is the
-focused alpha here; the inactive one is smaller and lighter as Breeze's
+the same colour. Plasma's default strength is 50%, which is the
+focused alpha here; the inactive one is smaller and lighter as Plasma's
 inactive shadow is.
 
 **Why the shadow is part of the damage rect.** A shadow is pixels
@@ -8829,7 +8829,7 @@ so a damage box that touches only a shadow still repaints the window
 that casts it. `tools/damage_sweep.py` ran clean over 43 interactions
 with the shadows on and its positive control still fired.
 
-**Why the radii are line heights.** Breeze's medium shadow is about a
+**Why the radii are line heights.** Plasma's medium shadow is about a
 title bar tall at the default font; a fixed pixel radius would be right
 at exactly one font size (`docs/gui-guidelines.md`, "Size everything
 from the font").
@@ -9314,7 +9314,7 @@ the theme, so `tint` holds the role number and the toolbar resolves it
 when it draws.
 
 **A folder's kind comes from its NAME** (`ufiletype_icon()`), the way
-Breeze's folder-music and Explorer's special folders key on well-known
+Plasma's folder-music and Explorer's special folders key on well-known
 names: music, pictures and wallpapers, documents, fonts, sounds, icons,
 cursors, terminal, services, hwdata, soundfonts, home. Reading a
 folder's contents to guess would be I/O on the draw path, which
@@ -9458,7 +9458,7 @@ Four calls a future session would otherwise re-litigate:
 
 ## Every menu is one card, Windows 11's, and the compositor cuts a popup's corners
 
-Chosen from mockups (2026-10-01) over Breeze's soft-accent menus and a
+Chosen from mockups (2026-10-01) over Plasma's soft-accent menus and a
 dark shell matching the taskbar, and applied to EVERY menu -- an app's
 menu bar and right-click menus as well as the desktop's, the window
 menu and the taskbar's. They are all `uui_menubar` already, so one
@@ -9536,7 +9536,7 @@ the hit test and every tool reading `gui menu --json` follow the move.
 2026-10-01, over an always-visible bar in a gutter): a thin thumb at
 rest, the shared `uui_scrollbar`'s groove and thumb while the pointer
 is on it or a drag holds it, floating over the rows' right end --
-Windows 11's Start, Breeze and GNOME. It was a passive indicator so the
+Windows 11's Start, Plasma and GNOME. It was a passive indicator so the
 panel would not grow a second scrollbar; it has none, since the draw,
 the hit test and the drag arithmetic are `uui_scrollbar`'s stateless
 helpers, and the drag and a held groove click (which pages, then

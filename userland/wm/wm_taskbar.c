@@ -114,7 +114,7 @@ void taskbar_geom(struct taskbar_geom *g) {
         g->pw = screen_w - 2 * TASKBAR_FLOAT_GAP;
         g->py = band_y;
         g->ph = g_bar_h;
-        // Breeze's proportion -- half the line height -- the radius
+        // Plasma's proportion -- half the line height -- the radius
         // this desktop's windows already use.
         g->radius = ugfx_char_h() / 2;
     } else {

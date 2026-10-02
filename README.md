@@ -163,7 +163,7 @@ third-party material. In short:
 - The bundled `pci.ids` and `usb.ids` databases in `data/` are taken
   under the BSD-3-Clause side of their dual licence, and three Terminal
   colour schemes carry other projects' palettes (Solarized, Tango,
-  Breeze).
+  Konsole).
 
 `tools/check_licenses.py` fails the build if a vendored port or a shipped
 font is missing from that inventory.

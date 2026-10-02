@@ -361,7 +361,7 @@ def icon_tb_home():
 #
 # The file-type glyphs are the generic page with an emblem, so a listing
 # reads as "a page of some kind" first and "which kind" second -- the
-# Breeze and Windows 11 convention. Places and drives are flat ink, no
+# Plasma and Windows 11 convention. Places and drives are flat ink, no
 # plate: they sit in a sidebar, not on a wallpaper.
 
 PAGE_EDGE = (140, 145, 155, 255)
@@ -516,7 +516,7 @@ def icon_place_pictures_tile():  return _tile((74, 163, 107), icon_place_picture
 
 
 # A FOLDER OF A KNOWN KIND is the plain folder's shape in the kind's
-# colour, with a white emblem on its front -- Breeze's folder-music and
+# colour, with a white emblem on its front -- Plasma's folder-music and
 # Explorer's special folders. lib/ufiletype.c maps names to these.
 def _folder_kind(body, tab, emblem):
     im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
@@ -925,7 +925,7 @@ def icon_tb_mkdir():
 def icon_tb_rename():
     # A text field with the caret in it: rename is TYPING a name, and
     # an I-beam is the one glyph that means "edit this text" on every
-    # desktop (edit-rename in Breeze, the F2 field in Explorer).
+    # desktop (edit-rename in Plasma, the F2 field in Explorer).
     im, d = _tb()
     d.rounded_rectangle([4, 18, 60, 46], radius=3, outline=TB_INK, width=4)
     d.rectangle([20, 26, 24, 38], fill=TB_INK)      # the caret's stem

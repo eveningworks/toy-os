@@ -13,7 +13,7 @@ static int g_inited;
 // The greys are ordered: field_bg is the brightest thing on a page and
 // the page (panel_bg) sits far enough below it that a text box reads as
 // a box without its outline -- macOS's and Windows 10's spacing, not
-// Breeze's, whose buttons are lighter than the ground; here a face is a
+// Plasma's, whose buttons are lighter than the ground; here a face is a
 // step DARKER than the page, and bars a step darker again. Hover and
 // press derive from these by luminance (uui_state_bg), so nothing else
 // moves when a rung does.

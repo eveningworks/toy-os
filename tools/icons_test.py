@@ -29,7 +29,7 @@ that can tell the difference.
   5. The same icon is in that window's TITLE BAR, at the rect the WM
      itself reports, with the title shifted clear of it -- and clicking
      it opens the window menu, as Windows' system-menu icon and
-     Breeze's window-menu button do.
+     Plasma's window-menu button do.
   6. The Start button honours `desktop.start_button` (text | icon |
      both): the mark is the start.qoi file, and the STRIP RE-LAYS OUT
      around it -- which is the half a screenshot of the button alone

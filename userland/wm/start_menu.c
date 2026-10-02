@@ -223,7 +223,7 @@ static void search_clear(void);
 #define TOK_SCROLLBAR 997
 
 // THE APP COLUMN'S SCROLLBAR: thin at rest, widened while the pointer is
-// on it or a drag holds it (an overlay bar, Windows 11's and Breeze's).
+// on it or a drag holds it (an overlay bar, Windows 11's and Plasma's).
 // Drawn and hit-tested by the shared uui_scrollbar helpers; the drag and
 // the held-click paging run from the overlay's press op, every tick.
 static int sb_drag;               // 1 while the thumb is held
@@ -1251,7 +1251,7 @@ void start_menu_draw(int mx, int my) {
             // A field with the query in it, always focused -- there is
             // nothing else here that takes text, so a caret is drawn
             // unconditionally rather than following a focus that cannot
-            // move. Windows 11's and Breeze's: rounded, an accent rule.
+            // move. Windows 11's and Plasma's: rounded, an accent rule.
             int fr = pr + 2;
             uui_fill_round_rect(s, x, y, w, h, fr, UTHEME_OUTLINE);
             uui_fill_round_rect(s, x + 1, y + 1, w - 2, h - 2, fr - 1, UTHEME_WHITE);

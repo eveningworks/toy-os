@@ -169,7 +169,7 @@ IMAGE_THEMES = {
     # grow stays inside the 2 px margin every shape keeps on its canvas.
     "bold": dict(fill=WHITE, rim=DARK, track=WHITE, arc=("flat", (70, 70, 80)),
                  rim_px=1.6, grow=0.35),
-    # Breeze/Adwaita/macOS: dark, white rim; the accent only in the ring.
+    # Plasma/Adwaita/macOS: dark, white rim; the accent only in the ring.
     "graphite": dict(fill=("flat", (30, 30, 34)), rim=WHITE,
                      track=("flat", (70, 70, 78)), arc=("diag", (110, 160, 230), (70, 110, 160))),
     # Windows 11's pointer colour, in the theme's accent blue.

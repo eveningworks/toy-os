@@ -456,7 +456,7 @@ def run(dbg, qmp, tmp, res):
 
     # --- 9b. the scrollbar: drag, page, widen --------------------------
     #
-    # An overlay bar (Windows 11's, Breeze's): thin at rest, the shared
+    # An overlay bar (Windows 11's, Plasma's): thin at rest, the shared
     # uui_scrollbar's groove and thumb while the pointer is on it. Every
     # number comes from `gui menu --json`'s "scrollbar" row.
     open_menu(dbg)

@@ -1,6 +1,6 @@
-# Konsole's own default scheme, so a terminal here looks like the
-# desktop this GUI takes its measurements from.
-Name=Breeze
+# Slate: the colour values of Konsole's default scheme, so a terminal
+# here matches the desktop this GUI takes its measurements from.
+Name=Slate
 Color0=232629
 Color1=ed1515
 Color2=11d116

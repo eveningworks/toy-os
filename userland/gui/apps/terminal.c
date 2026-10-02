@@ -1329,7 +1329,7 @@ static void draw(struct ugfx_surface *s, int focused) {
     // The track is drawn whether or not there is anything to scroll: it
     // is an indicator as well as a handle (gui-guidelines point 8).
     //
-    // Its colours are Breeze's DARK pair (#31363b track, #76797c thumb),
+    // Its colours are Plasma's DARK pair (#31363b track, #76797c thumb),
     // not the toolkit theme's. This page is the ANSI palette on black by
     // definition, and the near-white bar Notepad draws would be the
     // brightest thing on the window -- which is what Konsole's own dark

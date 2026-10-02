@@ -303,7 +303,7 @@ code:
                             also in each file's header.
   tango.scheme              The Tango Desktop Project's palette,
                             released into the public domain.
-  breeze.scheme             The colour values of KDE Konsole's
+  slate.scheme              The colour values of KDE Konsole's
                             Breeze.colorscheme. That file carries no
                             licence header of its own; Konsole as a
                             whole is GPL-2.0-or-later.

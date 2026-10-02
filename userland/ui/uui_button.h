@@ -21,7 +21,7 @@ struct uui_button {
     int disabled;
     int focused;         // OWNED -- the focus ring's set_focused
     // STYLE, the app's choice: 1 draws a 1px border darker than the face
-    // and softly rounded corners (the look of a Windows or Breeze push
+    // and softly rounded corners (the look of a Windows or Plasma push
     // button); 0 is the flat face every button had before.
     int outlined;
 };
