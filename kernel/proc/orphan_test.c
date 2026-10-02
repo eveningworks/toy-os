@@ -38,7 +38,7 @@ static void pair_free(struct pair *x) {
 KTEST("orphan", "a group whose only parent is inside it is orphaned") {
     struct pair x;
     if (!pair_make(&x)) { pair_free(&x); KTEST_SKIP("no free process slots"); }
-    int cpid = x.c + 1, ppid = x.p + 1;
+    int cpid = scheduler_slot_pid(x.c), ppid = scheduler_slot_pid(x.p);
     // Both in ONE group: the parent cannot rescue a group it is in.
     KTEST_ASSERT(scheduler_setpgid(ppid, ppid));
     KTEST_ASSERT(scheduler_setpgid(cpid, ppid));
@@ -55,7 +55,7 @@ KTEST("orphan", "a group whose only parent is inside it is orphaned") {
 KTEST("orphan", "a parent in another session does not rescue it") {
     struct pair x;
     if (!pair_make(&x)) { pair_free(&x); KTEST_SKIP("no free process slots"); }
-    int cpid = x.c + 1, ppid = x.p + 1;
+    int cpid = scheduler_slot_pid(x.c), ppid = scheduler_slot_pid(x.p);
     KTEST_ASSERT(scheduler_setpgid(cpid, cpid));
     KTEST_ASSERT(scheduler_reparent(cpid, ppid));
     KTEST_ASSERT(scheduler_sid(cpid) != scheduler_sid(ppid));

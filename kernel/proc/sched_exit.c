@@ -357,10 +357,10 @@ int scheduler_thread_detach(int tid) {
 }
 
 // Called when a process dies, on both paths. Its children lose their
-// parent, and the reason that MATTERS is not tidiness: a pid is a slot
-// index plus one, and slots are reused. Leaving a child pointing at its
-// dead parent's pid means that as soon as the slot is handed out again,
-// the child claims to be the new process's child -- and a waitpid(-1)
+// parent, and the reason that MATTERS is not tidiness: pids are reused
+// once they wrap. Leaving a child pointing at its dead parent's pid means
+// that as soon as that pid is handed out again, the child claims to be
+// the new process's child -- and a waitpid(-1)
 // from that new process would hand it somebody else's corpse.
 //
 // They are adopted by INIT when there is one, and become parentless

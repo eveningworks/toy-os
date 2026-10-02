@@ -597,7 +597,7 @@ def real_gdb_run(target, res):
     res.check("toy-dmesg prints the log ring", re.search(r"^\[\s*\d+\.\d+\]", out, re.M) is not None,
               out[:600])
     res.check("info threads shows the processes by name",
-              "Thread 1000 (kernel" in out and "(init, " in out, out[:900])
+              "Thread 32768 (kernel" in out and "(init, " in out, out[:900])
     # thread 2 is the first process: parked in a syscall, so its stack
     # runs down through isr_common into ring 3 -- and stops there.
     res.check("the unwinder claims a trap frame only once it is whole, not mid-push",

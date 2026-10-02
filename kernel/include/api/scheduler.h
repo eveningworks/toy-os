@@ -39,6 +39,14 @@
 // (scheduler.c)", which is a copy waiting to be forgotten.
 #define SCHED_MAX_PROCS 64
 
+// PIDS CYCLE: 1 .. SCHED_PID_MAX-1, each new one past the last, wrapping
+// to SCHED_PID_RESERVED -- Linux's pid_max and RESERVED_PIDS -- and
+// skipping a pid still in use or still named as a process group or a
+// session. So a pid a program held is not someone else's a moment later,
+// and init, spawned first, stays pid 1 for the whole boot.
+#define SCHED_PID_MAX      32768
+#define SCHED_PID_RESERVED 300
+
 void scheduler_init(void);
 
 // Called on every timer tick, from clockevent_tick() -- which arrives on
@@ -1256,6 +1264,9 @@ void scheduler_test_release(int idx);
 void scheduler_test_park_deadline(int idx, uint64_t wake_at_ns, int in_kernel);
 // Make a parked slot a THREAD of another parked slot's process.
 void scheduler_test_make_thread(int idx, int leader);
+// Where pid allocation continues from, so a test can reach the wrap.
+void scheduler_test_set_last_pid(int pid);
+void scheduler_test_set_pgid(int idx, int pgid);
 // The state of one slot, as a PROC_STATE_* value. -1 for a bad index.
 int  scheduler_test_state(int idx);
 // Claim a free slot the way spawn/fork/thread create do, and give it back.

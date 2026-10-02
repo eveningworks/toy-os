@@ -189,7 +189,7 @@ class Symbols(gdb.Command):
         self.user = []
         thread = gdb.selected_thread()
         tid = (thread.ptid[1] or thread.ptid[2]) if thread else 0
-        if not tid or tid >= 1000:
+        if not tid or tid >= 32768:   # SCHED_DEBUG_KERNEL_TID = SCHED_PID_MAX
             print("toy-symbols: the kernel context has no user program")
             return
         procs = gdb.parse_and_eval("procs")

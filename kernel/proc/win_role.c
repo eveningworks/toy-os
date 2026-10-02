@@ -25,15 +25,13 @@
 #include "signal_abi.h"  // SIGNAL_EXIT_BASE
 #include <stddef.h>
 
-#include "scheduler.h" // SCHED_MAX_PROCS
+#include "scheduler.h" // SCHED_PID_MAX
 #include "kerrno.h"  // EBUSY -- the diagnostic channel is one slot
 #include "mouse.h"    // mouse_get_state() -- park the plane where the pointer is
 #include "heap.h"     // kmalloc/kfree -- the DEFINE sprite bounce buffer
 #include "initcall.h"
 #include "query_abi.h"
 #include "query.h"
-
-#define WIN_SERVER_MAX_PIDS SCHED_MAX_PROCS
 
 // **THE KERNEL DOES NOT TOUCH A WINDOW'S PIXELS.** A buffer is a named
 // shm object the client creates and grants to the compositor
@@ -423,7 +421,7 @@ void win_server_client_died(int pid, int exit_code) {
 }
 
 void win_server_client_gone(int pid) {
-    if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return;
+    if (pid < 1 || pid >= SCHED_PID_MAX) return;
 
     // The COMPOSITOR dying is not the same event as a client dying, and
     // it has to be handled first: its address space is about to be torn
@@ -471,7 +469,7 @@ static void compositor_gone(int held) {
 }
 
 int win_server_set_compositor(int pid, uint64_t pml4) {
-    if (pid < 0 || pid > WIN_SERVER_MAX_PIDS) return 0;
+    if (pid < 0 || pid >= SCHED_PID_MAX) return 0;
 
     // NO MAPPINGS TO DROP: a compositor's view of a window is its own
     // mmap of the client's object, and it goes when that process's

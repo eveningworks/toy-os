@@ -77,6 +77,7 @@ whenever a headline here tells you something you did not already know.
   machine, and ENABLING IS THE LAST STEP**
 - **USING A SUBSYSTEM BEFORE ITS init() IS A PANIC, not a soft failure**
 - **A KERNEL PANIC ENDS IN `panic_finish()`, NEVER IN ITS OWN `cli; hlt`**
+- **A PID IS NOT A SLOT INDEX**
 - **A RING-3 CRASH WRITES A REPORT TO `/var/crash`, AND A KERNEL PANIC
   DOES NOT**
 - **THE KERNEL DEBUGGER'S STOPPED PATH TAKES NO LOCK, ALLOCATES NOTHING

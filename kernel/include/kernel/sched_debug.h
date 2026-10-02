@@ -9,8 +9,9 @@
 #include <stdint.h>
 #include "context_switch.h"
 #include "proc_info.h"   // PROC_NAME_MAX
+#include "scheduler.h"   // SCHED_PID_MAX -- the kernel thread's tid
 
-#define SCHED_DEBUG_KERNEL_TID 1000   // above every pid, and not 0 (GDB's "any")
+#define SCHED_DEBUG_KERNEL_TID SCHED_PID_MAX   // no pid can be it, and not 0 (GDB's "any")
 
 struct sched_debug_thread {
     int tid;

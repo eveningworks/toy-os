@@ -256,7 +256,7 @@ int main(void) {
     // leftover). 0 is success now, and the refusals carry reasons.
     utest_check(sys_unlink("/definitely/not/here.txt") == -1 && sys_errno() == ENOENT,
           "unlink() of a missing file is -1 ENOENT");
-    utest_check(sys_kill(4000, SIGTERM) == -1 && sys_errno() == ESRCH,
+    utest_check(sys_kill(99999, SIGTERM) == -1 && sys_errno() == ESRCH,
           "kill() of a missing pid is -1 ESRCH");
     utest_check(sys_proc_info(SYS_PROC_MAX + 5, &(struct proc_info){0}) == -1 &&
           sys_errno() == EINVAL,

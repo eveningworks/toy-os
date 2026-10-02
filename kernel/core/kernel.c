@@ -414,9 +414,9 @@ void kernel_main(uint64_t multiboot_info_addr) {
                 target_overridden() ? " (from the kernel command line)" : "");
 
     // init, pid 1 -- spawned HERE, before anything else can take a
-    // slot, because a pid is a slot index plus one and slots are handed
-    // out lowest-first. Nothing enforces that init is pid 1; being
-    // first is what makes it so, which is also how Linux does it.
+    // slot, because pids are handed out in order from 1. Nothing enforces
+    // that init is pid 1; being first is what makes it so, which is also
+    // how Linux does it.
     //
     // AFTER debug_console_init(), and that ordering is load-bearing now
     // that init starts the desktop itself (docs/init-design.md stage 2):

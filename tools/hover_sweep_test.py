@@ -71,7 +71,10 @@ def points(w):
 
 
 def live_pids(dbg):
-    return {p["pid"] for p in dbg.processes() if p["state"] != "zombie"}
+    # NOT the `ps` that answers this: it is spawned per call, and with pids
+    # that cycle each one has a new number.
+    return {p["pid"] for p in dbg.processes()
+            if p["state"] != "zombie" and p["name"] != "ps"}
 
 
 def wait_for(fn, seconds=8.0):

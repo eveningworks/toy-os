@@ -320,9 +320,9 @@ this the obvious way), not from how much history it accumulated.
   the KERNEL spawned it** (`scheduler_current_pid()` is 0 in kernel
   context), which is every process started by `spawn`, `gui` or a
   KTEST. **A dying process's children are reparented to 0 rather than
-  left naming it**, and that is correctness rather than tidiness: a pid
-  is a slot index plus one and slots are reused, so a stale ppid makes
-  the orphan look like a child of whatever process gets that slot next,
+  left naming it**, and that is correctness rather than tidiness: pids
+  are reused once they wrap (`SCHED_PID_MAX`), so a stale ppid makes
+  the orphan look like a child of whatever process gets that pid next,
   and THAT process's `waitpid(-1)` would hand it somebody else's corpse.
   **`waitpid(-1)`'s two negative answers are different**: -1 means "no
   children at all" and is PERMANENT, while a live-but-not-dead child
@@ -4577,6 +4577,22 @@ public entry that touches the device (`g_ata_lock`, `g_ahci_lock`,
 virtio-blk's `g_blk_lock`), held across the sleep. Linux's old IDE layer
 did the same per channel (`hwgroup->busy`). A busy FLAG that fails the
 second caller is not this: it turns a wait into an I/O error.
+
+## A PID IS NOT A SLOT INDEX
+
+`procs[i].pid` is a slot's pid, chosen in `slot_claim()` -- the one place
+-- and cleared by `slot_free()`, the one way a slot becomes free.
+**`pid_slot()` is the only pid -> slot lookup** (outside the scheduler,
+`scheduler_pid_slot()`/`scheduler_slot_pid()`/`scheduler_proc_info_pid()`);
+never `pid - 1`, never `idx + 1`, and never `scheduler_proc_info(pid - 1)`.
+Pids cycle from 1 to `SCHED_PID_MAX - 1`, wrapping to `SCHED_PID_RESERVED`
+and skipping a pid still in use or still named as a group or session
+(Linux's `pid_max`/`RESERVED_PIDS`), so init -- spawned first -- is pid 1
+and a pid a program held is not someone else's a moment later. Two
+traps. **A per-slot table keeps the owner's pid and checks it** (futex.c's
+wakewords), or a reused slot inherits the last tenant's entry. **A test's
+"pid nobody has" is `SCHED_PID_MAX`**, which no process can hold; a small
+number like 4000 is a real pid on a machine that has run long enough.
 
 ## A CONTEXT PARKED MID-CALL DIES ON ITS WAY OUT, NOT WHERE IT SLEEPS
 

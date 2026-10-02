@@ -127,9 +127,9 @@ KTEST("kdebug", "a software breakpoint stops, reports the PC and resumes") {
     KTEST_ASSERT(k_strncmp(g + 1 + 256, rip, 16) == 0);
     KTEST_ASSERT_EQ(*(volatile uint8_t *)(uintptr_t)at, before);   // lifted for good
 
-    // Threads: the kernel context first (1000 = 0x3e8), and pid 1 by name
+    // Threads: the kernel context first (SCHED_PID_MAX = 0x8000), and pid 1 by name
     // -- "init, " hex-encoded is 696e69742c20.
-    KTEST_ASSERT(k_strstr(g_log, "$m3e8,1") != 0);
+    KTEST_ASSERT(k_strstr(g_log, "$m8000,1") != 0);
     KTEST_ASSERT(k_strstr(g_log, "$696e69742c20") != 0);
 }
 

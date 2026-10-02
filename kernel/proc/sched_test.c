@@ -540,6 +540,76 @@ KTEST("sched", "a kill waits for ANY thread parked mid-call, not only the leader
     KTEST_ASSERT_EQ(polled, (int)SCHED_POLL_RUNNING); // nothing to reap yet
 }
 
+KTEST("sched", "a reaped pid is not handed straight to the next process") {
+    // Pids were slot numbers, so the pid a program had just held went to
+    // the very next spawn: every launch of one app was pid 4, and anything
+    // still holding the old pid (a parent, a terminal's owner) now named a
+    // stranger.
+    uint64_t tf[SCHED_TF_SLOTS] = {0};
+    static const char chan;
+    scheduler_preempt_disable();
+    int a = scheduler_test_park(tf, &chan, SCHED_WAIT_EVENT);
+    int pa = scheduler_slot_pid(a);
+    scheduler_test_release(a);
+    int b = scheduler_test_park(tf, &chan, SCHED_WAIT_EVENT);
+    int pb = scheduler_slot_pid(b);
+    scheduler_test_release(b);
+    scheduler_preempt_enable();
+
+    if (a < 0 || b < 0) KTEST_SKIP("no free process slot");
+    KTEST_ASSERT(pa > 0 && pb > 0);
+    KTEST_ASSERT(pb != pa);
+}
+
+KTEST("sched", "allocation skips a live pid and wraps to SCHED_PID_RESERVED") {
+    uint64_t tf_a[SCHED_TF_SLOTS] = {0}, tf_b[SCHED_TF_SLOTS] = {0}, tf_c[SCHED_TF_SLOTS] = {0};
+    static const char chan;
+    scheduler_preempt_disable();
+    int a = scheduler_test_park(tf_a, &chan, SCHED_WAIT_EVENT);
+    int pa = scheduler_slot_pid(a);
+    scheduler_test_set_last_pid(pa - 1);          // the next candidate IS pa
+    int b = scheduler_test_park(tf_b, &chan, SCHED_WAIT_EVENT);
+    int pb = scheduler_slot_pid(b);
+    scheduler_test_set_last_pid(SCHED_PID_MAX - 1);
+    int c = scheduler_test_park(tf_c, &chan, SCHED_WAIT_EVENT);
+    int pc = scheduler_slot_pid(c);
+    scheduler_test_release(c);
+    scheduler_test_release(b);
+    scheduler_test_release(a);
+    scheduler_preempt_enable();
+
+    if (a < 0 || b < 0 || c < 0) KTEST_SKIP("fewer than three free process slots");
+    KTEST_ASSERT(pb != pa);                        // skipped the live one
+    KTEST_ASSERT(pc >= SCHED_PID_RESERVED && pc < SCHED_PID_MAX - 1);   // wrapped low
+    KTEST_ASSERT(pc != 1);                         // ...but never to init's
+}
+
+KTEST("sched", "a pid still named as a process group is not handed out") {
+    // Linux keeps a struct pid alive while a group or session names it;
+    // reusing the number would put a new process in an old group.
+    uint64_t tf_a[SCHED_TF_SLOTS] = {0}, tf_b[SCHED_TF_SLOTS] = {0};
+    static const char chan;
+    scheduler_preempt_disable();
+    int a = scheduler_test_park(tf_a, &chan, SCHED_WAIT_EVENT);
+    const int X = SCHED_PID_MAX - 2;               // a number no live slot holds
+    scheduler_test_set_pgid(a, X);
+    scheduler_test_set_last_pid(X - 1);
+    int b = scheduler_test_park(tf_b, &chan, SCHED_WAIT_EVENT);
+    int pb = scheduler_slot_pid(b);
+    scheduler_test_release(b);
+    scheduler_test_release(a);
+    scheduler_preempt_enable();
+
+    if (a < 0 || b < 0) KTEST_SKIP("fewer than two free process slots");
+    KTEST_ASSERT(pb != X);
+}
+
+KTEST("sched", "init is pid 1") {
+    int init = scheduler_init_pid();
+    if (!init) KTEST_SKIP("this boot has no init");
+    KTEST_ASSERT_EQ(init, 1);
+}
+
 KTEST("sched", "a slot being built is never handed out twice") {
     // A spawn claims its slot and then SLEEPS reading the ELF. The slot
     // stayed UNUSED meanwhile, so a second spawn took the same one and

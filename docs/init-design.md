@@ -89,9 +89,10 @@ wait-any needs, so the scheduler side is done.
 
 ### R4. init itself, holding pid 1
 
-pid is `slot + 1` and slots are handed out lowest-first, so a process
-spawned from `kernel_main()` before anything else gets pid 1 and keeps
-it for the boot as long as it never exits.
+pids are handed out in order from 1 (they cycle, wrapping to
+`SCHED_PID_RESERVED`), so a process spawned from `kernel_main()` before
+anything else gets pid 1 and keeps it for the boot as long as it never
+exits.
 
 `/bin/init` is an ordinary ring-3 program. It needs almost nothing from
 Toykit: spawn, wait-any, and eventually a way to be told what to start.
@@ -218,7 +219,7 @@ Two things came out of building it that the plan did not predict.
 `ppid` took `struct proc_info`'s `reserved` field, which was only ever
 written as 0 and never read, so the ABI struct did not grow. And
 reparenting turned out to be a CORRECTNESS requirement rather than
-housekeeping for init's benefit: pids are slot indices, slots are
+housekeeping for init's benefit: pids were slot indices then, slots are
 reused, so a stale ppid makes an orphan look like a child of the slot's
 next tenant -- whose `waitpid(-1)` would then reap somebody else's
 child. That is testable today, with no init anywhere, and it is what

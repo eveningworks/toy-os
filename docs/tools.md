@@ -1622,9 +1622,9 @@ window without going through it will find its layout polls timing out.
   them and an append-only editor fails all three. It BOOTS TWICE against
   a disk copy: the first boot sets `system.default_target text` and the
   US keyboard layout, the second is the one under test. Two traps it encodes. **The restart check is a
-  second `init: started tosh` in the log, never a changed pid** -- a pid
-  is a slot index plus one and slots are reused, so the replacement
-  lands in the slot the dead one just left and reports the same number.
+  second `init: started tosh` in the log, never a changed pid** -- pids
+  used to be slot numbers, so a replacement could report the dead one's
+  number; they cycle now, but the log line is still the evidence.
   And **`dmesg` is `sh dmesg`**: the debug console has no such command
   of its own, and the first version of this tool "read the log"
   successfully because the serial stream carries live klog lines, so

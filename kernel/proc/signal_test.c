@@ -66,9 +66,9 @@ KTEST("signal", "a signal's name round-trips through the shared table") {
 // --- sending to nothing ------------------------------------------------
 
 KTEST("signal", "a signal to a pid or group that does not exist is refused") {
-    KTEST_ASSERT(!signal_send(4000, SIGTERM));
+    KTEST_ASSERT(!signal_send(SCHED_PID_MAX, SIGTERM));
     KTEST_ASSERT(!signal_send(0, SIGTERM));
-    KTEST_ASSERT_EQ(signal_send_group(4000, SIGTERM), 0);
+    KTEST_ASSERT_EQ(signal_send_group(SCHED_PID_MAX, SIGTERM), 0);
     // A number that is not a signal, to a pid that might be.
     KTEST_ASSERT(!signal_send(1, 99));
     KTEST_ASSERT(!signal_send(1, 0));
@@ -479,7 +479,7 @@ KTEST("signal", "setpgid joins an EXISTING group, or leads a new one") {
     int still = scheduler_pgid(pid);
     int live  = scheduler_pgid_live(pid);
     int dead  = scheduler_pgid_live(3999);
-    int nobody = scheduler_setpgid(4000, 4000);
+    int nobody = scheduler_setpgid(SCHED_PID_MAX, SCHED_PID_MAX);
 
     scheduler_test_release(idx);
     scheduler_preempt_enable();
@@ -508,7 +508,7 @@ KTEST("signal", "a group signal reaches every member and nobody else") {
         scheduler_preempt_enable();
         KTEST_SKIP("needs three free process slots to fabricate");
     }
-    int a = ia + 1, b = ib + 1, c = ic + 1;
+    int a = scheduler_slot_pid(ia), b = scheduler_slot_pid(ib), c = scheduler_slot_pid(ic);
 
     scheduler_setpgid(a, a);
     scheduler_setpgid(b, a);   // joins a's group

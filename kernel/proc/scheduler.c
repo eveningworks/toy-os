@@ -164,14 +164,43 @@ struct sched_process procs[MAX_PROCS];
 // seeing "not a process" without auditing each one.
 static uint8_t g_slot_claimed[MAX_PROCS];
 
+// pid -> slot + 1, or 0. Kept by slot_claim() and slot_free() alone.
+static uint16_t g_pid_slot[SCHED_PID_MAX];
+static int g_last_pid;
+
+// Still in use as a GROUP or a SESSION by a live or zombie slot: Linux
+// keeps a `struct pid` alive for that, and handing the number out would
+// put a new process into an old group.
+static int pid_named(int pid) {
+    for (int i = 0; i < MAX_PROCS; i++)
+        if (procs[i].state != SCHED_UNUSED && (procs[i].pgid == pid || procs[i].sid == pid))
+            return 1;
+    return 0;
+}
+
+// The next free pid after the last one handed out, or 0. Interrupts off.
+static int pid_alloc(void) {
+    int pid = g_last_pid;
+    for (int n = 0; n < SCHED_PID_MAX; n++) {
+        if (++pid >= SCHED_PID_MAX) pid = SCHED_PID_RESERVED;
+        if (g_pid_slot[pid] || pid_named(pid)) continue;
+        g_last_pid = pid;
+        return pid;
+    }
+    return 0;
+}
+
 int slot_claim(void) {
     uint64_t f;
     __asm__ volatile ("pushfq; popq %0; cli" : "=r"(f) :: "memory");
     int slot = -1;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state == SCHED_UNUSED && !g_slot_claimed[i]) {
+            int pid = pid_alloc();   // the one place a pid is chosen
+            if (!pid) break;
             g_slot_claimed[i] = 1;
-            procs[i].pid = i + 1;   // the one place a pid is chosen
+            procs[i].pid = pid;
+            g_pid_slot[pid] = (uint16_t)(i + 1);
             slot = i;
             break;
         }
@@ -184,16 +213,20 @@ int slot_claim(void) {
 // claim is over.
 void slot_unclaim(int slot) {
     if (slot < 0 || slot >= MAX_PROCS) return;
-    if (procs[slot].state == SCHED_UNUSED) procs[slot].pid = 0;   // abandoned
+    if (procs[slot].state == SCHED_UNUSED) slot_free(slot);   // abandoned
     g_slot_claimed[slot] = 0;
 }
 
 // THE ONE WAY A SLOT BECOMES FREE: its pid goes with it, so no lookup can
 // find a reused slot under the pid of what was there before.
 void slot_free(int slot) {
+    int pid = procs[slot].pid;
+    if (pid > 0 && pid < SCHED_PID_MAX && g_pid_slot[pid] == slot + 1) g_pid_slot[pid] = 0;
     procs[slot].state = SCHED_UNUSED;
     procs[slot].pid = 0;
 }
+
+void scheduler_test_set_last_pid(int pid) { g_last_pid = pid; }
 
 // The pid init holds, or 0 on a boot that has no init (nothing spawned
 // it, or /bin/init is missing). Everything that treats pid 1 specially
@@ -268,9 +301,11 @@ int is_thread(int idx) {
 }
 
 int pid_slot(int pid) {
-    if (pid < 1 || pid > MAX_PROCS) return -1;
-    int s = pid - 1;   // allocation is still pid = slot + 1
-    return procs[s].pid == pid ? s : -1;
+    if (pid < 1 || pid >= SCHED_PID_MAX) return -1;
+    int s = (int)g_pid_slot[pid] - 1;
+    // Checked against the slot: a lookup from an interrupt or the stopped
+    // debugger may race a claim, and must miss rather than misname.
+    return s >= 0 && procs[s].pid == pid ? s : -1;
 }
 
 // The slot holding what this group shares. Falls back to `idx` for a
@@ -1424,7 +1459,7 @@ int scheduler_wake_one(const void *chan) {
     }
     if (pick < 0) return 0;
     wake_slot(pick, 0);
-    return pick + 1;
+    return procs[pick].pid;
 }
 
 // The thread pointer this thread's %fs resolves against. Ring 3 owns
@@ -1607,8 +1642,8 @@ void scheduler_demo_run(void) {
         vga_write("schedtest: failed to spawn one or both counter processes --\n");
         vga_write("were /bin/counter_a and /bin/counter_b seeded onto disk.img?\n");
         vga_write("(see the Makefile's `seed` target)\n");
-        if (a > 0 && pid_slot(a) >= 0) { slot_free(pid_slot(a)); alive_count--; }
-        if (b > 0 && pid_slot(b) >= 0) { slot_free(pid_slot(b)); alive_count--; }
+        if (a >= 0) { slot_free(a); alive_count--; }   // spawn_from_fs() returns a SLOT
+        if (b >= 0) { slot_free(b); alive_count--; }
         return;
     }
 
@@ -1631,8 +1666,8 @@ void scheduler_demo_run(void) {
     int a_done = 0, b_done = 0;
     while (!a_done || !b_done) {
         __asm__ volatile ("hlt");
-        if (!a_done && scheduler_poll(a + 1, &a_code) == SCHED_POLL_EXITED) a_done = 1;
-        if (!b_done && scheduler_poll(b + 1, &b_code) == SCHED_POLL_EXITED) b_done = 1;
+        if (!a_done && scheduler_poll(procs[a].pid, &a_code) == SCHED_POLL_EXITED) a_done = 1;
+        if (!b_done && scheduler_poll(procs[b].pid, &b_code) == SCHED_POLL_EXITED) b_done = 1;
     }
 
     vga_write("\n\nBoth processes exited. Scheduler stays armed -- every other\n");

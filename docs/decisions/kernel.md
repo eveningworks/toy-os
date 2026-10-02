@@ -5702,7 +5702,7 @@ no concept named "thread" at all, and `tgid != pid` is the only thing
 that distinguishes one.
 
 toy-os took Linux's. The argument is not elegance, it is the existing
-code: `procs[]` is indexed everywhere, a pid is a slot index plus one, a
+code: `procs[]` is indexed everywhere, a pid was a slot index plus one, a
 wait channel is `&procs[i]`, a kernel stack is `kstacks[i]`, and
 `SCHED_MAX_PROCS` sizes four unrelated tables (`win_server.c`,
 `win_events.c`, `mm_audit.c`, `kstack_query.c`). A separate thread
@@ -8789,4 +8789,35 @@ siblings, so every whole-process exit goes through
 `scheduler_exit_group()`. Measured after the fix: ten kills of System
 Update at delays from 0.5 to 10 s, seven of them landing mid-call and
 deferred, the desktop alive after all ten and nothing left unreaped.
+
+## Pids cycle, and a pid is a field of its slot
+
+A pid was its slot's index plus one, so a reaped pid went to the very
+next spawn -- every launch of one app was pid 4 -- and anything still
+holding the old number (a parent, a terminal's owner, a test's "missing"
+pid) named a stranger. It also meant the process table could never be
+anything but a fixed array: the identity was arithmetic in some eighty
+places, and the first pass at changing it found code that indexed
+`procs[]` with a pid, and the kernel mutex handing a lock to `pick + 1`.
+
+**What Linux does.** Pids are allocated past the last one handed out, up
+to `pid_max` (32768 by default), wrapping to `RESERVED_PIDS` (300) so
+low pids stay with early daemons; a `struct pid` lives on while a process
+group or session names it, so a group's number is never reissued to a
+stranger; and a pid is looked up through an IDR, never derived.
+
+**toy-os copies that shape.** `procs[i].pid` is set in `slot_claim()` and
+cleared in `slot_free()`; `pid_slot()` maps a pid through a flat 64 KiB
+table (at 32k pids a flat array is the IDR's job without the tree) and
+checks the slot still holds it, so a racing lookup misses rather than
+misnames. Allocation skips pids in use -- zombies included, since a
+zombie keeps its map entry until reaped -- and pids still named as a
+pgid or sid by any slot, the field compare that stands in for
+`struct pid`'s refcount. init stays pid 1 by being spawned first, as on
+Linux. The kernel debugger's thread for the kernel context moved from
+1000 to `SCHED_PID_MAX`, the first number no pid can be.
+
+This is the step that lets the process TABLE become RAM-sized (a later
+entry): with no code deriving one from the other, the table's size and
+the pid space are independent.
 

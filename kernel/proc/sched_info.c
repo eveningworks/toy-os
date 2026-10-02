@@ -286,6 +286,10 @@ void scheduler_test_make_thread(int idx, int leader) {
     procs[idx].tgid = procs[leader].pid;
 }
 
+void scheduler_test_set_pgid(int idx, int pgid) {
+    if (idx >= 0 && idx < MAX_PROCS) procs[idx].pgid = pgid;
+}
+
 int  scheduler_test_slot_claim(void)     { return slot_claim(); }
 void scheduler_test_slot_unclaim(int s)  { slot_unclaim(s); }
 

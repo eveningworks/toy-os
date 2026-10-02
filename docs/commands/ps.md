@@ -76,5 +76,5 @@ is who STARTED a process; the group is what a SIGNAL reaches. `kill -TERM
 runs in a group of its own -- so the PGID column is how you see which
 processes one keystroke would end.
 
-It walks by SLOT and reads the pid from each record rather than
-assuming slot+1 -- that assumption holds only until a slot is reused.
+It walks by SLOT and reads the pid from each record: pids cycle and
+are not slot numbers.

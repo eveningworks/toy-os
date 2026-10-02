@@ -145,7 +145,7 @@ int main(void) {
     checkf("...and getpgid reports it", sys_getpgid(0) == me, sys_getpgid(0), me);
 
     check("getpgid of a pid that does not exist is refused",
-          sys_getpgid(4000) < 0, 0);
+          sys_getpgid(99999) < 0, 0);
 
     // --- dispositions -------------------------------------------------
 
@@ -595,8 +595,8 @@ int main(void) {
 
     // --- signalling something that is not there ---------------------------
     check("a signal to a pid that does not exist is refused",
-          sys_kill(4000, SIGTERM) != 0, 0);
-    check("a group with no members is refused", sys_kill(-4000, SIGTERM) != 0, 0);
+          sys_kill(99999, SIGTERM) != 0, 0);
+    check("a group with no members is refused", sys_kill(-99999, SIGTERM) != 0, 0);
     check("a number that is not a signal is refused", sys_kill(me, 99) != 0, 0);
 
     return utest_end();
