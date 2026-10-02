@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="screenshots/readme/desktop.png" alt="toy-os desktop: the Image Viewer, the File Manager, Notepad, DOOM and a Terminal open at once" width="49%">
+  <img src="screenshots/readme/desktop.png" alt="toy-os desktop: the Start menu open on All Apps, over the Image Viewer, the File Manager, the Task Manager and a Terminal" width="49%">
   <img src="screenshots/readme/shell.png" alt="toy-os Terminal: `doc ls` rendering the ls manual page, headings and code spans styled, paged" width="49%">
 </p>
 
