@@ -153,12 +153,17 @@ third-party material. In short:
   the rest of the repository stays MIT. The Doom IWAD is **not** in this
   repository — `tools/fetch_wad.py` obtains one, under id Software's own
   terms.
+- `userland/ports/mbedtls/` (Mbed TLS) is taken under the Apache-2.0
+  side of its dual licence, and builds into `/lib/libssl.so`.
+- `userland/ports/dash/` is BSD-3-Clause, vendored but not built.
 - `userland/ports/cjson/` is MIT, under its own copyright.
 - The runtime-loadable fonts in `data/fonts/` are under the Bitstream
   Vera and SIL Open Font licenses, and the baked JetBrains Mono glyphs
   in `kernel/drivers/font_ttf.c` under the SIL Open Font License 1.1.
-- The bundled `pci.ids` and `usb.ids` databases in `data/` have their
-  own terms.
+- The bundled `pci.ids` and `usb.ids` databases in `data/` are taken
+  under the BSD-3-Clause side of their dual licence, and three Terminal
+  colour schemes carry other projects' palettes (Solarized, Tango,
+  Breeze).
 
 `tools/check_licenses.py` fails the build if a vendored port or a shipped
 font is missing from that inventory.

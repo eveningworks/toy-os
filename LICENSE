@@ -238,12 +238,12 @@ tools/check_licenses.py exists. The decoder itself
 (userland/lib/usnd_mp3.c) is original work under the MIT License above;
 what was taken is the standard's data, not anyone's code.
 
-seed/sync/usr/share/hwdata/pci.ids (seeded onto the disk image as
+data/pci.ids (seeded onto the disk image as
 /usr/share/hwdata/pci.ids, and read by /bin/lspci) is a verbatim copy
 of the PCI ID Database maintained by the PCI ID Project at
 https://pci-ids.ucw.cz/. It is not covered by the MIT License above.
 
-seed/sync/usr/share/hwdata/usb.ids (seeded as /usr/share/hwdata/usb.ids,
+data/usb.ids (seeded as /usr/share/hwdata/usb.ids,
 and read by /bin/lsusb) is a verbatim copy of the USB ID Database
 maintained by Stephen J. Gowdy at https://www.linux-usb.org/usb-ids.html.
 It is likewise not covered by the MIT License above.
@@ -290,6 +290,34 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+data/usr/share/terminal/ holds the GUI Terminal's colour schemes. Three
+carry another project's palette -- sixteen colour values each, and no
+code:
+
+  solarized-dark.scheme     Solarized, Copyright (c) 2011 Ethan
+  solarized-light.scheme    Schoonover, under the MIT License
+                            (https://github.com/altercation/solarized),
+                            whose permission notice is the one at the
+                            top of this file. The copyright line is
+                            also in each file's header.
+  tango.scheme              The Tango Desktop Project's palette,
+                            released into the public domain.
+  breeze.scheme             The colour values of KDE Konsole's
+                            Breeze.colorscheme. That file carries no
+                            licence header of its own; Konsole as a
+                            whole is GPL-2.0-or-later.
+
+The other schemes are original.
+
+/etc/kbs/* on a built disk image (keyboard layouts, read by
+kernel/lib/keyboard_layout.c) is NOT in this repository: tools/gen_kbs.py
+generates it at build time from the BUILD HOST's own xkeyboard-config
+data, through xkbcli, when that tool is installed. xkeyboard-config is
+under X11/MIT-style permissive licences, one per contributor, collected
+in its COPYING. What the generated files hold is a key-to-character
+table per layout -- no XKB source text -- and a build without xkbcli
+ships none, falling back to a compiled-in US table that is original.
 
 ---
 
