@@ -10,6 +10,7 @@
 #include "term.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "rt/sys.h"
 #include "proc_info.h"
 #include "ui/ugfx.h"
@@ -111,8 +112,8 @@ static const char *doing(const struct proc_info *p) {
 
 // The shell and everything under it, depth-first, threads hidden -- ps
 // --tree's walk, cut to what fits.
-static struct proc_info g_procs[SYS_PROC_MAX];
-static int g_nprocs;
+static struct proc_info *g_procs;   // sys_proc_max() of them, sized on first draw
+static int g_procs_cap, g_nprocs;
 
 static void tree_row(struct ugfx_surface *s, int *y, const struct proc_info *p, int depth,
                      int sel) {
@@ -169,9 +170,11 @@ void term_panel_draw(struct ugfx_surface *s, const struct term_panel_info *in) {
     caption(s, &y, "PROCESSES", UTHEME_ACT_VIEW);
     int tree_end = y + TREE_ROWS * line_h();
     g_nprocs = 0;
+    if (!g_procs && (g_procs_cap = sys_proc_max()) > 0)
+        g_procs = malloc((size_t)g_procs_cap * sizeof *g_procs);
     struct proc_info info;
-    for (int i = 0; i < SYS_PROC_MAX && g_nprocs < SYS_PROC_MAX; i++) {
-        if (sys_proc_info(i, &info) != 0 || info.pid == 0) continue;
+    for (int i = 0; g_procs && g_nprocs < g_procs_cap && sys_proc_info(i, &info) == 0; i++) {
+        if (info.pid == 0) continue;
         if (info.tgid != info.pid) continue;
         g_procs[g_nprocs++] = info;
     }

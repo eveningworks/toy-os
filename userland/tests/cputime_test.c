@@ -65,9 +65,8 @@
 // construction -- it is the process executing the syscall that asks --
 // and there is no getpid() to do it more directly.
 static int find_self(struct proc_info *out) {
-    for (int i = 0; i < SYS_PROC_MAX; i++) {
-        struct proc_info info;
-        if (sys_proc_info(i, &info) != 0) continue;
+    struct proc_info info;
+    for (int i = 0; sys_proc_info(i, &info) == 0; i++) {
         if (info.pid == 0) continue;            // empty slot: skip, don't stop
         if (info.state != PROC_STATE_RUNNING) continue;
         *out = info;

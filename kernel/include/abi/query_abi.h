@@ -536,6 +536,12 @@ struct query_fsstat {
 // "" when it could not. Counted by `seq`, so a reader that remembers the
 // last one it saw tells a new crash from an old one.
 #define QUERY_CRASH 47
+// THE PROCESS TABLE'S LIMITS: how many processes (threads included) may
+// exist at once, the pid space, and how many exist now. SCALAR -- Linux's
+// kernel.threads-max and kernel.pid_max. A program sizes a per-process
+// table from `max_procs` and walks sys_proc_info() until it refuses an
+// index; there is no compile-time count in the ABI.
+#define QUERY_PROCLIMITS 48
 
 #define QUERY_REMOTE_SESSION  0 // a session opened or closed
 #define QUERY_REMOTE_COMMAND  1 // a command line the remote shell ran
@@ -1436,6 +1442,14 @@ struct query_crash {
 
 _Static_assert(sizeof(struct query_crash) <= 256,
                "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
+
+// --- QUERY_PROCLIMITS record --------------------------------------------
+
+struct query_proclimits {
+    uint64_t max_procs;   // processes and threads that may exist at once
+    uint64_t pid_max;     // pids run 1 .. pid_max - 1
+    uint64_t live;        // existing now, not counting zombies
+};
 
 // --- QUERY_SMBIOS record ------------------------------------------------
 

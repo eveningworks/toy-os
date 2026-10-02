@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include "proc_info.h"
 #include <unistd.h>
+#include <stdlib.h>
 
 static void put(const char *s) { write(1, s, strlen(s)); }
 
@@ -144,8 +145,7 @@ static void header(void) {
 static int snapshot(struct proc_info *out, int cap, int with_threads) {
     int n = 0;
     struct proc_info info;
-    for (int i = 0; i < SYS_PROC_MAX && n < cap; i++) {
-        if (sys_proc_info(i, &info) != 0) continue;
+    for (int i = 0; n < cap && sys_proc_info(i, &info) == 0; i++) {
         if (info.pid == 0) continue; // empty slot -- skip, never stop
         // HIDDEN BY DEFAULT, as in every Unix ps: a program's threads
         // are an implementation detail of that program, and a listing
@@ -157,9 +157,9 @@ static int snapshot(struct proc_info *out, int cap, int with_threads) {
     return n;
 }
 
-// Depth-first, printing every child of `parent` under it. O(n^2) over a
-// table bounded at SYS_PROC_MAX, which is 64 -- a real tree walk would
-// need a child list the ABI does not carry.
+// Depth-first, printing every child of `parent` under it. O(n^2) over
+// the live processes -- a real tree walk would need a child list the ABI
+// does not carry.
 // THE LAST CHILD IS DRAWN DIFFERENTLY, which is the whole reason to draw
 // branches rather than indent: a backtick closes a subtree, so a reader
 // can see where one ends. Plain indentation cannot express that at all.
@@ -214,8 +214,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    static struct proc_info procs[SYS_PROC_MAX];
-    int n = snapshot(procs, SYS_PROC_MAX, threads);
+    int cap = sys_proc_max();
+    struct proc_info *procs = cap > 0 ? malloc((size_t)cap * sizeof *procs) : NULL;
+    if (!procs) { put("ps: cannot size the process table\n"); return 1; }
+    int n = snapshot(procs, cap, threads);
 
     header();
     if (!tree) {

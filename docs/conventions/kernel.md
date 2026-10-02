@@ -4593,6 +4593,10 @@ traps. **A per-slot table keeps the owner's pid and checks it** (futex.c's
 wakewords), or a reused slot inherits the last tenant's entry. **A test's
 "pid nobody has" is `SCHED_PID_MAX`**, which no process can hold; a small
 number like 4000 is a real pid on a machine that has run long enough.
+**Ring 3 has no compile-time process count**: walk `sys_proc_info()` until
+it refuses an index (an empty slot is pid 0 -- skip it), and size a
+per-process table from `sys_proc_max()` (`QUERY_PROCLIMITS`,
+`config get proc.max_procs`) at startup.
 
 ## A CONTEXT PARKED MID-CALL DIES ON ITS WAY OUT, NOT WHERE IT SLEEPS
 

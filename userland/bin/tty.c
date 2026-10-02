@@ -34,8 +34,7 @@
 static const char *name_of(int pid, char *buf, int cap) {
     if (pid <= 0) return 0;
     struct proc_info info;
-    for (int i = 0; i < SYS_PROC_MAX; i++) {
-        if (sys_proc_info(i, &info) != 0) continue;
+    for (int i = 0; sys_proc_info(i, &info) == 0; i++) {
         if (info.pid != pid) continue;
         snprintf(buf, cap, "%s", info.name);
         return buf;

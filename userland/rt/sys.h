@@ -561,12 +561,18 @@ int sys_cpu_info(struct cpu_info *out);
 // under emulation. See kernel/include/api/krandom.h.
 int sys_getrandom(void *buf, unsigned long n);
 
-// Reports on process-table SLOT `index` (0 .. SYS_PROC_MAX-1), not on a
-// pid -- so a caller can walk the table without knowing which pids
-// exist. An empty slot is a SUCCESSFUL call reporting pid 0: skip it,
-// do not stop. Returns 0 on success, -1 (with sys_errno()) for a bad
-// index -- which is what terminates an enumeration -- or pointer.
+// Reports on process-table SLOT `index`, not on a pid -- so a caller can
+// walk the table without knowing which pids exist:
+//     for (int i = 0; sys_proc_info(i, &p) == 0; i++) { if (!p.pid) continue; ... }
+// An empty slot is a SUCCESSFUL call reporting pid 0: skip it, do not
+// stop. Returns -1 (with sys_errno()) past the table's end -- which is
+// what ends the walk -- or for a bad pointer.
 int sys_proc_info(int index, struct proc_info *out);
+
+// How many processes and threads may exist at once (QUERY_PROCLIMITS),
+// so a per-process table is sized at startup; 0 if the kernel did not
+// say. There is no compile-time count: the limit depends on the RAM.
+int sys_proc_max(void);
 
 // The settings and config-file registries (abi/setting_abi.h). ONE call
 // with an op field, not one per operation -- see SYS_SETTING's comment.

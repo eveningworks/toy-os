@@ -30,6 +30,7 @@
 #include "pmm.h"
 #include "proc_info.h"
 #include "string.h"
+#include "query.h"      // query_read() -- QUERY_PROCLIMITS
 
 #define TEST_VADDR 0x9000000000ULL // clear of every uaddr.h region
 
@@ -234,4 +235,19 @@ KTEST("procinfo", "a runnable process waits on nothing") {
     KTEST_ASSERT_EQ(got, 1);
     KTEST_ASSERT_EQ(info.state, (uint32_t)PROC_STATE_READY);
     KTEST_ASSERT_EQ(info.wait_reason, (uint32_t)PROC_WAIT_NONE);
+}
+
+KTEST("procinfo", "QUERY_PROCLIMITS is the scheduler's own limit and pid space") {
+    // What a ring-3 program sizes its process tables from, now that the
+    // ABI carries no count: a fact that disagreed with the table would
+    // overflow every caller that trusted it.
+    struct query_proclimits q;
+    k_memset(&q, 0, sizeof q);
+    KTEST_ASSERT_EQ(query_read(QUERY_PROCLIMITS, 0, &q, sizeof q), (int)sizeof q);
+    KTEST_ASSERT_EQ((int)q.max_procs, scheduler_max_procs());
+    KTEST_ASSERT_EQ((int)q.pid_max, SCHED_PID_MAX);
+    KTEST_ASSERT(q.live >= 1 && q.live <= q.max_procs);
+    // And the walk the ABI documents ends exactly there.
+    struct proc_info info;
+    KTEST_ASSERT_EQ(scheduler_proc_info((int)q.max_procs, &info), 0);
 }

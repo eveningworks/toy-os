@@ -854,6 +854,7 @@ int scheduler_mark_current_ready(void) {
 }
 
 int scheduler_max_procs(void) { return MAX_PROCS; }
+int scheduler_live_count(void) { return alive_count; }
 
 // CPU time is billed by MEASURING IT, not by counting ticks.
 //

@@ -47,7 +47,9 @@ struct tm_proc {
     char path[TM_PATH_MAX];   // "" when the kernel does not know
 };
 
-extern struct tm_proc g_proc[SYS_PROC_MAX];
+// Sized from sys_proc_max() at startup; g_proc_cap is that size.
+extern struct tm_proc *g_proc;
+extern int g_proc_cap;
 extern int g_nproc;
 extern int g_desktop_pid;          // the compositor's pid, or 0
 extern unsigned g_cpu_pm;          // the whole machine, per mille

@@ -40,8 +40,7 @@ static void fill_app(volatile struct snd_ctl_page *ctl) {
     if (g_app[0]) { strlcpy((char *)ctl->app, g_app, SND_APP_MAX); return; }
     int me = sys_getpid();
     struct proc_info info;
-    for (int i = 0; i < SYS_PROC_MAX; i++) {
-        if (sys_proc_info(i, &info) != 0) continue;
+    for (int i = 0; sys_proc_info(i, &info) == 0; i++) {
         if (info.pid != me) continue;
         strlcpy((char *)ctl->app, info.name, SND_APP_MAX);
         return;

@@ -1135,6 +1135,8 @@ int scheduler_reparent(int pid, int new_ppid);
 
 // How many slots that table has. The bound for the loop above.
 int scheduler_max_procs(void);
+// Processes and threads existing now, zombies excluded.
+int scheduler_live_count(void);
 
 int scheduler_block_current(uint64_t *regs, const void *chan, int reason);
 

@@ -135,7 +135,7 @@ typedef int (*uui_table_collapsed_fn)(void *ctx, int row); // 1 = children hidde
 // Past this many rows the table shows the first UUI_TABLE_MAX_ROWS in
 // sorted order and the rest unsorted after them, rather than silently
 // dropping any -- see uui_table.c; groups and the tree are off in that
-// case. Task Manager's ceiling is SYS_PROC_MAX (64).
+// case. Task Manager's ceiling is the process limit (sys_proc_max()).
 #define UUI_TABLE_MAX_ROWS 256
 #define UUI_TABLE_MAX_VIEW (UUI_TABLE_MAX_ROWS + UUI_TABLE_MAX_GROUPS)
 

@@ -6,7 +6,6 @@
 #include <string.h>
 #include <unistd.h>
 #include "rt/sys.h"
-#include "syscall_abi.h" // SYS_PROC_MAX -- getppid() walks the table
 
 int execve(const char *path, char *const argv[], char *const envp[]) {
     return sys_execve(path, argv, envp);
@@ -43,9 +42,7 @@ int execvp(const char *file, char *const argv[]) {
 pid_t getppid(void) {
     int me = getpid();
     struct proc_info pi;
-    for (int i = 0; i < SYS_PROC_MAX; i++) {
-        if (sys_proc_info(i, &pi) < 0) continue;
+    for (int i = 0; sys_proc_info(i, &pi) == 0; i++)
         if (pi.pid == me) return pi.ppid;
-    }
     return 0;
 }

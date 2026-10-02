@@ -26,6 +26,7 @@
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "rt/sys.h"
 #include "ui/ulog.h"
 #include "ui/ugfx.h"
@@ -59,14 +60,14 @@ static const char *const VIEW_NAMES[] = { "Grouped", "Tree", "List" };
 
 // --- rows ----------------------------------------------------------------
 
-static int g_rows[SYS_PROC_MAX];   // g_proc index per table row
+static int *g_rows;   // g_proc index per table row; g_proc_cap of them
 static int g_nrows;
 static int g_group_count[TM_GROUPS];
 static int g_sel_pid;              // the selection, by pid; 0 = none
 static int g_view = VIEW_GROUPED;
 
 // Folded parents, by pid, for the same reason the selection is a pid.
-static int g_folded[SYS_PROC_MAX];
+static int *g_folded;   // g_proc_cap of them
 static int g_nfolded;
 
 static struct tm_proc *row_proc(int row) {
@@ -87,7 +88,7 @@ static int is_folded(int pid) {
 static void toggle_fold(int pid) {
     for (int i = 0; i < g_nfolded; i++)
         if (g_folded[i] == pid) { g_folded[i] = g_folded[--g_nfolded]; return; }
-    if (g_nfolded < SYS_PROC_MAX) g_folded[g_nfolded++] = pid;
+    if (g_nfolded < g_proc_cap) g_folded[g_nfolded++] = pid;
 }
 
 // --- the table ----------------------------------------------------------
@@ -628,6 +629,8 @@ static int focusables(struct uui_focusable *out, int cap) {
 }
 
 void tm_procs_init(struct tm_page *page) {
+    g_rows = calloc((size_t)g_proc_cap, sizeof *g_rows);
+    g_folded = calloc((size_t)g_proc_cap, sizeof *g_folded);
     uui_table_init(&g_table, 0, 0, 100, 100, COLUMNS, COL_COUNT, cell, 0);
     uui_table_set_seek_col(&g_table, COL_NAME);
     uui_table_set_compare(&g_table, compare_rows);

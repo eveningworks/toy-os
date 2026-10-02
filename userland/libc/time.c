@@ -262,9 +262,7 @@ clock_t clock(void) {
     int me = sys_getpid();
     if (me < 0) return (clock_t)-1;   // no scheduler slot: C's "unavailable"
     struct proc_info pi;
-    for (int i = 0; i < SYS_PROC_MAX; i++) {
-        if (sys_proc_info(i, &pi) == 0 && pi.pid == me)
-            return (clock_t)(pi.cpu_ns / 1000u);   // CLOCKS_PER_SEC is 1e6
-    }
+    for (int i = 0; sys_proc_info(i, &pi) == 0; i++)
+        if (pi.pid == me) return (clock_t)(pi.cpu_ns / 1000u);   // CLOCKS_PER_SEC is 1e6
     return (clock_t)-1;
 }

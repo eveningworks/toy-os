@@ -40,7 +40,8 @@
 
 // --- the process model -------------------------------------------------
 
-struct tm_proc g_proc[SYS_PROC_MAX];
+struct tm_proc *g_proc;
+int g_proc_cap;
 int g_nproc;
 int g_desktop_pid;
 unsigned g_cpu_pm;
@@ -50,12 +51,12 @@ int g_threads;
 // Last tick's CPU totals, BY PID: rows move as processes come and go, so
 // indexing by row would charge one process's time to whichever landed
 // in its slot -- nonsense exactly when the table is busiest.
-static struct { int pid; unsigned long long cpu; } g_prev[SYS_PROC_MAX];
+static struct prev { int pid; unsigned long long cpu; } *g_prev;
 static int g_nprev;
 static unsigned long long g_prev_ns;
 static unsigned long long g_load_proc, g_load_kernel;
 
-static struct proc_info g_info[SYS_PROC_MAX];   // static: 4.6 KiB off the stack
+static struct proc_info *g_info;
 
 int tm_proc_row(int pid) {
     for (int i = 0; i < g_nproc; i++)
@@ -156,8 +157,7 @@ static void refresh_model(void) {
     unsigned long long elapsed = now - g_prev_ns;
 
     int ninfo = 0;
-    for (int i = 0; i < SYS_PROC_MAX; i++) {
-        if (sys_proc_info(i, &g_info[ninfo]) != 0) continue;
+    for (int i = 0; ninfo < g_proc_cap && sys_proc_info(i, &g_info[ninfo]) == 0; i++) {
         if (g_info[ninfo].pid == 0) continue;   // an empty slot: skip, do not stop
         ninfo++;
     }
@@ -391,6 +391,15 @@ static void on_size(int *w, int *h) {
 }
 
 int main(void) {
+    // The tables are as big as the process limit, which depends on the RAM.
+    g_proc_cap = sys_proc_max();
+    g_proc = g_proc_cap > 0 ? calloc((size_t)g_proc_cap, sizeof *g_proc) : NULL;
+    g_prev = g_proc_cap > 0 ? calloc((size_t)g_proc_cap, sizeof *g_prev) : NULL;
+    g_info = g_proc_cap > 0 ? calloc((size_t)g_proc_cap, sizeof *g_info) : NULL;
+    if (!g_proc || !g_prev || !g_info) {
+        sys_eprint("taskmgr: cannot size the process table\n");
+        return 1;
+    }
     load_apps();
     tm_procs_init(&g_pages[PAGE_PROCS]);
     tm_perf_init(&g_pages[PAGE_PERF]);

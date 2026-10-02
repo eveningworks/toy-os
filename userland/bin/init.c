@@ -941,8 +941,8 @@ static void poll_readiness(void) {
     if (!count_awaiting_ready()) return;
 
     struct proc_info pi;
-    for (int slot = 0; slot < SYS_PROC_MAX; slot++) {
-        if (sys_proc_info(slot, &pi) != 0 || pi.pid == 0 || !pi.ready) continue;
+    for (int slot = 0; sys_proc_info(slot, &pi) == 0; slot++) {
+        if (pi.pid == 0 || !pi.ready) continue;
         for (int i = 0; i < g_svc_count; i++) {
             struct service *s = &g_svc[i];
             if (s->pid != pi.pid || s->ready) continue;

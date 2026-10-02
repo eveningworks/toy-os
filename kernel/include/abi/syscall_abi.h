@@ -1087,7 +1087,7 @@ struct spawn_msg {
                           // pids exist -- which is what a task manager
                           // does. An EMPTY slot is a successful call
                           // reporting pid 0, so enumeration skips rather
-                          // than stops. The bound is SYS_PROC_MAX below.
+                          // than stops. Past the table's end: -EINVAL.
                           //
                           // Read-only and unprivileged: every process
                           // can see every other. This kernel has no user
@@ -2306,9 +2306,9 @@ struct mmap_msg {
 // still bounded by FS_PATH_MAX where it is used AS a path.
 #define SPAWN_ARGS_MAX 1024
 
-// The number of process-table slots SYS_PROC_INFO can be asked about.
-// Mirrors the kernel's SCHED_MAX_PROCS; a caller loops 0..this-1.
-#define SYS_PROC_MAX 64
+// NO SYS_PROC_MAX: the process limit depends on the RAM. A caller walks
+// SYS_PROC_INFO until it refuses an index, and sizes a table from
+// QUERY_PROCLIMITS (query_abi.h).
 
 // The largest single SYS_GETRANDOM request. Not a security limit -- it
 // stops a bad count from turning into a long uninterruptible fill in

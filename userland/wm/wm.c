@@ -459,26 +459,32 @@ void open_app(const struct gui_app *app) {
 //
 // Reaping is also what makes force-quit repeatable rather than a
 // four-shot escape hatch.
-// Sized by SCHED_MAX_PROCS, not by the window count. It tracks
-// PROCESSES the desktop launched, so the scheduler's table is its
-// real bound -- the two were the same number by coincidence while
-// windows were capped at 6, and that coincidence broke the moment
-// the window table started growing.
-static int g_launched[SCHED_MAX_PROCS];
+// Sized by the PROCESS limit (sys_proc_max(), at first use), not by the
+// window count: it tracks processes the desktop launched, so the
+// scheduler's table is its real bound.
+static int *g_launched;
+static int g_launched_cap;
+
+static int launched_ready(void) {
+    if (!g_launched && (g_launched_cap = sys_proc_max()) > 0)
+        g_launched = calloc((size_t)g_launched_cap, sizeof *g_launched);
+    return g_launched != 0;
+}
 
 // Slot i's pid, or 0 if free. For `gui state`, which is how a test sees
 // that a process the desktop launched is still alive -- the WM reaps
 // this table every iteration, so a non-zero entry means "running as of
 // the last loop pass" without the test needing a second liveness call.
 int wm_launched_pid(int slot) {
-    if (slot < 0 || slot >= SCHED_MAX_PROCS) return 0;
+    if (!g_launched || slot < 0 || slot >= g_launched_cap) return 0;
     return g_launched[slot];
 }
 
-int wm_launched_max(void) { return SCHED_MAX_PROCS; }
+int wm_launched_max(void) { return g_launched_cap; }
 
 void wm_track_launched(int pid) {
-    for (int i = 0; i < SCHED_MAX_PROCS; i++) {
+    if (!launched_ready()) return;
+    for (int i = 0; i < g_launched_cap; i++) {
         if (g_launched[i] == 0) { g_launched[i] = pid; return; }
     }
     // Full: every slot is a pid still running. Dropping the newest is
@@ -488,7 +494,7 @@ void wm_track_launched(int pid) {
 }
 
 static void wm_reap_launched(void) {
-    for (int i = 0; i < SCHED_MAX_PROCS; i++) {
+    for (int i = 0; i < g_launched_cap; i++) {
         if (!g_launched[i]) continue;
         int code = 0;
         // sys_waitpid_NOHANG(), and that distinction is the whole

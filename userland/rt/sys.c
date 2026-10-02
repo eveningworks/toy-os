@@ -841,6 +841,12 @@ int sys_proc_info(int index, struct proc_info *out) {
                               (uint64_t)(uintptr_t)out));
 }
 
+int sys_proc_max(void) {
+    struct query_proclimits q;
+    if (sys_query_record(QUERY_PROCLIMITS, 0, &q, sizeof q) < (int)sizeof q) return 0;
+    return (int)q.max_procs;
+}
+
 int sys_setting(struct setting_msg *msg) {
     return (int)err(syscall1(SYS_SETTING, (uint64_t)(uintptr_t)msg));
 }

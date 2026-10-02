@@ -132,8 +132,8 @@ static void do_ring3(int code) {
 // a way to ask it to fault; the signal's report is the same evidence.
 static void do_desktop(void) {
     struct proc_info p;
-    for (int i = 0; i < SYS_PROC_MAX; i++) {
-        if (sys_proc_info(i, &p) != 0 || p.pid == 0 || strcmp(p.name, "toywm") != 0) continue;
+    for (int i = 0; sys_proc_info(i, &p) == 0; i++) {
+        if (p.pid == 0 || strcmp(p.name, "toywm") != 0) continue;
         char buf[64];
         snprintf(buf, sizeof buf, "crashtest: desktop SIGSEGV to pid %d\n", (int)p.pid);
         ulog(buf);
