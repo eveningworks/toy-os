@@ -1682,7 +1682,26 @@ this the obvious way), not from how much history it accumulated.
   so adding a kind there gives the app a button with no edit -- and
   `tools/crashtest_test.py` is safe in `gui_regress` precisely because
   the dangerous half is disarmed by default. To exercise a real panic:
-  `make iso KCMDLINE="faultinject"`.
+  `make iso KCMDLINE="faultinject"`. **"crash the desktop" sends toywm a
+  `SIGSEGV`**, so the test ends on a restarted desktop -- run it LAST in
+  anything that keeps state across checks.
+- **A CRASH IS TOLD FROM `QUERY_CRASH`, NEVER INFERRED FROM A WINDOW
+  VANISHING** -- a clean exit vanishes too. `userland/wm/crash_notice.c`
+  polls the kernel's ring of this boot's last eight ring-3 crashes and
+  tells each `seq` once: "<App> closed unexpectedly" with Details (the
+  dialog, `/bin/wm/apps/crashreports --report <path>`) and Reopen (desktop
+  apps only; a daemon is init's to restart). Three things. **The notice
+  is a PASSIVE overlay** (`wm_overlay.h`'s `passive`): it takes clicks on
+  its cards and nothing else and is not "a menu is open", so it never
+  eats the next desktop click. **A restarted toywm reads the ring at
+  startup**, and a toywm crash under a minute old is "The desktop
+  restarted after a problem". **When the compositor DIES the kernel
+  holds its last frame** (`win_surface_hold_frame()`, dimmed, with a
+  card) until a new one registers or `VGA_HOLD_S` passes, then falls back
+  to the console. Only a CRASH holds (a fault or a core-dumping signal);
+  a clean exit or a `SIGTERM` gets the console back at once. `gui state`
+  reports the newest card and its button rects as `notice`;
+  `tools/crashtest_test.py` drives all of it.
 - **THE KERNEL CONSOLE STOPS PRESENTING WHILE A COMPOSITOR OWNS THE
   SCREEN, AND KEEPS BUFFERING.** `vga_present()` returns early when
   `win_server_any()`; the console still draws into its own back buffer,
@@ -1694,7 +1713,9 @@ this the obvious way), not from how much history it accumulated.
   how it was noticed. Three things. **`vga_present_force()` is the
   override, and a PANIC is its caller** -- guarding the routine path
   alone would have made every panic under a running desktop invisible,
-  which is the opposite of what a panic report is for. **Default-safe**:
+  which is the opposite of what a panic report is for. A RING-3 crash is
+  NOT a caller: the fault handler forces only when the fault is
+  unrecoverable, or every app crash would flash the console. **Default-safe**:
   a new routine caller gets the check without knowing it exists, and the
   two that mean to override say so. And **the console is not stopped from
   DRAWING**, only from publishing -- the back buffer is kernel-owned and

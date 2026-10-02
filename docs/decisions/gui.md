@@ -5117,6 +5117,76 @@ for programs whose INTERFACE is a terminal — `edit`, `tosh` — which toy-os
 still cannot launch from the desktop at all. That is a real gap and it is
 on the roadmap; it is a different feature from this bug.
 
+**A ring-3 crash no longer takes the override** (2026-10-02). The
+fault handler used to force-present for EVERY fault, so a crashing
+app -- or the compositor itself -- flashed the whole text console over
+the desktop for the second it took init to restart it, too briefly to
+read. It now forces only when the fault is unrecoverable; a ring-3
+crash goes through the routine path like any other output. What the
+user sees instead is the next entry.
+
+## A crash is said in the desktop's voice: a held frame, a notice, a dialog
+
+Two things went wrong when a ring-3 program crashed. An app's crash said
+nothing on screen at all -- its window vanished and a report landed in
+`/var/crash`, found only by someone who knew `crashlog`. And a crash of
+the COMPOSITOR flashed the kernel console for about a second, which is
+too short to read and long enough to alarm.
+
+**What real systems do.** Windows' display driver recovery (TDR) keeps
+the last frame, blanks briefly, and says afterwards "Display driver
+stopped responding and has recovered"; Windows Error Reporting and
+Reliability Monitor hold the per-app record. macOS shows "<App> quit
+unexpectedly" with Reopen and a report. KDE's DrKonqi notifies with
+Details, and GNOME's ABRT keeps a list. Linux's own kernel side is
+`signal(7)`'s "Core" default action: a crash is a signal whose default
+dumps core, which is why a `SIGSEGV` sent by `kill` counts too. toy-os
+copies the SHAPE of all four: a notice, a dialog, a list, and a frame
+held across a compositor restart.
+
+**The held frame is the KERNEL's, because nothing else is left.** When
+the compositor dies, its windows' memory goes with it and init has not
+started the next one yet. The kernel still has the scanout, so
+`win_surface_hold_frame()` copies the front buffer into the console's
+back buffer, dims it, draws a "Restarting the desktop" card, and
+`vga_present()` goes quiet (`vga_held()`) until a new compositor
+registers or `VGA_HOLD_S` passes -- then the console comes back, because
+a desktop that is not returning must not leave a picture of itself
+standing in for a hung machine. Only a compositor that CRASHED holds --
+a fault, or a signal whose default dumps core (`signal_dumps_core()`). A
+clean exit or a `SIGTERM` is someone asking the desktop to go, and hands
+the screen straight back.
+
+**The WM learns of a crash from the kernel, not by inference.** A window
+disappearing is also what a clean exit looks like, and watching
+`/var/crash` would miss a crash whose report was refused (a busy
+filesystem, the legacy loader). So the kernel keeps a ring of this
+boot's last eight ring-3 crashes as `QUERY_CRASH` records, each with a
+monotonically increasing `seq`, noted BEFORE any refusal; the WM polls it
+twice a second and tells each `seq` once. A restarted WM reads the ring
+at startup, and a toywm crash within the last minute becomes "The
+desktop restarted after a problem". A record says whether a report was
+saved, so a refusal is said, not hidden.
+
+**The notice is a PASSIVE overlay.** It takes clicks on its own cards
+and nothing else, does not count as "a menu is open", and expires after
+12 s unless the pointer is on it. An ordinary overlay would have
+swallowed the next click anywhere on the desktop, which is the wrong
+cost for a message that needs no answer.
+
+**One app, two faces.** `/bin/wm/apps/crashreports --report <path>` is
+the dialog (the notice's Details), and with no argument it is the list
+(Start menu, and the dialog's All reports). They parse the same report
+header and say the same things in the same words, which two programs
+would drift apart on. The dialog has its own `app_id` because the WM
+remembers a window's size per id.
+
+**A core-dumping signal writes a report too.** `SIGSEGV`, `SIGILL`,
+`SIGFPE` and `SIGABRT` whose default action kills the process now
+write `Killed by SIG<name>`, as Linux dumps core for them. Without it
+Crash Test's "crash the desktop" -- a `SIGSEGV` sent to toywm -- would
+restart the desktop with nothing to say why.
+
 ## A client may post an event to itself, and only that
 
 `WIN_REQ_EVENT_PUSH` was compositor-only, and for a good reason: it is

@@ -136,7 +136,12 @@ this the obvious way), not from how much history it accumulated.
   crash-reporting milestone), kept apart so a list of crashes never
   conflates the system working with the system failing. The buffers are
   statics, not locals: the writer runs on the faulting process's kernel
-  stack.
+  stack. **A core-dumping signal's default action writes one too**
+  (`SIGSEGV`/`SIGILL`/`SIGFPE`/`SIGABRT`, `Killed by SIG<name>`, Linux's
+  "Core" action in `signal(7)`), and **every crash is noted in
+  `QUERY_CRASH`'s ring BEFORE any refusal**, with `report` empty when
+  none was written -- the desktop's crash notice reads that, not the
+  directory.
 - **THE KERNEL DEBUGGER'S STOPPED PATH TAKES NO LOCK, ALLOCATES NOTHING
   AND DOES NOT LOG.** `kernel/debug/` (armed by `kdebug=ttySN`,
   `docs/kdebug-design.md`) runs with interrupts off at whatever

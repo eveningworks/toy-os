@@ -1163,6 +1163,8 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] The panic store on real hardware: the ASUS resets HARD (0xCF9 = 6) and kept nothing, 1 panic in 1 -- try a warm reset
 - [ ] `crashlog --panics` -- a panic is in the dead boot's log (`log -p N`); crashlog lists ring-3 reports only
 - [x] ~~Core dumps for a faulting ring-3 process~~ DONE 2026-09-02 -- a text report plus the raw stack in `/var/crash`
+- [x] ~~Say a crash on the desktop: a notice, a dialog, a Crash Reports list~~ DONE 2026-10-02 -- `QUERY_CRASH`
+- [x] ~~A compositor crash holds its last frame instead of flashing the console~~ DONE 2026-10-02 -- `win_surface_hold_frame()`
 - [x] ~~A host-side script to inspect a core dump against the ELF's DWARF~~ DONE 2026-09-02 -- `panic_resolve.py --crash`
 - [x] ~~Distinguish "the kernel faulted" from "a process faulted and the kernel tore it down correctly"~~ DONE 2026-09-12
 - [x] ~~Stack-overflow detection via a guard page, reported as such rather than as a mystery fault~~ done

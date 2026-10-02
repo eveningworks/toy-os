@@ -16,6 +16,10 @@ written by the kernel when a ring-3 process faults and is torn down
 -- the program, pid, fault, registers, memory map and the tail of the
 kernel log -- followed by the raw bytes of the process's stack.
 
+A core-dumping signal's default action writes one too (`Killed by
+SIGSEGV`). On the desktop the same reports are the Crash Reports app
+(`/bin/wm/apps/crashreports`), which a crash notice's Details opens.
+
 `crashlog` shows the header only. The stack is for the host:
 `tools/panic_resolve.py --crash <file>` names RIP and every return
 address on it against the program's ELF, which is where the DWARF is.
