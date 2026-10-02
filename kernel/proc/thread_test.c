@@ -130,7 +130,7 @@ KTEST("thread", "a thread is reported as one, with its leader's identity") {
         if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) break;
     }
     KTEST_ASSERT(found);
-    KTEST_ASSERT(scheduler_proc_info(pid - 1, &leader));
+    KTEST_ASSERT(scheduler_proc_info_pid(pid, &leader));
     KTEST_ASSERT_EQ(thread.tgid, leader.pid);
     KTEST_ASSERT(thread.pid != leader.pid);
     // A thread has no name of its own -- `ps` prints its leader's in
@@ -152,7 +152,7 @@ KTEST("thread", "an ordinary process is its own thread group") {
     if (!pid) KTEST_SKIP("no /bin/hello on this boot");
 
     struct proc_info info;
-    KTEST_ASSERT(scheduler_proc_info(pid - 1, &info));
+    KTEST_ASSERT(scheduler_proc_info_pid(pid, &info));
     KTEST_ASSERT_EQ(info.tgid, pid);
     KTEST_ASSERT_EQ(scheduler_tgid(pid), pid);
 

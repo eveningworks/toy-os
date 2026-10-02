@@ -84,7 +84,7 @@ KTEST("signal", "raising a signal sets a pending bit, and taking it clears the s
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     int before = (int)scheduler_signal_pending(pid);
     int raised = scheduler_signal_raise(pid, SIGTERM);
@@ -114,7 +114,7 @@ KTEST("signal", "two of the same signal before delivery are ONE signal") {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     scheduler_signal_raise(pid, SIGINT);
     scheduler_signal_raise(pid, SIGINT);
@@ -138,7 +138,7 @@ KTEST("signal", "the LOWEST pending signal is the one taken") {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     scheduler_signal_raise(pid, SIGTERM); // 15
     scheduler_signal_raise(pid, SIGINT);  // 2
@@ -171,7 +171,7 @@ KTEST("signal", "an IGNORED signal is dropped at arrival, not queued") {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     int was = test_set_ignored(pid, SIGINT, 1);
     int raised = scheduler_signal_raise(pid, SIGINT);
@@ -203,7 +203,7 @@ KTEST("signal", "starting to ignore a signal drops one already pending") {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     scheduler_signal_raise(pid, SIGINT);
     uint32_t before = scheduler_signal_pending(pid);
@@ -238,7 +238,7 @@ KTEST("signal", "a BLOCKED process is woken by REWINDING its syscall") {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     tf[SCHED_TF_VECTOR] = 0x80;      // "this frame is a syscall"
     tf[SCHED_TF_RIP]    = 0x400000;  // whatever follows the `int`
@@ -273,7 +273,7 @@ KTEST("signal", "SIGSTOP suspends a process and SIGCONT resumes it") {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     // Woken first, so the slot is READY rather than BLOCKED -- this test
     // is about the flag, and the blocked case is the next one.
@@ -310,7 +310,7 @@ KTEST("signal", "a BLOCKED process stops without losing what it waits on") {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     signal_send(pid, SIGSTOP);
     int while_blocked = scheduler_test_state(idx);
@@ -347,7 +347,7 @@ KTEST("signal", "a stop is reported to a waiter ONCE per suspension") {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     signal_send(pid, SIGTSTP);
     int first  = scheduler_stop_report(pid);
@@ -378,7 +378,7 @@ KTEST("signal", "SIGSTOP cannot be ignored, and SIGCONT to a running process is 
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     // SIGSTOP is unignorable for the reason SIGKILL is: there has to be
     // something that always works.
@@ -423,7 +423,7 @@ KTEST("signal", "a stopped process is still killable") {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     signal_send(pid, SIGSTOP);
     int alive = scheduler_pid_alive(pid);
@@ -469,7 +469,7 @@ KTEST("signal", "setpgid joins an EXISTING group, or leads a new one") {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     int lead = scheduler_setpgid(pid, pid);      // lead its own
     int own  = scheduler_pgid(pid);
@@ -547,7 +547,7 @@ KTEST("signal", "SIGKILL and SIGSTOP cannot be BLOCKED, whatever the mask says")
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     scheduler_signal_set_blocked(pid, 0xFFFFFFFFu); // block everything
     uint32_t got = scheduler_signal_blocked(pid);
@@ -581,7 +581,7 @@ KTEST("signal", "a BLOCKED signal stays pending rather than being dropped") {
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     scheduler_signal_set_blocked(pid, 1u << SIGINT);
     scheduler_signal_raise(pid, SIGINT);
@@ -612,7 +612,7 @@ KTEST("signal", "installing a HANDLER keeps a pending signal; SIG_IGN drops it")
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     struct k_sigaction handler = { .handler = 0x400000, .restorer = 0x400010 };
     struct k_sigaction ignore  = { .handler = SIG_IGN };
@@ -647,7 +647,7 @@ KTEST("signal", "a sentinel disposition reports back with no restorer left on it
         scheduler_preempt_enable();
         KTEST_SKIP("no free process slot to fabricate");
     }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     struct k_sigaction handler = { .handler = 0x400000, .restorer = 0x400010,
                                  .flags = SA_RESTART };
@@ -699,7 +699,7 @@ KTEST("signal", "a STOPPED process stops accruing CPU time, and resumes accruing
     KTEST_ASSERT(pid != 0);
 
     struct proc_info info;
-    int slot = pid - 1;
+    int slot = scheduler_pid_slot(pid);
 
     // Let it run first, so the measurement has something to compare
     // against -- a process that never got the CPU at all would show a

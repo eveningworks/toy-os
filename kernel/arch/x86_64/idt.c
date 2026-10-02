@@ -608,7 +608,7 @@ static void isr_dispatch_body(uint64_t *regs) {
         } else if (kstack_overflow) {
             vga_printf("Process slot %d (pid %d) ran off the bottom of its "
                        "KERNEL stack into the guard page below it.\n",
-                       kstack_slot, kstack_slot + 1);
+                       kstack_slot, scheduler_slot_pid(kstack_slot));
             vga_printf("The call chain in the stack scan below is too deep "
                        "for one -- shorten it, or move a big local off it.\n");
         }
@@ -654,7 +654,7 @@ static void isr_dispatch_body(uint64_t *regs) {
                 klog_printf("  process slot %d (pid %d) overran its %d KiB "
                             "KERNEL stack into the guard page below it -- the "
                             "call chain below is too deep for one\n",
-                            kstack_slot, kstack_slot + 1,
+                            kstack_slot, scheduler_slot_pid(kstack_slot),
                             scheduler_kstack_kib());
             }
         }

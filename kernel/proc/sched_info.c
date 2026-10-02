@@ -25,7 +25,7 @@ int scheduler_kstack_info(int idx, struct sched_kstack_info *out) {
     if (idx < 0 || idx >= MAX_PROCS || !out) return 0;
     k_memset(out, 0, sizeof *out);
     out->slot       = idx;
-    out->pid        = idx + 1;
+    out->pid        = procs[idx].pid;
     out->state      = (int)procs[idx].state;
     out->size       = PROC_KSTACK_SIZE;
     out->base       = kernel_stack_base(idx);
@@ -167,6 +167,18 @@ static uint32_t reported_wait_reason(int reason) {
     }
 }
 
+int scheduler_pid_slot(int pid) { return pid_slot(pid); }
+
+int scheduler_slot_pid(int slot) {
+    if (slot < 0 || slot >= MAX_PROCS || procs[slot].state == SCHED_UNUSED) return 0;
+    return procs[slot].pid;
+}
+
+int scheduler_proc_info_pid(int pid, struct proc_info *out) {
+    int s = pid_slot(pid);
+    return s >= 0 && scheduler_proc_info(s, out) && out->pid == pid;
+}
+
 int scheduler_proc_info(int index, struct proc_info *out) {
     if (!out || index < 0 || index >= MAX_PROCS) return 0;
 
@@ -186,8 +198,7 @@ int scheduler_proc_info(int index, struct proc_info *out) {
 
     if (p->state == SCHED_UNUSED) return 1; // a real answer: slot empty
 
-    // pid is slot + 1 throughout this file -- 0 is "no process".
-    out->pid = index + 1;
+    out->pid = p->pid;   // 0 is "no process"; never derived from `index`
     out->tgid = p->tgid;
     out->ready = p->ready ? 1u : 0u;
     out->cpu_ns = p->cpu_ns;
@@ -253,9 +264,9 @@ int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
         // Establishing the precondition in the fabricator beats each
         // test remembering to (ktest.h).
         signal_state_reset(i);
-        procs[i].pgid = i + 1;
-        procs[i].sid = i + 1;
-        procs[i].tgid = i + 1;     // a process; scheduler_test_make_thread() changes that
+        procs[i].pgid = procs[i].pid;
+        procs[i].sid = procs[i].pid;
+        procs[i].tgid = procs[i].pid;   // a process; scheduler_test_make_thread() changes that
         procs[i].group_dying = 0;
         // NOTHING REAL TO TEAR DOWN: a kill that is not deferred runs the
         // full teardown, and a stale address space or parent here would
@@ -272,7 +283,7 @@ int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
 
 void scheduler_test_make_thread(int idx, int leader) {
     if (idx < 0 || idx >= MAX_PROCS || leader < 0 || leader >= MAX_PROCS) return;
-    procs[idx].tgid = leader + 1;
+    procs[idx].tgid = procs[leader].pid;
 }
 
 int  scheduler_test_slot_claim(void)     { return slot_claim(); }
@@ -310,14 +321,14 @@ int scheduler_test_take_resched(void) {
 void scheduler_test_release(int idx) {
     if (idx < 0 || idx >= MAX_PROCS) return;
     if (procs[idx].state != SCHED_BLOCKED && procs[idx].state != SCHED_READY) return;
-    procs[idx].state = SCHED_UNUSED;
+    slot_free(idx);
     procs[idx].wait_chan = 0;
     procs[idx].kernel_rsp = 0;
     procs[idx].isr_depth = 0;
     procs[idx].preempt_depth = 0;
     procs[idx].parked_in_kernel = 0;
     procs[idx].group_dying = 0;
-    procs[idx].tgid = idx + 1;
+    procs[idx].tgid = 0;
     k_memset(&procs[idx].kctx, 0, sizeof procs[idx].kctx);
     // Cleared on the way out as well as on the way in. Belt and braces
     // is not the reason: an UNUSED slot with a pending bit is a slot the

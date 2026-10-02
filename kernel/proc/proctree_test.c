@@ -24,7 +24,7 @@
 // be a process, so where a real parent is needed these use
 // scheduler_reparent(), which is the same call stage 1's adoption will
 // use rather than a hook that exists only for tests.
-static int find_slot(int pid) { return pid - 1; }
+static int find_slot(int pid) { return scheduler_pid_slot(pid); }
 
 KTEST("proctree", "a kernel-spawned process has no parent") {
     if (!fs_exists(SPIN_PATH)) KTEST_SKIP("no " SPIN_PATH " on this boot");

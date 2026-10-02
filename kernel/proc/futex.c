@@ -97,14 +97,23 @@ int sys_futex_wake(struct syscall_ctx *c) {
 // work: the word is named by its FRAME, so the kernel can bump it from
 // any context without caring which address space is loaded.
 
+// PER SLOT, with the owner's pid: a lookup checks it, so a slot reused by
+// another process never inherits the last one's word.
 static struct {
+    int pid;
     uint64_t phys;   // 0 = this process registered none
     uint64_t pml4;   // whose it is, so a teardown can drop it
 } g_wakeword[SCHED_MAX_PROCS];
 
+static int ww_slot(int pid) {
+    int s = scheduler_pid_slot(pid);
+    return s >= 0 && g_wakeword[s].pid == pid ? s : -1;
+}
+
 void futex_note_ready(int pid) {
-    if (pid < 1 || pid > SCHED_MAX_PROCS) return;
-    uint64_t phys = g_wakeword[pid - 1].phys;
+    int s = ww_slot(pid);
+    if (s < 0) return;
+    uint64_t phys = g_wakeword[s].phys;
     if (!phys) return;
     // The bump is what closes the lost-wakeup race, not the wake: a
     // waiter that sampled the word before this and parks after it finds
@@ -114,35 +123,42 @@ void futex_note_ready(int pid) {
 }
 
 uint64_t futex_wakeword_phys(int pid) {
-    if (pid < 1 || pid > SCHED_MAX_PROCS) return 0;
-    return g_wakeword[pid - 1].phys & ~0xFFFULL;
+    int s = ww_slot(pid);
+    return s < 0 ? 0 : g_wakeword[s].phys & ~0xFFFULL;
 }
 
 void futex_wakeword_release(uint64_t pml4_phys) {
     for (int i = 0; i < SCHED_MAX_PROCS; i++)
         if (g_wakeword[i].pml4 == pml4_phys) {
+            g_wakeword[i].pid = 0;
             g_wakeword[i].phys = 0;
             g_wakeword[i].pml4 = 0;
         }
 }
 
+static void ww_set(int pid, uint64_t phys, uint64_t pml4) {
+    int s = scheduler_pid_slot(pid);
+    if (s < 0) return;
+    g_wakeword[s].pid = phys ? pid : 0;
+    g_wakeword[s].phys = phys;
+    g_wakeword[s].pml4 = phys ? pml4 : 0;
+}
+
 int sys_wakeword(struct syscall_ctx *c) {
     int pid = scheduler_current_pid();
-    if (pid < 1 || pid > SCHED_MAX_PROCS) {
+    if (scheduler_pid_slot(pid) < 0) {
         c->regs[14] = (uint64_t)(int64_t)-EPERM;
         return 0;
     }
     if (!c->a0) {                     // 0 deregisters
-        g_wakeword[pid - 1].phys = 0;
-        g_wakeword[pid - 1].pml4 = 0;
+        ww_set(pid, 0, 0);
         c->regs[14] = 0;
         return 0;
     }
     const void *key;
     int64_t ret = futex_key(c->pml4, c->a0, &key);
     if (ret < 0) { c->regs[14] = (uint64_t)ret; return 0; }
-    g_wakeword[pid - 1].phys = (uint64_t)(uintptr_t)key;
-    g_wakeword[pid - 1].pml4 = c->pml4;
+    ww_set(pid, (uint64_t)(uintptr_t)key, c->pml4);
     c->regs[14] = 0;
     return 0;
 }
@@ -231,6 +247,26 @@ KTEST("futex", "two words in ONE page are two different channels") {
     futex_fixture_down(&f);
 }
 
+// The wakeword's OWNER: a fabricated parked slot, so its pid is a real
+// one (wakewords are kept per slot). BLOCKED on a private channel with no
+// deadline, nothing can schedule it, so the test runs with the guard down.
+static const char g_owner_chan;
+static uint64_t g_owner_tf[SCHED_TF_SLOTS];
+
+static int owner_park(void) {
+    scheduler_preempt_disable();
+    int s = scheduler_test_park(g_owner_tf, &g_owner_chan, 0);
+    scheduler_preempt_enable();
+    return s;
+}
+
+static void owner_release(int s) {
+    scheduler_preempt_disable();
+    scheduler_test_release(s);
+    (void)scheduler_test_take_resched();
+    scheduler_preempt_enable();
+}
+
 KTEST("futex", "queueing an EVENT bumps the waiter's wakeword") {
     // THE WIRING, and the only check that covers it: a futex waits on
     // one word, so a process waiting for a message and for a window
@@ -239,42 +275,39 @@ KTEST("futex", "queueing an EVENT bumps the waiter's wakeword") {
     // input -- and nothing else here would notice.
     struct futex_fixture f = {0};
     if (!futex_fixture_up(&f)) { futex_fixture_down(&f); KTEST_SKIP("out of memory"); }
-
-    // A pid nothing is using, so the event lands in a queue no live
-    // process is draining.
-    int pid = 0;
-    for (int p = SCHED_MAX_PROCS - 1; p > 0; p--)
-        if (!scheduler_pid_valid(p)) { pid = p; break; }
-    if (!pid) { futex_fixture_down(&f); KTEST_SKIP("no spare pid"); }
-
-    // The queue is the compositor's, so the spare pid has to BE the
+    // The queue is the compositor's, so the owner has to BE the
     // compositor for the duration -- which a live desktop forbids.
     if (win_server_compositor_pid()) { futex_fixture_down(&f); KTEST_SKIP("a compositor holds the role"); }
+    int slot = owner_park();
+    if (slot < 0) { futex_fixture_down(&f); KTEST_SKIP("no free process slot"); }
+    int pid = scheduler_slot_pid(slot);
 
     const void *key = NULL;
-    KTEST_ASSERT_EQ(futex_key(f.as, FUTEX_TEST_VADDR, &key), 0);
-    g_wakeword[pid - 1].phys = (uint64_t)(uintptr_t)key;
-    g_wakeword[pid - 1].pml4 = f.as;
+    int keyed = futex_key(f.as, FUTEX_TEST_VADDR, &key) == 0;
+    ww_set(pid, (uint64_t)(uintptr_t)key, f.as);
     futex_set(&f, 0);
     win_server_set_compositor(pid, 0);
 
     struct win_event ev = { .type = WIN_EV_RAW_KEY, .a = 'x' };
-    KTEST_ASSERT(win_input_push(&ev));
-    KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f.frame, 1u);
-
+    int p1 = win_input_push(&ev);
+    uint32_t v1 = *(volatile uint32_t *)(uintptr_t)f.frame;
     // A SECOND event moves it again -- a word that only ever reached 1
     // would let a waiter that sampled 1 park through everything after.
-    KTEST_ASSERT(win_input_push(&ev));
-    KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f.frame, 2u);
-
+    int p2 = win_input_push(&ev);
+    uint32_t v2 = *(volatile uint32_t *)(uintptr_t)f.frame;
     // And the registration goes with the address space, or the kernel
     // writes into whatever the allocator hands out next.
     futex_wakeword_release(f.as);
-    KTEST_ASSERT(win_input_push(&ev));
-    KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f.frame, 2u);
+    int p3 = win_input_push(&ev);
+    uint32_t v3 = *(volatile uint32_t *)(uintptr_t)f.frame;
 
     win_server_set_compositor(0, 0);
+    owner_release(slot);
     futex_fixture_down(&f);
+    KTEST_ASSERT(keyed && p1 && p2 && p3);
+    KTEST_ASSERT_EQ(v1, 1u);
+    KTEST_ASSERT_EQ(v2, 2u);
+    KTEST_ASSERT_EQ(v3, 2u);
 }
 
 KTEST("futex", "a SECOND source bumps the same wakeword") {
@@ -289,16 +322,13 @@ KTEST("futex", "a SECOND source bumps the same wakeword") {
     // service that exited and was never restarted.
     struct futex_fixture f = {0};
     if (!futex_fixture_up(&f)) { futex_fixture_down(&f); KTEST_SKIP("out of memory"); }
-
-    int pid = 0;
-    for (int p = SCHED_MAX_PROCS - 1; p > 0; p--)
-        if (!scheduler_pid_valid(p)) { pid = p; break; }
-    if (!pid) { futex_fixture_down(&f); KTEST_SKIP("no spare pid"); }
+    int slot = owner_park();
+    if (slot < 0) { futex_fixture_down(&f); KTEST_SKIP("no free process slot"); }
+    int pid = scheduler_slot_pid(slot);
 
     const void *key = NULL;
-    KTEST_ASSERT_EQ(futex_key(f.as, FUTEX_TEST_VADDR, &key), 0);
-    g_wakeword[pid - 1].phys = (uint64_t)(uintptr_t)key;
-    g_wakeword[pid - 1].pml4 = f.as;
+    int keyed = futex_key(f.as, FUTEX_TEST_VADDR, &key) == 0;
+    ww_set(pid, (uint64_t)(uintptr_t)key, f.as);
     futex_set(&f, 0);
 
     // THE HELPER, NOT THE CALL SITE, and that gap is worth stating: a
@@ -306,10 +336,13 @@ KTEST("futex", "a SECOND source bumps the same wakeword") {
     // sched_exit.c's notify_parent() actually calls this is init serving
     // its channel while reaping -- an end-to-end check, not this one.
     futex_note_ready(pid);
-    KTEST_ASSERT_EQ(*(volatile uint32_t *)(uintptr_t)f.frame, 1u);
+    uint32_t v = *(volatile uint32_t *)(uintptr_t)f.frame;
 
     futex_wakeword_release(f.as);
+    owner_release(slot);
     futex_fixture_down(&f);
+    KTEST_ASSERT(keyed);
+    KTEST_ASSERT_EQ(v, 1u);
 }
 
 KTEST("futex", "the SAME frame at two addresses is ONE channel") {

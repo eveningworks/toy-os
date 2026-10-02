@@ -81,9 +81,9 @@ class Ps(gdb.Command):
         procs = gdb.parse_and_eval("procs")
         cur = int(gdb.parse_and_eval("current_index"))
         n = int(procs.type.range()[1]) + 1
-        print(f"{'PID':>4} {'PPID':>4}  {'STATE':<8} NAME")
+        print(f"{'PID':>5} {'PPID':>5}  {'STATE':<8} NAME")
         if cur < 0:
-            print(f"{'-':>4} {'-':>4}  {'running':<8} (the kernel context)")
+            print(f"{'-':>5} {'-':>5}  {'running':<8} (the kernel context)")
         for i in range(n):
             p = procs[i]
             st = int(p["state"])
@@ -93,7 +93,16 @@ class Ps(gdb.Command):
             state = "running" if i == cur else STATES.get(st, str(st))
             if int(p["stopped"]):
                 state += ",T"
-            print(f"{i + 1:>4} {int(p['ppid']):>4}  {state:<8} {name}")
+            # The slot's own pid field: a pid is not a slot index.
+            print(f"{int(p['pid']):>5} {int(p['ppid']):>5}  {state:<8} {name}")
+
+
+def slot_of(procs, pid):
+    """The slot whose pid field is `pid`, or None -- a pid is not an index."""
+    for i in range(int(procs.type.range()[1]) + 1):
+        if int(procs[i]["state"]) != 0 and int(procs[i]["pid"]) == pid:
+            return procs[i]
+    return None
 
 
 def elf_sections(path):
@@ -184,7 +193,10 @@ class Symbols(gdb.Command):
             print("toy-symbols: the kernel context has no user program")
             return
         procs = gdb.parse_and_eval("procs")
-        p = procs[tid - 1]
+        p = slot_of(procs, tid)
+        if p is None:
+            print(f"toy-symbols: no process with pid {tid}")
+            return
         path = p["exec_path"].string()
         elf = panic_resolve.elf_for_program(path)
         if not elf:
@@ -195,7 +207,7 @@ class Symbols(gdb.Command):
         print(f"toy-symbols: pid {tid} {path} <- {os.path.relpath(elf, REPO)}")
         # Libraries: a file mapping of /lib/X.so at file offset 0 is where
         # its first PT_LOAD -- vaddr 0 -- went, which makes it the bias.
-        leader = procs[int(p["tgid"]) - 1] if int(p["tgid"]) > 0 else p
+        leader = slot_of(procs, int(p["tgid"])) or p
         mm = leader["mm"]
         regions = mm["regions"]
         if int(regions) == 0:

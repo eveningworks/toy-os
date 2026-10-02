@@ -300,7 +300,7 @@ KTEST("sched", "a wake preempts only when it OUTRANKS what is running") {
     int asked_eq = -1, asked_hi = -1, cur = scheduler_current_pid();
 
     if (hi >= 0 && eq >= 0) {
-        scheduler_set_priority(hi + 1, -5);
+        scheduler_set_priority(scheduler_slot_pid(hi), -5);
         scheduler_wake(&chan_eq, 0);
         asked_eq = scheduler_test_take_resched();
         scheduler_wake(&chan_hi, 0);
@@ -332,8 +332,8 @@ KTEST("sched", "within a level, whoever has run least runs next") {
     int equal = -2, behind = -2;
 
     if (a >= 0 && b >= 0) {
-        scheduler_set_priority(a + 1, -17);
-        scheduler_set_priority(b + 1, -17);
+        scheduler_set_priority(scheduler_slot_pid(a), -17);
+        scheduler_set_priority(scheduler_slot_pid(b), -17);
         scheduler_wake(&chan_a, 0);
         scheduler_wake(&chan_b, 0);
         (void)scheduler_test_take_resched();
@@ -490,9 +490,9 @@ KTEST("sched", "a kill waits for a context WOKEN mid-call, not only a parked one
         scheduler_test_park_deadline(w, 0, 1);   // parked mid-call
         scheduler_wake(&chan, 0);                // ...and woken: READY
         (void)scheduler_test_take_resched();
-        scheduler_kill(w + 1, 1);
+        scheduler_kill(scheduler_slot_pid(w), 1);
         state = scheduler_test_state(w);
-        pending = scheduler_signal_pending(w + 1);
+        pending = scheduler_signal_pending(scheduler_slot_pid(w));
         scheduler_test_release(w);
     }
     scheduler_preempt_enable();
@@ -519,12 +519,12 @@ KTEST("sched", "a kill waits for ANY thread parked mid-call, not only the leader
     if (l >= 0 && t >= 0) {
         scheduler_test_make_thread(t, l);
         scheduler_test_park_deadline(t, 0, 1);   // the thread: mid-call
-        rc = scheduler_kill(l + 1, 9);
+        rc = scheduler_kill(scheduler_slot_pid(l), 9);
         state_l = scheduler_test_state(l);
         state_t = scheduler_test_state(t);
-        pend_l = scheduler_signal_pending(l + 1);
-        pend_t = scheduler_signal_pending(t + 1);
-        polled = (int)scheduler_poll(l + 1, 0);
+        pend_l = scheduler_signal_pending(scheduler_slot_pid(l));
+        pend_t = scheduler_signal_pending(scheduler_slot_pid(t));
+        polled = (int)scheduler_poll(scheduler_slot_pid(l), 0);
     }
     scheduler_test_release(t);
     scheduler_test_release(l);

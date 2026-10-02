@@ -1087,6 +1087,15 @@ void scheduler_make_session_leader(int pid);
 // is a cumulative total rather than a percentage.
 int scheduler_proc_info(int index, struct proc_info *out);
 
+// The same, by PID: 1 and `out` filled for a pid in use, else 0. A pid
+// is NOT a slot index -- never call scheduler_proc_info(pid - 1).
+int scheduler_proc_info_pid(int pid, struct proc_info *out);
+
+// pid <-> slot, for a kernel table kept per slot (futex.c's wakewords):
+// the slot holding `pid` or -1, and the pid in `slot` or 0 when it is free.
+int scheduler_pid_slot(int pid);
+int scheduler_slot_pid(int slot);
+
 // The address space behind a slot, for a kernel-side caller that needs
 // to walk its page tables (`meminfo audit`). 0 for an empty slot and
 // for a ZOMBIE, whose address space has already been destroyed --

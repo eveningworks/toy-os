@@ -17,8 +17,9 @@
 // deliberately not live: it has no address space left to signal and
 // nothing to interrupt.
 static struct sched_process *live_slot(int pid) {
-    if (pid < 1 || pid > MAX_PROCS) return 0;
-    struct sched_process *p = &procs[pid - 1];
+    int s = pid_slot(pid);
+    if (s < 0) return 0;
+    struct sched_process *p = &procs[s];
     if (p->state == SCHED_UNUSED || p->state == SCHED_ZOMBIE) return 0;
     return p;
 }
@@ -56,9 +57,9 @@ int scheduler_pgid_orphaned(int pgid) {
         if (procs[i].state == SCHED_UNUSED || procs[i].state == SCHED_ZOMBIE) continue;
         if (procs[i].pgid != pgid) continue;
         any = 1;
-        int ppid = procs[i].ppid;
-        if (ppid < 1 || ppid > MAX_PROCS) continue;
-        const struct sched_process *par = &procs[ppid - 1];
+        int ps = pid_slot(procs[i].ppid);
+        if (ps < 0) continue;
+        const struct sched_process *par = &procs[ps];
         if (par->state == SCHED_UNUSED || par->state == SCHED_ZOMBIE) continue;
         // A parent inside the group cannot rescue it, and one in another
         // SESSION has no claim on this terminal.
@@ -370,9 +371,9 @@ int scheduler_stop_report_any(int parent_pid, int *out_pid) {
     for (int i = 0; i < MAX_PROCS; i++) {
         if (is_thread(i)) continue; // not a child -- see scheduler_poll_any()
         if (procs[i].ppid != parent_pid) continue;
-        int sig = scheduler_stop_report(i + 1);
+        int sig = scheduler_stop_report(procs[i].pid);
         if (sig) {
-            if (out_pid) *out_pid = i + 1;
+            if (out_pid) *out_pid = procs[i].pid;
             return sig;
         }
     }

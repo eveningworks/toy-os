@@ -399,7 +399,7 @@ KTEST("tty", "a fabricated slot leads its own session") {
     uint64_t tf[SCHED_TF_SLOTS] = {0};
     int idx = scheduler_test_park(tf, tf, SCHED_WAIT_EVENT);
     if (idx < 0) KTEST_SKIP("no free slot");
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     // Non-zero for every live slot, exactly as pgid is: a process the
     // kernel started leads its own session.
@@ -431,7 +431,7 @@ KTEST("tty", "a hang-up ends the session but keeps the input typed ahead") {
     uint64_t tf[SCHED_TF_SLOTS] = {0};
     int idx = scheduler_test_park(tf, tf, SCHED_WAIT_EVENT);
     if (idx < 0) { tty_destroy(t); KTEST_SKIP("no free slot"); }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     tty_attach_kernel_session(t, pid);
     int owner = tty_owner(t), fg = tty_fg_pgid(t);
@@ -469,7 +469,7 @@ KTEST("tty", "INTR reaches the owner's own group only in a kernel-led session") 
     uint64_t tf[SCHED_TF_SLOTS] = {0};
     int idx = scheduler_test_park(tf, tf, SCHED_WAIT_EVENT);
     if (idx < 0) { tty_destroy(t); KTEST_SKIP("no free slot"); }
-    int pid = idx + 1;
+    int pid = scheduler_slot_pid(idx);
 
     tty_set_owner(t, pid);
     tty_input(t, 0x03, 0);

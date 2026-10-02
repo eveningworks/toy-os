@@ -43,11 +43,11 @@ uint64_t mm_audit_report(void) {
         if (a.swapped) {
             vga_printf("  pid %d %s: %lu pages, %lu borrowed, %lu unmanaged, "
                         "%lu swapped\n",
-                        slot + 1, name, a.pages, a.borrowed, a.unmanaged,
+                        scheduler_slot_pid(slot), name, a.pages, a.borrowed, a.unmanaged,
                         a.swapped);
         } else {
             vga_printf("  pid %d %s: %lu pages, %lu borrowed, %lu unmanaged\n",
-                        slot + 1, name, a.pages, a.borrowed, a.unmanaged);
+                        scheduler_slot_pid(slot), name, a.pages, a.borrowed, a.unmanaged);
         }
         if (a.dangling) {
             vga_printf("    DANGLING: %lu mapping(s) of a FREE frame, "
@@ -132,7 +132,7 @@ static uint64_t audit_walk(struct audit_pick *p) {
     for (int slot = 0; slot < SCHED_MAX_PROCS; slot++) {
         uint64_t as = scheduler_slot_pml4(slot);
         if (!as) continue; // empty slot, or a zombie whose space is gone
-        p->pid = (uint64_t)slot + 1;
+        p->pid = (uint64_t)scheduler_slot_pid(slot);
         vmm_audit_space_cb(as, 0, audit_pick_cb, p);
     }
     return p->seen;

@@ -74,7 +74,7 @@ static void notify_parent(int ppid) {
 // death. Remove it when the stall has a cause.
 static void reap_audit(int idx, const char *who) {
     int ppid = procs[idx].ppid;
-    if (ppid < 1 || ppid > MAX_PROCS) return;
+    if (ppid < 1) return;
     // **A CHILD IS REAPED BY ITS PARENT, AND BY NOBODY ELSE.** Checking
     // the parent's STATE instead was the first version of this and it
     // never fired: the window is between the parent's poll and its
@@ -85,7 +85,7 @@ static void reap_audit(int idx, const char *who) {
     if (reaper == ppid) return;          // the parent itself: correct
     klog_printf(KLOG_ERR "REAP BY NON-PARENT: %s (pid %d) freed pid %d "
                 "(\"%s\", state %d) whose parent is pid %d\n",
-                who, reaper, idx + 1, procs[idx].name, procs[idx].state, ppid);
+                who, reaper, procs[idx].pid, procs[idx].name, procs[idx].state, ppid);
     scheduler_trace_dump();
 }
 
@@ -95,7 +95,7 @@ static void slot_release(int idx) {
     reap_audit(idx, "slot_release");
     if (procs[idx].state == SCHED_UNUSED) return;
     if (procs[idx].state != SCHED_ZOMBIE) alive_count--;
-    procs[idx].state = SCHED_UNUSED;
+    slot_free(idx);
 }
 
 // Every OTHER thread of `leader`'s group stops existing.
@@ -110,13 +110,13 @@ void group_release_threads(int leader) {
     for (int i = 0; i < MAX_PROCS; i++) {
         if (i == leader) continue;
         if (procs[i].state == SCHED_UNUSED) continue;
-        if (procs[i].tgid == leader + 1) slot_release(i);
+        if (procs[i].tgid == procs[leader].pid) slot_release(i);
     }
 }
 
 static int in_group(int i, int leader) {
     return procs[i].state != SCHED_UNUSED && procs[i].state != SCHED_ZOMBIE &&
-           (i == leader || procs[i].tgid == leader + 1);
+           (i == leader || procs[i].tgid == procs[leader].pid);
 }
 
 // How many of `leader`'s threads other than `except` are PARKED MID-CALL
@@ -143,12 +143,12 @@ static int group_defer_death(int leader, int except, int code) {
         procs[leader].group_dying = 1;
         procs[leader].group_exit_code = code;   // the FIRST death's reason
         klog_printf("sched: pid %d dies once its threads leave the kernel (%d mid-call)\n",
-                    leader + 1, group_parked(leader, except));
+                    procs[leader].pid, group_parked(leader, except));
     }
     for (int i = 0; i < MAX_PROCS; i++) {
         if (i == except || !in_group(i, leader)) continue;
         procs[i].stopped = 0;   // it must be able to finish the call
-        scheduler_signal_raise(i + 1, SIGKILL);
+        scheduler_signal_raise(procs[i].pid, SIGKILL);
     }
     return 1;
 }
@@ -228,7 +228,8 @@ void scheduler_on_exit(int code) {
     // A REMOTE SESSION ENDS WHEN ITS LEADER DOES, whether it said
     // goodbye or the link dropped -- a no-op for every other process,
     // and what stops the tray indicator outliving the connection.
-    remote_log_session_closed(leader + 1);
+    int pid = procs[leader].pid;
+    remote_log_session_closed(pid);
 
     // Tell the window server to drop anything this client still owned.
     // Here rather than at reap: a zombie's windows must come off the
@@ -236,12 +237,12 @@ void scheduler_on_exit(int code) {
     // polling it -- otherwise a crashed client leaves a window that
     // draws stale pixels and answers no input. A no-op when no server
     // is registered, which is every non-GUI boot.
-    win_server_client_died(leader + 1, code);
-    diag_provider_gone(leader + 1);
+    win_server_client_died(pid, code);
+    diag_provider_gone(pid);
 
     // Its children lose their parent before anything can reuse this
     // slot -- see reparent_children() for why that ordering matters.
-    reparent_children(leader + 1);
+    reparent_children(pid);
 
     // A parent blocked in SYS_WAITPID has to hear about this -- and
     // ONLY that parent. This used to wake every child-waiter in the
@@ -301,7 +302,7 @@ void scheduler_on_thread_exit(int code) {
     }
     // Whoever is joining. Harmless when nobody is: a wake with no
     // waiter on the channel is a loop over the table finding nothing.
-    scheduler_wake(scheduler_wait_chan_pid(me + 1), SYS_RETRY);
+    scheduler_wake(scheduler_wait_chan_pid(procs[me].pid), SYS_RETRY);
     scheduler_preempt_enable();
 
     sched_switch_begin();
@@ -319,11 +320,9 @@ void scheduler_on_thread_exit(int code) {
 // is what parks, because parking means writing the CALLER's trapframe
 // and only a syscall handler holds one.
 enum sched_poll_result scheduler_thread_poll(int tid, int *out_code) {
-    if (tid < 1 || tid > MAX_PROCS) return SCHED_POLL_INVALID;
-    if (current_index < 0) return SCHED_POLL_INVALID;
-    int slot = tid - 1;
-    // ONLY WITHIN ONE PROCESS. A tid is a slot index like any other, so
-    // without this a program could join another program's thread and
+    int slot = pid_slot(tid);
+    if (slot < 0 || current_index < 0) return SCHED_POLL_INVALID;
+    // ONLY WITHIN ONE PROCESS. A tid names any slot, so without this a program could join another program's thread and
     // free its slot.
     if (procs[slot].state == SCHED_UNUSED) return SCHED_POLL_INVALID;
     if (procs[slot].tgid != procs[current_index].tgid) return SCHED_POLL_INVALID;
@@ -334,7 +333,7 @@ enum sched_poll_result scheduler_thread_poll(int tid, int *out_code) {
     if (procs[slot].state == SCHED_ZOMBIE) {
         if (out_code) *out_code = procs[slot].exit_code;
         reap_audit(slot, "thread_poll");
-        procs[slot].state = SCHED_UNUSED; // reaped -- see scheduler_poll()
+        slot_free(slot); // reaped -- see scheduler_poll()
         return SCHED_POLL_EXITED;
     }
     return SCHED_POLL_RUNNING;
@@ -344,16 +343,16 @@ enum sched_poll_result scheduler_thread_poll(int tid, int *out_code) {
 // thread that has ALREADY exited, this reaps it -- which is what makes
 // detach-after-the-fact safe rather than a leak.
 int scheduler_thread_detach(int tid) {
-    if (tid < 1 || tid > MAX_PROCS) return -EINVAL;
+    if (tid < 1) return -EINVAL;
     if (current_index < 0) return -EPERM;
-    int slot = tid - 1;
-    if (procs[slot].state == SCHED_UNUSED) return -ESRCH;
+    int slot = pid_slot(tid);
+    if (slot < 0 || procs[slot].state == SCHED_UNUSED) return -ESRCH;
     if (procs[slot].tgid != procs[current_index].tgid) return -ESRCH;
     if (!is_thread(slot)) return -EINVAL;
     if (procs[slot].detached) return -EINVAL;
 
     procs[slot].detached = 1;
-    if (procs[slot].state == SCHED_ZOMBIE) { reap_audit(slot, "thread_detach"); procs[slot].state = SCHED_UNUSED; }
+    if (procs[slot].state == SCHED_ZOMBIE) { reap_audit(slot, "thread_detach"); slot_free(slot); }
     return 0;
 }
 
@@ -412,11 +411,11 @@ void reparent_children(int dead_pid) {
 // Refuses to make a process its own parent, which would make the tree
 // a cycle and hang any walk of it.
 int scheduler_reparent(int pid, int new_ppid) {
-    if (pid < 1 || pid > MAX_PROCS) return 0;
-    if (new_ppid < 0 || new_ppid > MAX_PROCS) return 0;
+    int s = pid_slot(pid);
+    if (s < 0 || new_ppid < 0) return 0;
     if (new_ppid == pid) return 0;
-    if (procs[pid - 1].state == SCHED_UNUSED) return 0;
-    procs[pid - 1].ppid = new_ppid;
+    if (procs[s].state == SCHED_UNUSED) return 0;
+    procs[s].ppid = new_ppid;
     return 1;
 }
 
@@ -431,7 +430,7 @@ int scheduler_reparent(int pid, int new_ppid) {
 // either spins forever or gives up too early.
 enum sched_poll_result scheduler_poll_any(int parent_pid, int *out_pid,
                                            int *out_exit_code) {
-    if (parent_pid < 1 || parent_pid > MAX_PROCS) return SCHED_POLL_INVALID;
+    if (parent_pid < 1) return SCHED_POLL_INVALID;
 
     int any_children = 0;
     for (int i = 0; i < MAX_PROCS; i++) {
@@ -444,10 +443,10 @@ enum sched_poll_result scheduler_poll_any(int parent_pid, int *out_pid,
         if (procs[i].ppid != parent_pid) continue;
         any_children = 1;
         if (procs[i].state == SCHED_ZOMBIE && !procs[i].group_dying) {
-            if (out_pid) *out_pid = i + 1;
+            if (out_pid) *out_pid = procs[i].pid;
             if (out_exit_code) *out_exit_code = procs[i].exit_code;
             reap_audit(i, "poll_any");
-            procs[i].state = SCHED_UNUSED; // reap, as scheduler_poll() does
+            slot_free(i); // reap, as scheduler_poll() does
             return SCHED_POLL_EXITED;
         }
     }
@@ -455,16 +454,16 @@ enum sched_poll_result scheduler_poll_any(int parent_pid, int *out_pid,
 }
 
 int scheduler_kill(int pid, int exit_code) {
-    if (pid < 1 || pid > MAX_PROCS) return 0;
-    int slot = pid - 1;
+    int slot = pid_slot(pid);
+    if (slot < 0) return 0;
 
     // A TID IS NOT SEPARATELY KILLABLE: the cleanup below destroys an
     // address space, and a thread's is its siblings'. Naming a thread
     // kills the process it belongs to, which is what kill(2) means and
     // what tkill(2) exists separately for.
     if (procs[slot].state != SCHED_UNUSED && is_thread(slot)) {
-        slot = procs[slot].tgid - 1;
-        pid  = slot + 1;
+        slot = leader_index(slot);
+        pid  = procs[slot].pid;
     }
 
     // Killing the CURRENT process would have to switch away and never
@@ -511,7 +510,7 @@ int scheduler_kill(int pid, int exit_code) {
     procs[slot].exit_code = exit_code;
     alive_count--;
 
-    remote_log_session_closed(slot + 1);   // killed counts as ended
+    remote_log_session_closed(pid);   // killed counts as ended
 
     // Exactly the teardown scheduler_on_exit() does, and for the same
     // reasons -- see its comments. A killed client's windows must come
@@ -546,15 +545,15 @@ int scheduler_kill(int pid, int exit_code) {
 }
 
 enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
-    if (pid < 1 || pid > MAX_PROCS) return SCHED_POLL_INVALID;
-    int slot = pid - 1;
+    int slot = pid_slot(pid);
+    if (slot < 0) return SCHED_POLL_INVALID;
 
     if (procs[slot].state == SCHED_ZOMBIE && procs[slot].group_dying)
         return SCHED_POLL_RUNNING;   // a thread is still leaving the kernel
     if (procs[slot].state == SCHED_ZOMBIE) {
         if (out_exit_code) *out_exit_code = procs[slot].exit_code;
         reap_audit(slot, "poll");
-        procs[slot].state = SCHED_UNUSED; // reap -- see scheduler.h's doc comment
+        slot_free(slot); // reap -- see scheduler.h's doc comment
         return SCHED_POLL_EXITED;
     }
     // SCHED_BLOCKED counts as RUNNING: a process parked in a blocking

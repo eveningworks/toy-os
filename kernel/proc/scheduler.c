@@ -171,6 +171,7 @@ int slot_claim(void) {
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state == SCHED_UNUSED && !g_slot_claimed[i]) {
             g_slot_claimed[i] = 1;
+            procs[i].pid = i + 1;   // the one place a pid is chosen
             slot = i;
             break;
         }
@@ -182,7 +183,16 @@ int slot_claim(void) {
 // Published (its state is no longer UNUSED) or abandoned: either way the
 // claim is over.
 void slot_unclaim(int slot) {
-    if (slot >= 0 && slot < MAX_PROCS) g_slot_claimed[slot] = 0;
+    if (slot < 0 || slot >= MAX_PROCS) return;
+    if (procs[slot].state == SCHED_UNUSED) procs[slot].pid = 0;   // abandoned
+    g_slot_claimed[slot] = 0;
+}
+
+// THE ONE WAY A SLOT BECOMES FREE: its pid goes with it, so no lookup can
+// find a reused slot under the pid of what was there before.
+void slot_free(int slot) {
+    procs[slot].state = SCHED_UNUSED;
+    procs[slot].pid = 0;
 }
 
 // The pid init holds, or 0 on a boot that has no init (nothing spawned
@@ -254,16 +264,21 @@ int rotation_pos = ROT_KERNEL;
 // between this and two processes that happen to share a page table.
 
 int is_thread(int idx) {
-    return procs[idx].tgid != idx + 1;
+    return procs[idx].tgid != procs[idx].pid;
+}
+
+int pid_slot(int pid) {
+    if (pid < 1 || pid > MAX_PROCS) return -1;
+    int s = pid - 1;   // allocation is still pid = slot + 1
+    return procs[s].pid == pid ? s : -1;
 }
 
 // The slot holding what this group shares. Falls back to `idx` for a
 // group whose leader is already gone -- unreachable while a thread runs
 // (the group dies as a unit) and it keeps every caller here total.
 int leader_index(int idx) {
-    int lead = procs[idx].tgid - 1;
-    if (lead < 0 || lead >= MAX_PROCS) return idx;
-    return lead;
+    int lead = pid_slot(procs[idx].tgid);
+    return lead < 0 ? idx : lead;
 }
 
 uint64_t kernel_stack_top(int idx) {
@@ -293,10 +308,10 @@ static void kstack_verify(int idx) {
     if (kstack_canary_ok(&kstacks[idx])) return;
     klog_printf("KERNEL STACK OVERFLOW: slot %d (pid %d, \"%s\") overran its "
                 "%d-byte stack -- canary at %lx destroyed\n",
-                idx, idx + 1, procs[idx].name, PROC_KSTACK_SIZE,
+                idx, procs[idx].pid, procs[idx].name, PROC_KSTACK_SIZE,
                 kernel_stack_base(idx));
     vga_printf("KERNEL STACK OVERFLOW: pid %d (\"%s\") overran its kernel stack\n",
-               idx + 1, procs[idx].name);
+               procs[idx].pid, procs[idx].name);
     // There is no panic() to call -- the panic machinery lives in the
     // fault handler, and going through it is what buys the function
     // name, the registers and the stack scan. `ud2` is the cheapest way
@@ -391,16 +406,16 @@ static int kernel_slot_runnable(void) {
 // A process's scheduling priority, by pid. The picker above is the
 // only reader; these are the only writers.
 int scheduler_set_priority(int pid, int value) {
-    int idx = pid - 1;
-    if (idx < 0 || idx >= MAX_PROCS || procs[idx].state == SCHED_UNUSED)
+    int idx = pid_slot(pid);
+    if (idx < 0 || procs[idx].state == SCHED_UNUSED)
         return -ESRCH;
     procs[idx].prio = (int8_t)value;
     return 0;
 }
 
 int scheduler_get_priority(int pid, int *value) {
-    int idx = pid - 1;
-    if (idx < 0 || idx >= MAX_PROCS || procs[idx].state == SCHED_UNUSED)
+    int idx = pid_slot(pid);
+    if (idx < 0 || procs[idx].state == SCHED_UNUSED)
         return -ESRCH;
     *value = procs[idx].prio;
     return 0;
@@ -558,7 +573,7 @@ static void check_one_running(const char *where) {
         if (procs[i].state != SCHED_RUNNING || i == current_index) continue;
         g_running_latched = 1;
         klog_printf("sched: INVARIANT at %s -- slot %d (pid %d, \"%s\") is RUNNING "
-                    "while cur=%d (tgid=%d)\n", where, i, i + 1, procs[i].name,
+                    "while cur=%d (tgid=%d)\n", where, i, procs[i].pid, procs[i].name,
                     current_index, procs[i].tgid);
         scheduler_trace_dump();
         return;
@@ -729,9 +744,9 @@ void switch_to(int from, int idx) {
     // which is no more diagnosable, so it is still checked here.
     if (!procs[idx].kctx.rip) {
         klog_printf("SLOT HAS NO SAVED CONTEXT: idx=%d pid=%d state=%d \"%s\"\n",
-                    idx, idx + 1, procs[idx].state, procs[idx].name);
+                    idx, procs[idx].pid, procs[idx].state, procs[idx].name);
         vga_printf("\nSLOT HAS NO SAVED CONTEXT: idx=%d pid=%d state=%d \"%s\"\n",
-                   idx, idx + 1, procs[idx].state, procs[idx].name);
+                   idx, procs[idx].pid, procs[idx].state, procs[idx].name);
         __asm__ volatile ("ud2");
     }
 
@@ -798,8 +813,8 @@ void switch_to_kernel(int from) {
 
 int scheduler_mark_current_ready(void) {
     int pid = scheduler_current_pid();
-    if (pid <= 0) return 0;
-    procs[pid - 1].ready = 1;
+    if (pid <= 0 || current_index < 0) return 0;
+    procs[current_index].ready = 1;
     return 1;
 }
 
@@ -1092,8 +1107,8 @@ const char sched_chan_timer;
 // reused hands the new occupant the same channel, which is correct --
 // the old occupant is gone and cannot be waiting on it.
 const void *scheduler_wait_chan_pid(int pid) {
-    int idx = pid - 1;
-    if (idx < 0 || idx >= MAX_PROCS) return 0;
+    int idx = pid_slot(pid);
+    if (idx < 0) return 0;
     return &procs[idx];
 }
 
@@ -1427,7 +1442,7 @@ int scheduler_set_tls(uint64_t base) {
 }
 
 int scheduler_current_pid(void) {
-    return current_index < 0 ? 0 : current_index + 1;
+    return current_index < 0 ? 0 : procs[current_index].pid;
 }
 
 // The PROCESS on the CPU, where scheduler_current_pid() is the THREAD.
@@ -1441,16 +1456,17 @@ int scheduler_current_tgid(void) {
 }
 
 int scheduler_tgid(int pid) {
-    if (pid < 1 || pid > MAX_PROCS) return 0;
-    if (procs[pid - 1].state == SCHED_UNUSED) return 0;
-    return procs[pid - 1].tgid;
+    int s = pid_slot(pid);
+    if (s < 0 || procs[s].state == SCHED_UNUSED) return 0;
+    return procs[s].tgid;
 }
 
 int scheduler_exec_path(int pid, char *out, unsigned cap) {
     if (!out || !cap) return 0;
     out[0] = '\0';
-    if (pid < 1 || pid > MAX_PROCS) return 0;   // slot is pid - 1, as everywhere here
-    struct sched_process *p = &procs[pid - 1];
+    int s = pid_slot(pid);
+    if (s < 0) return 0;
+    struct sched_process *p = &procs[s];
     if (p->state == SCHED_UNUSED) return 0;
     // REFUSE rather than truncate: callers match on this string to
     // decide which program a window belongs to, and a shortened path
@@ -1516,8 +1532,8 @@ struct sched_mm *scheduler_mm_for_pml4(uint64_t pml4_phys) {
 }
 
 struct sched_mm *scheduler_mm_for_pid(int pid) {
-    int slot = pid - 1;
-    if (slot < 0 || slot >= MAX_PROCS) return 0;
+    int slot = pid_slot(pid);
+    if (slot < 0) return 0;
     if (procs[slot].state == SCHED_UNUSED || procs[slot].state == SCHED_ZOMBIE)
         return 0;
     if (is_thread(slot)) return 0;
@@ -1554,16 +1570,15 @@ int scheduler_is_child_of(int pid, int parent_pid) {
     // answer YES and let a wait through to a park that then refused.
     // Caught by the errno test asking for ECHILD and getting EPERM.
     if (parent_pid < 1) return 0;
-    if (pid < 1 || pid > MAX_PROCS) return 0;
-    int slot = pid - 1;
-    if (procs[slot].state == SCHED_UNUSED) return 0;
+    int slot = pid_slot(pid);
+    if (slot < 0 || procs[slot].state == SCHED_UNUSED) return 0;
     if (is_thread(slot)) return 0;
     return procs[slot].ppid == parent_pid;
 }
 
 int scheduler_pid_valid(int pid) {
-    if (pid < 1 || pid > MAX_PROCS) return 0;
-    return procs[pid - 1].state != SCHED_UNUSED;
+    int s = pid_slot(pid);
+    return s >= 0 && procs[s].state != SCHED_UNUSED;
 }
 
 // See the fields' comment. Announces that the caller is ABOUT to wait on
@@ -1592,8 +1607,8 @@ void scheduler_demo_run(void) {
         vga_write("schedtest: failed to spawn one or both counter processes --\n");
         vga_write("were /bin/counter_a and /bin/counter_b seeded onto disk.img?\n");
         vga_write("(see the Makefile's `seed` target)\n");
-        if (a >= 0) { procs[a].state = SCHED_UNUSED; alive_count--; }
-        if (b >= 0) { procs[b].state = SCHED_UNUSED; alive_count--; }
+        if (a > 0 && pid_slot(a) >= 0) { slot_free(pid_slot(a)); alive_count--; }
+        if (b > 0 && pid_slot(b) >= 0) { slot_free(pid_slot(b)); alive_count--; }
         return;
     }
 
@@ -1682,11 +1697,11 @@ void scheduler_idle_halt(void) {
 // --- the rewound-syscall window (see struct sched_proc.syscall_reissue) --
 
 int scheduler_syscall_reissue_pending(int pid) {
-    if (pid < 1 || pid > MAX_PROCS) return 0;
-    return procs[pid - 1].syscall_reissue;
+    int s = pid_slot(pid);
+    return s < 0 ? 0 : procs[s].syscall_reissue;
 }
 
 void scheduler_syscall_entered(int pid) {
-    if (pid < 1 || pid > MAX_PROCS) return;
-    procs[pid - 1].syscall_reissue = 0;
+    int s = pid_slot(pid);
+    if (s >= 0) procs[s].syscall_reissue = 0;
 }

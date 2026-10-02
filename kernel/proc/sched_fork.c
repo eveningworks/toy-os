@@ -350,7 +350,7 @@ int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
     procs[slot].wait_reason = 0;
     // A NEW PROCESS LEADS ITS OWN THREAD GROUP -- everything below this
     // line is per-group state, and it has exactly one member.
-    procs[slot].tgid     = slot + 1;
+    procs[slot].tgid     = procs[slot].pid;
     procs[slot].fs_base  = 0;
     procs[slot].detached = 0;
 
@@ -417,10 +417,10 @@ int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
     if (want_pgid > 0) {
         procs[slot].pgid = want_pgid;              // join that group
     } else if (want_pgid == PGID_NEW) {
-        procs[slot].pgid = slot + 1;               // lead one of its own
+        procs[slot].pgid = procs[slot].pid;        // lead one of its own
     } else {
         int parent_pgid = scheduler_pgid(procs[slot].ppid);
-        procs[slot].pgid = parent_pgid > 0 ? parent_pgid : slot + 1;
+        procs[slot].pgid = parent_pgid > 0 ? parent_pgid : procs[slot].pid;
     }
     // THE SESSION IS ALWAYS INHERITED -- there is no spawn-time way to
     // ask for a new one, and deliberately: POSIX creates a session with
@@ -429,7 +429,7 @@ int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
     // A kernel-context spawn has no session to lend and leads its own.
     {
         int parent_sid = scheduler_sid(procs[slot].ppid);
-        procs[slot].sid = parent_sid > 0 ? parent_sid : slot + 1;
+        procs[slot].sid = parent_sid > 0 ? parent_sid : procs[slot].pid;
     }
     // Reset, not inherited: slots are reused, and a reaped process's
     // name and CPU time showing up on its successor would be a
@@ -478,7 +478,7 @@ int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
         }
         if (arg) k_snprintf(line, sizeof line, "%s %s", path, arg);
         else     k_strlcpy(line, path, sizeof line);
-        remote_log_record(QUERY_REMOTE_SPAWN, rip, slot + 1,
+        remote_log_record(QUERY_REMOTE_SPAWN, rip, procs[slot].pid,
                           procs[slot].name, line);
     }
 
@@ -554,14 +554,14 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
     fpu_init_state(procs[slot].fpu);
     procs[slot].wait_chan   = 0;
     procs[slot].wait_reason = 0;
-    procs[slot].tgid     = leader + 1;
+    procs[slot].tgid     = procs[leader].pid;
     procs[slot].fs_base  = fs_base;
     procs[slot].detached = detached ? 1 : 0;
     // Its parent is its leader, which is what makes `ps --tree` show a
     // thread under the process it belongs to. Every walk over a
     // process's CHILDREN skips threads, so this is a display fact and
     // never a wait() one.
-    procs[slot].ppid     = leader + 1;
+    procs[slot].ppid     = procs[leader].pid;
     procs[slot].pgid     = procs[leader].pgid;
     procs[slot].prio     = procs[caller].prio;
     procs[slot].vruntime = g_min_vruntime;
@@ -587,7 +587,7 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
     procs[slot].state = SCHED_READY;
     slot_unclaim(slot);
     alive_count++;
-    return slot + 1;
+    return procs[slot].pid;
 }
 
 // --- fork ------------------------------------------------------------
@@ -615,10 +615,10 @@ int scheduler_fork(const uint64_t *regs) {
 
     uint64_t pinned[MAX_PROCS + 1];
     int npin = 0;
-    uint64_t ww = futex_wakeword_phys(leader + 1);
+    uint64_t ww = futex_wakeword_phys(procs[leader].pid);
     if (ww) pinned[npin++] = ww;
     for (int i = 0; i < MAX_PROCS; i++) {
-        if (procs[i].state != SCHED_BLOCKED || procs[i].tgid != leader + 1) continue;
+        if (procs[i].state != SCHED_BLOCKED || procs[i].tgid != procs[leader].pid) continue;
         if (procs[i].wait_chan) pinned[npin++] = (uint64_t)(uintptr_t)procs[i].wait_chan;
     }
     struct vmm_fork_opts o = { pinned, npin, fork_inherits_borrowed, &procs[leader].mm };
@@ -646,11 +646,11 @@ int scheduler_fork(const uint64_t *regs) {
     procs[slot].wait_chan   = 0;
     procs[slot].wait_reason = 0;
     procs[slot].wake_at_ns  = 0;
-    procs[slot].tgid     = slot + 1;
+    procs[slot].tgid     = procs[slot].pid;
     procs[slot].fs_base  = procs[caller].fs_base;
     procs[slot].detached = 0;
     fd_clone(as, procs[leader].pml4_phys);
-    procs[slot].ppid = leader + 1;
+    procs[slot].ppid = procs[leader].pid;
     procs[slot].prio = procs[caller].prio;
     procs[slot].vruntime = g_min_vruntime;
     signal_state_reset(slot);
@@ -678,7 +678,7 @@ int scheduler_fork(const uint64_t *regs) {
         // space was leaked outright.
         fd_release_all(as);
         vmm_destroy_address_space(as);
-        procs[slot].state = SCHED_UNUSED;
+        slot_free(slot);
         slot_unclaim(slot);
         return -1;
     }
@@ -686,7 +686,7 @@ int scheduler_fork(const uint64_t *regs) {
     procs[slot].state = SCHED_READY;
     slot_unclaim(slot);
     alive_count++;
-    return slot + 1;
+    return procs[slot].pid;
 }
 
 // --- exec ------------------------------------------------------------
@@ -707,7 +707,7 @@ int scheduler_exec(const char *path, const char *argvec, size_t argvec_len,
     if (is_thread(me)) {
         // POSIX makes the exec'ing thread the leader, pid and all. Not
         // worth a second exit path: refuse, loudly.
-        klog_printf(KLOG_ERR "exec: refused from thread %d -- only a process may exec\n", me + 1);
+        klog_printf(KLOG_ERR "exec: refused from thread %d -- only a process may exec\n", procs[me].pid);
         return -EPERM;
     }
     uint64_t as = 0, entry = 0, user_rsp = 0, image_end = 0;
@@ -719,8 +719,8 @@ int scheduler_exec(const char *path, const char *argvec, size_t argvec_len,
     strace_rekey(old, as);
     fd_rekey(old, as);
     proc_syscall_release(old);
-    win_server_client_gone(me + 1);
-    diag_provider_gone(me + 1);
+    win_server_client_gone(procs[me].pid);
+    diag_provider_gone(procs[me].pid);
     sound_process_gone(old);
     shm_process_gone(old);
     futex_wakeword_release(old);
@@ -827,5 +827,5 @@ int scheduler_spawn_group(const char *path, const char *argv, size_t argv_len,
 
     // Clear any events left over from the previous tenant of this slot.
     // Doing it at spawn rather than at reap is what makes this the only
-    return slot + 1; // 1-based pid (see scheduler.h)
+    return procs[slot].pid;
 }

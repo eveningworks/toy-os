@@ -130,6 +130,7 @@ KTEST("kmutex", "an unlock hands the lock to a parked waiter, not to the floor")
     kmutex_unlock(&m);
     int owner = kmutex_owner(&m), held = kmutex_held(&m), handed = m.handed;
     int state = w >= 0 ? scheduler_test_state(w) : -1;
+    int wpid = scheduler_slot_pid(w);
     scheduler_test_park_deadline(w, 0, 0);
     scheduler_test_release(w);
     scheduler_test_take_resched();
@@ -141,7 +142,7 @@ KTEST("kmutex", "an unlock hands the lock to a parked waiter, not to the floor")
 
     if (w < 0) KTEST_SKIP("no free process slots to fabricate");
     KTEST_ASSERT(held);                    // not dropped...
-    KTEST_ASSERT_EQ(owner, w + 1);         // ...but the waiter's now
+    KTEST_ASSERT_EQ(owner, wpid);          // ...but the waiter's now
     KTEST_ASSERT_EQ(handed, 1);            // for it to claim on resume
     KTEST_ASSERT_EQ(state, PROC_STATE_READY);
     KTEST_ASSERT(!kmutex_held(&c));

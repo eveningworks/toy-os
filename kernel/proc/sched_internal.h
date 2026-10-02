@@ -133,6 +133,11 @@ struct sched_process {
     // process's children skips threads -- see `tgid` below.
     int ppid;
 
+    // THIS SLOT'S PID, set when the slot is claimed and 0 when it is free.
+    // A PID IS NOT A SLOT INDEX: every pid -> slot lookup goes through
+    // pid_slot(), and every slot -> pid read is this field.
+    int pid;
+
     // --- threads: which group this slot belongs to -------------------
     //
     // The pid of the thread-group LEADER, which for an ordinary process
@@ -384,8 +389,12 @@ extern uint64_t g_min_vruntime;
 void proc_name_from_path(char *dst, int cap, const char *path);
 int slot_claim(void);
 void slot_unclaim(int slot);
+void slot_free(int slot);
 int is_thread(int idx);
 int leader_index(int idx);
+// The slot holding `pid`, or -1 -- whatever state the slot is in, so a
+// caller still checks UNUSED/ZOMBIE as it needs to.
+int pid_slot(int pid);
 uint64_t kernel_stack_top(int idx);
 uint64_t kernel_stack_base(int idx);
 void kstack_arm_slot(int idx);

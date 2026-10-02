@@ -11,7 +11,7 @@
 #include "scheduler.h"
 #include "fs.h"        // FS_PATH_MAX, which the record's width tracks
 #include "string.h"
-#include "syscall_abi.h" // SYS_PROC_MAX
+#include "scheduler.h"   // a slot's pid
 #include "initcall.h"
 
 _Static_assert(sizeof(struct query_procpath) <= QUERY_RECORD_MAX,
@@ -19,14 +19,15 @@ _Static_assert(sizeof(struct query_procpath) <= QUERY_RECORD_MAX,
 
 static int procpath_count(void) {
     int n = 0;
-    for (int pid = 1; pid <= SYS_PROC_MAX; pid++)
-        if (scheduler_mm_for_pid(pid)) n++;
+    for (int slot = 0; slot < SCHED_MAX_PROCS; slot++)
+        if (scheduler_mm_for_pid(scheduler_slot_pid(slot))) n++;
     return n;
 }
 
 static int procpath_fill(int index, void *out) {
     if (index < 0) return 0;
-    for (int pid = 1; pid <= SYS_PROC_MAX; pid++) {
+    for (int slot = 0; slot < SCHED_MAX_PROCS; slot++) {
+        int pid = scheduler_slot_pid(slot);
         if (!scheduler_mm_for_pid(pid)) continue;
         if (index--) continue;
         struct query_procpath *q = out;

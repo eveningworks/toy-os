@@ -160,7 +160,7 @@ int sys_remote_log(struct syscall_ctx *c) {
 
     struct proc_info info;
     const char *comm = "";
-    if (scheduler_proc_info(pid - 1, &info)) comm = info.name;
+    if (scheduler_proc_info_pid(pid, &info)) comm = info.name;
     remote_log_record(kind, ip, pid, comm, text);
     c->regs[14] = 0;
     return 0;

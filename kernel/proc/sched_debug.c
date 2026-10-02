@@ -8,7 +8,7 @@
 
 static void from_slot(int i, struct sched_debug_thread *out) {
     const struct sched_process *p = &procs[i];
-    out->tid = i + 1;
+    out->tid = p->pid;
     out->running = i == current_index;
     out->state = (int)p->state;
     out->stopped = p->stopped;
@@ -43,7 +43,8 @@ int sched_debug_thread(int n, struct sched_debug_thread *out) {
 
 int sched_debug_find(int tid, struct sched_debug_thread *out) {
     if (tid == SCHED_DEBUG_KERNEL_TID) { kernel_thread(out); return 1; }
-    if (tid < 1 || tid > MAX_PROCS || !live(tid - 1)) return 0;
-    from_slot(tid - 1, out);
+    int s = pid_slot(tid);
+    if (s < 0 || !live(s)) return 0;
+    from_slot(s, out);
     return 1;
 }

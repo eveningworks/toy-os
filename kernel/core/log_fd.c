@@ -35,7 +35,7 @@ static int log_write(struct syscall_ctx *c, enum log_sink sink,
             // `log -u toywm` is that it means what it says.
             struct proc_info info;
             const char *tag = "?";
-            if (scheduler_proc_info(scheduler_current_pid() - 1, &info))
+            if (scheduler_proc_info_pid(scheduler_current_pid(), &info))
                 tag = info.name;
             applog_write(tag, (const char *)buf, (uint32_t)len);
         } else {

@@ -32,8 +32,8 @@ static int records_of(struct sched_mm *mm) {
 // is inherent to the interface and fine for a diagnostic.
 static int procmap_count(void) {
     int n = 0;
-    for (int pid = 1; pid <= SYS_PROC_MAX; pid++) {
-        struct sched_mm *mm = scheduler_mm_for_pid(pid);
+    for (int slot = 0; slot < SCHED_MAX_PROCS; slot++) {
+        struct sched_mm *mm = scheduler_mm_for_pid(scheduler_slot_pid(slot));
         if (mm) n += records_of(mm);
     }
     return n;
@@ -77,7 +77,8 @@ static void fill_one(struct query_procmap *q, int pid, struct sched_mm *mm,
 
 static int procmap_fill(int index, void *out) {
     if (index < 0) return 0;
-    for (int pid = 1; pid <= SYS_PROC_MAX; pid++) {
+    for (int slot = 0; slot < SCHED_MAX_PROCS; slot++) {
+        int pid = scheduler_slot_pid(slot);
         struct sched_mm *mm = scheduler_mm_for_pid(pid);
         if (!mm) continue;
         int n = records_of(mm);
