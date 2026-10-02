@@ -258,6 +258,19 @@ def _build_id():
     return _commit()
 
 
+def _uncommitted_reason():
+    """Why the build is not exactly HEAD, or None."""
+    built = _build_id()
+    head = _commit()
+    if built.endswith("-dirty"):
+        return f"the build is of uncommitted changes ({built})"
+    if head.split("-")[0] != built:
+        return f"the build is of {built}, but HEAD is {head.split('-')[0]} -- rebuild"
+    if head.endswith("-dirty"):
+        return "the working tree has changes the build does not include"
+    return None
+
+
 def release_notes(build_id, limit=NOTES_COMMITS):
     """The notes file for a build: its last `limit` commits, newest first."""
     rev = build_id.split("-")[0]
@@ -310,6 +323,17 @@ def publish(staging, store, keep, force=False):
     if why:
         sys.exit(f"update_server: REFUSING to publish a stale build: {why}\n"
                  "  run `make iso` first")
+    # A RELEASE IS A COMMIT. The snapshot's `# commit` and its notes come
+    # from the id stamped into the BUILD, so a build of uncommitted work
+    # (`-dirty`) or of an earlier HEAD would ship notes that miss the
+    # change being published -- cargo publish's dirty-tree refusal.
+    why = _uncommitted_reason()
+    if why and not force:
+        sys.exit(f"update_server: REFUSING to publish: {why}\n"
+                 "  The order is: commit, then tools/preflight.sh (it rebuilds with the\n"
+                 "  commit's id), then --publish.  (--force publishes anyway)")
+    if why:
+        print(f"update_server: publishing a build that is not a commit ({why})")
     # A RELEASE IS A TESTED BUILD. preflight stamps the tree it passed on.
     why = preflight_stamp.why_not()
     if why and not force:

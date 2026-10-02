@@ -156,6 +156,12 @@ before you start delivering -- don't reconstruct it from memory.
   as a change with no visible effect, which is the truth.
 - **Tag, if cutting a release:** `git tag -a v<version> <commit> -m
   "..."` directly.
+- **To the update server's `stable` channel: COMMIT, THEN PREFLIGHT,
+  THEN `update_server.py --publish`.** The snapshot's release notes come
+  from the commit id baked into the BUILD, so a preflight run on
+  uncommitted work builds `<parent>-dirty` and its notes miss the change
+  being shipped. `--publish` refuses that build (and one whose id is not
+  HEAD) and says this order; `--force` is the override, not the habit.
 - **Publish:** `git push origin main` (`--tags` if a tag was cut) and
   `gh release create`/`gh release upload` both work directly from the
   session -- confirmed by actually doing both (ordinary pushes, and

@@ -781,7 +781,13 @@ manual steps to be worth automating:
   with `remote.py`'s `USERLAND_TREES` IMPORTED, so the push and the pull
   agree that `/etc` and `/home` are new-files-only; `GET /files/<path>`
   serves only what the manifest names (a `/stable` snapshot freezes both
-  at publish time). **Two gates**: `--publish` refuses a build
+  at publish time). **A third gate, first**: `--publish` refuses a build
+  that is not exactly HEAD -- `TOYOS_BUILD_ID` with `-dirty`, an id
+  other than HEAD's, or a working tree with changes -- because the
+  snapshot's `# commit` and its release notes come from that id, and a
+  build of uncommitted work ships notes that miss its own change. The
+  order is commit, then `preflight.sh` (which rebuilds with the commit's
+  id), then `--publish`. **Two gates**: `--publish` refuses a build
   `preflight_stamp.py` does not cover (`--force` overrides and says so),
   and `/dev` answers 503 while `build/.seeding` exists -- the Makefile's
   seed step creates it first and removes it last, so a half-written
