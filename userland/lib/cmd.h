@@ -31,15 +31,21 @@
 // HANDED the errno, and reading sys_errno() there would report whatever
 // syscall ran last instead of the one that failed. cp, rm, mv and
 // install each wrote this out.
-static inline void cmd_fail_err(const char *prog, const char *subject, int err) {
+// The same line with the reason in words, for a refusal whose errno
+// alone would read wrong.
+static inline void cmd_fail_msg(const char *prog, const char *subject, const char *reason) {
     sys_print(prog);
     sys_print(": ");
     if (subject) {
         sys_print(subject);
         sys_print(": ");
     }
-    sys_print(sys_strerror(err));
+    sys_print(reason);
     sys_print("\n");
+}
+
+static inline void cmd_fail_err(const char *prog, const char *subject, int err) {
+    cmd_fail_msg(prog, subject, sys_strerror(err));
 }
 
 // The same line, for the errno the last failing syscall left. Pass NULL

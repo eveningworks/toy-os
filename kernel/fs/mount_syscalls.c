@@ -34,6 +34,7 @@ static int why_to_errno(const char *why) {
     if (k_strstr(why, "already mounted")) return -EBUSY;
     if (k_strstr(why, "in use") || k_strstr(why, "still open")) return -EBUSY;
     if (k_strstr(why, "underneath")) return -EBUSY;
+    if (k_strstr(why, "cannot be unmounted")) return -EBUSY;   // the root, as Linux answers
     if (k_strstr(why, "not a directory")) return -ENOTDIR;
     if (k_strstr(why, "table is full")) return -ENOSPC;
     if (k_strstr(why, "nothing recognises")) return -ENODEV;

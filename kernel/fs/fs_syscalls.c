@@ -225,7 +225,9 @@ int sys_open(struct syscall_ctx *c) {
                                 why = ferr == -ENOTDIR ? "a path component is not a directory"
                                     : ferr == -ENOENT  ? "no such directory to create it in"
                                                        : "the path is too long";
-                            else {
+                            else if (fs_readonly(name)) {
+                                ferr = -EROFS; why = "the filesystem is read-only";
+                            } else {
                                 ferr = -ENOSPC; why = "the record table is full";
                             }
                         }
@@ -235,7 +237,7 @@ int sys_open(struct syscall_ctx *c) {
                     // file just created is empty already: truncating it
                     // again was one more path walk and one more commit.
                     if (!ferr && want_trunc && !created && !fs_write(name, "", 0)) {
-                        ferr = -EIO; why = "truncate refused";
+                        ferr = fs_readonly(name) ? -EROFS : -EIO; why = "truncate refused";
                     }
                 }
                 if (ferr) {
@@ -279,7 +281,7 @@ int sys_unlink(struct syscall_ctx *c) {
         // Exists and still refused: a non-empty directory is the usual
         // cause, and fs_delete() does not say which it was.
         klog_write(KLOG_ERR "syscall: unlink() failed\n");
-        c->regs[14] = (uint64_t)(int64_t)-EIO;
+        c->regs[14] = (uint64_t)(int64_t)(fs_readonly(name) ? -EROFS : -EIO);
     } else {
         c->regs[14] = 0;
     }
@@ -510,8 +512,10 @@ int sys_mkdir(struct syscall_ctx *c) {
                    : "syscall: mkdir() rejected -- no such parent directory\n");
         c->regs[14] = (uint64_t)(int64_t)err;
     } else if (!fs_mkdir(path)) {
-        klog_write(KLOG_ERR "syscall: mkdir() failed -- the record table is full\n");
-        c->regs[14] = (uint64_t)(int64_t)-ENOSPC;
+        int ro = fs_readonly(path);
+        klog_write(ro ? KLOG_ERR "syscall: mkdir() failed -- the filesystem is read-only\n"
+                      : KLOG_ERR "syscall: mkdir() failed -- the record table is full\n");
+        c->regs[14] = (uint64_t)(int64_t)(ro ? -EROFS : -ENOSPC);
     } else {
         c->regs[14] = 0;
     }
@@ -535,7 +539,7 @@ static int64_t rename_errno(const char *from, const char *to, uint64_t flags) {
         // (a cross-parent directory move needs five credits) -- see
         // fs.h. -EIO rather than a guess at which of several it was.
         klog_write(KLOG_ERR "syscall: rename() failed\n");
-        return -EIO;
+        return fs_readonly(from) ? -EROFS : -EIO;
     }
     return 0;
 }
@@ -580,7 +584,7 @@ int sys_truncate(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)-EISDIR;
     } else if (!fs_truncate(path, c->a1)) {
         klog_write(KLOG_ERR "syscall: truncate() failed\n");
-        c->regs[14] = (uint64_t)(int64_t)-EIO;
+        c->regs[14] = (uint64_t)(int64_t)(fs_readonly(path) ? -EROFS : -EIO);
     } else {
         c->regs[14] = 0;
     }
@@ -689,7 +693,7 @@ int sys_link(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)-EEXIST;
     } else if (!fs_link(from, to)) {
         klog_write(KLOG_ERR "syscall: link() failed\n");
-        c->regs[14] = (uint64_t)(int64_t)-EIO;
+        c->regs[14] = (uint64_t)(int64_t)(fs_readonly(to) ? -EROFS : -EIO);
     } else {
         c->regs[14] = 0;
     }
@@ -784,7 +788,7 @@ static int file_fd_write(struct syscall_ctx *c, struct open_file *f,
     // The COUNT IS NOW HONEST. Reporting `len` unconditionally is what
     // let the truncation go unnoticed: every caller checked its return
     // value and every one of them was told it had succeeded.
-    regs[14] = ok ? len : (uint64_t)(int64_t)-EIO;
+    regs[14] = ok ? len : (uint64_t)(int64_t)(fs_readonly(f->file.name) ? -EROFS : -EIO);
     kfree(tmp);
     return 0;
 }

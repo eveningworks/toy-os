@@ -122,6 +122,7 @@ static const struct { int code; const char *msg; } g_errmsg[] = {
     { ENOTTY, "not a terminal" },
     { EDEADLK, "would deadlock" },
     { ENOSPC, "no space left" },
+    { EROFS,  "read-only file system" },
     { ENOTDIR, "not a directory" },
     { EISDIR, "is a directory" },
     { ERANGE, "out of range" },

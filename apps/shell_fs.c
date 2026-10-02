@@ -153,7 +153,8 @@ void cmd_write_or_append(const char *args, int append) {
     line[n] = '\n';
     line[n + 1] = '\0';
 
-    if (!fs_write(path, line, append)) vga_write("write: failed\n");
+    if (!fs_write(path, line, append))
+        vga_write(fs_readonly(path) ? "write: read-only file system\n" : "write: failed\n");
 }
 
 void cmd_rm(const char *name) {

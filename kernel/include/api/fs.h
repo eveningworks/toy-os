@@ -262,6 +262,10 @@ int fs_is_dir(const char *path);
 // True if `path` names an existing file or directory (or is "/").
 int fs_exists(const char *path);
 
+// True if `path` is on a mount that refuses every change (MNT_RDONLY) --
+// what a failed mutation asks to answer EROFS rather than guess.
+int fs_readonly(const char *path);
+
 // Calls cb(ctx, name, size, is_dir) for every direct child of `dir_path`
 // (which must be an existing directory, or "/") -- `name` is just that
 // child's own last path component (e.g. "notes.txt", not

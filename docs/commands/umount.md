@@ -20,7 +20,8 @@ back.
 
 ## What it refuses, and why
 
-- **The root.** There would be nothing left to resolve a path against.
+- **The root** (`the root filesystem cannot be unmounted`). There would be
+  nothing left to resolve a path against. `EBUSY`, as on Linux.
 - **A filesystem with a file still open on it.** The kernel walks its open-file
   table and looks for a path under the mount point — `struct open_file` already
   records a file descriptor's absolute path, so this needs no bookkeeping that
@@ -28,7 +29,8 @@ back.
 - **A filesystem with another one mounted underneath it.** Unmount the deeper
   one first.
 
-All three are `EBUSY`-shaped: the same command would succeed later.
+All three are `EBUSY`. A path with nothing mounted on it is `EINVAL`, printed
+as `nothing is mounted there` (util-linux says `not mounted`).
 
 ## What it deliberately does not do
 

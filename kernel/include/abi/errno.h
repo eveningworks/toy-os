@@ -90,6 +90,11 @@
                    // one -- it covers every unseekable stream, and a
                    // libc's fseek() turns it straight into the errno a
                    // program expects
+#define EROFS  30  // the path is on a filesystem mounted READ-ONLY (/boot,
+                   // by default): a create, write, delete, rename or
+                   // truncate there. Its own code because the guesses it
+                   // replaced -- ENOSPC from mkdir, EIO from rm -- sent
+                   // a person looking for a full or failing disk
 #define ENFILE 23  // a SYSTEM-wide table is full (the pipe table)
 #define EMFILE 24  // THIS PROCESS's descriptor table is full -- distinct from
                    // ENFILE, and distinct from ENOENT, which is the whole

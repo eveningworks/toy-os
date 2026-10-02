@@ -774,6 +774,11 @@ int fs_exists(const char *path) {
     return FS_OP(r.m, r.gen, exists, r.sub);
 }
 
+int fs_readonly(const char *path) {
+    struct resolved r;
+    return resolve(path, &r) && (r.m->flags & MNT_RDONLY);
+}
+
 void fs_list(const char *dir_path, fs_list_cb cb, void *ctx) {
     struct resolved r;
     if (!resolve(dir_path, &r)) return;
