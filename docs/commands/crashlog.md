@@ -20,11 +20,27 @@ A core-dumping signal's default action writes one too (`Killed by
 SIGSEGV`). On the desktop the same reports are the Crash Reports app
 (`/bin/wm/apps/crashreports`), which a crash notice's Details opens.
 
-`crashlog` shows the header only. The stack is for the host:
-`tools/panic_resolve.py --crash <file>` names RIP and every return
-address on it against the program's ELF, which is where the DWARF is.
-Get the file off the machine with `tools/remote.py get`, or out of a
-QEMU disk image with `tools/tfs3_writer.py read`.
+`crashlog <report>` prints a summary, the **backtrace**, then the text
+header. The backtrace is recovered on the machine (`lib/ucrash.h`, the
+same reading the Crash Reports viewer shows): every word of the saved
+stack from RSP up that points into code AND follows a call instruction,
+named from that binary's own symbol table on disk --
+
+    /bin/wm/apps/notepad (pid 18): Killed by SIGSEGV, sent by pid 20
+    where: sys_futex_wait +0xa in notepad
+
+    backtrace, found by scanning the stack:
+      #0  0x80000081fa  sys_futex_wait +0xa  (notepad)
+      #1  0x900005bce9  uapp_pump +0x249  (libuapp.so)
+      #2  0x900005ca79  uapp_run +0x699  (libuapp.so)
+      #3  0x8000007145  main +0x165  (notepad)
+
+A scan can include a stale return address left in a local, and a binary
+replaced since the crash names the wrong functions (it says so). Source
+lines are the host's: `tools/panic_resolve.py --crash <file>` resolves
+RIP and the stack against the build's DWARF. Get the file off the
+machine with `tools/remote.py get`, or out of a QEMU disk image with
+`tools/tfs3_writer.py read`.
 
 What is deliberately NOT here: a kernel panic. `/var/crash` holds
 processes that faulted while the kernel carried on, which is the system

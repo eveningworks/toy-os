@@ -177,8 +177,13 @@ static void put_run(struct md_ctx *c, int x, int y, const char *txt,
 // umd because WHERE a line breaks is a property of the renderer's
 // medium, and umd's is columns.
 
+// THE TALLER OF THE TEXT AND THE CODE FACE: a code span's ground and its
+// underscores reach the mono face's full height, and a pitch from the
+// text face alone let the next line's ground paint over them.
 static int line_height(struct md_ctx *c) {
-    return font_h(style_font(c->m, 0, c->level)) + (c->level ? 2 : 1);
+    int text = font_h(style_font(c->m, 0, c->level));
+    int code = font_h(style_font(c->m, UMD_STYLE_CODE, c->level));
+    return (text > code ? text : code) + (c->level ? 2 : 1);
 }
 
 static void flush_word(struct md_ctx *c, int space_first) {

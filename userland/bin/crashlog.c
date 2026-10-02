@@ -1,9 +1,10 @@
 // crashlog -- the ring-3 crash reports in /var/crash: list them, or
-// print one's text header. The kernel writes a report on the way to
-// killing a process that faulted (kernel/proc/crash_report.c); the raw
-// stack after the header is for tools/panic_resolve.py --crash on the
-// host, which names every address against the ELF's DWARF, so this
-// program stops at the marker rather than printing a page of bytes.
+// print one: a summary, the BACKTRACE recovered from its saved stack
+// (lib/ucrash.h -- the same reading the Crash Reports window shows), and
+// its text header. The kernel writes a report on the way to killing a
+// process that faulted (kernel/proc/crash_report.c); the raw stack is
+// never printed, and tools/panic_resolve.py --crash on the host adds
+// source lines from DWARF.
 //
 // A KERNEL PANIC IS NOT HERE. This directory holds processes that
 // faulted while the kernel carried on; a panic's record is a separate
@@ -14,6 +15,7 @@
 #include "rt/sys.h"
 #include "lib/cmd.h"
 #include "lib/dirsort.h"
+#include "lib/ucrash.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -62,8 +64,30 @@ static int show(const char *name) {
     buf[total] = 0;
     char *mark = strstr(buf, "---- stack ----");
     if (mark) *mark = 0;
+    static struct ucrash r;
+    if (ucrash_load(&r, path) == 0) {
+        char line[192], where[96], by[24];
+        ucrash_backtrace(&r);
+        ucrash_where(&r, where, sizeof where);
+        ucrash_sender(&r, by, sizeof by);
+        snprintf(line, sizeof line, "%s (pid %d): %s%s%s\nwhere: %s\n\nbacktrace, found by scanning the stack:\n",
+                 r.program, r.pid, r.fault, by[0] ? ", sent by " : "", by, where);
+        sys_print(line);
+        for (int i = 0; i < r.nframe; i++) {
+            const struct ucrash_frame *f = &r.frame[i];
+            if (f->func[0])
+                snprintf(line, sizeof line, "  #%-2d 0x%llx  %s +0x%llx  (%s)\n", i,
+                         (unsigned long long)f->addr, f->func, (unsigned long long)f->off, f->module);
+            else
+                snprintf(line, sizeof line, "  #%-2d 0x%llx  %s +0x%llx\n", i,
+                         (unsigned long long)f->addr, f->module, (unsigned long long)f->off);
+            sys_print(line);
+        }
+        if (!r.nframe) sys_print("  (none: no code addresses on the saved stack)\n");
+        if (r.stale) sys_print("  ** a binary is newer than this report: the names may be wrong **\n");
+        sys_print("\n");
+    }
     sys_print(buf);
-    if (mark) sys_print("(stack bytes follow; resolve with tools/panic_resolve.py --crash on the host)\n");
     return 0;
 }
 

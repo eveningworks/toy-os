@@ -24,11 +24,13 @@
 | `uclock.h` | The smallest non-zero gap the monotonic clock will actually show. |
 | `ucomplete.h` | `/bin/tosh`'s completion ENVIRONMENT -- the ring-3 half of api/completion.h, whose engine is kernel/lib/completion.c compiled into libuapp.a. |
 | `uconf.h` | /etc access for a ring-3 program: reading and writing `name=value` documents. |
+| `ucrash.h` | ucrash -- a ring-3 crash report from /var/crash, read: its header, the kernel log it carries, and a BACKTRACE recovered from the saved stack. |
 | `ucursor.h` | One cursor SHAPE, as /usr/share/cursors/<theme>/<shape> describes it -- the file format, shared by the compositor (userland/wm/cursor_theme.c, which owns the live theme) and anything that only SHOW... |
 | `udate.h` | A `struct rtc_time` written the way the LC_TIME locale writes it -- "1.10.2026 14.02" in Finland, "10/1/2026 2:02 PM" in the US. |
 | `udevice.h` | THE MACHINE'S DEVICES, as one list -- what /bin/devctl prints and the Device Manager shows. |
 | `udhcp.h` | THE DHCP CLIENT, AS A LIBRARY -- one implementation, two front ends. |
 | `ueffect.h` | A WINDOW EFFECT'S OPTIONS -- what it declares, and what the user chose. |
+| `uelfsym.h` | uelfsym -- function names for addresses in an ELF64 file on disk, and the bytes at an address: what a crash report's backtrace needs to name a frame and to check it follows a call. |
 | `ufile.h` | Reading a whole file into one allocation, in one place. |
 | `ufileop.h` | ufileop -- copying, moving and deleting files and trees, once. |
 | `ufiletype.h` | WHAT KIND OF FILE A NAME IS, in words and as an icon -- the File Manager's Type column, its details pane and Properties all ask, and three private tables would drift into three answers. |

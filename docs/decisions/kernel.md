@@ -8872,3 +8872,24 @@ past the 16 KiB stack) and is counted and allocated; futex's wakeword
 table is allocated at the first registration; the fd-space table grows
 by doubling like the descriptor table beside it.
 
+## A crash's backtrace is recovered ON the machine, by a stack scan that checks for a call
+
+The maintainer asked for a report viewer that shows what matters rather
+than a file Notepad opens as text followed by binary (2026-10-02).
+macOS names its crash frames on the machine; Linux's coredumpctl
+unwinds with elfutils; Windows' Reliability Monitor shows a module and
+an offset and leaves the rest to WinDbg. toy-os's executables carry no
+unwind tables (`.eh_frame` is in the libraries only) and no frame
+pointers, so the frames come from SCANNING the saved stack -- Google
+Breakpad's fallback when CFI is missing, which it labels "found by
+stack scanning". Two filters make the scan worth reading: only the
+words from RSP up (the kernel copies from RSP's page, and below RSP is
+dead frames), and only an address whose preceding bytes are a `call`
+(E8, or FF /2 in its four lengths) -- the host scan in
+`panic_resolve.py --crash` keeps every code address, and on a real
+report that let three stale ones in. Names come from each binary's own
+`.symtab`, which every shipped binary keeps; a binary replaced after the
+crash is flagged rather than trusted. DWARF line numbers stay on the
+host for now: the binaries carry `.debug_line`, and reading it is a
+line-program interpreter, a project of its own.
+

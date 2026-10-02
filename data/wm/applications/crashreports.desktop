@@ -4,3 +4,4 @@ Exec=/bin/wm/apps/crashreports
 Category=system
 Comment=Programs that stopped unexpectedly, and why
 Icon=crashreports
+Handles=.crash

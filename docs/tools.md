@@ -1897,6 +1897,18 @@ window without going through it will find its layout polls timing out.
   `mutate.py`: dropping `point_at()`'s `ucrt_source_point()` call
   reddens the double-click (`selbytes 0`), and dropping the scanline
   gain reddens the pitch check. In `gui_regress.py`.
+- **`crashview_test.py`** -- the crash report viewer (Crash Reports'
+  viewer face over `lib/ucrash.c`): a Notepad killed with SIGSEGV
+  leaves a report; `open` on it opens the viewer (`Handles=.crash`);
+  the viewer's logged frames are checked against THIS tool's own
+  reading -- the report's raw header and `readelf` over the same
+  build's binaries -- frame 0 is the header's rip, every name and
+  offset is the host's symbol table's, every later frame follows a
+  call instruction in the host's copy of the file, and the chain holds
+  `uapp_run` then `main`; the document is drawn, `crashlog` prints the
+  same frames, and Enter in the list opens the viewer. Positive
+  control: `mutate.py` making `after_call()` accept anything reddens
+  the call check (three stale addresses got in). In `gui_regress.py`.
 - **`crashtest_test.py`** -- the fault paths and what the user is told:
   the app enumerates the kernel's fault kinds, kernel faults
   are refused while disarmed, a ring-3 crash kills the app WITHOUT taking

@@ -6,6 +6,7 @@
 static const struct { const char *ext, *name, *icon; } TYPES[] = {
     { "txt",     "Text",            "file-text" },
     { "log",     "Log",             "file-text" },
+    { "crash",   "Crash report",    "file-doc" },
     { "md",      "Markdown",        "file-doc" },
     { "c",       "C source",        "file-text" },
     { "h",       "C header",        "file-text" },
