@@ -105,6 +105,22 @@ def answer_after(transcript, echoed_command):
     return None
 
 
+def between(transcript, first, second):
+    """The stripped lines after the echo of `first` and before the echo of
+    `second`, as a list -- compared WHOLE, so a word inside a longer line
+    (a refusal's choice list) is not an answer."""
+    lines = [ln.strip() for ln in transcript.splitlines()]
+    start = next((i for i, ln in enumerate(lines) if first in ln), None)
+    if start is None:
+        return []
+    out = []
+    for ln in lines[start + 1:]:
+        if second in ln:
+            break
+        out.append(ln)
+    return out
+
+
 def run_boot(iso, img, qemu_log, commands, timeout):
     """Boot once, run `commands` over the debug console, return the transcript."""
     return serial_boot.run_session(launch(iso, img, qemu_log), SERIAL_PORT, commands, timeout)
@@ -224,9 +240,16 @@ def main():
     # prints, so a substring search would pass on the very message this
     # check exists to tell apart. The console ends lines with CRLF,
     # hence the strip.
-    got = answer_after(t1b, "config get kernel.ata_nodma")
+    #
+    # A WHOLE LINE OF THE REPLY, not the first line after the echo: this
+    # boot's console shares COM1 with the kernel log, which is still
+    # printing, and a klog line cut mid-word (`y-os: boot target ...`)
+    # passes any "is it a log line" test. The reply runs from the get's
+    # echo to the set's.
+    reply = between(t1b, "config get kernel.ata_nodma", "config set kernel.ata_nodma")
     check("the PIO tunable reports the FORCING flag, not the effective state",
-          got == "off", f"`config get` answered {got!r}, not 'off'")
+          "off" in reply and "on" not in reply,
+          f"`config get` answered {answer_after(t1b, 'config get kernel.ata_nodma')!r}, not 'off'")
     # THE REASON HAS TO NAME THIS MACHINE'S ACTUAL STORAGE. The first
     # version of the sentence said "every transfer already goes through
     # PIO", which is true of an ATA controller with no Bus-Master DMA

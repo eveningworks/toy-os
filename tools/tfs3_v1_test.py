@@ -147,9 +147,13 @@ def main():
           "type:     directory" in section("rescue stat /d1/moved")
           and "no such" in section("rescue stat /d1/sub"))
 
+    # `mv` says only that it failed; the WHY is the kernel's line, which
+    # reaches `dmesg` and not the command's reply (the kernel log has
+    # its own serial port).
     refusal = section("rescue mv /d1/moved /d2/moved")
+    log = section("rescue dmesg")
     check("a cross-parent directory move is refused, naming the fix",
-          "journal is too small" in refusal and "fsformat tfs3 confirm" in refusal,
+          "mv: failed" in refusal and "journal is too small" in log and "fsformat tfs3 confirm" in log,
           refusal.strip()[:80])
     # Refused must mean UNCHANGED -- a half-done move is the failure
     # this whole credit-reservation mechanism exists to prevent. Take

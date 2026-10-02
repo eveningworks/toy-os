@@ -6426,16 +6426,6 @@ size probe fails the same two checks, so neither is that change's.
   hands blocks back" passes vacuously -- it asserts the image ends near
   its baseline, which it never left.
 
-## `tools/virtio_boot_test.py` fails `the PIO tunable reports the FORCING flag` every run
-
-Measured 2026-09-24 with `tools/predates.py` against a48a6b8e, on a fresh
-image: HEAD and the 4K-sector work fail identically, 10 of 11 checks
-passing. The tool types `config get kernel.ata_nodma` and reads back
-`tosh -- the toy-os shell, in ring 3. Ctrl-D to exit.` -- the banner of
-a shell starting -- where it wants `off`. Whether the command reached a
-freshly spawned shell or the tool read the wrong line of the transcript
-is not established.
-
 ## `damage_sweep.py` reports one violation on `start-menu dismiss`
 
 Measured 2026-09-02 on 540dd6e5 and again with the rounded-corner

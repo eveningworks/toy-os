@@ -27,12 +27,19 @@ not catch:
    SYS_READ_KEY already allowed.
 
 3. **The console has exactly ONE reader, and the claim is released.**
-   `touch` is a KERNEL SHELL builtin and is not on tosh's PATH, so
-   typing `touch /claimprobe.txt` at tosh must create NOTHING -- if the
-   kernel shell were still taking keys behind it, the file would appear.
-   Then Ctrl-D exits tosh and the same line must now work, which is the
-   release half. Without both directions "the claim works" and "the
-   claim is stuck on" look identical.
+   `rescue touch` is KERNEL-SHELL-ONLY, so typing it at tosh must create
+   NOTHING -- if the kernel shell were still taking keys behind it, the
+   file would appear. Then Ctrl-D exits tosh and the same line must now
+   work, which is the release half. Without both directions "the claim
+   works" and "the claim is stuck on" look identical.
+
+THE TOSH UNDER TEST IS INIT'S CONSOLE SHELL, the `tosh` service, which
+owns the console once the desktop is gone. It is DISABLED first (its
+descriptor moved aside, as the desktop's is) so Ctrl-D ends it for good
+-- with `Restart=always` init would start another, and the kernel shell
+would never get the keyboard back. Spawning a second tosh, as this tool
+once did, typed `spawn /bin/tosh` INTO the console tosh and then counted
+whichever tosh it found.
 
 PRECONDITIONS THIS TOOL ESTABLISHES ITSELF
 ------------------------------------------
@@ -89,10 +96,14 @@ TOYWM_SVC = "/etc/services.d/toywm"
 # every later tool in a sweep, and a desktop that never comes back fails
 # them all with `no provider named gui` (2026-09-30).
 TOYWM_SAVED = "/var/tmp/toywm.service.saved"
+TOSH_SVC = "/etc/services.d/tosh"
+TOSH_SAVED = "/var/tmp/tosh.service.saved"
 
 
 def restore_desktop(dbg):
+    dbg.send(f"sh cp {TOSH_SAVED} {TOSH_SVC}")
     dbg.send(f"sh cp {TOYWM_SAVED} {TOYWM_SVC}")
+    dbg.send("sh sync")   # the sweep stops the guest straight after
 PROBE = "/claimprobe.txt"
 MADE = "/filetest.txt"
 
@@ -137,6 +148,13 @@ def kstack_slots(dbg):
     return rows
 
 
+def spend_first_line(flow):
+    """A harmless line for the console to lose -- see main()."""
+    flow.type_command("x")
+    flow.session.send_key("ret")
+    time.sleep(1.0)
+
+
 def free_the_console(dbg):
     """Stop init supervising the desktop, then kill it -- see this
     module's docstring for why both steps are needed."""
@@ -144,6 +162,9 @@ def free_the_console(dbg):
     pid = comp.get("pid") or 0
     dbg.send(f"sh cp {TOYWM_SVC} {TOYWM_SAVED}")    # put back by restore_desktop()
     dbg.send(f"sh rm {TOYWM_SVC}")
+    # The console shell keeps running, but is not restarted when it exits.
+    dbg.send(f"sh cp {TOSH_SVC} {TOSH_SAVED}")
+    dbg.send(f"sh rm {TOSH_SVC}")
     time.sleep(0.5)
     if pid:
         dbg.send(f"sh kill {pid}")
@@ -192,13 +213,10 @@ def main():
           " ".join(sorted(before)))
 
     print("the ring-3 shell")
-    flow.type_command("spawn /bin/tosh")
-    flow.session.send_key("ret")
-    time.sleep(1.5)
-
     rows = kstack_slots(dbg)
     tosh = [r for r in rows if r[1].startswith("tosh")]
-    check("tosh is running as a ring-3 process", bool(tosh),
+    mine = tosh[0][0] if len(tosh) == 1 else None
+    check("the console tosh is running as a ring-3 process, alone", mine is not None,
           f"{tosh}" if tosh else f"slots: {rows}")
 
     # 4 == SCHED_BLOCKED (kernel/proc/sched_internal.h's enum sched_state).
@@ -206,6 +224,10 @@ def main():
           f"state {tosh[0][2]}" if tosh else "no tosh row")
 
     print("a typed line reaches it")
+    # THE FIRST LINE AFTER A CONSOLE HANDOVER IS LOST (docs/bugs.md), so
+    # one is spent here and after Ctrl-D -- the spawn line this tool used
+    # to type absorbed it unseen.
+    spend_first_line(flow)
     flow.type_command("file_test")
     flow.session.send_key("ret")
     time.sleep(2.5)
@@ -239,10 +261,11 @@ def main():
     time.sleep(1.5)
     rows = kstack_slots(dbg)
     check("tosh exited on Ctrl-D",
-          not [r for r in rows if r[1].startswith("tosh") and r[2] not in (0, 3)],
+          mine is not None and not [r for r in rows if r[0] == mine and r[2] not in (0, 3)],
           f"slots: {rows}")
 
-    flow.type_command("touch /claimprobe.txt")
+    spend_first_line(flow)
+    flow.type_command("rescue touch /claimprobe.txt")
     flow.session.send_key("ret")
     time.sleep(1.5)
     end = root_names(dbg)

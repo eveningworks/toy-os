@@ -16,6 +16,7 @@ import socket
 import time
 
 READY = "debug console ready"
+PROMPT = "dbg>"
 
 
 def connect(port, timeout):
@@ -73,6 +74,9 @@ def run_session(qemu, port, commands, timeout, settle=3.0):
             return None, "could not connect to the guest's serial console"
         if not read_until(sock, READY, timeout, transcript):
             return None, "the debug console never came up"
+        # READY arrives mid-line; a command typed before the PROMPT is lost
+        # and the rest of the banner reads as its answer.
+        read_until(sock, PROMPT, timeout, transcript)
         for cmd in commands:
             cmd, needle = cmd if isinstance(cmd, tuple) else (cmd, None)
             sock.sendall((cmd + "\n").encode())
