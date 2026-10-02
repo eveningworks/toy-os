@@ -208,7 +208,9 @@ the waiver. `docs/tools.md` has what each one looks for.
   subject under ~72 chars with an area prefix (`settings:`, `wm:`,
   `kernel:`); a paragraph or two on what was wrong and why; a bullet per
   change; every changed file with a one-line note. No capitalised lede
-  sentences, no war stories, no forensics. Bodies before 2026-08-24 are
+  sentences, no war stories, no forensics. **A change a person can SEE
+  or DO ends with a `Release-note: <new|improved|fixed>: <one sentence>`
+  trailer** -- System Update's What's new (`docs/conventions/build.md`). Bodies before 2026-08-24 are
   an older essay voice (one-liners before 2026-08-15), not rewritten.
 
 ### Traps that only bite while testing

@@ -654,6 +654,18 @@ this the obvious way), not from how much history it accumulated.
   every claim against the TAG** -- `git ls-tree -r v<x> --name-only` and
   `git show v<x>:<file>` answer it in seconds -- and say plainly what is
   still in progress.
+- **A COMMIT THAT CHANGES SOMETHING A PERSON CAN SEE OR DO CARRIES A
+  `Release-note:` TRAILER** -- `Release-note: fixed: Force-quitting
+  System Update could freeze the desktop.`, the kind one of `new`,
+  `improved`, `fixed`, the text one sentence in the USER's words (what
+  they notice, not which function changed). It is what System Update's
+  What's new and `update --check` show; a commit without one is counted
+  as "a change with no visible effect", which is right for a refactor, a
+  test or a doc and wrong for a fix somebody was waiting for. Several
+  lines for several changes; any other kind is dropped with a warning by
+  `update_server.py`, never guessed at. It goes with the trailers at the
+  END of the message (`git interpret-trailers` reads only the last
+  paragraph), before `Co-Authored-By:`.
 
 ## A `.d` FILE MUST NEVER BE REMAKEABLE, OR make BUILDS THE WRONG FILE AND STILL EXITS 0
 

@@ -2015,3 +2015,30 @@ Restart shows no flyout. The laptops needed `install --bootloader
 confirm` and the stanza added to their hand-kept `grub.cfg` (done
 2026-09-30, both).
 
+## Release notes are `Release-note:` trailers on commits, cut at the machine's own build
+
+System Update shows what changed before it installs (chosen from
+mockups, 2026-10-02). Three sources were drawn with the same 18 commits:
+the commit SUBJECTS grouped by area prefix, a TRAILER per commit, and a
+paragraph WRITTEN at `--publish`. Subjects cost nothing and read as a
+developer's log ("a pid is a field of its slot, not the slot index plus
+one"), and most commits -- docs, tests, an ABI rename -- mean nothing to
+a person updating. A note written at publish reads best and is a chore
+at every publish, so the dev channel would have had none. A trailer is
+written ONCE, by the session that made the change and knows what a user
+would notice, and a commit without one is simply counted. GitLab's
+`Changelog:` trailer is the same shape; Kubernetes' `release-note` block
+in a PR is its cousin.
+
+The CLIENT cuts the list, not the server: the notes file is the last
+200 commits of the build, and the machine reads until it meets its own
+build's commit (the `# commit` of the manifest it last applied) --
+apt-listchanges' rule, showing the changelog entries newer than the
+installed version. A static file therefore serves every machine however
+far behind it is, which a server computing "since X" per request would
+not, and `stable`'s snapshot stays a copy. A machine whose build is not
+in the list says "Recent changes" rather than pretending to a cut.
+
+The notes are TEXT TO SHOW from an unauthenticated server: one Markdown
+string, rendered by the same `uui_markdown`/`umd` pair `/bin/doc` uses,
+so there is no second parser of what `**` means.

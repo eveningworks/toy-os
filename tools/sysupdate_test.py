@@ -6,6 +6,11 @@ WHAT IT CHECKS, and what a broken version would still pass:
   - the window opens, checks by itself and lands on "updates available"
     with the TWO files damaged beforehand -- a window that reported a
     view and counted nothing would fail on the count;
+  - What's new is the page it opens on, with the notes NEWER than the
+    guest's build counted (a cut in the wrong place changes the count)
+    and DRAWN -- more text rows than the one-line "no notes" placeholder
+    leaves, which `--positive-control` serves instead;
+  - the Files tab, clicked at the slot the strip reports, shows the list;
   - the file list is DRAWN: ink in the table's rect, not only rows
     reported;
   - mid-install the overall bar is PART-filled, read from the pixels in
@@ -14,7 +19,7 @@ WHAT IT CHECKS, and what a broken version would still pass:
     a bar that jumped from empty to full would fail here;
   - it ends on "installed" and the files are right on disk, read by
     `sum` against the manifest -- an independent reader, not the app;
-  - the bar ends full.
+  - the bar ends full, and What's new still shows the notes afterwards.
 
 The server is tools/update_server.py's handler in this process, on an
 ephemeral loopback port the guest reaches as 10.0.2.2: nothing leaves
@@ -41,6 +46,7 @@ TITLE = "System Update"
 # desktop that restarted mid-test would find it truncated).
 DAMAGE = ("/bin/hello", "/install/kernel.bin")
 V_AVAILABLE, V_INSTALLED = 1, 4
+NOTES = 2, 1          # notes, quiet commits the fixture puts above the guest's build
 
 
 
@@ -53,8 +59,25 @@ def finish():
     return _res.finish("sysupdate_test")
 
 
-def serve(throttle_kib):
-    manifest = update_server.Manifest(os.path.join(os.path.dirname(HERE), "seed", "sync"))
+class Fixture(update_server.Manifest):
+    """The build's own manifest, with notes cut by the guest's build."""
+    plain = False
+
+    def notes(self):
+        if self.plain:
+            return None
+        own = update_server._build_id().split("-")[0]   # git log never says -dirty
+        return "\n".join(["# toy-os release notes",
+                          "aaaaaaa1 new Crash Reports lists past crashes.",
+                          "aaaaaaa2 -",
+                          "aaaaaaa3 fixed Force-quitting System Update could freeze the desktop.",
+                          f"{own} -",
+                          "aaaaaaa4 new Older than this build, never shown."]) + "\n"
+
+
+def serve(throttle_kib, plain=False):
+    manifest = Fixture(os.path.join(os.path.dirname(HERE), "seed", "sync"))
+    manifest.plain = plain
     base = update_server.make_handler({"": manifest}, throttle_kib)
 
     class Quiet(base):
@@ -66,8 +89,12 @@ def serve(throttle_kib):
     return srv, manifest
 
 
+LINES = []   # every app line views() has read: it clears the log as it goes
+
+
 def views(dbg, seen):
     for line in dbg.logs("sysupdate:", clear=True):
+        LINES.append(line)
         m = re.search(r"sysupdate: view (\d+) changed (\d+)", line)
         if m:
             seen.append((int(m.group(1)), int(m.group(2))))
@@ -80,6 +107,32 @@ def wait_view(dbg, seen, n, timeout=120):
         if len(views(dbg, seen)) >= n:
             return seen[n - 1]
         time.sleep(0.5)
+    return None
+
+
+def text_rows(im, rect):
+    """Pixel rows in a rect carrying dark ink -- text, not the page."""
+    x, y, w, h = rect
+    return sum(1 for yy in range(y, y + h)
+               if any(sum(im.getpixel((xx, yy))[:3]) < 300 for xx in range(x, x + w, 2)))
+
+
+def screen_rect(w, name):
+    r = w[name]
+    return r["screen"]["x"], r["screen"]["y"], r["w"], r["h"]
+
+
+def tab_slot(dbg, w, i):
+    """Screen centre of tab `i`, from the strip's own report."""
+    want = f"sysupdate: layout tabs.slot {i} "
+    views(dbg, [])
+    for line in reversed([ln for ln in LINES if want in ln]):
+        p = line.split(want, 1)[1].split()
+        if len(p) >= 4:
+            ox = w["tabs"]["screen"]["x"] - w["tabs"]["x"]
+            oy = w["tabs"]["screen"]["y"] - w["tabs"]["y"]
+            x, y, ww, hh = (int(v) for v in p[:4])
+            return ox + x + ww // 2, oy + y + hh // 2
     return None
 
 
@@ -101,6 +154,8 @@ def main():
     port_guard.add_instance_args(ap)
     ap.add_argument("--in-gui", action="store_true")
     ap.add_argument("--tmp", default="/tmp")
+    ap.add_argument("--positive-control", action="store_true",
+                    help="serve NO notes and still expect them drawn")
     args = ap.parse_args()
     port_guard.resolve_instance(args, "sysupdate_test")
 
@@ -109,7 +164,7 @@ def main():
         check("the staging tree matches the build", False, f"{why} -- run `make iso`")
         return finish()
 
-    srv, manifest = serve(throttle_kib=192)
+    srv, manifest = serve(throttle_kib=192, plain=args.positive_control)
     try:
         qmp = QMPSession(port=args.qmp_port)
         if not args.in_gui:
@@ -122,9 +177,15 @@ def main():
             dbg.send(f"sh truncate -s 100 {path}")
         dbg.logs("sysupdate:", clear=True)
 
-        seen = []
+        seen, notes = [], []
         win = dbg.spawn(APP, TITLE)
         first = wait_view(dbg, seen, 1)
+        for line in LINES:
+            m = re.search(r"notes (\d+) quiet (\d+) since (\d+)", line)
+            if m:
+                notes.append(tuple(int(v) for v in m.groups()))
+        check("the notes are cut at the guest's own build",
+              notes[-1:] == [NOTES + (1,)], f"notes/quiet/since {notes[-1:]}")
         if not check("it checks by itself and finds the two damaged files",
                      first == (V_AVAILABLE, len(DAMAGE)), f"view/changed {first}"):
             return finish()
@@ -133,6 +194,18 @@ def main():
         dbg.settle()
         w = dbg.widgets(TITLE)
         shot = os.path.join(args.tmp, f"sysupdate_{os.getpid()}.png")
+        qmp.screenshot(shot)
+        im = Image.open(shot).convert("RGB")
+        notes_rows = text_rows(im, screen_rect(w, "notes"))
+        line_h = w["tabs"]["h"]
+        check("What's new opens first, and the notes are drawn",
+              notes_rows > 3 * line_h, f"{notes_rows} rows of ink, a line is ~{line_h}")
+        slot = tab_slot(dbg, w, 1)
+        if not check("the strip reports the Files tab", slot is not None):
+            return finish()
+        dbg.click(*slot)
+        dbg.settle()
+        w = dbg.widgets(TITLE)
         qmp.screenshot(shot)
         im = Image.open(shot).convert("RGB")
         t = w["files"]["screen"]
@@ -173,6 +246,15 @@ def main():
         im = Image.open(shot).convert("RGB")
         end = accent_fraction(im, bar)
         check("the bar ends full", end > 0.98, f"{end:.2f} filled")
+        slot = tab_slot(dbg, w, 0)
+        if slot:
+            dbg.click(*slot)
+            dbg.settle()
+            qmp.screenshot(shot)
+            im = Image.open(shot).convert("RGB")
+            after = text_rows(im, screen_rect(dbg.widgets(TITLE), "notes"))
+            check("...and What's new still shows the notes", after > 3 * line_h,
+                  f"{after} rows of ink")
         if win:
             wz = next((x for x in dbg.windows() if x.get("title") == TITLE), None)
             if wz:

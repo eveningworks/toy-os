@@ -145,7 +145,15 @@ before you start delivering -- don't reconstruct it from memory.
   Verified: preflight clean, gui_regress all clear, three positive
   controls each reddened the intended checks.
   NOT established: <anything measured and left alone>
+
+  Release-note: improved: Time zones are listed by their names.
+  Co-Authored-By: ...
   ```
+  **The `Release-note:` trailer is what System Update's What's new
+  shows** (`docs/conventions/build.md`): one per change a person can SEE
+  or DO, kind `new`/`improved`/`fixed`, a sentence in the user's words.
+  Leave it off a refactor, a test or a doc -- the commit is then counted
+  as a change with no visible effect, which is the truth.
 - **Tag, if cutting a release:** `git tag -a v<version> <commit> -m
   "..."` directly.
 - **Publish:** `git push origin main` (`--tags` if a tag was cut) and

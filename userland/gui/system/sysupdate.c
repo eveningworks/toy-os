@@ -4,8 +4,9 @@
 // A WINDOW over userland/update/upd.c, the engine /bin/update also
 // runs; the design, and why a library update waits for a restart, is
 // docs/update-design.md. The layout is Windows Update's single page: a
-// status heading, the server, one overall bar, the files, and the log
-// behind a toggle (the mockup chosen 2026-09-30).
+// status heading, the server, one overall bar, then What's new / Files /
+// Log as tabs (the mockups chosen 2026-09-30 and 2026-10-02). What's new
+// is the release notes the engine cut at this machine's build.
 //
 // THREADS: a check or an install runs on a worker, which owns the plan
 // while it runs and talks to this thread ONLY through uapp_post() and
@@ -14,12 +15,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "keyboard.h"   // KEY_PAGE_*, KEY_MOD_CTRL
 #include "rt/sys.h"
 #include "lib/human.h"
 #include "ui/uapp.h"
 #include "ui/uui.h"
 #include "ui/uui_label.h"
+#include "ui/uui_markdown.h"
 #include "ui/uui_table.h"
+#include "ui/uui_tabs.h"
 #include "ui/ulog.h"
 #include "ui/utheme.h"
 #include "update/upd.h"
@@ -29,8 +33,9 @@ enum { JOB_NONE, JOB_CHECK, JOB_APPLY };
 
 enum {
     ID_CHANGE = 1, ID_SERVER_EDIT, ID_RECENT, ID_USE, ID_EDIT_CANCEL,
-    ID_TABLE, ID_LOGVIEW, ID_LOG, ID_CHECK, ID_MAIN,
+    ID_TABLE, ID_LOGVIEW, ID_TABS, ID_NOTES, ID_CHECK, ID_MAIN,
 };
+enum { PAGE_NOTES, PAGE_FILES, PAGE_LOG, PAGE_COUNT };
 
 // What the window is showing, which decides the heading and the buttons.
 enum view {
@@ -60,7 +65,7 @@ static unsigned long long g_last_post_ns;
 static enum view g_view = V_CHECKING;
 static char g_title_text[64], g_detail_text[200], g_amount_text[64], g_rate_text[64];
 static struct uui_label g_title, g_detail, g_server_key, g_server_val, g_amount, g_rate, g_spacer;
-static struct uui_button g_change, g_use, g_edit_cancel, g_log_btn, g_check, g_main;
+static struct uui_button g_change, g_use, g_edit_cancel, g_check, g_main;
 static struct uui_textbox g_edit;
 static struct uui_dropdown g_recent;
 static char g_recent_urls[UPD_RECENT_MAX][UPD_URL_MAX];
@@ -71,7 +76,12 @@ static struct uui_textview g_log;
 static char g_log_buf[32768];
 static int g_rows[UUI_TABLE_MAX_ROWS];   // plan index per table row
 static int g_row_count;
-static int g_show_log;
+static struct uui_markdown g_notes;
+static char g_files_label[24] = "Files";
+static struct uui_tab g_tab_list[PAGE_COUNT] = {
+    { "What's new", 0 }, { g_files_label, 0 }, { "Log", 0 },
+};
+static struct uui_tabs g_tabs;
 
 // Speed, from the bytes done since the install started.
 static unsigned long long g_apply_start_ns;
@@ -110,7 +120,6 @@ static struct uui_layout g_amount_row = {
     .count = sizeof g_amount_items / sizeof g_amount_items[0],
 };
 static struct uui_item g_button_items[] = {
-    { .ops = &uui_button_ops, .widget = &g_log_btn, .id = ID_LOG, .name = "logtoggle" },
     { .ops = &uui_label_ops,  .widget = &g_spacer, .flags = UUI_FILL_W },
     { .ops = &uui_button_ops, .widget = &g_check, .id = ID_CHECK, .name = "check" },
     { .ops = &uui_button_ops, .widget = &g_main, .id = ID_MAIN, .name = "main" },
@@ -120,8 +129,24 @@ static struct uui_layout g_button_row = {
     .count = sizeof g_button_items / sizeof g_button_items[0],
 };
 
-// Indices into g_items, for the two rows that come and go.
-enum { ITEM_EDIT = 3, ITEM_TABLE = 6, ITEM_LOG = 7 };
+// The tab strip and the one page under it, tight against it.
+static struct uui_item g_page_items[] = {
+    { .ops = &uui_tabs_ops,     .widget = &g_tabs, .id = ID_TABS, .name = "tabs",
+      .flags = UUI_FILL_W },
+    { .ops = &uui_markdown_ops, .widget = &g_notes, .id = ID_NOTES, .name = "notes",
+      .flags = UUI_FILL_W | UUI_FILL_H },
+    { .ops = &uui_table_ops,    .widget = &g_table, .id = ID_TABLE, .name = "files",
+      .flags = UUI_FILL_W | UUI_FILL_H, .hidden = 1 },
+    { .ops = &uui_textview_ops, .widget = &g_log, .id = ID_LOGVIEW, .name = "log",
+      .flags = UUI_FILL_W | UUI_FILL_H, .hidden = 1 },
+};
+static struct uui_layout g_page = {
+    .dir = UUI_COLUMN, .gap = 1, .items = g_page_items,
+    .count = sizeof g_page_items / sizeof g_page_items[0],
+};
+
+// Indices into g_items for the row that comes and goes.
+enum { ITEM_EDIT = 3 };
 static struct uui_item g_items[] = {
     { .ops = &uui_label_ops,    .widget = &g_title, .name = "title" },
     { .ops = &uui_label_ops,    .widget = &g_detail, .name = "detail", .flags = UUI_FILL_W },
@@ -129,10 +154,7 @@ static struct uui_item g_items[] = {
     { .ops = &uui_layout_ops,   .widget = &g_edit_row, .flags = UUI_FILL_W, .hidden = 1 },
     { .ops = &uui_progress_ops, .widget = &g_bar, .name = "bar", .flags = UUI_FILL_W },
     { .ops = &uui_layout_ops,   .widget = &g_amount_row, .flags = UUI_FILL_W },
-    { .ops = &uui_table_ops,    .widget = &g_table, .id = ID_TABLE, .name = "files",
-      .flags = UUI_FILL_W | UUI_FILL_H },
-    { .ops = &uui_textview_ops, .widget = &g_log, .id = ID_LOGVIEW, .name = "log",
-      .flags = UUI_FILL_W | UUI_FILL_H, .hidden = 1 },
+    { .ops = &uui_layout_ops,   .widget = &g_page, .flags = UUI_FILL_W | UUI_FILL_H },
     { .ops = &uui_layout_ops,   .widget = &g_button_row, .flags = UUI_FILL_W },
 };
 static struct uui_layout g_root = {
@@ -146,7 +168,6 @@ static struct uui_focusable g_focusables[] = {
     { &g_use, &uui_button_ops },
     { &g_edit_cancel, &uui_button_ops },
     { &g_table, &uui_table_ops },
-    { &g_log_btn, &uui_button_ops },
     { &g_check, &uui_button_ops },
     { &g_main, &uui_button_ops },
 };
@@ -192,6 +213,7 @@ static void *worker(void *arg) {
 }
 
 static void refresh(struct uapp *a);
+static void show_notes(void);
 
 static void start_job(struct uapp *a, int job) {
     if (g_job != JOB_NONE) return;
@@ -199,7 +221,10 @@ static void start_job(struct uapp *a, int job) {
     g_cancel = 0;
     g_view = job == JOB_CHECK ? V_CHECKING : V_INSTALLING;
     if (job == JOB_APPLY) g_apply_start_ns = sys_monotonic_ns();
-    if (job == JOB_CHECK) g_row_count = 0;
+    if (job == JOB_CHECK) {
+        g_row_count = 0;
+        show_notes();   // the worker frees the plan the page points into
+    }
     pthread_attr_t at;
     pthread_attr_init(&at);
     pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
@@ -254,6 +279,28 @@ static void collect_rows(void) {
     }
     uui_table_set_rows(&g_table, g_row_count);
 }
+
+// What the What's new page says when the engine has no notes to give.
+static void show_notes(void) {
+    const char *t = g_plan.notes;
+    if (g_job == JOB_CHECK) t = "Checking for release notes...";
+    else if (!t && g_plan.notes_since) t = "Nothing new since this machine's build.";
+    else if (!t) t = "This server publishes no release notes.";
+    uui_markdown_set_text(&g_notes, t, (int)strlen(t));
+}
+
+static void show_page(struct uapp *a, int page) {
+    g_page_items[1].hidden = page != PAGE_NOTES;
+    g_page_items[2].hidden = page != PAGE_FILES;
+    g_page_items[3].hidden = page != PAGE_LOG;
+    uui_tabs_select(&g_tabs, page);
+    if (a) {
+        uui_layout_run(&g_root, 0, 0, uapp_width(a), uapp_height(a));
+        uapp_redraw(a);
+    }
+}
+
+static void tab_selected(void *ctx, int index) { show_page(ctx, index); }
 
 static void set_button(struct uui_button *b, const char *label, int enabled) {
     b->label = label;
@@ -373,6 +420,9 @@ static void refresh(struct uapp *a) {
     default:                            set_button(&g_main, "Install", 0); break;
     }
     uui_table_set_rows(&g_table, g_row_count);
+    if (g_row_count) snprintf(g_files_label, sizeof g_files_label, "Files (%d)", g_row_count);
+    else snprintf(g_files_label, sizeof g_files_label, "Files");
+    show_notes();
     relayout(a);
     uapp_redraw(a);
 }
@@ -403,7 +453,10 @@ static void job_done(struct uapp *a, int job) {
     // What a test reads: the view, and the counts it was drawn from.
     ulogf("sysupdate: view %d changed %d removals %d staged %d installed %s\n", (int)g_view,
           g_plan.changed, g_plan.removals, g_plan.at_boot, g_job_rc == 0 ? "ok" : "failed");
+    ulogf("sysupdate: notes %d quiet %d since %d\n", g_plan.notes_count, g_plan.notes_quiet,
+          g_plan.notes_since);
     refresh(a);
+    uapp_log_layout(a, "sysupdate");   // the tab slots, for a test to click (ui/uui_describe.h)
 }
 
 // ---- the server editor --------------------------------------------------------
@@ -454,14 +507,6 @@ static void on_action(struct uapp *a, int code) {
     case ID_USE:         use_server(a); break;
     case ID_EDIT_CANCEL: show_editor(a, 0); break;
     case ID_CHECK:       start_job(a, JOB_CHECK); break;
-    case ID_LOG:
-        g_show_log = !g_show_log;
-        g_items[ITEM_TABLE].hidden = g_show_log;
-        g_items[ITEM_LOG].hidden = !g_show_log;
-        g_log_btn.label = g_show_log ? "Show files" : "Show log";
-        relayout(a);
-        uapp_redraw(a);
-        break;
     case ID_MAIN:
         if (g_view == V_CHECKING || g_view == V_INSTALLING) g_cancel = 1;
         else if (g_view == V_AVAILABLE) start_job(a, JOB_APPLY);
@@ -471,7 +516,12 @@ static void on_action(struct uapp *a, int code) {
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
-    (void)mods;
+    // Ctrl+PgUp/PgDn steps the tabs, as in the Terminal.
+    if ((mods & KEY_MOD_CTRL) && (key == KEY_PAGE_UP || key == KEY_PAGE_DOWN)) {
+        int step = key == KEY_PAGE_DOWN ? 1 : PAGE_COUNT - 1;
+        show_page(a, (g_tabs.selected + step) % PAGE_COUNT);
+        return;
+    }
     if ((key == '\n' || key == '\r') && !g_items[ITEM_EDIT].hidden) use_server(a);
 }
 
@@ -513,6 +563,7 @@ static void on_size(int *w, int *h) {
 
 static void on_open(struct uapp *a) {
     g_app = a;
+    g_tabs.ctx = a;
     start_job(a, JOB_CHECK);
 }
 
@@ -531,10 +582,9 @@ int main(void) {
     uui_button_init(&g_change, 0, 0, 0, 0, "Change...", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_CHANGE);
     uui_button_init(&g_use, 0, 0, 0, 0, "Use", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_USE);
     uui_button_init(&g_edit_cancel, 0, 0, 0, 0, "Cancel", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_EDIT_CANCEL);
-    uui_button_init(&g_log_btn, 0, 0, 0, 0, "Show log", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_LOG);
     uui_button_init(&g_check, 0, 0, 0, 0, "Check again", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_CHECK);
     uui_button_init(&g_main, 0, 0, 0, 0, "Restart now", UTHEME_ACCENT, UTHEME_ACCENT_TEXT, ID_MAIN);
-    g_change.outlined = g_use.outlined = g_edit_cancel.outlined = g_log_btn.outlined = 1;
+    g_change.outlined = g_use.outlined = g_edit_cancel.outlined = 1;
     g_check.outlined = 1;
     uui_textbox_init(&g_edit, g_server);
     g_recent_items[0] = "Recent";
@@ -544,6 +594,10 @@ int main(void) {
     uui_table_set_tint(&g_table, tint);
     uui_textview_init(&g_log, 0, 0, 0, 0, UTHEME_TEXT, UTHEME_WHITE, UTHEME_PANEL_BG,
                       UTHEME_BUTTON_BG, UTHEME_SELECTION, g_log_buf, (int)sizeof g_log_buf);
+    uui_markdown_init(&g_notes);
+    uui_tabs_init(&g_tabs, g_tab_list, PAGE_COUNT, 0);
+    g_tabs.on_select = tab_selected;
+    show_page(0, PAGE_NOTES);
     uui_focus_init(&g_focus, g_focusables, (int)(sizeof g_focusables / sizeof g_focusables[0]));
 
     struct uapp_desc desc = {

@@ -68,6 +68,7 @@ struct upd_plan {
     char base[UPD_URL_MAX];
     char version[48];             // "# version" in the manifest, or ""
     char built[48];               // "# built", for a person to READ -- never compared
+    char commit[24];              // "# commit": the build this manifest is, or ""
     struct upd_file *files;       // every manifest line this machine uses
     int count;
 
@@ -79,6 +80,14 @@ struct upd_plan {
     char    *manifest;            // the raw text, recorded once applied
     int      staged_for_boot;     // an earlier run already staged an update (restart pending)
     int      kernel_blocked;      // the kernel changed and may not be installed: nothing will be
+
+    // The release notes (GET <base>/notes), cut at THIS machine's build
+    // as apt-listchanges cuts a changelog: Markdown for uui_markdown and
+    // umd, or NULL when the server has none or nothing is newer.
+    char    *notes;
+    int      notes_count;         // release-note lines in it
+    int      notes_quiet;         // newer commits that carry none
+    int      notes_since;         // 1: cut at this machine's build; 0: it was not in the list
 
     // Filled by upd_apply().
     uint64_t done_bytes;

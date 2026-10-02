@@ -19,6 +19,10 @@ WHAT IT PROVES, each against an INDEPENDENT reader (`sum`, `cat`,
      a record of the previous manifest exists -- unless it was edited
      here, which keeps it. A stale LIBRARY waits for the boot like a
      changed one ("-/lib/..." in the pending list).
+  8. RELEASE NOTES: `update --check` prints the notes NEWER than this
+     machine's build and none older -- cut first at the commit the guest
+     was compiled from, then, once an install has recorded a manifest
+     with a different `# commit`, at the RECORD's commit instead.
   6. THE KERNEL, served as a copy of this build's with one boot message
      changed so the new one can be told from the old: on the stock image,
      whose GRUB has `set timeout=0`, the update is REFUSED whole and
@@ -72,6 +76,8 @@ class Server:
         self.manifest = update_server.Manifest(os.path.join(ROOT, "seed", "sync"))
         self.tamper = None
         self.hide = set()      # paths the served manifest leaves out
+        self.notes = None      # a notes file to serve instead of the build's own
+        self.commit = None     # a `# commit` to claim instead of the build's own
         base = update_server.make_handler({"": self.manifest})
         outer = self
 
@@ -83,10 +89,16 @@ class Server:
                 pass
 
             def do_GET(self):
-                if outer.hide and self.path == "/manifest":
+                if outer.notes is not None and self.path == "/notes":
+                    self._send(200, outer.notes.encode(), "text/plain")
+                    return
+                if (outer.hide or outer.commit) and self.path == "/manifest":
                     text, _ = outer.manifest.build()
                     keep = [ln for ln in text.splitlines()
                             if len(ln.split(" ")) < 3 or ln.split(" ")[2] not in outer.hide]
+                    if outer.commit:
+                        keep = [f"# commit {outer.commit}" if ln.startswith("# commit ") else ln
+                                for ln in keep]
                     self._send(200, ("\n".join(keep) + "\n").encode(), "text/plain")
                     return
                 if outer.tamper and self.path == "/files" + outer.tamper:
@@ -295,6 +307,42 @@ def main():
         c.ok("serving them again puts them back",
              all(summed(sh, f) is not None for f in ("/bin/hello", "/lib/libhello.so")),
              out.strip()[-200:])
+
+        # 8. release notes, cut at this machine's build
+        own = update_server._build_id().split("-")[0]   # git log never says -dirty
+        recorded = "fffffff0"
+        srv.notes = "\n".join([
+            "# toy-os release notes",
+            "aaaaaaa1 new Crash Reports lists past crashes.",
+            "aaaaaaa2 -",
+            f"{recorded} fixed RECORDED-BUILD-NOTE",
+            "aaaaaaa3 -",
+            f"{own} -",
+            "aaaaaaa4 new OLDER-THAN-THIS-BUILD",
+        ]) + "\n"
+        sh.run("truncate -s 100 /bin/hello")
+        out = sh.run(f"update --from {url} --check", timeout=600)
+        c.ok("--check prints What's new with the newer notes",
+             "What's new" in out and "Crash Reports lists past crashes" in out
+             and "RECORDED-BUILD-NOTE" in out, out.strip()[-300:])
+        c.ok("...counting the commits without one",
+             "2 changes with no visible effect" in out, out.strip()[-300:])
+        c.ok("...and none at or older than the guest's own build",
+             "OLDER-THAN-THIS-BUILD" not in out, out.strip()[-300:])
+        srv.commit = recorded
+        sh.run(f"update --from {url}", timeout=600)
+        srv.commit = None
+        c.ok("the record carries the manifest's commit",
+             f"# commit {recorded}" in sh.run("cat /var/lib/update/installed"))
+        sh.run("truncate -s 100 /bin/hello")
+        srv.notes = srv.notes.replace(f"{recorded} fixed RECORDED-BUILD-NOTE",
+                                      f"{recorded} -")
+        out = sh.run(f"update --from {url} --check", timeout=600)
+        c.ok("once recorded, the cut is at the RECORD's commit",
+             "Crash Reports lists past crashes" in out and "1 change with" in out
+             and "OLDER-THAN" not in out, out.strip()[-300:])
+        sh.run(f"update --from {url}", timeout=600)
+        srv.notes = None
 
         # 5. the address
         sh.run(f"update --server {url}")

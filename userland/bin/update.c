@@ -12,6 +12,8 @@
 #include "rt/sys.h"
 #include "lib/cmd.h"
 #include "lib/human.h"
+#include "lib/umd.h"
+#include "lib/upager.h"
 #include "update/upd.h"
 
 #define USAGE "update [--check] [-v] [--from <url>] | --server [<url>] | --log"
@@ -75,6 +77,22 @@ static void list_changes(const struct upd_plan *p, int verbose) {
     }
 }
 
+// The engine's notes are Markdown; umd wraps them to this terminal, as
+// /bin/doc does a page.
+static void show_notes(const struct upd_plan *p, int color) {
+    if (!p->notes) return;
+    int cols = 80;
+    upager_term(NULL, &cols);
+    static char buf[65536];
+    struct umd_opts mo = { .cols = cols, .color = color, .indent = 2 };
+    struct umd_out o = { buf, (int)sizeof buf, 0, 0 };
+    umd_render(p->notes, (int)strlen(p->notes), &mo, &o);
+    printf("\nWhat's new\n");
+    fwrite(buf, 1, (size_t)o.len, stdout);
+    if (o.overflow) printf("  ... (cut short)\n");
+    printf("\n");
+}
+
 static int show_log(void) {
     int fd = open(UPD_LOG_PATH, O_RDONLY);
     if (fd < 0) { printf("update: no log yet (%s)\n", UPD_LOG_PATH); return 1; }
@@ -133,6 +151,7 @@ int main(int argc, char **argv) {
         upd_plan_free(&p);
         return 0;
     }
+    show_notes(&p, c.tty);
     char total[16];
     human_size(total, sizeof total, p.bytes);
     printf("%d file%s to fetch, %s", p.changed, p.changed == 1 ? "" : "s", total);

@@ -1006,3 +1006,5 @@ whenever a headline here tells you something you did not already know.
   RESCUE ENTRY NEEDS A GRUB TIMEOUT**
 - **dash's LINE EDITING IS A libedit SHIM, NOT A SECOND EDITOR**
 - **A GitHub Release's notes follow ONE shape, and it is terse.**
+- **A COMMIT THAT CHANGES SOMETHING A PERSON CAN SEE OR DO CARRIES A
+  `Release-note:` TRAILER**

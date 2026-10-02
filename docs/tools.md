@@ -796,7 +796,13 @@ manual steps to be worth automating:
   slows each file so a progress bar has a middle to watch. Binds
   `0.0.0.0:8080` by default (the port the dev host's firewall leaves
   open); a QEMU guest reaches it as `10.0.2.2`. The test tools mount one
-  source at the root instead (`make_handler({"": ...})`).
+  source at the root instead (`make_handler({"": ...})`). **`GET
+  <ch>/notes`** is the release notes: `release_notes()` reads the
+  `Release-note:` trailers of the build's last 200 commits (`git log`
+  from `TOYOS_BUILD_ID` in `version.h`, not HEAD), one line per commit;
+  `--publish` freezes them as `notes` in the snapshot, and an older
+  snapshot answers 404. The manifest carries `# commit` for the same
+  reason.
   Unauthenticated, as the command page says.
 
 - **`gui_flow.py`** -- named, composable QMP click-flows on top of
@@ -4283,7 +4289,13 @@ window without going through it will find its layout polls timing out.
   file list is drawn; mid-install the `uui_progress` bar is PART-filled
   (accent pixels across its reported rect, so a bar that jumps from
   empty to full fails) and the fetched row is tinted; it ends on
-  "installed", `sum` agrees with the manifest, and the bar is full. The
+  "installed", `sum` agrees with the manifest, and the bar is full.
+  **What's new**: the fixture serves notes with the guest's own build in
+  the middle; the app must count the two notes above it (`sysupdate:
+  notes`), open on that tab and DRAW them (more ink rows than the
+  one-line placeholder; `mutate.py` forcing the placeholder reddens
+  exactly the two drawing checks), then reach Files by the slot the
+  strip reports, and still show the notes after the install. The
   damaged files are neither a library (that waits for a restart) nor
   anything running (a desktop restarted mid-test would find it
   truncated). In `gui_regress.py`.
@@ -5435,7 +5447,10 @@ window without going through it will find its layout polls timing out.
   guest is kept and said so, and a stale library is staged as a `-` line
   and removed by the next boot -- then served again to put the guest
   back. Removing the "edited here" crc guard by `mutate.py` takes the
-  run to 31 of 32.
+  run to 31 of 32. **Release notes**: `--check` prints the notes newer
+  than the guest's build and none older, cut first at the commit the
+  guest was compiled from and then -- after an install from a manifest
+  claiming another `# commit` -- at the RECORD's.
   `--positive-control` serves the "corrupted" file intact while still
   expecting the refusal: two checks must go red (measured: 15 of 17).
   **The kernel path** (checks 18-25, skipped without mtools): a copy of

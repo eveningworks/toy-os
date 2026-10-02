@@ -47,6 +47,34 @@ progress bar, and what this prints *is* the log that window shows.
 Run over `tools/remote.py exec "update"` it streams the same lines back
 to the host.
 
+## What's new
+
+When something differs, `update --check` (and `update`) print the
+server's **release notes** first -- only the ones NEWER than this
+machine's build, as apt-listchanges cuts a changelog at the installed
+version -- wrapped to the terminal:
+
+    What's new
+      Since this machine's build of 2026-10-02 12:51:
+
+      New
+      - When a program crashes you get a notice, then a dialog ...
+
+      Fixed
+      - Force-quitting System Update while it checked could freeze the
+        desktop.
+
+      And 11 changes with no visible effect.
+
+This machine's build is the `# commit` of the manifest it last applied
+(`/var/lib/update/installed`), or the commit `/bin/update` itself was
+built from when there is no record yet. The notes are the commits'
+`Release-note:` lines (`docs/conventions/build.md`); a commit without
+one is only counted. A server with no notes -- a build published before
+they existed -- prints none, and that is not an error. The System
+Update window shows the same text on its **What's new** tab, before and
+after an install.
+
 ## What decides that a file changed
 
 **Size and crc32, never dates.** A machine whose clock is wrong would

@@ -35,6 +35,21 @@ Each channel serves
     GET <channel>/manifest      one line per file:  <crc32> <size> <path> [opts]
                                 (<path> URL-quoted: some names have spaces)
     GET <channel>/files/<path>  that file, and ONLY a file the manifest names
+    GET <channel>/notes         what changed, newest commit first (below);
+                                404 from a build published before it existed
+
+RELEASE NOTES ARE `Release-note:` TRAILERS, collected from `git log`
+---------------------------------------------------------------------
+A commit that changes something a person can see carries one or more
+
+    Release-note: fixed: Force-quitting System Update could freeze the desktop.
+
+with the kind `new`, `improved` or `fixed`, in the user's words (GitLab's
+`Changelog:` trailer is the shape). The notes file is one line per
+commit, newest first -- `<sha> <kind> <text>`, or `<sha> -` for a commit
+with none -- and the CLIENT cuts it at its own build, as apt-listchanges
+cuts a changelog at the installed version. A trailer with any other kind
+is left out with a warning, never guessed at.
 
 The `dev` manifest is GENERATED from the staging tree `make iso` seeds on
 every request, never kept beside it -- a list maintained by hand is a
@@ -61,6 +76,7 @@ import argparse
 import datetime
 import http.server
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -82,6 +98,9 @@ STORE = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.l
 SEEDING = os.path.join(REPO, "build", ".seeding")   # the Makefile's seed step, while it runs
 UNIT_NAME = "toy-os-update.service"
 UNIT_TEMPLATE = os.path.join(REPO, "tools", "systemd", UNIT_NAME)
+VERSION_H = os.path.join(REPO, "kernel", "include", "api", "version.h")
+NOTE_KINDS = ("new", "improved", "fixed")
+NOTES_COMMITS = 200       # how far back a machine can be and still get "since your build"
 
 
 class Unavailable(Exception):
@@ -140,7 +159,7 @@ class Manifest:
                 self._add_kernel(lines, files)
             built = datetime.datetime.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M")
             head = ["# toy-os update manifest", f"# version {_version()}",
-                    f"# built {built}"]
+                    f"# built {built}", f"# commit {_build_id()}"]
             return "\n".join(head + sorted(lines, key=_line_path)) + "\n", files
 
     def snapshot(self):
@@ -152,6 +171,9 @@ class Manifest:
         if why:
             raise Unavailable(f"stale build on the server: {why}")
         return self.build()
+
+    def notes(self):
+        return release_notes(_build_id())
 
     def _add_kernel(self, lines, files):
         elf, media = self.kernel_elf, self.kernel_media
@@ -195,6 +217,14 @@ class Published:
             self._cached = (cur, text, files)
         return self._cached[1], self._cached[2]
 
+    def notes(self):
+        cur = self.current()
+        try:
+            with open(os.path.join(cur or "", "notes")) as fh:
+                return fh.read()
+        except OSError:
+            return None
+
 
 def _commit():
     try:
@@ -204,6 +234,52 @@ def _commit():
         return sha + ("-dirty" if dirty else "")
     except (OSError, subprocess.CalledProcessError):
         return "nogit"
+
+
+def _build_id():
+    """The commit the BUILD came from, as gen_version.sh stamped it --
+    not HEAD now, which may be ahead of what `make iso` staged."""
+    try:
+        with open(VERSION_H) as fh:
+            m = re.search(r'#define TOYOS_BUILD_ID "([^"]*)"', fh.read())
+        if m:
+            return m.group(1)
+    except OSError:
+        pass
+    return _commit()
+
+
+def release_notes(build_id, limit=NOTES_COMMITS):
+    """The notes file for a build: its last `limit` commits, newest first."""
+    rev = build_id.split("-")[0]
+    lines = ["# toy-os release notes", f"# commit {build_id}"]
+    try:
+        out = subprocess.run(
+            ["git", "log", f"-n{limit}", "--abbrev=8",
+             "--format=%h%x1f%(trailers:key=Release-note,valueonly,separator=%x1e)%x1d", rev],
+            cwd=REPO, check=True, capture_output=True, text=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return "\n".join(lines) + "\n"
+    for rec in out.split("\x1d"):
+        sha, _, values = rec.strip("\n").partition("\x1f")
+        if not sha:
+            continue
+        said = 0
+        for v in values.split("\x1e"):
+            v = " ".join(v.split())          # a folded trailer is one line
+            if not v:
+                continue
+            kind, sep, text = v.partition(":")
+            kind = kind.strip().lower()
+            if not sep or kind not in NOTE_KINDS or not text.strip():
+                print(f"update_server: {sha}: Release-note {v!r} is not "
+                      f"`<{'|'.join(NOTE_KINDS)}>: <text>` -- left out", file=sys.stderr)
+                continue
+            lines.append(f"{sha} {kind} {text.strip()[:300]}")
+            said += 1
+        if not said:
+            lines.append(f"{sha} -")
+    return "\n".join(lines) + "\n"
 
 
 def _set_current(store, name):
@@ -242,12 +318,10 @@ def publish(staging, store, keep, force=False):
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy2(local, dst)
         index[key] = rel
-    lines = text.split("\n")
-    at = next(i for i, ln in enumerate(lines) if ln.startswith("# built ")) + 1
-    lines.insert(at, f"# commit {name.split('-', 2)[2]}")   # for a person; the client skips it
-    text = "\n".join(lines)
     with open(os.path.join(part, "manifest"), "w") as fh:
         fh.write(text)
+    with open(os.path.join(part, "notes"), "w") as fh:
+        fh.write(release_notes(_build_id()))
     with open(os.path.join(part, "index.json"), "w") as fh:
         json.dump(index, fh)
     os.rename(part, os.path.join(builds, name))    # complete, or not there at all
@@ -377,7 +451,7 @@ def make_handler(channels, throttle_kib=0):
             self._send(200, ("\n".join(lines) + "\n").encode())
 
         def do_GET(self):
-            prefix = next((p for p in prefixes if self.path == p + "/manifest"
+            prefix = next((p for p in prefixes if self.path in (p + "/manifest", p + "/notes")
                            or self.path.startswith(p + "/files/")), None)
             if prefix is None:
                 if self.path in ("/", ""):
@@ -396,6 +470,13 @@ def make_handler(channels, throttle_kib=0):
             rest = self.path[len(prefix):]
             if rest == "/manifest":
                 self._send(200, text.encode())
+                return
+            if rest == "/notes":
+                notes = getattr(channels[prefix], "notes", lambda: None)()
+                if notes is None:
+                    self._send(404, b"no release notes for this build\n")
+                else:
+                    self._send(200, notes.encode())
                 return
             local = files.get(urllib.parse.unquote(rest[len("/files"):]))
             if not local:

@@ -14,6 +14,7 @@
 #include "uhash.h"
 #include "uhttp.h"
 #include "update/upd.h"
+#include "version.h"     // TOYOS_BUILD_ID, generated -- tools/gen_version.sh
 
 #define MANIFEST_MAX (1024u * 1024u)
 #define KERNEL_PATH  "/boot/boot/kernel.bin"
@@ -241,6 +242,7 @@ static int parse_manifest(struct upd_plan *p, char *text, const struct upd_hooks
         if (l[0] == '#') {
             if (!strncmp(l, "# version ", 10)) snprintf(p->version, sizeof p->version, "%s", l + 10);
             else if (!strncmp(l, "# built ", 8)) snprintf(p->built, sizeof p->built, "%s", l + 8);
+            else if (!strncmp(l, "# commit ", 9)) snprintf(p->commit, sizeof p->commit, "%s", l + 9);
             continue;
         }
         if (!l[0]) continue;
@@ -319,6 +321,125 @@ static void write_record(struct upd_plan *p, const struct upd_hooks *h) {
         say(h, "could not record the manifest in %s -- the next update removes nothing",
             UPD_INSTALLED_PATH);
     if (fd >= 0) close(fd);
+}
+
+// ---- release notes ----------------------------------------------------------
+
+// This machine's build: the record's `# commit` and `# built`, else the
+// commit this program was compiled from -- a machine whose record
+// predates the line, or that has none.
+static void own_build(char *commit, size_t ccap, char *built, size_t bcap) {
+    commit[0] = built[0] = '\0';
+    FILE *fp = fopen(UPD_INSTALLED_PATH, "r");
+    if (fp) {
+        char line[128];
+        for (int i = 0; i < 8 && fgets(line, sizeof line, fp); i++) {
+            line[strcspn(line, "\r\n")] = '\0';
+            if (!strncmp(line, "# commit ", 9)) snprintf(commit, ccap, "%s", line + 9);
+            else if (!strncmp(line, "# built ", 8)) snprintf(built, bcap, "%s", line + 8);
+        }
+        fclose(fp);
+    }
+    if (!commit[0]) {
+        snprintf(commit, ccap, "%s", TOYOS_BUILD_ID);
+        built[0] = '\0';   // the record's date would describe some other build
+    }
+}
+
+// Two short ids name one commit when one is a prefix of the other; a
+// "-dirty" suffix is ignored, since the notes only know commits.
+static int same_commit(const char *a, const char *b) {
+    size_t la = strcspn(a, "-"), lb = strcspn(b, "-");
+    size_t n = la < lb ? la : lb;
+    return n >= 7 && !strncmp(a, b, n);
+}
+
+static int is_sha(const char *s) {
+    size_t n = 0;
+    for (; s[n]; n++)
+        if (!((s[n] >= '0' && s[n] <= '9') || (s[n] >= 'a' && s[n] <= 'f'))) return 0;
+    return n >= 7;
+}
+
+// `<sha> <new|improved|fixed> <text>` or `<sha> -`, newest first, read
+// until this machine's own build. The server is unauthenticated, so this
+// is text to SHOW and nothing more; a line it does not understand is
+// skipped and counted. A server with no notes is not an error.
+__attribute__((noinline))   // its request is kilobytes, and upd_check() already holds one
+static void fetch_notes(struct upd_plan *p, const struct upd_hooks *h) {
+    static const char *const KIND[] = { "new", "improved", "fixed" };
+    static const char *const HEAD[] = { "New", "Improved", "Fixed" };
+    char url[UPD_URL_MAX + 32];
+    url_for(p, "/notes", url, sizeof url);
+    struct growbuf b = { 0 };
+    struct uhttp_request req;
+    memset(&req, 0, sizeof req);
+    req.url = url;
+    req.sink = grow_sink;
+    req.sink_ctx = &b;
+    if (uhttp_fetch(&req) != 0 || req.status != 200 || !b.p) {
+        free(b.p);
+        say(h, "notes: none on this server");
+        return;
+    }
+    char own[24], built[48];
+    own_build(own, sizeof own, built, sizeof built);
+
+    struct growbuf sect[3] = { { 0 } };
+    int bad = 0;
+    char *save = 0;
+    for (char *l = strtok_r(b.p, "\n", &save); l; l = strtok_r(0, "\n", &save)) {
+        size_t len = strlen(l);
+        if (len && l[len - 1] == '\r') l[--len] = '\0';
+        if (!l[0] || l[0] == '#') continue;
+        char *sp = strchr(l, ' ');
+        if (!sp) { bad++; continue; }
+        *sp = '\0';
+        char *kind = sp + 1, *text = strchr(kind, ' ');
+        if (text) *text++ = '\0';
+        if (!is_sha(l)) { bad++; continue; }
+        if (same_commit(l, own)) { p->notes_since = 1; break; }
+        if (!strcmp(kind, "-") && !text) { p->notes_quiet++; continue; }
+        int k = 0;
+        while (k < 3 && strcmp(kind, KIND[k])) k++;
+        if (k == 3 || !text || !text[0]) { bad++; continue; }
+        if (grow_sink(&sect[k], "- ", 2) || grow_sink(&sect[k], text, strlen(text)) ||
+            grow_sink(&sect[k], "\n", 1))
+            break;
+        p->notes_count++;
+    }
+    free(b.p);
+    if (bad) say(h, "notes: ignored %d line%s this client does not understand", bad,
+                 bad == 1 ? "" : "s");
+
+    struct growbuf md = { 0 };
+    char line[160];
+    if (p->notes_count || p->notes_quiet) {
+        if (!p->notes_since)
+            snprintf(line, sizeof line, "Recent changes. This machine's build is not in the "
+                     "server's list, so some may be ones it already has.\n\n");
+        else if (built[0])
+            snprintf(line, sizeof line, "Since this machine's build of %s:\n\n", built);
+        else
+            snprintf(line, sizeof line, "Since this machine's build:\n\n");
+        grow_sink(&md, line, strlen(line));
+    }
+    for (int k = 0; k < 3; k++) {
+        if (!sect[k].p) continue;
+        snprintf(line, sizeof line, "### %s\n\n", HEAD[k]);
+        grow_sink(&md, line, strlen(line));
+        grow_sink(&md, sect[k].p, sect[k].len);
+        grow_sink(&md, "\n", 1);
+        free(sect[k].p);
+    }
+    if (p->notes_quiet) {
+        snprintf(line, sizeof line, "%s%d change%s with no visible effect.\n",
+                 p->notes_count ? "And " : "", p->notes_quiet, p->notes_quiet == 1 ? "" : "s");
+        grow_sink(&md, line, strlen(line));
+    }
+    p->notes = md.p;
+    say(h, "notes: %d since %s%s, %d without a note", p->notes_count, own,
+        p->notes_since ? "" : " (not in the list)", p->notes_quiet);
 }
 
 // ---- deciding -------------------------------------------------------------
@@ -402,6 +523,7 @@ int upd_check(const char *base, struct upd_plan *p, const struct upd_hooks *h) {
     say(h, "manifest: %d files%s%s%s%s", p->count, p->version[0] ? ", version " : "", p->version,
         p->built[0] ? ", built " : "", p->built);
     progress(h, p, -1);
+    fetch_notes(p, h);
 
     p->staged_for_boot = exists(UPDATE_PENDING_PATH, 0) == 1;
     compare_kernel(p, h);
@@ -711,7 +833,9 @@ int upd_apply(struct upd_plan *p, const struct upd_hooks *h) {
 void upd_plan_free(struct upd_plan *p) {
     free(p->files);
     free(p->manifest);
+    free(p->notes);
     p->manifest = 0;
+    p->notes = 0;
     p->files = 0;
     p->count = 0;
 }

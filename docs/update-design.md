@@ -217,6 +217,17 @@ the kernel alone would install a userland newer than its kernel, which
 is how a flashed laptop once came up with no network. So nothing is
 installed, and the window says why.
 
+**Release notes are commit trailers, cut by the CLIENT.** `GET
+<channel>/notes` is one line per commit, newest first -- `<sha>
+<new|improved|fixed> <text>`, or `<sha> -` for a commit with none --
+generated from the build's own commit (`TOYOS_BUILD_ID`, not HEAD) by
+`update_server.py`, and frozen into a `--publish` snapshot beside its
+manifest. The manifest gained a `# commit` line, so the record a machine
+keeps says which build it is; the engine reads lines until it meets that
+commit and hands both front ends one short Markdown text (`uui_markdown`
+in the window, `umd` in the terminal). Why trailers rather than subjects
+or a note written at publish: `docs/decisions/build.md`.
+
 **Two channels, and `stable` is a copy.** The server runs as a systemd
 user service with `/dev` -- the checkout's staging tree, live -- and
 `/stable`, the snapshot a `--publish` copied out and an atomically
