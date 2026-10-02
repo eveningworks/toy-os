@@ -5428,7 +5428,9 @@ that drew its own would be client-side decoration, a separate project.
 **The selected tab keeps the light lift** (the tab-strip entry above).
 The merged dark tab was mocked up again for this layout -- no light menu
 bar above it, a grey page rather than black -- and the maintainer chose
-the lift anyway.
+the lift anyway. The tabs FLOAT in the bar (`uui_tabs.floating`: centred,
+rounded all round, no baseline) -- Firefox's and libadwaita's tab bar --
+because on the bar's foot the white tab ran straight into the page.
 
 **The Session panel is the toy-os addition.** None of the three
 terminals shows the tab's process; here a right-hand panel does (the

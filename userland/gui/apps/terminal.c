@@ -1573,6 +1573,7 @@ static void draw(struct ugfx_surface *s, int focused) {
     // The bar's ground, under the strip and the toolbar: the strip sits
     // at its foot, and the air above it is this.
     ugfx_fill_rect(s, 0, menubar_h(), s->w, tabbar_h(), UTHEME_WINDOW_BG);
+    ugfx_fill_rect(s, 0, menubar_h() + tabbar_h() - 1, s->w, 1, UTHEME_BORDER);
     if (g_panel_open) draw_panel(s, ses);
     if (!ses) { ugfx_set_font(was_font); return; }
 
@@ -1816,13 +1817,13 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     uui_dialog_set_bounds(&g_quit_ask, 0, 0, s->w, s->h);
 
     // The bar: the toolbar at its natural width on the right, the strip
-    // in what is left, at the bar's foot so its baseline meets the
-    // toolbar's.
+    // in what is left, FLOATING -- centred in the bar, clear of the grid
+    // below it; draw() puts the one hairline under the bar.
     const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
     int bh = tabbar_h(), th = uui_tabs_height(), tbw = 0, tbh = 0;
     uui_toolbar_natural_size(&g_tb, &tbw, &tbh);
     uui_toolbar_ops.set_geometry(&g_tb, s->w - tbw, mh, tbw, bh);
-    uui_tabs_set_geometry(&g_strip, 0, mh + bh - th, s->w - tbw, th);
+    uui_tabs_set_geometry(&g_strip, 0, mh + (bh - th) / 2, s->w - tbw, th);
 
     // Find floats at the grid's top right, clear of the scrollbar.
     int fw = 0, fh = 0;
@@ -2246,16 +2247,15 @@ static void open_newtab_menu(void) {
     g_newtab_items[n++] = (struct uui_menu_item)UUI_MENU_ICON("Options...", CMD_PREFS, 0, "tb-gear", 0);
     int x, y, w, h;
     uui_toolbar_item_rect(&g_tb, TB_NEWTAB, &x, &y, &w, &h);
-    uui_menubar_open_at(&g_ctx, g_newtab_items, n, x, y + h);
+    uui_menubar_open_below(&g_ctx, g_newtab_items, n, x, y, w, h, 0);
 }
 
 static void open_burger_menu(void) {
     int x, y, w, h;
     uui_toolbar_item_rect(&g_tb, TB_MENU, &x, &y, &w, &h);
-    // Right-aligned under the button: the popup slides left off the
-    // window edge by itself (the bounds rect), so ask for its right end.
-    uui_menubar_open_at(&g_ctx, burger_items,
-                        (int)(sizeof burger_items / sizeof burger_items[0]), x + w, y + h);
+    // Under the button, its right edge on the button's (KDE's ☰).
+    uui_menubar_open_below(&g_ctx, burger_items,
+                           (int)(sizeof burger_items / sizeof burger_items[0]), x, y, w, h, 1);
 }
 
 // The bar's own commands. Returns 0 for any other code.
@@ -2288,7 +2288,20 @@ static void do_command(struct uapp *a, int code) {
     case CMD_EXIT:      uapp_quit(a, 0); return;
     case CMD_RENAME:    rename_begin(); break;
     case CMD_CLEAR_SCREEN:
-        if (s) { vt_reset_screen(s); s->sb_view = 0; }
+        // THE CURSOR'S LINE SURVIVES, moved to the top: it holds the
+        // prompt and whatever is half-typed, and the shell will not
+        // redraw them on its own -- Windows Terminal's Clear Buffer. Not
+        // on the alternate screen, whose program owns every row.
+        if (s && !s->alt) {
+            struct cell *keep = malloc((size_t)g_cap_cols * sizeof *keep);
+            if (keep) memcpy(keep, grid_row(s, s->cr), (size_t)g_cap_cols * sizeof *keep);
+            int cc = s->cc;
+            vt_reset_screen(s);
+            s->cc = cc;
+            if (keep) { memcpy(grid_row(s, 0), keep, (size_t)g_cap_cols * sizeof *keep); free(keep); }
+            s->cr = 0;
+            s->sb_view = 0;
+        }
         break;
     case CMD_CLEAR_SB:
         if (s) { s->sb_count = 0; s->sb_view = 0; }
@@ -2695,8 +2708,11 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     // menu is down -- its rows lie over the grid.
     int sbx, sby, sbw, sbh;
     bar_rect(uapp_width(a), uapp_height(a), &sbx, &sby, &sbw, &sbh);
+    // Not over the floating find bar either: it sits on the grid and
+    // names its own cursor (the I-beam over its field only).
+    int over_find = g_find_open && uui_hit(g_find.x, g_find.y, g_find.w, g_find.h, x, y);
     if (y >= chrome_h() && x >= 0 && x < sbx && !uui_menubar_is_open(&g_menu)
-            && !uui_menubar_is_open(&g_ctx))
+            && !uui_menubar_is_open(&g_ctx) && !over_find)
         uapp_set_cursor(a, WIN_CURSOR_TEXT);
 
     if (g_bar_grab >= 0) {
@@ -2774,6 +2790,7 @@ static void on_open_cb(struct uapp *a) {
     g_strip.on_close  = tab_closed;
     g_strip.on_new    = tab_new;
     g_strip.show_new  = 1;
+    g_strip.floating  = 1;
 
     clip_refresh();   // the broadcast only fires on a CHANGE, so ask once
     uui_menubar_init(&g_menu, menu_bar,

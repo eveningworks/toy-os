@@ -92,6 +92,11 @@ struct uui_tabs {
     // nothing. Off by default.
     int numbered;
 
+    // **FLOATING: the tabs sit IN a taller bar** rather than on its foot
+    // -- four rounded corners and no baseline, Firefox's and libadwaita's
+    // tab bar. The caller draws the line under the bar. Off by default.
+    int floating;
+
     // Driven by the widget from pointer input; an app never sets these.
     int hovered;                // tab index under the cursor, or -1
     int hovered_close;          // 1 if the cursor is on that tab's close box

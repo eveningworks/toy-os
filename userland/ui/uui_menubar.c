@@ -293,6 +293,19 @@ void uui_menubar_open_at(struct uui_menubar *m, const struct uui_menu_item *item
     open_level(m, 0, items, count, x, y, 1, 0, 0, -1);
 }
 
+void uui_menubar_open_below(struct uui_menubar *m, const struct uui_menu_item *items,
+                            int count, int ax, int ay, int aw, int ah, int align_right) {
+    m->open_root = -1;
+    set_depth(m, 0);
+    if (!items || count <= 0) return;
+    int w, h;
+    level_size(items, count, &w, &h);
+    // Right-aligned: the anchor becomes the popup's own width, ending
+    // where the button ends -- the provider still flips it at a screen edge.
+    if (align_right) { ax += aw - w; aw = w; }
+    open_level(m, 0, items, count, ax, ay, aw, ah, 0, -1);
+}
+
 // Opens level `lvl + 1` from row `index` of level `lvl`.
 static void open_sub(struct uui_menubar *m, int lvl, int index) {
     if (lvl + 1 >= UUI_MENU_MAX_DEPTH) return;

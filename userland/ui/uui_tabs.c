@@ -3,6 +3,7 @@
 #include "ui/uui_tabs.h"
 #include "ui/utheme.h"
 #include "ui/ugfx.h"
+#include "ui/uui_primitives.h"
 
 // Every measurement here is font-derived, per docs/gui-guidelines.md:
 // raising the desktop font size has to move the strip with it.
@@ -32,6 +33,7 @@ void uui_tabs_init(struct uui_tabs *t, struct uui_tab *tabs, int count,
     t->selected = 0;
     t->show_new = 0;
     t->numbered = 0;
+    t->floating = 0;
     t->hovered = -1;
     t->hovered_close = 0;
     t->hovered_new = 0;
@@ -218,6 +220,15 @@ static void fill_top_rounded(struct ugfx_surface *s, int x, int y, int w,
 // corner of the hit box made a close mark nearly as tall as the strip,
 // crowding the label beside it; every real tab puts a small mark in a
 // large target, and only the target has to be easy to hit.
+// The tab's shape: a top-rounded well on the strip's foot, or a floating
+// tab rounded all round. Floating fills BLEND their arcs against what is
+// already there, which the strip's own ground fill has just painted.
+static void fill_tab(struct ugfx_surface *s, const struct uui_tabs *t, int x, int y,
+                     int w, int h, uint32_t c) {
+    if (t->floating) uui_fill_round_rect(s, x, y, w, h, corner_r(), c);
+    else             fill_top_rounded(s, x, y, w, h, corner_r(), c);
+}
+
 static void draw_close(struct ugfx_surface *s, int x, int y, int w, int h,
                         uint32_t ink) {
     int box = w < h ? w : h;
@@ -264,14 +275,13 @@ static void draw_one(struct ugfx_surface *s, const struct uui_tabs *t, int i) {
         // which is where it has the least contrast of anywhere it could
         // be. Inset by the corner radius so it follows the rounding
         // instead of overhanging it.
-        fill_top_rounded(s, x, y, w, h, corner_r(), UTHEME_WHITE);
+        fill_tab(s, t, x, y, w, h, UTHEME_WHITE);
         ugfx_fill_rect(s, x + corner_r(), y, w - 2 * corner_r(), 2,
                         UTHEME_ACCENT);
     } else {
         // RECESSED, not bare: TAB_REST is darker than the strip ground,
         // so the strip reads as wells with one tab raised out of them.
-        fill_top_rounded(s, x, y, w, h, corner_r(),
-                          uui_state_bg(UTHEME_TAB_REST, st));
+        fill_tab(s, t, x, y, w, h, uui_state_bg(UTHEME_TAB_REST, st));
         // A HAIRLINE, NOT A BORDER. Separators only between two resting
         // tabs: one beside the selected tab would land against that
         // tab's own rounded edge and read as a stray mark.
@@ -316,8 +326,8 @@ static void draw_new(struct ugfx_surface *s, const struct uui_tabs *t) {
     if (t->pressed_new)      st = UUI_STATE_PRESSED;
     else if (t->hovered_new) st = UUI_STATE_HOVER;
     if (st != UUI_STATE_REST)
-        fill_top_rounded(s, x + 1, y + 1, w - 2, h - 1, corner_r(),
-                          uui_state_bg(UTHEME_PANEL_BG, st));
+        fill_tab(s, t, x + 1, y + 1, w - 2, t->floating ? h - 2 : h - 1,
+                 uui_state_bg(UTHEME_PANEL_BG, st));
     draw_plus(s, x + w / 2, y + h / 2, ugfx_char_w(), UTHEME_TEXT);
 }
 
@@ -350,7 +360,7 @@ static void ops_draw(struct ugfx_surface *s, const void *w) {
     // tab and then painted over by that tab's accent, so the break is a
     // consequence of the fill rather than a second calculation that has
     // to agree with it.
-    ugfx_fill_rect(s, t->x, t->y + t->h - 1, t->w, 1, UTHEME_BORDER);
+    if (!t->floating) ugfx_fill_rect(s, t->x, t->y + t->h - 1, t->w, 1, UTHEME_BORDER);
     for (int i = 0; i < t->count; i++) draw_one(s, t, i);
     draw_new(s, t);
 }
