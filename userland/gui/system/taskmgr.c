@@ -422,7 +422,9 @@ int main(void) {
                                    .flags = UUI_FILL_W | UUI_FILL_H };
     ITEMS[2] = (struct uui_item){ .ops = &uui_menubar_ops, .widget = &g_ctx,
                                    .id = TM_ID_CTX, .name = "ctxmenu" };
-    LAYOUT = (struct uui_layout){ .dir = UUI_ROW, .items = ITEMS, .count = 2 };
+    // EDGE TO EDGE, as Help and Crash Reports are: 1,
+    // because a margin or gap at or below 0 means "the default".
+    LAYOUT = (struct uui_layout){ .dir = UUI_ROW, .items = ITEMS, .count = 2, .margin = 1, .gap = 1 };
 
     g_desc = (struct uapp_desc){
         .title = "Task Manager",
