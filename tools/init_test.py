@@ -458,6 +458,25 @@ def main():
         check("the process table returns to its baseline", not leftover,
               str(leftover) if leftover else f"{len(baseline)} slot(s), unchanged")
 
+        # --- a BATCH of adopted zombies, reaped together -------------
+        # `orphan_test N zombies` exits only once its children are dead
+        # and unreaped, so init adopts N corpses at once. init used to
+        # reap ONE per wake and the rest at its 2 s deadline -- six took
+        # about ten seconds. Draining per wake, they all go together.
+        t0 = time.time()
+        vm.sh("spawn /tests/orphan_test 6 zombies")
+        elapsed = None
+        while time.time() < t0 + 20:
+            rows = vm.ps()
+            if not any(v[2] == "exit_test" for v in rows.values()) and \
+                    "orphan: abandoning" in vm.sh("dmesg"):
+                elapsed = time.time() - t0
+                break
+            time.sleep(0.3)
+        check("a batch of adopted zombies is reaped together",
+              elapsed is not None and elapsed < 4.0,
+              f"{elapsed:.1f}s for 6" if elapsed is not None else "still there after 20 s")
+
         # --- SYS_SLEEP, which is how init idles ----------------------
         vm.sh("spawn /tests/sleep_test")
         deadline = time.time() + 20

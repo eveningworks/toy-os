@@ -166,12 +166,11 @@
 // failing pays the wait.
 static const int SVC_BACKOFF_MS[] = { 0, 250, 500, 1000, 2000 };
 
-// Long enough that an idle machine wakes ~4 times a second, short
-// enough that a freshly adopted orphan is reaped promptly even if the
-// adoption's wake is missed. The kernel wakes child-waiters on adoption
-// (reparent_children()), so this is a backstop rather than the
-// mechanism -- which is the right way round: a poll that is load-
-// bearing is a poll whose interval is a correctness constant.
+// Long enough that an idle machine wakes ~4 times a second. A backstop,
+// not the mechanism: an adopted zombie wakes init (the kernel's
+// reparent_children() notifies the heir), and every wake DRAINS what is
+// reapable rather than taking one -- a poll that is load-bearing is a
+// poll whose interval is a correctness constant.
 #define IDLE_SLEEP_MS  250
 
 // How finely a pending backoff is checked. Only ever used while a
@@ -868,6 +867,16 @@ static int service_exited(int pid, int code) {
     return 0;
 }
 
+// A child is gone: a service's exit, or an orphan the kernel handed us.
+// Every orphan reap is reported on stderr, which reaches the kernel log
+// -- an init that silently absorbs corpses is one nobody can tell apart
+// from an init that has died.
+static void reaped(int pid, int code) {
+    if (service_exited(pid, code)) return;
+    snprintf(g_msg, sizeof g_msg, "init: reaped orphan pid %d (code %d)\n", pid, code);
+    sys_eprint(g_msg);
+}
+
 // --- readiness -------------------------------------------------------
 //
 // Does this service still hold up anything ordered after it?
@@ -1397,9 +1406,12 @@ int main(void) {
             // The deadline is a backstop, not a poll: everything that
             // should wake this wakes it.
             uchan_server_wait(&g_chan, next_due_ms());
-            if (serve_channel()) continue;   // acted; re-run the pass
-            pid = sys_waitpid_nohang(-1, &code);
-            if (pid == SYS_RETRY || pid < 0) continue;
+            serve_channel();
+            // DRAIN, THEN PARK. The wakeword counts wakes, not corpses:
+            // one bump can stand for several deaths, and re-parking after
+            // a single reap left the rest to the next deadline, 2 s each.
+            while ((pid = sys_waitpid_nohang(-1, &code)) > 0) reaped(pid, code);
+            continue;   // re-run the pass: a reap may have made a restart due
         } else {
             // NO CHANNEL -- the older path, still exercised whenever the
             // beacon could not be published. INTERRUPTIBLE, because a
@@ -1409,19 +1421,7 @@ int main(void) {
             pid = sys_waitpid_intr(-1, &code);
         }
 
-        if (pid > 0) {
-            if (!service_exited(pid, code)) {
-                // Not one of ours: an orphan the kernel handed us.
-                // Report every reap on stderr, which reaches the kernel
-                // log and `dmesg` -- an init that silently absorbs
-                // corpses is one nobody can tell apart from an init
-                // that has died.
-                snprintf(g_msg, sizeof g_msg,
-                         "init: reaped orphan pid %d (code %d)\n", pid, code);
-                sys_eprint(g_msg);
-            }
-            continue;
-        }
+        if (pid > 0) { reaped(pid, code); continue; }
 
         // A DOORBELL LOOKS EXACTLY LIKE "no children" HERE -- both
         // land as a negative return. Sleeping on it would delay every

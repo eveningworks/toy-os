@@ -377,6 +377,7 @@ int scheduler_thread_detach(int tid) {
 void reparent_children(int dead_pid) {
     if (dead_pid <= 0) return;
     int heir = (g_init_pid != dead_pid) ? g_init_pid : 0;
+    int zombie = 0;
     for (int i = 0; i < MAX_PROCS; i++) {
         // A THREAD IS NOT A CHILD. Its ppid names its leader for
         // display only, and by the time a leader dies its threads are
@@ -385,14 +386,19 @@ void reparent_children(int dead_pid) {
         if (is_thread(i)) continue;
         if (procs[i].state != SCHED_UNUSED && procs[i].ppid == dead_pid) {
             procs[i].ppid = heir;
+            zombie |= procs[i].state == SCHED_ZOMBIE;
         }
     }
     // An adopted ZOMBIE is one init can reap immediately, and it may be
     // parked in waitpid(-1) right now with no children of its own -- in
     // which case it was told "never" and is asleep on a timer instead.
     // Waking child-waiters here is what turns adoption into a reap
-    // rather than a slot that frees at init's next poll.
-    if (heir) scheduler_wake(scheduler_wait_chan_pid(heir), SYS_RETRY);
+    // rather than a slot that frees at init's next poll. AN ADOPTED
+    // CORPSE IS A CHILD'S DEATH as far as the heir can tell, so it gets
+    // the whole notice -- the wakeword too, which is where init waits
+    // (Linux's reparent_leader() -> do_notify_parent()).
+    if (heir && zombie) notify_parent(heir);
+    else if (heir) scheduler_wake(scheduler_wait_chan_pid(heir), SYS_RETRY);
 }
 
 // Give `pid` a new parent. 0 means "no parent".
