@@ -1,0 +1,6 @@
+# Crash Reports -- see this directory's README.md for the format.
+Name=Crash Reports
+Exec=/bin/wm/apps/crashreports
+Category=system
+Comment=Programs that stopped unexpectedly, and why
+Icon=crashreports

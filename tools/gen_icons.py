@@ -172,6 +172,18 @@ def icon_logview():
     return im
 
 
+def icon_crashreports():
+    # A PAGE WITH A WARNING BAR: a report of something that went wrong.
+    # An amber bar on a plain page, on a warm red tile, so it reads as
+    # "a document about a problem" rather than as an error dialog.
+    im, d = tile((150, 85, 80))
+    d.rounded_rectangle([16, 10, 48, 54], radius=4, fill=WHITE)
+    d.rectangle([16, 10, 48, 20], fill=(250, 190, 90))
+    for y, w in ((26, 24), (33, 18), (40, 22), (47, 14)):
+        d.rectangle([21, y, 21 + w, y + 3], fill=(150, 85, 80, 255))
+    return im
+
+
 def icon_screenshot():
     # A CAMERA BODY WITH A LENS, which is what a screenshot icon is
     # everywhere -- the alternative, a dashed rectangle "selection",
@@ -1593,6 +1605,7 @@ ICONS = {
     "about": icon_about,
     "help": icon_help,
     "logview": icon_logview,
+    "crashreports": icon_crashreports,
     "screenshot": icon_screenshot,
     "shapes": icon_shapes,
     "fontdemo": icon_fontdemo,
