@@ -1,0 +1,1 @@
+fixed: Programs left behind by a crash are cleaned up at once, not one every 2 seconds.
