@@ -232,23 +232,19 @@ int commit_option(struct slot *sl) {
 }
 
 void dlg_on_widget(struct uapp_window *win, int id, int reason) {
-    // **ONLY ON A RELEASE, exactly as the page's handler is.** Ignoring
-    // `reason` meant every event reached these branches -- and since
-    // the dialog opens CENTRED UNDER THE CURSOR, a pointer that landed
-    // on Cancel closed it on the first hover, ten milliseconds after it
-    // appeared. It looked like the window failing to open; it was
-    // Cancel doing its job on an event that was never a click.
-    //
-    // A KEY still counts: the focus ring reaches OK and Cancel, and a
-    // dialog that could not be dismissed from the keyboard would be the
-    // one modal window here that traps you.
+    // A release or a key: a dialog opens CENTRED UNDER THE CURSOR, and a
+    // control must not take that pointer's arrival for a change.
     if (reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return;
     if (id >= ID_CONTROL_BASE && id < ID_CONTROL_BASE + PAGE_MAX) {
         control_changed(id - ID_CONTROL_BASE);
         uapp_window_redraw(win);
-        return;
     }
-    if (id == ID_OPTS_OK) {
+}
+
+// OK and Cancel. A hover can never reach here: commands arrive only as a
+// completed click or a key (ui/uapp.h).
+void dlg_on_action(struct uapp_window *win, int code) {
+    if (code == ID_OPTS_OK) {
         // The staged values, written to the effect's own file. The
         // page's Apply writes registered settings; an option is not
         // one, so this is where it lands -- the same uconf_set() call
@@ -263,7 +259,7 @@ void dlg_on_widget(struct uapp_window *win, int id, int reason) {
         if (g_app) uapp_redraw(g_app);  // the footer's change count
         return;
     }
-    if (id == ID_OPTS_CANCEL) dlg_on_close(win);
+    if (code == ID_OPTS_CANCEL) dlg_on_close(win);
 }
 
 void dlg_on_close(struct uapp_window *win) {
@@ -301,7 +297,7 @@ void open_options_dialog(struct uapp *a) {
         .title = title, .w = w, .h = h, .flags = UAPP_WIN_MODAL,
         .widgets = DLG, .widget_count = DLG_COUNT,
         .layout = &DLG_LAYOUT, .focus = &g_dlg_focus,
-        .on_widget = dlg_on_widget, .on_close = dlg_on_close,
+        .on_widget = dlg_on_widget, .on_action = dlg_on_action, .on_close = dlg_on_close,
         // A window a test cannot ask about is one a test has to guess
         // pixels at (ui/uapp.h).
         .log_prefix = "settings.options",

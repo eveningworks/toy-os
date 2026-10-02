@@ -871,11 +871,6 @@ static void on_widget(struct uapp *a, int id, int reason) {
         uapp_redraw(a);
         return;
     }
-    if (id == ID_DP_OPEN || id == ID_DP_PROPS) {
-        if (reason == UUI_REASON_RELEASE)
-            do_command(a, id == ID_DP_OPEN ? CMD_OPEN : CMD_PROPERTIES);
-        return;
-    }
     if (id == ID_ADDR_L || id == ID_ADDR_R) {
         // A click in a path strip starts editing it (and makes that
         // pane the active one, as clicking anywhere in a pane does).
@@ -969,13 +964,19 @@ static void on_widget(struct uapp *a, int id, int reason) {
         uapp_redraw(a);
         return;
     }
-    if (id == ID_CANCEL) {
+}
+
+// The buttons: the details pane's Open / Properties and a job's Cancel.
+// Under a modal they do nothing, as every routed widget does.
+static void on_action(struct uapp *a, int code) {
+    if (g_modal != MODAL_NONE) return;
+    if (code == ID_DP_OPEN)  do_command(a, CMD_OPEN);
+    if (code == ID_DP_PROPS) do_command(a, CMD_PROPERTIES);
+    if (code == ID_CANCEL) {
         fm_job_cancel();
         set_note("cancelling");
         uapp_redraw(a);
-        return;
     }
-    do_command(a, id); // the function-key buttons carry their command as their id
 }
 
 // A SECONDARY CLICK ARMS THE CONTEXT MENU. It opens on the release --
@@ -1657,6 +1658,7 @@ int main(int argc, char **argv) {
         .on_draw      = on_draw,
         .on_draw_over = on_draw_over,
         .on_widget    = on_widget,
+        .on_action    = on_action,
         .on_press     = on_press,
         .on_release   = on_release,
         .on_key       = on_key,

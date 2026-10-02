@@ -532,6 +532,14 @@ static void do_command(struct uapp *a, int code) {
     uapp_redraw(a);
 }
 
+static void on_action(struct uapp *a, int code) {
+    if (code == ID_REFRESH) { do_command(a, CMD_REFRESH); return; }
+    if (code != ID_TOGGLE) return;
+    toggle(a);
+    update_controls();
+    uapp_redraw(a);
+}
+
 static void on_widget(struct uapp *a, int id, int reason) {
     switch (id) {
     case ID_MENU: {
@@ -562,8 +570,6 @@ static void on_widget(struct uapp *a, int id, int reason) {
         return;
     }
     switch (id) {
-    case ID_TOGGLE:  toggle(a); break;
-    case ID_REFRESH: do_command(a, CMD_REFRESH); return;
     case ID_KEEP:    keep_changed(); break;
     case ID_TREE:    break;
     default: return;
@@ -652,6 +658,7 @@ int main(void) {
         .on_open      = on_open,
         .on_draw      = on_draw,
         .on_widget    = on_widget,
+        .on_action    = on_action,
         .on_key       = on_key,
         .on_resize    = on_resize,
         .on_tick      = on_tick,

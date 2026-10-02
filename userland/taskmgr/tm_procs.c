@@ -513,11 +513,8 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
 // A button names itself on press, motion AND release; it has committed
 // only on the release (or a key). Acting on every report sent each
 // signal three or four times.
-static int committed(int reason) {
-    return reason == UUI_REASON_RELEASE || reason == UUI_REASON_KEY;
-}
-
 static int on_widget(struct uapp *a, int id, int reason) {
+    (void)reason;
     menu_closed_check();
     switch (id) {
     case TM_ID_CTX: {
@@ -551,15 +548,22 @@ static int on_widget(struct uapp *a, int id, int reason) {
             rebuild_rows();
         }
         return 1;
+    default:
+        return 0;
+    }
+}
+
+// Stop / Continue, Close and Force Quit.
+static int on_action(struct uapp *a, int code) {
+    switch (code) {
     case ID_STOP: {
-        if (!committed(reason)) return 1;
         const struct tm_proc *p = row_proc(row_of_pid(g_sel_pid));
         if (p) act(a, p->state == PROC_STATE_STOPPED ? CMD_CONTINUE : CMD_STOP);
         return 1;
     }
     case ID_CLOSE:
     case ID_KILL:
-        if (committed(reason)) arm_or_commit(a, id);
+        arm_or_commit(a, code);
         return 1;
     default:
         return 0;
@@ -687,7 +691,8 @@ void tm_procs_init(struct tm_page *page) {
 
     BODY_ITEMS[0] = (struct uui_item){ .ops = &uui_table_ops, .widget = &g_table,
                                         .id = ID_TABLE, .name = "table",
-                                        .flags = UUI_FILL_W | UUI_FILL_H };
+                                        // The hover follows its pid across a rebuild.
+                                        .flags = UUI_FILL_W | UUI_FILL_H | UUI_TRACK_HOVER };
     BODY_ITEMS[1] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &DETAIL,
                                         .name = "details", .flags = UUI_FILL_H };
     BODY = (struct uui_layout){ .dir = UUI_ROW, .items = BODY_ITEMS, .count = 2 };
@@ -708,7 +713,7 @@ void tm_procs_init(struct tm_page *page) {
 
     *page = (struct tm_page){
         .label = "Processes", .icon = "tb-details", .root = &g_root,
-        .open = page_open, .tick = tick, .widget = on_widget, .key = on_key,
+        .open = page_open, .tick = tick, .widget = on_widget, .action = on_action, .key = on_key,
         .press = on_press, .release = on_release, .focusables = focusables,
     };
 }

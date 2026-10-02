@@ -266,6 +266,21 @@ static void on_widget(struct uapp *a, int id, int reason) {
         }
         break;
     }
+    case ID_ADVANCED:
+        g_show_advanced = g_advanced_cb.checked;
+        if (g_page_group >= 0) open_group(g_page_group);
+        break;
+    default:
+        break;
+    }
+    uapp_redraw(a);
+}
+
+// The buttons: the footer's Reset and Apply, and the page's own (Test,
+// Settings..., Change..., System Information's two). Their codes are their
+// ids.
+static void on_action(struct uapp *a, int code) {
+    switch (code) {
     case ID_RESET:
         if (page_dirty() && g_page_group >= 0) {
             open_group(g_page_group);
@@ -283,10 +298,6 @@ static void on_widget(struct uapp *a, int id, int reason) {
         break;
     case ID_SI_DEVMGR:
         sys_spawn("/bin/wm/system/devmgr", 0, -1);
-        break;
-    case ID_ADVANCED:
-        g_show_advanced = g_advanced_cb.checked;
-        if (g_page_group >= 0) open_group(g_page_group);
         break;
     case ID_OPTS:
         open_options_dialog(a);
@@ -560,10 +571,10 @@ int main(int argc, char **argv) {
         g_slot[i].slider.bg = UUI_COLOR_UNSET;
         g_slot[i].slider.fg = UTHEME_TEXT;
     }
-    uui_button_init(&g_test_btn, 0, 0, 0, 0, "Test", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
-    uui_button_init(&g_opts_btn, 0, 0, 0, 0, "Settings...", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
-    uui_button_init(&g_opts_ok, 0, 0, 0, 0, "OK", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
-    uui_button_init(&g_opts_cancel, 0, 0, 0, 0, "Cancel", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
+    uui_button_init(&g_test_btn, 0, 0, 0, 0, "Test", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_TEST);
+    uui_button_init(&g_opts_btn, 0, 0, 0, 0, "Settings...", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_OPTS);
+    uui_button_init(&g_opts_ok, 0, 0, 0, 0, "OK", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_OPTS_OK);
+    uui_button_init(&g_opts_cancel, 0, 0, 0, 0, "Cancel", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_OPTS_CANCEL);
     uui_checkbox_init(&g_advanced_cb, 0, 0, 0, "Show advanced settings",
                        UTHEME_PANEL_BG, UTHEME_TEXT);
     uui_dialog_init(&g_ask);
@@ -571,8 +582,8 @@ int main(int argc, char **argv) {
     clock_init();
 
     // Apply is the PRIMARY action, so it wears the accent.
-    uui_button_init(&g_reset, 0, 0, 0, 0, "Reset", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
-    uui_button_init(&g_apply, 0, 0, 0, 0, "Apply", UTHEME_ACCENT, UTHEME_ACCENT_TEXT, 1);
+    uui_button_init(&g_reset, 0, 0, 0, 0, "Reset", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_RESET);
+    uui_button_init(&g_apply, 0, 0, 0, 0, "Apply", UTHEME_ACCENT, UTHEME_ACCENT_TEXT, ID_APPLY);
     uui_label_init(&g_footer, g_footer_text);
 
     PAGE_LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = PAGE, .count = 0 };
@@ -630,6 +641,7 @@ int main(int argc, char **argv) {
         .widgets = ROOT,
         .widget_count = (int)(sizeof ROOT / sizeof ROOT[0]),
         .on_widget = on_widget,
+        .on_action = on_action,
         // The whole window is one ring (focus_ring_close()).
         .focus = &PAGE_FOCUS,
         .on_draw = on_draw,

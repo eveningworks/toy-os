@@ -120,8 +120,6 @@ static struct uui_layout g_bar;
 static struct uui_item g_root_items[4];
 static struct uui_layout g_root;
 
-// THE ROUTED PATH REPORTS THE ITEM'S id THROUGH on_widget; on_action
-// belongs to uui_button_group. See ui/uapp.h.
 #define ID_RUN 1
 
 static int bytes_mib(void) {
@@ -328,10 +326,9 @@ static void begin_run(struct uapp *a) {
     uapp_redraw(a);
 }
 
-static void on_widget(struct uapp *a, int id, int reason) {
-    // COMMIT ON RELEASE: a control that acts on button-down can never be
-    // cancelled by dragging off it (docs/gui-guidelines.md).
-    if (id == ID_RUN && reason == UUI_REASON_RELEASE) begin_run(a);
+// A completed click only (docs/gui-guidelines.md); the library enforces it.
+static void on_action(struct uapp *a, int code) {
+    if (code == ID_RUN) begin_run(a);
 }
 
 static int on_close(struct uapp *a) {
@@ -396,7 +393,7 @@ int main(void) {
     g_size.list.selected = 0;   // 16 MiB -- the popup IS the listbox.
                                 // Small by default because an emulated disk
                                 // makes 64 MiB a multi-minute run.
-    uui_button_init(&g_run, 0, 0, 0, 0, "Run", UTHEME_BUTTON_BG, UTHEME_TEXT, 0);
+    uui_button_init(&g_run, 0, 0, 0, 0, "Run", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_RUN);
 
     // key-routing-ok: the popup is what takes keys here, and an OPEN
     // popup gets them from uui_router_overlay_key() before either door
@@ -469,7 +466,7 @@ int main(void) {
         .tick_ms   = 500,
         .on_tick   = on_tick,
         .on_open   = on_open,
-        .on_widget = on_widget,
+        .on_action = on_action,
         .on_close  = on_close,
         // Two copies would fight over one temp file and produce two
         // sets of numbers from one disk.

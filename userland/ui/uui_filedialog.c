@@ -244,15 +244,18 @@ static void on_widget(struct uapp_window *w, int id, int reason) {
         if (reason == UUI_REASON_PRESS) uui_focus_set(&fd->focus, FOCUS_TYPE);
         apply_filter(fd);
         break;
-    case ID_OK:
-        if (reason == UUI_REASON_RELEASE) { if (commit(fd)) return; }
-        break;
-    case ID_CANCEL:
-        if (reason == UUI_REASON_RELEASE) { finish(fd, 0); return; }
-        break;
     default:
         break;
     }
+    uapp_window_redraw(w);
+}
+
+// OK and Cancel.
+static void on_action(struct uapp_window *w, int code) {
+    struct uui_filedialog *fd = (struct uui_filedialog *)uapp_window_state(w);
+    if (!fd) return;
+    if (code == ID_OK && commit(fd)) return;
+    if (code == ID_CANCEL) { finish(fd, 0); return; }
     uapp_window_redraw(w);
 }
 
@@ -505,6 +508,7 @@ struct uapp_window *uui_filedialog_open(struct uapp *a, struct uui_filedialog *f
         .focus = &fd->focus,
         .state = fd,
         .on_widget = on_widget,
+        .on_action = on_action,
         .on_key = on_key,
         .on_close = on_close,
         // ONE PREFIX FOR EVERY APP'S CHOOSER, because it is one widget:

@@ -370,10 +370,9 @@ static void about_draw(struct uapp *a, struct uapp_draw *d) {
     uui_button_set_geometry(&g_close, s->w - pad() - cw, by, cw, bh);
 }
 
-static void on_widget(struct uapp *a, int id, int reason) {
-    if (reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return;
-    if (id == ID_COPY) { copy_report(); uapp_redraw(a); }
-    else if (id == ID_CLOSE) uapp_quit(a, 0);
+static void on_action(struct uapp *a, int code) {
+    if (code == ID_COPY) { copy_report(); uapp_redraw(a); }
+    else if (code == ID_CLOSE) uapp_quit(a, 0);
 }
 
 int main(void) {
@@ -391,7 +390,7 @@ int main(void) {
         .widgets = g_widgets,
         .widget_count = 2,
         .focus   = &g_focus,
-        .on_widget = on_widget,
+        .on_action = on_action,
         // FIXED SIZE: the window is sized from its rows, and nothing in
         // it reflows -- every About box is (macOS, GNOME, KDE Info Center).
         .flags   = UAPP_SINGLE_INSTANCE,

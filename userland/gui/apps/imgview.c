@@ -796,7 +796,11 @@ static void do_command(struct uapp *a, int code) {
     uapp_redraw(a);
 }
 
+// The wallpaper buttons: their codes are the menu's commands.
+static void on_action(struct uapp *a, int code) { do_command(a, code); }
+
 static void on_widget(struct uapp *a, int id, int reason) {
+    (void)reason;
     switch (id) {
     case ID_MENU: {
         int code = uui_menubar_take_code(&g_menu);   // PARKED in the widget
@@ -816,8 +820,6 @@ static void on_widget(struct uapp *a, int id, int reason) {
         uapp_redraw(a);
         return;
     }
-    case ID_WP_FILL: if (reason == UUI_REASON_RELEASE) set_wallpaper(a, "fill"); return;
-    case ID_WP_FIT:  if (reason == UUI_REASON_RELEASE) set_wallpaper(a, "fit");  return;
     case ID_SLIDE_TP:
         switch (uui_transport_take(&g_slide_tp)) {
         case UUI_TRANSPORT_PREV: step(a, -1); break;
@@ -1036,6 +1038,7 @@ int main(int argc, char **argv) {
         .on_draw      = on_draw,
         .on_draw_over = on_draw_over,
         .on_widget    = on_widget,
+        .on_action    = on_action,
         .on_key       = on_key,
         .on_press     = on_press,
         .on_motion    = on_motion,

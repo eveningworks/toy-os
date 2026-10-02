@@ -120,21 +120,29 @@ in local coordinates -- `userland/gui/demos/gfxdemo.c` uses both.
 ## 4. Behaviour: commit on RELEASE
 
 With `.widgets` set, the library hit-tests, routes and grabs the mouse
-for you, and tells you what changed through **one callback**:
+for you. **A button's click is a command**, and arrives as `on_action`
+with the code you gave the button:
 
 ```c
-static void on_widget(struct uapp *a, int id, int reason) {
-    if (reason != UUI_REASON_RELEASE) return;
-    if (id == ID_ADD) set_count(a, g_count + 1);
-    else if (id == ID_RESET) set_count(a, 0);
+static void on_action(struct uapp *a, int code) {
+    if (code == ID_ADD) set_count(a, g_count + 1);
+    else if (code == ID_RESET) set_count(a, 0);
 }
 ```
 
 **A button acts when it is released over itself**, never on the press --
 a press can still be cancelled by dragging off, which is the rule in
-`docs/gui-guidelines.md` and what every button here does. The value of
-a stateful widget (a checkbox, a list's selection) is read from the
-widget struct itself inside this callback.
+`docs/gui-guidelines.md` and what every button here does. The library
+enforces it: `on_action` fires only for a completed click (or Space/Enter
+on a focused button), and a press or a hover never reaches the app.
+
+**Every other widget reports through `on_widget(a, id, reason)`** -- a
+checkbox toggled, a list's selection moved, a slider dragged. The value
+is read from the widget struct itself inside that callback. The two are
+kept apart on purpose: when commands and widget changes shared one
+callback, a table whose id equalled a command's code ran that command on
+every hover. Ids must also be unique -- an app declaring one twice is
+refused at startup.
 
 Changing state means changing the widget and asking for a repaint:
 
@@ -185,7 +193,7 @@ int main(void) {
         .layout = &g_root,          // sizes and draws the window
         .widgets = g_items,         // routes the mouse, nested rows included
         .widget_count = sizeof g_items / sizeof g_items[0],
-        .on_widget = on_widget,
+        .on_action = on_action,
         .on_key = on_key,
         .flags = UAPP_RESIZABLE,
     };

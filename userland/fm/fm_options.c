@@ -157,13 +157,20 @@ static void close_window(void) {
 }
 
 static void on_widget(struct uapp_window *w, int id, int reason) {
+    (void)reason;
     if (id == OPT_PAGES) {
         int page = uui_sidebar_selected_id(&g_pages);
         if (page >= 0 && page < PAGE_COUNT) show_page(page);
-    } else if (id == OPT_DEFAULTS && reason == UUI_REASON_RELEASE) {
+    }
+    uapp_window_redraw(w);
+}
+
+// Defaults, OK, Cancel.
+static void on_action(struct uapp_window *w, int code) {
+    if (code == OPT_DEFAULTS) {
         g_edit = DEFAULTS;
         to_controls();
-    } else if (id == OPT_OK && reason == UUI_REASON_RELEASE) {
+    } else if (code == OPT_OK) {
         from_controls();
         int view_changed = g_edit.view != g_opt.view;
         g_opt = g_edit;
@@ -179,7 +186,7 @@ static void on_widget(struct uapp_window *w, int id, int reason) {
         uapp_redraw(g_app);
         close_window();
         return;
-    } else if (id == OPT_CANCEL && reason == UUI_REASON_RELEASE) {
+    } else if (code == OPT_CANCEL) {
         close_window();
         return;
     }
@@ -190,7 +197,7 @@ static void on_key(struct uapp_window *w, int key, unsigned mods) {
     (void)mods;
     // Esc cancels and Return keeps, as in every dialog.
     if (key == 0x1B) { close_window(); return; }
-    if (key == '\n' || key == '\r') { on_widget(w, OPT_OK, UUI_REASON_RELEASE); return; }
+    if (key == '\n' || key == '\r') { on_action(w, OPT_OK); return; }
     uapp_window_redraw(w);
 }
 
@@ -291,6 +298,7 @@ void options_open(struct uapp *a) {
         .layout = &g_root_l,
         .focus = &g_focus,
         .on_widget = on_widget,
+        .on_action = on_action,
         .on_key = on_key,
         .on_close = on_close,
         .log_prefix = "options",

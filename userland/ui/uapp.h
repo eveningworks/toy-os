@@ -178,7 +178,9 @@ struct uapp_desc {
 
     // A widget changed. `id` is the one the app put on that item, and
     // `reason` is the input that caused it (enum uui_reason: press,
-    // motion, release, wheel). The app reads the new VALUE from the
+    // motion, release, wheel). MOTION arrives only while a button is
+    // HELD -- a hover is the widget's business -- unless the item set
+    // UUI_TRACK_HOVER. A lone button never reports here: see on_action. The app reads the new VALUE from the
     // widget itself -- uui_dropdown_selected(), cb.checked,
     // list.selected -- so this stays one callback and a switch rather
     // than a callback pointer stapled to every widget struct.
@@ -211,7 +213,10 @@ struct uapp_desc {
     // After the window exists and the first draw is about to happen.
     void (*on_open)(struct uapp *a);
 
-    // A control committed. Only fires when `buttons` is set.
+    // A control COMMITTED -- a lone uui_button in `widgets` (released
+    // while armed, or Space/Enter on it), or one in `buttons` -- with
+    // that button's code. A command is never an on_widget call: a lone
+    // button's press, hover and drag-off reach the app not at all.
     void (*on_action)(struct uapp *a, int code);
 
     // Repaint the content. With widgets or a layout declared, this runs
@@ -378,6 +383,8 @@ struct uapp_window_desc {
     void *state;           // uapp_window_state()
 
     void (*on_widget)(struct uapp_window *w, int id, int reason);
+    // A lone uui_button committed: its code. uapp_desc.on_action's rule.
+    void (*on_action)(struct uapp_window *w, int code);
     void (*on_key)(struct uapp_window *w, int key, unsigned mods);
     // The user asked for it to go away (the X, Alt+F4, the window
     // menu). NULL closes it; a handler that wants to refuse simply does

@@ -9739,3 +9739,43 @@ search still ran would make the setting decorative.
 **Hover waits 150 ms.** A folder opens under a pointer that rests on
 it, not one passing over: the rail is a column, and a diagonal move to
 the apps crosses other folders.
+
+## Commands and widget changes are two callbacks, and a hover is not an event
+
+`uapp` used to tell an app about everything through one callback,
+`on_widget(id, reason)`: a list's selection moving, a slider dragged,
+and a button pressed, dragged off and released -- three or four calls
+per click, each carrying the item's id. Every app had to filter the
+reason, and the ones that did not acted several times a click or on a
+hover (Task Manager's four SIGSTOPs, a Settings dialog closing on the
+hover that opened it). And because a dialog button's id WAS its command,
+ids and command codes shared one number space: Crash Reports' table had
+id 1, its Open command was 1, and every row the pointer crossed opened a
+Notepad -- thirty-six on the bare-metal laptop, until the process table
+was full.
+
+**What real toolkits do.** Win32 has exactly the old shape --
+`WM_COMMAND` carries a control id and a notification code -- and its
+known failure is the same collision, fended off by convention (separate
+`IDC_` and `IDM_` ranges) and by resource compilers warning on duplicate
+ids. Qt and GTK avoid it by design: `clicked()` and `currentRowChanged()`
+are different signals, and an item view emits nothing for a hover unless
+`setMouseTracking(true)` asked it to (`entered()`).
+
+**toy-os takes Qt's shape inside the one-callback-per-kind design it
+already had.** A lone button's commit is `on_action(code)` -- the
+callback a `uui_button_group` already used -- and nothing else about a
+button reaches the app; `on_widget` carries value changes only. MOTION
+reaches it only with a button held, or for an item flagged
+`UUI_TRACK_HOVER`. And Win32's lesson is kept as a hard rule: `uapp`
+looks up the item behind an id to route it, so a duplicate id -- or a
+button with no `on_action` -- is refused at startup with a `uapp: BUG`
+line rather than misrouted later.
+
+**Why not a callback pointer per widget**, which is GTK's literal shape:
+`uapp.h` deliberately keeps one switch per app rather than a function
+pointer stapled to every widget struct, and the collision is fixed by
+separating the KINDS of event, not by giving each widget its own door.
+`tools/hover_sweep_test.py` is the standing check: it hovers every
+widget of every Start-menu app and fails if anything appears.
+

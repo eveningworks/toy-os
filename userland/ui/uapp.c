@@ -10,6 +10,7 @@
 #include "ui/uui_route.h"
 #include "ui/uui_popup.h"   // the popup-surface provider, installed at open
 #include "ui/uui_focus.h"   // desc.focus -- keyboard focus ring
+#include "ui/uui_button.h"  // a lone button commits through on_action
 #include "ui/ulog.h"        // uapp_log_layout()
 #include "setting_abi.h" // desktop.layout_log -- the gate below
 #include "lib/usetting.h" // ...and the MERGED registry that can see it
@@ -960,6 +961,9 @@ static void dlg_flush(struct uapp_window *w) {
     surf_present(s);
 }
 
+static int ids_unique(const struct uui_router *r, const char *who);   // below
+static int buttons_heard(const struct uui_router *r, int has_on_action, const char *who);
+
 struct uapp_window *uapp_window_open(struct uapp *a, const struct uapp_window_desc *desc) {
     if (!a || !desc || desc->w <= 0 || desc->h <= 0 || comp_pid() <= 0) return 0;
     int w = desc->w > WIN_CLIENT_MAX_W ? WIN_CLIENT_MAX_W : desc->w;
@@ -995,8 +999,13 @@ struct uapp_window *uapp_window_open(struct uapp *a, const struct uapp_window_de
     d->slot = slot;
     d->app = a;
     d->cursor = WIN_CURSOR_DEFAULT;
-    if (desc->widgets && desc->widget_count > 0)
+    if (desc->widgets && desc->widget_count > 0) {
         uui_router_init(&d->router, desc->widgets, desc->widget_count);
+        // Too late to refuse the app, so the window routes nothing.
+        if (!ids_unique(&d->router, desc->title) ||
+            !buttons_heard(&d->router, desc->on_action != 0, desc->title))
+            d->router.count = 0;
+    }
     d->dirty = 1;
     dlg_flush(d);
     return d;
@@ -1028,6 +1037,64 @@ void uapp_window_set_title(struct uapp_window *w, const char *title) {
 // so nothing is translated. Its widgets are routed exactly as the
 // toplevel's are; what a dialog has no equivalent of (scanout, resize,
 // drag brokering) is simply not offered.
+// --- telling the app what a widget did ------------------------------------
+//
+// A LONE BUTTON'S COMMIT IS A COMMAND: on_action, with the button's code.
+// Its press, hover and a press dragged off reach the app not at all -- the
+// button drew them. Every other widget's change is on_widget's. One number
+// space for both is how Crash Reports' table (id 1) arrived as its Open
+// command (1) on every hover. `committed` is the router's word for it: a
+// release while armed, or a key the button took.
+static const struct uui_button *lone_button(const struct uui_router *r, int id) {
+    const struct uui_item *it = uui_router_item(r, id);
+    return it && it->ops == &uui_button_ops ? it->widget : 0;
+}
+
+// MOTION reaches the app while a button is held (a drag, a thumb), or
+// for an item that asked to hear hovers (UUI_TRACK_HOVER).
+static int motion_wanted(const struct uui_router *r, int id, unsigned held) {
+    if (held) return 1;
+    const struct uui_item *it = uui_router_item(r, id);
+    return it && (it->flags & UUI_TRACK_HOVER);
+}
+
+static void tell_app(struct uapp *a, int id, int reason, int committed) {
+    const struct uapp_desc *d = a->desc;
+    if (!id) return;
+    const struct uui_button *b = lone_button(&a->router, id);
+    if (b) { if (committed && d->on_action) d->on_action(a, b->code); return; }
+    if (d->on_widget) d->on_widget(a, id, reason);
+}
+
+static void tell_window(struct uapp_window *w, int id, int reason, int committed) {
+    const struct uapp_window_desc *d = &w->desc;
+    if (!id) return;
+    const struct uui_button *b = lone_button(&w->router, id);
+    if (b) { if (committed && d->on_action) d->on_action(w, b->code); return; }
+    if (d->on_widget) d->on_widget(w, id, reason);
+}
+
+// IDS ARE UNIQUE, or the lookup above names the wrong widget. Refused
+// loudly at startup rather than misrouted later -- a resource compiler's
+// duplicate-id warning, made fatal.
+static int ids_unique(const struct uui_router *r, const char *who) {
+    int dup = uui_router_duplicate_id(r);
+    if (!dup) return 1;
+    ulogf("uapp: BUG: %s declares widget id %d twice -- refusing to start\n",
+          who ? who : "an app", dup);
+    return 0;
+}
+
+// A LONE BUTTON WITH NOBODY TO HEAR IT is a button that silently does
+// nothing -- the shape check_key_routing.py catches for keys, checked
+// here because only the running app knows which files linked together.
+static int buttons_heard(const struct uui_router *r, int has_on_action, const char *who) {
+    if (has_on_action || !uui_router_has_ops(r, &uui_button_ops)) return 1;
+    ulogf("uapp: BUG: %s declares a button and no on_action -- refusing to start\n",
+          who ? who : "an app");
+    return 0;
+}
+
 static void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
     const struct uapp_window_desc *d = &w->desc;
     switch (ev->type) {
@@ -1048,7 +1115,7 @@ static void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
             int id = uui_router_overlay_key(&w->router, ev->a, ev->mods, &changed);
             if (changed) w->dirty = 1;
             if (id) {
-                if (d->on_widget) d->on_widget(w, id, UUI_REASON_KEY);
+                tell_window(w, id, UUI_REASON_KEY, 0);
                 return;
             }
         }
@@ -1057,7 +1124,7 @@ static void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
             if (ev->a != '\t' && d->on_widget && d->focus->current >= 0) {
                 int id = uui_router_id_of(&w->router,
                                           d->focus->items[d->focus->current].widget);
-                if (id) d->on_widget(w, id, UUI_REASON_KEY);
+                tell_window(w, id, UUI_REASON_KEY, 1);
             }
         }
         if (d->on_key) d->on_key(w, ev->a, ev->mods);
@@ -1073,7 +1140,7 @@ static void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
         int id = w->router.count
                      ? uui_router_press(&w->router, ev->a, ev->b, kmods, &changed) : 0;
         if (changed) w->dirty = 1;
-        if (id && d->on_widget) d->on_widget(w, id, UUI_REASON_PRESS);
+        tell_window(w, id, UUI_REASON_PRESS, 0);
         if (d->focus && uui_focus_click(d->focus, ev->a, ev->b)) w->dirty = 1;
         return;
     }
@@ -1087,7 +1154,7 @@ static void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
         int id = uui_router_motion(&w->router, ev->a, ev->b, held,
                                    WIN_MOUSE_MODS(ev->mods), &changed);
         if (changed) w->dirty = 1;
-        if (id && d->on_widget) d->on_widget(w, id, UUI_REASON_MOTION);
+        if (motion_wanted(&w->router, id, held)) tell_window(w, id, UUI_REASON_MOTION, 0);
         int want = uui_router_cursor(&w->router, ev->a, ev->b);
         if (want != w->cursor && want >= 0 && want < WIN_CURSOR_COUNT) {
             w->cursor = want;
@@ -1102,7 +1169,7 @@ static void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
         int changed = 0;
         int id = uui_router_release(&w->router, ev->a, ev->b, &changed);
         if (changed) w->dirty = 1;
-        if (id && d->on_widget) d->on_widget(w, id, UUI_REASON_RELEASE);
+        tell_window(w, id, UUI_REASON_RELEASE, changed);
         return;
     }
     case WIN_EV_WHEEL: {
@@ -1111,7 +1178,7 @@ static void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
         int id = uui_router_wheel(&w->router, w->mouse_x, w->mouse_y,
                                   (int)ev->a, &changed);
         if (changed) w->dirty = 1;
-        if (id && d->on_widget) d->on_widget(w, id, UUI_REASON_WHEEL);
+        tell_window(w, id, UUI_REASON_WHEEL, 0);
         return;
     }
     default:
@@ -1215,6 +1282,10 @@ struct uchan_client *uapp_wmchan(void) {
 void uapp_set_widgets(struct uapp *a, struct uui_item *items, int count) {
     if (!a) return;
     uui_router_init(&a->router, items, count > 0 ? count : 0);
+    const char *who = a->desc ? a->desc->title : 0;
+    if (!ids_unique(&a->router, who) ||
+        !buttons_heard(&a->router, a->desc && a->desc->on_action, who))
+        a->router.count = 0;
     a->dirty = 1;
 }
 
@@ -1612,7 +1683,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
                                         ev->a, &changed)
                      : 0;
         if (changed) a->dirty = 1;
-        if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_WHEEL);
+        tell_app(a, id, UUI_REASON_WHEEL, 0);
         if (!id && d->on_wheel) { d->on_wheel(a, ev->a); a->dirty = 1; }
         break;
     }
@@ -1656,7 +1727,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             int id = uui_router_overlay_key(&a->router, ev->a, ev->mods, &changed);
             if (changed) a->dirty = 1;
             if (id) {
-                if (d->on_widget) d->on_widget(a, id, UUI_REASON_KEY);
+                tell_app(a, id, UUI_REASON_KEY, 0);
                 break;
             }
         }
@@ -1670,7 +1741,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             if (ev->a != '\t' && d->on_widget && d->focus->current >= 0) {
                 int id = uui_router_id_of(&a->router,
                                           d->focus->items[d->focus->current].widget);
-                if (id) d->on_widget(a, id, UUI_REASON_KEY);
+                tell_app(a, id, UUI_REASON_KEY, 1);
             }
         }
         if (d->on_key) d->on_key(a, ev->a, ev->mods);
@@ -1717,7 +1788,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
                          ? uui_router_press(&a->router, ev->a, ev->b, kmods,
                                             &changed) : 0;
             if (changed) a->dirty = 1;
-            if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_PRESS);
+            tell_app(a, id, UUI_REASON_PRESS, 0);
             // Keyboard focus follows the click, after the widgets have had
             // the press (a widget takes the pointer grab; this only moves
             // which one keys go to). See uui_focus_click().
@@ -1750,7 +1821,11 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             int id = uui_router_motion(&a->router, ev->a, ev->b, held,
                                        WIN_MOUSE_MODS(ev->mods), &changed);
             if (changed) a->dirty = 1;
-            if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_MOTION);
+            // A HOVER IS NOT AN EVENT FOR THE APP unless it asked
+            // (motion_wanted()). The widget has already redrawn its hover;
+            // an app that read every call as "act" opened Notepad per row
+            // crossed (Crash Reports).
+            if (motion_wanted(&a->router, id, held)) tell_app(a, id, UUI_REASON_MOTION, 0);
             // A drag just began: tell the compositor, so it can offer it
             // to whatever the pointer leaves this window for. The source
             // widget has filled the drag slot (lib/uclip.h) in drag_start.
@@ -1786,7 +1861,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             int was_dragging = uui_router_drag_active(&a->router);
             int id = uui_router_release(&a->router, ev->a, ev->b, &changed);
             if (changed) a->dirty = 1;
-            if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_RELEASE);
+            tell_app(a, id, UUI_REASON_RELEASE, changed);
             // The slot stays: a target in another window reads it AFTER
             // this release reaches the compositor (wm_dnd.c says why).
             if (was_dragging) wmchan_send(WIN_REQ_DRAG_END, 0, 0, 0, 0, 0);
@@ -2049,6 +2124,14 @@ int uapp_run(const struct uapp_desc *desc) {
     // the launch SUCCEEDED, and reporting a failure here would put an
     // error in the log for the case that works.
     if (activate_existing(desc)) return 0;
+
+    // Before any window exists: a refusal leaves nothing on screen.
+    if (desc->widgets && desc->widget_count > 0) {
+        struct uui_router probe;
+        uui_router_init(&probe, desc->widgets, desc->widget_count);
+        if (!ids_unique(&probe, desc->title)) return 1;
+        if (!buttons_heard(&probe, desc->on_action != 0, desc->title)) return 1;
+    }
 
     if (!uapp_open(&a, desc)) return 1;
 

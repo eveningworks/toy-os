@@ -244,6 +244,7 @@ extern struct uui_item      DLG_ROW_ITEMS[2];
 void relayout_dialog(int content_w);
 void opts_window_size(int *w, int *h);
 void dlg_on_widget(struct uapp_window *win, int id, int reason);
+void dlg_on_action(struct uapp_window *win, int code);
 void dlg_on_close(struct uapp_window *win);
 void open_options_dialog(struct uapp *a);
 int commit_option(struct slot *sl);   // 1 written, 0 nothing to do, -1 refused

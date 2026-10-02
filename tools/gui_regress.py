@@ -147,6 +147,7 @@ TOOLS = [
     ("saver", "screensaver_test.py", "the idle clock, and the savers it spawns"),
     ("shot", "screenshot_test.py", "screen capture: the command, the app, the region band"),
     ("crash", "crashtest_test.py", "fault paths: ring-3 crashes, and the gate on kernel panics"),
+    ("hoversweep", "hover_sweep_test.py", "a hover over any widget of any app opens nothing"),
     ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
     ("devmgr", "devmgr_test.py", "the device tree and its icons, disable/enable through the dialog"),

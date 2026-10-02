@@ -27,8 +27,11 @@ root file's other rules still apply.
   the layout. **AND THE INVERSE HAPPENS -- a slot that is PRESENT and
   read by nobody**; when you add a slot, grep for the code meant to
   consult it.
-- **A lone `uui_button` routes its own clicks.** `uui_button_group` is
-  worth keeping only for a GRID of them.
+- **A lone `uui_button` routes its own clicks, and the CLICK arrives as
+  `on_action(code)`** -- never `on_widget`, which carries value changes
+  only and hears a hover only from a `UUI_TRACK_HOVER` item. Ids are
+  unique, or uapp refuses the app. `uui_button_group` is worth keeping
+  only for a GRID of them.
 - **A DEFAULT MARGIN IS THE WINDOW'S EDGE, NOT EVERY NESTING LEVEL'S.**
   A `uui_layout` inside another container takes NO margin of its own
   unless it names one -- Qt's rule for a sub-layout.

@@ -258,9 +258,6 @@ static void draw_details(struct ugfx_surface *s, const struct report *r, int x, 
 // --- the list ----------------------------------------------------------
 
 enum { ID_TABLE = 1, ID_TB, ID_PANEL };
-// ONE NUMBER SPACE with the widget ids: a dialog button's id IS its
-// command, so the two must not overlap (the table's id was CMD_OPEN, and
-// every click on a row opened Notepad).
 enum { CMD_OPEN = 100, CMD_COPY, CMD_DELETE, CMD_REOPEN, CMD_ALL, CMD_CLOSE };
 enum { COL_PROGRAM, COL_WHEN, COL_WHAT, COL_COUNT };
 
@@ -326,10 +323,12 @@ static void command(struct uapp *a, int code) {
     uapp_redraw(a);
 }
 
+// The dialog's buttons; a button's code is its command.
+static void on_action(struct uapp *a, int code) { command(a, code); }
+
 static void on_widget(struct uapp *a, int id, int reason) {
     (void)reason;
     if (id == ID_TB) { int c = uui_toolbar_take_code(&g_tb); if (c > 0) command(a, c); return; }
-    if (id >= CMD_OPEN && id <= CMD_CLOSE) { command(a, id); return; }
     uapp_redraw(a);
 }
 
@@ -430,7 +429,7 @@ int main(int argc, char **argv) {
             // sharing the list's made the list open dialog-sized.
             .title = title, .app_id = "crashreport", .on_size = dialog_size,
             .layout = &g_droot, .widgets = g_d_items, .widget_count = 2,
-            .on_widget = on_widget, .on_draw_over = on_draw_over,
+            .on_widget = on_widget, .on_action = on_action, .on_draw_over = on_draw_over,
             .focus = &g_focus, .on_key = on_key,
         };
         return uapp_run(&desc);

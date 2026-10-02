@@ -284,6 +284,7 @@ static void verb(int id) {
 }
 
 static int on_widget(struct uapp *a, int id, int reason) {
+    (void)reason;
     (void)a;
     if (id == ID_TABLE) {
         if (g_table.selected >= 0 && g_table.selected < g_nsvc &&
@@ -294,16 +295,17 @@ static int on_widget(struct uapp *a, int id, int reason) {
         refresh_page();
         return 1;
     }
-    if (id == ID_START || id == ID_STOP || id == ID_RESTART) {
-        // A button reports press, motion and release; only the release
-        // (or a key) is the click.
-        if (reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return 0;
-        verb(id);
-        tm_services_read();
-        refresh_page();
-        return 1;
-    }
     return 0;
+}
+
+// Start, Stop, Restart.
+static int on_action(struct uapp *a, int code) {
+    (void)a;
+    if (code != ID_START && code != ID_STOP && code != ID_RESTART) return 0;
+    verb(code);
+    tm_services_read();
+    refresh_page();
+    return 1;
 }
 
 static void tick(struct uapp *a, int shown) {
@@ -384,6 +386,6 @@ void tm_services_init(struct tm_page *page) {
 
     *page = (struct tm_page){
         .label = "Services", .icon = "tb-gear", .root = &g_root,
-        .open = page_open, .tick = tick, .widget = on_widget, .focusables = focusables,
+        .open = page_open, .tick = tick, .widget = on_widget, .action = on_action, .focusables = focusables,
     };
 }

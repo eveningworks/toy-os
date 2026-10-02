@@ -413,6 +413,59 @@ int uui_router_id_of(const struct uui_router *r, const void *widget) {
     return 0;
 }
 
+static struct uui_item *item_of_id(struct uui_item *it, int id) {
+    if (it->id == id) return it;
+    int n = 0;
+    struct uui_item *sub = nested(it, &n);
+    for (int i = 0; i < n; i++) {
+        struct uui_item *hit = item_of_id(&sub[i], id);
+        if (hit) return hit;
+    }
+    return 0;
+}
+
+struct uui_item *uui_router_item(const struct uui_router *r, int id) {
+    if (!id) return 0;
+    for (int i = 0; i < r->count; i++) {
+        struct uui_item *hit = item_of_id(&r->items[i], id);
+        if (hit) return hit;
+    }
+    return 0;
+}
+
+static int has_ops(const struct uui_item *it, const struct uui_widget_ops *ops) {
+    if (it->ops == ops) return 1;
+    int n = 0;
+    struct uui_item *sub = nested((struct uui_item *)it, &n);
+    for (int i = 0; i < n; i++)
+        if (has_ops(&sub[i], ops)) return 1;
+    return 0;
+}
+
+int uui_router_has_ops(const struct uui_router *r, const struct uui_widget_ops *ops) {
+    for (int i = 0; i < r->count; i++)
+        if (has_ops(&r->items[i], ops)) return 1;
+    return 0;
+}
+
+#define DUP_SCAN_MAX 256
+static void collect_ids(struct uui_item *it, int *ids, int *n) {
+    if (it->id && *n < DUP_SCAN_MAX) ids[(*n)++] = it->id;
+    int m = 0;
+    struct uui_item *sub = nested(it, &m);
+    for (int i = 0; i < m; i++) collect_ids(&sub[i], ids, n);
+}
+
+int uui_router_duplicate_id(const struct uui_router *r) {
+    static int ids[DUP_SCAN_MAX];
+    int n = 0;
+    for (int i = 0; i < r->count; i++) collect_ids(&r->items[i], ids, &n);
+    for (int i = 0; i < n; i++)
+        for (int j = i + 1; j < n; j++)
+            if (ids[i] == ids[j]) return ids[i];
+    return 0;
+}
+
 int uui_router_overlay_key(struct uui_router *r, int key, unsigned mods,
                             int *out_changed) {
     int changed = 0;

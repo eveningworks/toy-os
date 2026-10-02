@@ -440,13 +440,16 @@ static void use_server(struct uapp *a) {
 // ---- callbacks ----------------------------------------------------------------
 
 static void on_widget(struct uapp *a, int id, int reason) {
+    (void)a;
     if (id == ID_RECENT && reason == UUI_REASON_RELEASE) {
         int s = uui_dropdown_selected(&g_recent);
         if (s > 0) uui_textbox_set_text(&g_edit, g_recent_items[s]);
         return;
     }
-    if (reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return;
-    switch (id) {
+}
+
+static void on_action(struct uapp *a, int code) {
+    switch (code) {
     case ID_CHANGE:      if (g_job == JOB_NONE) show_editor(a, g_items[ITEM_EDIT].hidden); break;
     case ID_USE:         use_server(a); break;
     case ID_EDIT_CANCEL: show_editor(a, 0); break;
@@ -551,6 +554,7 @@ int main(void) {
         .widget_count = sizeof g_items / sizeof g_items[0],
         .focus = &g_focus,
         .on_widget = on_widget,
+        .on_action = on_action,
         .on_key = on_key,
         .on_open = on_open,
         .on_user = on_user,

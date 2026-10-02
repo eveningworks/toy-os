@@ -70,11 +70,12 @@ static void set_count(struct uapp *a, int n) {
 }
 
 // A button COMMITS on release, over the same button it was pressed on --
-// docs/gui-guidelines.md's rule, which the library enforces.
-static void on_widget(struct uapp *a, int id, int reason) {
-    if (reason != UUI_REASON_RELEASE) return;
-    if (id == ID_ADD) set_count(a, g_count + 1);
-    else if (id == ID_RESET) set_count(a, 0);
+// docs/gui-guidelines.md's rule, which the library enforces -- and the
+// library hands over the button's code. A press or a hover never reaches
+// the app.
+static void on_action(struct uapp *a, int code) {
+    if (code == ID_ADD) set_count(a, g_count + 1);
+    else if (code == ID_RESET) set_count(a, 0);
 }
 
 // Keys the app owns. Esc closes nothing; Alt+F4 is the window manager's.
@@ -105,7 +106,7 @@ int main(void) {
         .layout = &g_root,          // sizes and draws the window
         .widgets = g_items,         // routes the mouse, nested rows included
         .widget_count = sizeof g_items / sizeof g_items[0],
-        .on_widget = on_widget,
+        .on_action = on_action,
         .on_key = on_key,
         .flags = UAPP_RESIZABLE,
     };

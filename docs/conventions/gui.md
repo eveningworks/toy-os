@@ -1326,11 +1326,9 @@ this the obvious way), not from how much history it accumulated.
   be clicked, with nothing anywhere to say so. Pass the SAME
   `struct uui_item` array to both (the router recurses into nested
   layouts through `uui_widget_ops.children`). And **a lone routed button
-  reports through `on_widget` with the ITEM's id, not through
-  `on_action`** -- `uapp.c` fires `on_action` only from
-  `uapp_desc.buttons`, i.e. a `uui_button_group`, which is why
-  Calculator (a grid of buttons in a group) looks like the opposite
-  example.
+  reports its CLICK through `on_action` with the button's CODE**, exactly
+  as a `uui_button_group` does -- never through `on_widget` (the next
+  section's rule).
 - **`uui_label` WRAPS ONLY IF ASKED, AND THE CALLER RESERVES THE ROWS.**
   `uui_label_set_wrap(l, rows)` is Qt's `QLabel::setWordWrap` and
   GtkLabel's `wrap` -- opt-in, because most labels are a word or two in
@@ -5172,16 +5170,32 @@ folded" would fold whichever process slid into row 7. Cell HEAT
 selection outranks it. `userland/tests/table_tree_test.c` covers all of
 it with a fixture stored out of screen order.
 
-## A BUTTON'S `on_widget` FIRES ON PRESS, MOTION AND RELEASE; ACT ON RELEASE OR KEY
+## A BUTTON'S CLICK IS `on_action`; `on_widget` NEVER CARRIES A COMMAND, AND A HOVER REACHES IT ONLY IF ASKED
 
-The router names a widget to its app whenever the widget reports a
-change, with the reason (`UUI_REASON_*`). A lone `uui_button` changes on
-the press (armed), on motion (dragged off), and on the release -- and
-only the release, or a key, is the click. An app that acts on every
-report acts three or four times: Task Manager's first rail build sent
-SIGSTOP four times per click and four init requests per service click,
-the extra three timing out behind the first. Test
-`reason == UUI_REASON_RELEASE || reason == UUI_REASON_KEY` before a verb.
+`uapp` tells an app about its widgets through two callbacks, and keeps
+them apart (`ui/uapp.c`'s `tell_app()`). **A lone `uui_button`'s
+COMMIT** -- released over itself while armed, or Space/Enter on it --
+arrives as `on_action(a, code)` with the button's code; its press, hover
+and drag-off reach the app not at all. **Every other widget's change**
+arrives as `on_widget(a, id, reason)`. Three rules follow.
+
+- **MOTION reaches `on_widget` only while a button is HELD** (a drag, a
+  scrollbar thumb), or for an item flagged `UUI_TRACK_HOVER` -- Qt's
+  `setMouseTracking()`, for the one view that needs hover changes (Task
+  Manager's table, whose highlight follows its pid across a refresh).
+- **Widget ids are UNIQUE.** `uapp` finds the item behind an id to decide
+  which callback it is, so an app declaring one twice is refused at
+  startup (`uapp: BUG ... declares widget id N twice`).
+- **A lone button needs an `on_action`**, or it is refused the same way
+  -- a button nobody hears is a button that silently does nothing.
+
+Before this, buttons reported press, motion and release through
+`on_widget` and every app had to filter the reason: Task Manager's
+first build sent SIGSTOP four times per click, Settings' options dialog
+closed on the hover that opened it, and Crash Reports' table (id 1)
+equalled its Open command (1), so every row the pointer crossed opened
+a Notepad. `tools/hover_sweep_test.py` hovers every widget of every app
+and fails on anything appearing.
 
 ## A CLIENT HOLDS ITS OWN MINIMUM: `uapp` CLAMPS A PROPOSED SIZE TO `min_w`/`min_h`
 

@@ -208,8 +208,8 @@ static void draw_view(struct ugfx_surface *s, const struct uui_custom *c) {
 
 void sysinfo_init(void) {
     g_si_view = (struct uui_custom){ .draw = draw_view };
-    uui_button_init(&g_si_devmgr, 0, 0, 0, 0, "Open Device Manager", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
-    uui_button_init(&g_si_copy, 0, 0, 0, 0, "Copy to clipboard", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
+    uui_button_init(&g_si_devmgr, 0, 0, 0, 0, "Open Device Manager", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_SI_DEVMGR);
+    uui_button_init(&g_si_copy, 0, 0, 0, 0, "Copy to clipboard", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_SI_COPY);
 }
 
 // "Key: value" lines, as KDE's Copy to Clipboard gives them.

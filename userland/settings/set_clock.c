@@ -249,12 +249,15 @@ static void cd_set(struct uapp_window *w) {
     cd_close(w);
 }
 
+static void cd_on_action(struct uapp_window *w, int code) {
+    if (code == CD_SET) cd_set(w);
+    if (code == CD_CANCEL) cd_close(w);
+}
+
 static void cd_on_widget(struct uapp_window *w, int id, int reason) {
     // A release or a key, as on the page: a dialog opened under the
     // pointer must not take the hover for a click (set_owner.c).
     if (reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return;
-    if (id == CD_SET) { cd_set(w); return; }
-    if (id == CD_CANCEL) { cd_close(w); return; }
     if (id == CD_MONTH || id == CD_YEAR) clamp_day();
     uapp_window_redraw(w);
 }
@@ -294,8 +297,8 @@ void clock_open_dialog(struct uapp *a) {
              "%s time. The hardware clock is kept in UTC", tzname[0]);
     uui_label_init(&g_cd_note, g_cd_note_text);
     uui_label_init(&g_cd_gap, "");
-    uui_button_init(&g_cd_set, 0, 0, 0, 0, "Set", UTHEME_ACCENT, UTHEME_ACCENT_TEXT, 1);
-    uui_button_init(&g_cd_cancel, 0, 0, 0, 0, "Cancel", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
+    uui_button_init(&g_cd_set, 0, 0, 0, 0, "Set", UTHEME_ACCENT, UTHEME_ACCENT_TEXT, CD_SET);
+    uui_button_init(&g_cd_cancel, 0, 0, 0, 0, "Cancel", UTHEME_BUTTON_BG, UTHEME_TEXT, CD_CANCEL);
     // The two captions share a width, so the fields after them align.
     int cap_w = ugfx_text_width("Date") > ugfx_text_width("Time")
                 ? ugfx_text_width("Date") : ugfx_text_width("Time");
@@ -340,7 +343,7 @@ void clock_open_dialog(struct uapp *a) {
     g_cd_win = uapp_window_open(a, &(struct uapp_window_desc){
         .title = "Change date and time", .w = w, .h = h, .flags = UAPP_WIN_MODAL,
         .widgets = CD, .widget_count = 4, .layout = &CD_LAYOUT, .focus = &g_cd_focus,
-        .on_widget = cd_on_widget, .on_close = cd_close,
+        .on_widget = cd_on_widget, .on_action = cd_on_action, .on_close = cd_close,
         .log_prefix = "settings.clock",
     });
     ulogf("settings: clock dialog %s\n", g_cd_win ? "open" : "FAILED");
@@ -348,7 +351,7 @@ void clock_open_dialog(struct uapp *a) {
 
 void clock_init(void) {
     g_clock_view = (struct uui_custom){ .draw = draw_clock };
-    uui_button_init(&g_clock_btn, 0, 0, 0, 0, "Change...", UTHEME_BUTTON_BG, UTHEME_TEXT, 1);
+    uui_button_init(&g_clock_btn, 0, 0, 0, 0, "Change...", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_CLOCK_CHANGE);
     g_clock_row.desc_rows = 1;   // not a slot, so the page's fit never sets it
     uui_label_init(&g_region_preview, g_preview_text);
     uui_label_set_wrap(&g_region_preview, 2);   // a narrow window wraps it

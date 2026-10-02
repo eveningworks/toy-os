@@ -172,6 +172,19 @@ int uui_router_cursor(const struct uui_router *r, int cx, int cy);
 // arrive under.
 int uui_router_id_of(const struct uui_router *r, const void *widget);
 
+// The inverse: the item declared with `id`, anywhere in the tree, or
+// NULL. Sound only because ids are UNIQUE -- uapp refuses to start an
+// app whose items share one (uui_router_duplicate_id()).
+struct uui_item *uui_router_item(const struct uui_router *r, int id);
+
+// The first nonzero id declared on two items, or 0. 0 is "unnamed" and
+// may repeat.
+int uui_router_duplicate_id(const struct uui_router *r);
+
+// Whether any item in the tree uses `ops` -- "does this app declare a
+// lone button", which needs an on_action to be heard.
+int uui_router_has_ops(const struct uui_router *r, const struct uui_widget_ops *ops);
+
 int uui_router_overlay_key(struct uui_router *r, int key, unsigned mods,
                             int *out_changed);
 

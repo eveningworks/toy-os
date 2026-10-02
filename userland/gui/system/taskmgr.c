@@ -325,6 +325,11 @@ static void on_widget(struct uapp *a, int id, int reason) {
     if (p->widget && p->widget(a, id, reason)) uapp_redraw(a);
 }
 
+static void on_action(struct uapp *a, int code) {
+    const struct tm_page *p = &g_pages[g_page];
+    if (p->action && p->action(a, code)) uapp_redraw(a);
+}
+
 static void on_key(struct uapp *a, int key, unsigned mods) {
     const struct tm_page *p = &g_pages[g_page];
     if (p->key && p->key(a, key, mods)) uapp_redraw(a);
@@ -441,6 +446,7 @@ int main(void) {
         .on_press = on_press,
         .on_release = on_release,
         .on_widget = on_widget,
+        .on_action = on_action,
         .on_open = on_open,
         .on_tick = on_tick,
     };

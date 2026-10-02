@@ -78,6 +78,7 @@ struct tm_page {
     void (*open)(struct uapp *a);        // the page became visible
     void (*tick)(struct uapp *a, int shown);
     int  (*widget)(struct uapp *a, int id, int reason);
+    int  (*action)(struct uapp *a, int code);   // a button's click; 1 = repaint
     int  (*key)(struct uapp *a, int key, unsigned mods);
     void (*press)(struct uapp *a, int x, int y, unsigned buttons);
     void (*release)(struct uapp *a, int x, int y, unsigned buttons);

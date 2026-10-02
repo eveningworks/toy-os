@@ -1856,6 +1856,14 @@ window without going through it will find its layout polls timing out.
   meaningless without the boot log). Same two-pass + `--verify` shape as
   `genrelocs.py`; the blob is deliberately pointer-free so it costs no
   relocations.
+- **`hover_sweep_test.py`** -- opens every Start-menu app and moves the
+  pointer over a grid of points in every widget it names; no window or
+  process may appear, and no app may log `uapp: BUG` (the toolkit refusing
+  a duplicate widget id or a button with no `on_action`). HOVER ONLY: a
+  widget report has no type, and a click on a toolbar is a command, so
+  "a click opened something" is not a sweep's call. It closes each app by
+  KILLING it, so System Update dies mid-check -- the case that froze the
+  desktop before `group_defer_death()`. In `gui_regress.py`.
 - **`crashtest_test.py`** -- the fault paths and what the user is told:
   the app enumerates the kernel's fault kinds, kernel faults
   are refused while disarmed, a ring-3 crash kills the app WITHOUT taking

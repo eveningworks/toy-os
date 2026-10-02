@@ -237,6 +237,11 @@ struct uui_item {
 #define UUI_FILL_W 0x01
 #define UUI_FILL_H 0x02
 
+// Tell the app about HOVER changes too (on_widget, UUI_REASON_MOTION with
+// no button held). Off, a hover is the widget's own business -- Qt's
+// setMouseTracking(), for the one view that genuinely needs it.
+#define UUI_TRACK_HOVER 0x04
+
 // --- a custom item ----------------------------------------------------
 //
 // An app's own drawing, participating in a layout like any widget: it

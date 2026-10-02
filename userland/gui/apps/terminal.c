@@ -2617,6 +2617,20 @@ static void tab_new(void *ctx) {
 // The router names a widget to the app; the menu bar's commit is parked
 // in the widget and taken here (ui/uui_menubar.h). Only the menu reports
 // this way -- the strip's own callbacks say what happened directly.
+// The Session panel's buttons, whose codes are TERM_PANEL_*.
+static void on_action(struct uapp *a, int code) {
+    struct session *ps = active();
+    if (!ps || ps->exited) return;
+    switch (code) {
+    case TERM_PANEL_INTR: send_byte(0x03); break;
+    case TERM_PANEL_EOF:  send_byte(0x04); break;
+    // SIGKILL, the Task Manager's Force Quit: the shell may be
+    // ignoring everything politer, which is why the button exists.
+    case TERM_PANEL_KILL: if (ps->child > 0) sys_kill(ps->child, SIGKILL); break;
+    }
+    uapp_redraw(a);
+}
+
 static void on_widget(struct uapp *a, int id, int reason) {
     (void)reason;
     if (id == ID_MENU || id == ID_CTX) {
@@ -2636,19 +2650,6 @@ static void on_widget(struct uapp *a, int id, int reason) {
         case UUI_FIND_PREV:  find_step(fs, -1); break;
         case UUI_FIND_CLOSE: find_close(); break;
         default: break;
-        }
-        uapp_redraw(a);
-        return;
-    }
-    if (id >= TERM_PANEL_ID_BASE && id < TERM_PANEL_ID_BASE + TERM_PANEL_BUTTONS) {
-        struct session *ps = active();
-        if (!ps || ps->exited) return;
-        switch (id - TERM_PANEL_ID_BASE) {
-        case TERM_PANEL_INTR: send_byte(0x03); break;
-        case TERM_PANEL_EOF:  send_byte(0x04); break;
-        // SIGKILL, the Task Manager's Force Quit: the shell may be
-        // ignoring everything politer, which is why the button exists.
-        case TERM_PANEL_KILL: if (ps->child > 0) sys_kill(ps->child, SIGKILL); break;
         }
         uapp_redraw(a);
         return;
@@ -2971,6 +2972,7 @@ int main(void) {
         .on_draw = on_draw,
         .on_draw_over = on_draw_over,
         .on_widget = on_widget,
+        .on_action = on_action,
         .on_press = on_press,
         .on_motion = on_motion,
         .on_release = on_release,

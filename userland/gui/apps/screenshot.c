@@ -299,9 +299,8 @@ static const struct uui_filedialog_filter FILTERS[] = {
 
 // --- callbacks --------------------------------------------------------
 
-static void on_widget(struct uapp *a, int id, int reason) {
-    if (reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) return;
-    switch (id) {
+static void on_action(struct uapp *a, int code) {
+    switch (code) {
     case ID_TAKE:
         take(a);
         break;
@@ -524,11 +523,11 @@ int main(void) {
     uui_checkbox_init(&g_pointer, 0, 0, 0, "Include the pointer",
                       UUI_COLOR_UNSET, UUI_COLOR_UNSET);
     uui_button_init(&g_take, 0, 0, 0, 0, "Take Screenshot",
-                    UTHEME_ACCENT, UTHEME_ACCENT_TEXT, 0);
+                    UTHEME_ACCENT, UTHEME_ACCENT_TEXT, ID_TAKE);
     uui_button_init(&g_save, 0, 0, 0, 0, "Save As...",
-                    UTHEME_BUTTON_BG, UTHEME_TEXT, 0);
+                    UTHEME_BUTTON_BG, UTHEME_TEXT, ID_SAVE);
     uui_button_init(&g_copy, 0, 0, 0, 0, "Copy",
-                    UTHEME_BUTTON_BG, UTHEME_TEXT, 0);
+                    UTHEME_BUTTON_BG, UTHEME_TEXT, ID_COPY);
     uui_image_init(&g_preview, 0, UIMG_FIT_CONTAIN);
     // A CEILING ON WHAT IT MAY ASK FOR. Without these its natural size
     // is the picture's own, so a screen-sized capture would demand a
@@ -607,7 +606,7 @@ int main(void) {
         .widget_count = 5,
         .focus        = &g_focus,
         .on_open      = on_open,
-        .on_widget    = on_widget,
+        .on_action    = on_action,
         .on_draw      = on_draw,
         .on_press     = on_press,
         .on_motion    = on_motion,

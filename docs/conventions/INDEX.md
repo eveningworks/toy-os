@@ -732,8 +732,8 @@ whenever a headline here tells you something you did not already know.
 - **"SHOW ADVANCED SETTINGS" APPEARS ONLY ON A PAGE THAT HAS ONE**
 - **`uui_table` GROUPS AND ITS TREE ARE ORDERINGS, AND THE FOLDED STATE
   IS THE APP'S**
-- **A BUTTON'S `on_widget` FIRES ON PRESS, MOTION AND RELEASE; ACT ON
-  RELEASE OR KEY**
+- **A BUTTON'S CLICK IS `on_action`; `on_widget` NEVER CARRIES A
+  COMMAND, AND A HOVER REACHES IT ONLY IF ASKED**
 - **A CLIENT HOLDS ITS OWN MINIMUM: `uapp` CLAMPS A PROPOSED SIZE TO
   `min_w`/`min_h`**
 
