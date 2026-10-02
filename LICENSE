@@ -308,7 +308,7 @@ code:
                             licence header of its own; Konsole as a
                             whole is GPL-2.0-or-later.
 
-The other schemes are original.
+amber.scheme, default.scheme and green.scheme are original.
 
 /etc/kbs/* on a built disk image (keyboard layouts, read by
 kernel/lib/keyboard_layout.c) is NOT in this repository: tools/gen_kbs.py
@@ -318,6 +318,11 @@ under X11/MIT-style permissive licences, one per contributor, collected
 in its COPYING. What the generated files hold is a key-to-character
 table per layout -- no XKB source text -- and a build without xkbcli
 ships none, falling back to a compiled-in US table that is original.
+An image that carries the layouts also carries those notices, as
+/usr/share/licenses/xkeyboard-config.txt: a verbatim copy of
+xkeyboard-config 2.48's COPYING, tracked at
+data/licenses/xkeyboard-config.txt and seeded by the same Makefile step
+that generates the layouts.
 
 ---
 

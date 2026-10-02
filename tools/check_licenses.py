@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Every vendored port and shipped font is named in LICENSE.
+"""Every vendored port, shipped font, palette and notice file is named in LICENSE.
 
 WHY THIS EXISTS
 ---------------
@@ -25,6 +25,14 @@ WHAT IT CHECKS
   3. Every font under data/fonts/ has a license file beside it.
   4. ...and is named in LICENSE.
   5. Every license file those fonts point at actually exists.
+  6. Every Terminal colour scheme (data/usr/share/terminal/*.scheme) is
+     named in LICENSE -- as another project's palette, or in the list of
+     original ones. A palette is data, not code, which is how three of
+     them shipped unrecorded until 2026-10-02: naming EVERY scheme forces
+     the question for each new one, where a check for third-party ones
+     alone would need to know which those are.
+  7. Every notice file under data/licenses/ is named in LICENSE by path,
+     and every data/licenses/ path LICENSE names exists.
 
 WHAT IT DOES NOT CHECK, and cannot: whether the license NAMED is the
 license the code is actually under. Nothing static can read a
@@ -41,6 +49,8 @@ REPO = os.path.dirname(HERE)
 
 PORTS = os.path.join(REPO, "userland", "ports")
 FONTS = os.path.join(REPO, "data", "fonts")
+SCHEMES = os.path.join(REPO, "data", "usr", "share", "terminal")
+NOTICES = os.path.join(REPO, "data", "licenses")
 
 LICENSE_FILENAMES = ("LICENSE", "LICENSE.txt", "LICENSE.md", "COPYING", "COPYING.txt")
 
@@ -104,6 +114,33 @@ def main():
                     if not os.path.exists(os.path.join(REPO, token)):
                         problems.append(f"LICENSE points at {token}, which does not exist")
 
+    # --- Terminal colour schemes ------------------------------------------
+    if os.path.isdir(SCHEMES):
+        for name in sorted(os.listdir(SCHEMES)):
+            if not name.endswith(".scheme"):
+                continue
+            checked += 1
+            if name not in lic:
+                problems.append(f"data/usr/share/terminal/{name} ships but LICENSE does not "
+                                f"say whose palette it is -- name it under \"Third-party "
+                                f"data\", or in the list of original schemes")
+            elif args.verbose:
+                print(f"  ok    data/usr/share/terminal/{name}")
+
+    # --- notice files shipped for generated data -------------------------
+    if os.path.isdir(NOTICES):
+        for name in sorted(os.listdir(NOTICES)):
+            checked += 1
+            if f"data/licenses/{name}" not in lic:
+                problems.append(f"data/licenses/{name} exists but LICENSE never points at it")
+            elif args.verbose:
+                print(f"  ok    data/licenses/{name}")
+    for line in lic.splitlines():
+        for token in line.split():
+            token = token.strip(".,;:()")
+            if token.startswith("data/licenses/") and not os.path.exists(os.path.join(REPO, token)):
+                problems.append(f"LICENSE points at {token}, which does not exist")
+
     if problems:
         print(f"check_licenses: {len(problems)} problem(s)\n")
         for p in problems:
@@ -113,8 +150,8 @@ def main():
               "section.")
         return 1
 
-    print(f"check_licenses: ok -- {checked} vendored port(s), font(s) and notice "
-          f"file(s), all named in LICENSE")
+    print(f"check_licenses: ok -- {checked} vendored port(s), font(s), palette(s) and "
+          f"notice file(s), all named in LICENSE")
     return 0
 
 

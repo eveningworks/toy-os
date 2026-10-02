@@ -4888,7 +4888,11 @@ window without going through it will find its layout polls timing out.
 
 - **`check_licenses.py`** -- every directory under `userland/ports/` and
   every font in `data/fonts/` must carry a license file **and** be named
-  in `LICENSE`.
+  in `LICENSE`; so must every Terminal colour scheme (as another
+  project's palette, or in the list of original ones -- naming EVERY one
+  forces the question for a new one) and every notice file under
+  `data/licenses/`. Palettes were added after three shipped unrecorded:
+  data, not code, so nothing asked.
 
   **The inventory had drifted twice before this existed.**
   `userland/ports/doom/` is GPL-2-or-later source vendored into an MIT

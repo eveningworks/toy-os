@@ -2011,9 +2011,14 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	done
 	@if [ -n "$$(ls -A data/wm/startup 2>/dev/null)" ]; then \
 	    cp data/wm/startup/* $(SEED_DIR)/sync/usr/wm/startup/; fi
+	# The layouts are generated from the host's xkeyboard-config, so its
+	# notices travel with them: an image that has /etc/kbs has
+	# /usr/share/licenses/xkeyboard-config.txt (see LICENSE).
 	@if command -v xkbcli >/dev/null 2>&1; then \
 		python3 tools/gen_kbs.py us --write; \
 		python3 tools/gen_kbs.py se --write; \
+		mkdir -p $(SEED_DIR)/sync/usr/share/licenses; \
+		cp data/licenses/xkeyboard-config.txt $(SEED_DIR)/sync/usr/share/licenses/; \
 	else \
 		echo "seed: xkbcli not found -- skipping /etc/kbs regeneration (apt-get install libxkbcommon-tools to enable; kernel falls back to compiled-in US regardless)"; \
 	fi
