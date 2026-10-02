@@ -317,3 +317,35 @@ analogue end included, so it cannot say which stage owns a fault. QEMU's
 capture of one stage, with no analogue path at all. Neither is the
 better instrument; the pair is, because a fault present in one and
 absent in the other is LOCATED rather than merely measured.
+
+## Shared code goes in the toolkit when it is generic, not when a second caller appears
+
+The toolkit's bar was "a second REAL caller, not a plausible one" -- the
+rule of three, loosened by one: an abstraction drawn from one example
+copies that example's quirks, and every later caller pays for them.
+
+**It produced the drift it was there to prevent.** Three programs read
+`/usr/wm/applications` three ways: the WM, Task Manager through `uconf`,
+and Crash Reports with a hand-rolled scan that matched `.desktop`
+anywhere in a name, ignored sections and read only the first kilobyte.
+Each was written by a session that did not know the others existed --
+an app's private helper is invisible to the next session, and here
+every session starts cold, which weighs more than YAGNI. The
+scrollbar copied into three apps until the third shipped one that drew
+and did nothing (`ui/uapp.h`) was the same failure. And moving code out
+later costs more than placing it right: the copies have diverged, and
+every app that held one has to be retested.
+
+**So the test is the code's NATURE, not its caller count.** A helper or
+widget whose job names no app's data -- a desktop-entry lookup, a find
+bar, a path join -- goes into `userland/lib/` or `userland/ui/` from its
+first caller. Logic shaped around one app's data (Terminal's tab model,
+Task Manager's grouping) stays in that app until a real second use
+shows what is actually common; that is where the old rule's warning
+still holds. A second caller is a signal to look, not a gate.
+
+**Existing helpers move as their app is touched**, not in a sweep: the
+maintainer chose that over a one-off pass, so a change to an app carries
+its own cleanup and nothing moves untested. The toolkit's quality bar is
+unchanged -- KTESTs or a host check, a parser that rejects rather than
+guesses, a formatter that writes nothing when it does not fit.

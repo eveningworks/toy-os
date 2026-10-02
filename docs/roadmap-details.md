@@ -1462,6 +1462,16 @@ Convert Calculator first. Its grid is pure arithmetic today, it's
 `multi_instance` so two windows can be compared side by side, and if the
 engine can't express a uniform button grid it can't express anything.
 
+
+**One desktop-entry reader** (2026-10-02, asked for by the maintainer).
+Three programs answer "what is this program called" from
+`/usr/wm/applications`: the WM's `desktop.c`, Task Manager's
+`load_apps()` (through `uconf_load()`, the right parser) and Crash
+Reports' `friendly_name()` (hand-rolled line scanning). The shape is a
+libuapp module -- look up an entry by `Exec=`, iterate them -- built on
+`uconf`. Generic helpers elsewhere in the apps move out as each app is
+next touched (CLAUDE.md, "fix as touched"), not in a sweep.
+
 ### Runtime font loading & text metrics
 
 **Most of this shipped on 2026-08-20** -- `kernel/lib/ttf.c` parses and

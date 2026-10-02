@@ -31,7 +31,7 @@ first before re-litigating it from scratch.
 
 ## Index
 
-**Kernel, memory & processes** -- [`decisions/kernel.md`](decisions/kernel.md) (183 entries)
+**Kernel, memory & processes** -- [`decisions/kernel.md`](decisions/kernel.md) (184 entries)
 
 - [A crash report is a text header plus the raw stack, not an ELF core](decisions/kernel.md#a-crash-report-is-a-text-header-plus-the-raw-stack-not-an-elf-core)
 - [A panic keeps its log in RAM at a fixed address, and logd files it](decisions/kernel.md#a-panic-keeps-its-log-in-ram-at-a-fixed-address-and-logd-files-it)
@@ -216,6 +216,7 @@ first before re-litigating it from scratch.
 - [A description carries an ops pointer, not a kind](decisions/kernel.md#a-description-carries-an-ops-pointer-not-a-kind)
 - [A file a release stops shipping is removed -- by dpkg's rule, not by mirroring](decisions/kernel.md#a-file-a-release-stops-shipping-is-removed----by-dpkgs-rule-not-by-mirroring)
 - [An update that touches a library or the kernel is applied BY THE KERNEL, at the next boot](decisions/kernel.md#an-update-that-touches-a-library-or-the-kernel-is-applied-by-the-kernel-at-the-next-boot)
+- [A process with a thread parked mid-call dies when that thread leaves the kernel](decisions/kernel.md#a-process-with-a-thread-parked-mid-call-dies-when-that-thread-leaves-the-kernel)
 
 **Filesystem & storage** -- [`decisions/storage.md`](decisions/storage.md) (84 entries)
 
@@ -366,7 +367,7 @@ first before re-litigating it from scratch.
 - [The mixer never runs ahead of what its clients have produced](decisions/drivers.md#the-mixer-never-runs-ahead-of-what-its-clients-have-produced)
 - [NVMe runs one I/O queue on one vector, and a timeout disables the controller](decisions/drivers.md#nvme-runs-one-io-queue-on-one-vector-and-a-timeout-disables-the-controller)
 
-**GUI: window manager, compositor & widgets** -- [`decisions/gui.md`](decisions/gui.md) (246 entries)
+**GUI: window manager, compositor & widgets** -- [`decisions/gui.md`](decisions/gui.md) (247 entries)
 
 - [Reading the bochs adapter's capabilities is a WRITE, so it happens once](decisions/gui.md#reading-the-bochs-adapters-capabilities-is-a-write-so-it-happens-once)
 - [Windows remember their geometry per APP, saved on close, keyed by a string](decisions/gui.md#windows-remember-their-geometry-per-app-saved-on-close-keyed-by-a-string)
@@ -614,6 +615,7 @@ first before re-litigating it from scratch.
 - [The Start menu is Kickoff's whole shape: search in a header, two-line rows, power in a footer](decisions/gui.md#the-start-menu-is-kickoffs-whole-shape-search-in-a-header-two-line-rows-power-in-a-footer)
 - [A gallery's pictures are the caller's painter, and Preview= is read by the client](decisions/gui.md#a-gallerys-pictures-are-the-callers-painter-and-preview-is-read-by-the-client)
 - [The Start menu's settings are one page, read per open, and Recent off forgets](decisions/gui.md#the-start-menus-settings-are-one-page-read-per-open-and-recent-off-forgets)
+- [Commands and widget changes are two callbacks, and a hover is not an event](decisions/gui.md#commands-and-widget-changes-are-two-callbacks-and-a-hover-is-not-an-event)
 
 **Shell, apps & console** -- [`decisions/shell.md`](decisions/shell.md) (35 entries)
 
@@ -701,7 +703,7 @@ first before re-litigating it from scratch.
 - [KASAN is Linux's generic mode, with a fixed shadow slot and outline checks](decisions/build.md#kasan-is-linuxs-generic-mode-with-a-fixed-shadow-slot-and-outline-checks)
 - [A one-shot boot entry is GRUB's environment block, cleared by GRUB](decisions/build.md#a-one-shot-boot-entry-is-grubs-environment-block-cleared-by-grub)
 
-**Workflow, testing & tooling** -- [`decisions/workflow.md`](decisions/workflow.md) (6 entries)
+**Workflow, testing & tooling** -- [`decisions/workflow.md`](decisions/workflow.md) (7 entries)
 
 - [The GUI suite's wall clock is its slowest tool, so the fix was a timeout knob rather than parallelism](decisions/workflow.md#the-gui-suites-wall-clock-is-its-slowest-tool-so-the-fix-was-a-timeout-knob-rather-than-parallelism)
 - [No per-file licence headers, and the MIT notice lives in one place](decisions/workflow.md#no-per-file-licence-headers-and-the-mit-notice-lives-in-one-place)
@@ -709,5 +711,6 @@ first before re-litigating it from scratch.
 - [The GUI tools reach real hardware by being POINTED, not by being ported](decisions/workflow.md#the-gui-tools-reach-real-hardware-by-being-pointed-not-by-being-ported)
 - [A pointer warp belongs in the mouse driver, not in the compositor's event loop](decisions/workflow.md#a-pointer-warp-belongs-in-the-mouse-driver-not-in-the-compositors-event-loop)
 - [Audio is judged by RECORDING it, because every counter we had pointed the wrong way](decisions/workflow.md#audio-is-judged-by-recording-it-because-every-counter-we-had-pointed-the-wrong-way)
+- [Shared code goes in the toolkit when it is generic, not when a second caller appears](decisions/workflow.md#shared-code-goes-in-the-toolkit-when-it-is-generic-not-when-a-second-caller-appears)
 
-<!-- 658 entries. Generated by tools/gen_decisions_index.py -- do not edit below the marker by hand. -->
+<!-- 661 entries. Generated by tools/gen_decisions_index.py -- do not edit below the marker by hand. -->

@@ -69,8 +69,9 @@ app needs them (`uui_thumbstrip` did, from the File Manager's cache).
 ## The widgets, and what each is for
 
 `userland/ui/` is the toolkit. Reach for one of these before drawing
-something by hand -- and before writing a new one, which needs a SECOND
-REAL CALLER, not a plausible one.
+something by hand. A control that is GENERIC BY NATURE -- nothing in it
+names one app's data -- is written here from the start, even for one
+app; one shaped around an app's data stays in that app (CLAUDE.md).
 
 | Widget | For |
 |---|---|

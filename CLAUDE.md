@@ -115,8 +115,14 @@ KTESTs: `string.h`, `knum.h`, `kfmt.h`, `kpath.h`, `fixed.h`, `geom.h`,
   `tools/check_chains.py`, a ratchet; new number formatting is
   `vga_printf()`/`klog_printf()`.
 - **A formatter that doesn't fit writes NOTHING; a parser REJECTS rather
-  than guesses.** Adding to the toolkit needs **a second real caller,
-  not a plausible one.**
+  than guesses.**
+- **SHARED FROM THE START WHEN IT IS GENERIC BY NATURE** -- its job
+  names no app's data (a desktop-entry lookup, a find bar, a path
+  helper) -- even with one caller; APP-SHAPED logic stays in the app. A
+  second caller is a signal, not a gate (it was a gate until
+  2026-10-02; `docs/decisions/workflow.md`). **Fix as touched**: a
+  change to an app moves that app's generic helpers into `userland/lib/`
+  or `userland/ui/`.
 
 ### Widgets and layout
 

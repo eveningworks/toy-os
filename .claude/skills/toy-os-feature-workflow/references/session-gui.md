@@ -279,11 +279,13 @@ Control Panel became **System Settings** -- a `uui_tree` sidebar on the
 left and one page on the right, KDE System Settings' shape. Four things
 worth carrying.
 
-**A new widget needs a second REAL caller, and the roadmap named one.**
+**A new widget says nothing about the app it was written for.**
 `uui_tree` was written for this sidebar and deliberately says nothing
 about settings, because the file manager the roadmap already lists needs
-a directory pane. That is the toolkit's standing bar; a widget shaped
-around one app's data is one nobody else can use.
+a directory pane. A widget shaped around one app's data is one nobody
+else can use. (This entry once read "needs a second REAL caller"; since
+2026-10-02 a GENERIC widget goes in the toolkit from its first caller --
+CLAUDE.md.)
 
 **Make the easy path three lines and the powerful path available.** The
 nodes are the app's flat `const` array with a `depth` per row, and the
