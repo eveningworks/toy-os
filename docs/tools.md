@@ -1856,6 +1856,13 @@ window without going through it will find its layout polls timing out.
   meaningless without the boot log). Same two-pass + `--verify` shape as
   `genrelocs.py`; the blob is deliberately pointer-free so it costs no
   relocations.
+- **`gen_toolkit_index.py`** -- writes `docs/toolkit.md`, one row per
+  `userland/lib/` and `userland/ui/` header, taken from the header's own
+  top comment (its first sentence). `--check` fails when the file is
+  stale or a header has no top comment, and `check_docs.py` runs it -- so
+  a new header needs a first comment line that says what it is, and then
+  a rerun. It exists because the ring-3 toolkit had no index and an app
+  hand-rolled a fourth `.desktop` reader beside `uconf`.
 - **`hover_sweep_test.py`** -- opens every Start-menu app and moves the
   pointer over a grid of points in every widget it names; no window or
   process may appear, and no app may log `uapp: BUG` (the toolkit refusing

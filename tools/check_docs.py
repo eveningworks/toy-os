@@ -317,6 +317,18 @@ def check_next_up_is_current(problems):
                         "tools/gen_next_up.py --write")
 
 
+def check_toolkit_index_is_current(problems):
+    """docs/toolkit.md is generated from the ring-3 toolkit headers' top
+    comments. Stale, it hides exactly the helper a session was about to
+    rewrite -- the reason it exists (gen_toolkit_index.py)."""
+    gen = os.path.join(REPO, "tools", "gen_toolkit_index.py")
+    r = subprocess.run([sys.executable, gen, "--check"],
+                       capture_output=True, text=True, cwd=REPO)
+    if r.returncode != 0:
+        problems.append("docs/toolkit.md is stale or a header has no top comment -- "
+                        "run tools/gen_toolkit_index.py (" + r.stdout.strip().splitlines()[0] + ")")
+
+
 def check_internal_doc_links(problems):
     """A relative link from one doc to another that does not exist. The
     roadmap split produced exactly this: a pointer to a `## Details`
@@ -587,6 +599,7 @@ def main():
                   check_no_duplicated_sections,
                   check_decisions_index_is_current,
                   check_next_up_is_current,
+                  check_toolkit_index_is_current,
                   check_internal_doc_links,
                   check_tools_are_documented,
                   check_every_driver_is_listed,
@@ -598,8 +611,8 @@ def main():
     if not problems:
         print("check_docs: ok -- no dead changelog pointers, no numbered or "
               "versioned milestones, no duplicated roadmap entries, one line "
-              "per roadmap item, the decisions index and Next up are "
-              "current, no broken "
+              "per roadmap item, the decisions index, Next up and the "
+              "toolkit index are current, no broken "
               "doc links, every tool documented, every command has a page "
               "and a link, every driver listed")
         return 0

@@ -4,6 +4,9 @@ Loaded when working under `userland/`, where every widget and app lives.
 Moved here from the root CLAUDE.md so they cost nothing elsewhere; the
 root file's other rules still apply.
 
+**Before writing a helper or a widget in an app, read `docs/toolkit.md`**
+-- every `userland/lib/` and `userland/ui/` header in one generated line.
+
 ## Widgets and layout
 
 `docs/conventions/gui.md` carries the reasoning; these fire first.

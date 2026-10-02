@@ -88,7 +88,10 @@ indexed by headline in the next section.
 **Check `kernel/lib/` before hand-rolling a digit loop, a formatter, a
 path join or a rasteriser.** Reachable through `kapi.h`, each with
 KTESTs: `string.h`, `knum.h`, `kfmt.h`, `kpath.h`, `fixed.h`, `geom.h`,
-`rubberband.h`, `krandom.h`, `hid_parse.h`. What bites:
+`rubberband.h`, `krandom.h`, `hid_parse.h`. **In ring 3, check
+`docs/toolkit.md` first** -- every `userland/lib/` and `userland/ui/`
+header in one line, GENERATED from the headers (`gen_toolkit_index.py`;
+a new header needs a top comment saying what it is). What bites:
 
 - **`kfmt.h` is one header but TWO files** -- `kfmt.c` is freestanding
   and shared with ring 3, the kernel sinks live in `kfmt_print.c`; a
@@ -478,6 +481,7 @@ one-line pointer.** Add detail there.
 | `docs/testing.md` | running and driving the OS, QMP mechanics, what the emulator does and does not model |
 | `docs/tools.md` | every script in `tools/` |
 | `docs/conventions/` | convention BODIES by area -- `INDEX.md` first |
+| `docs/toolkit.md` | every ring-3 toolkit header in one line -- GENERATED, check it before writing a helper or widget |
 | `docs/decisions.md` | the INDEX over `docs/decisions/`: why toy-os works this way |
 | `docs/gui-guidelines.md` | how the GUI looks and behaves -- binding; read before touching anything drawn |
 | `docs/gui-app-tutorial.md` | writing a ring-3 GUI app, walked through `userland/gui/demos/counter.c` -- change the two together |
