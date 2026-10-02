@@ -135,7 +135,14 @@ static const char *shell_path(char *buf, size_t cap) {
 // number with an indirection in front of it.
 static struct term_conf g_conf;
 static struct term_scheme g_scheme;
-static const int g_margin = TERM_MARGIN;
+// TERM_MARGIN, or more while a curved screen effect needs the corners
+// clear (ucrt_margin()); set by size_changed().
+static int g_margin = TERM_MARGIN;
+// The screen effect: this window's, toggled from the menu without
+// touching the file (as the menu bar and the panel are); g_conf.crt is
+// what it looks like.
+static int g_effect;
+static struct ucrt g_crt;
 static int g_sb_rows = 240;   // scrollback lines kept above the screen
 #define SB_ROWS g_sb_rows
 
@@ -275,7 +282,7 @@ enum {
     CMD_INTR, CMD_EOF,
     CMD_TOP, CMD_BOTTOM, CMD_MENUBAR,
     CMD_NEXT_TAB, CMD_PREV_TAB,
-    CMD_PREFS, CMD_FIND, CMD_PANEL,
+    CMD_PREFS, CMD_FIND, CMD_PANEL, CMD_EFFECT,
     CMD_MENU_BUTTON, CMD_NEWTAB_MENU,   // the bar's two popups
     CMD_SHELL_BASE = 100,               // + an index into /etc/shells
 };
@@ -316,6 +323,7 @@ static const struct uui_menu_item view_items[] = {
     UUI_MENU("Scroll to Bottom", CMD_BOTTOM, "PgDn"),
     UUI_MENU_SEP,
     UUI_MENU("Session Panel",    CMD_PANEL,   "F9"),
+    UUI_MENU("Screen Effect",    CMD_EFFECT,  "Ctrl+Shift+E"),
     UUI_MENU("Menu Bar",         CMD_MENUBAR, "F10"),
 };
 
@@ -366,6 +374,7 @@ static const struct uui_menu_item burger_items[] = {
     UUI_SUBMENU("Terminal",    term_sub_items),
     UUI_MENU_SEP,
     UUI_MENU_ICON("Session Panel", CMD_PANEL, "F9",           "tb-pane",  UTHEME_ACT_VIEW),
+    UUI_MENU("Screen Effect",  CMD_EFFECT,    "Ctrl+Shift+E"),
     UUI_MENU("Menu Bar",       CMD_MENUBAR,   "F10"),
     UUI_MENU_ICON("Options...", CMD_PREFS,    0,              "tb-gear",  0),
     UUI_MENU_SEP,
@@ -1593,43 +1602,33 @@ static void draw_panel(struct ugfx_surface *s, struct session *ses) {
     term_panel_draw(s, &in);
 }
 
-static void draw(struct ugfx_surface *s, int focused) {
-    struct session *ses = active();
-    int top = chrome_h();
-    // The grid is drawn in THIS terminal's font; the menu bar and tab
-    // strip are the toolkit's and stay in the desktop's. font_sync()
-    // also re-reads the metrics, which is what makes a desktop font-size
-    // change reflow a window that is following it.
-    font_sync();
-    const struct ugfx_font *was_font = ugfx_set_font(grid_font());
-    // ONLY THE GRID AREA, not the whole surface: the toolkit paints the
-    // tab strip after this runs, and a full-surface fill here would wipe
-    // whatever it had already put down (ui/uapp.c's draw order).
-    int gr = grid_right(s->w);
-    ugfx_fill_rect(s, 0, top, gr, s->h - top, VGA_RGB[VT_BG]);
-    // The bar's ground, under the strip and the toolbar: the strip sits
-    // at its foot, and the air above it is this.
-    ugfx_fill_rect(s, 0, menubar_h(), s->w, tabbar_h(), UTHEME_WINDOW_BG);
-    ugfx_fill_rect(s, 0, menubar_h() + tabbar_h() - 1, s->w, 1, UTHEME_BORDER);
-    if (g_panel_open) draw_panel(s, ses);
-    if (!ses) { ugfx_set_font(was_font); return; }
+// The screen effect over the grid -- text, caret and all -- with the
+// scrollbar, find bar and menus drawn after it, crisp, as the window's.
+static void draw_effect(struct ugfx_surface *s, int top, int gr) {
+    if (!g_effect || !ucrt_look_on(&g_conf.crt)) return;
+    g_crt.look = g_conf.crt;
+    g_crt.period = (cell_h() + 3) / 6;
+    // A neutral frame a little lighter than black, tinted by the page, so
+    // the tube's edge reads against a dark scheme.
+    g_crt.bezel = ugfx_blend(ugfx_rgb(22, 22, 22), VGA_RGB[VT_BG], 40);
+    static int frames;   // since the size or the look last changed
+    static struct ucrt_look last;
+    int first = g_crt.w != gr || g_crt.h != s->h - top || memcmp(&last, &g_crt.look, sizeof last);
+    last = g_crt.look;
+    frames = first ? 1 : frames + 1;
+    unsigned long long t0 = sys_monotonic_ns();
+    if (ucrt_apply(&g_crt, s, 0, top, gr, s->h - top) != 0 && first)
+        ulog("uterm: no memory for the screen effect; drawn plain\n");
+    // TWO lines per size -- the first frame builds the tables, the second
+    // is what every later one costs -- so a test can read both without
+    // the log filling at a line per keystroke.
+    if (frames <= 2)
+        ulogf("uterm: effect %dx%d %s %llu us\n", gr, s->h - top, frames == 1 ? "first" : "frame",
+              (sys_monotonic_ns() - t0) / 1000ULL);
+    if (ucrt_animates(&g_conf.crt)) uui_anim_request();
+}
 
-    int ch = cell_h(), cw = cell_w();
-
-    // Scrolled back: the top rows come from history, the rest from the
-    // screen, and they meet without a seam because both are the same
-    // grid of cells. That is the payoff of scrollback being made of
-    // evicted ROWS rather than of a character stream.
-    for (int r = 0; r < g_rows; r++) {
-        int line = virt_of_row(ses, r);
-        const struct cell *row = virt_row(ses, line);
-        if (!row) continue;   // before the oldest line we kept
-        int sc0, sc1;
-        sel_cols(line, &sc0, &sc1);
-        draw_row(s, row, top + g_margin + r * ch, sc0, sc1);
-    }
-    draw_hits(s, ses, top);
-
+static void draw_scrollbar(struct ugfx_surface *s, struct session *ses) {
     // The scrollbar. TOTAL is the whole virtual buffer -- scrollback plus
     // the screen -- and the offset is sb_view unconverted, because a
     // vertical bar here already counts from the bottom (uui_scrollbar.h).
@@ -1669,6 +1668,44 @@ static void draw(struct ugfx_surface *s, int focused) {
         uui_fill_round_rect(s, tr - tw + 1, ty, tw, th, UUI_CAPSULE,
                             g_bar_grab >= 0 ? ugfx_rgb(150, 153, 156) : ugfx_rgb(118, 121, 124));
     }
+}
+
+static void draw(struct ugfx_surface *s, int focused) {
+    struct session *ses = active();
+    int top = chrome_h();
+    // The grid is drawn in THIS terminal's font; the menu bar and tab
+    // strip are the toolkit's and stay in the desktop's. font_sync()
+    // also re-reads the metrics, which is what makes a desktop font-size
+    // change reflow a window that is following it.
+    font_sync();
+    const struct ugfx_font *was_font = ugfx_set_font(grid_font());
+    // ONLY THE GRID AREA, not the whole surface: the toolkit paints the
+    // tab strip after this runs, and a full-surface fill here would wipe
+    // whatever it had already put down (ui/uapp.c's draw order).
+    int gr = grid_right(s->w);
+    ugfx_fill_rect(s, 0, top, gr, s->h - top, VGA_RGB[VT_BG]);
+    // The bar's ground, under the strip and the toolbar: the strip sits
+    // at its foot, and the air above it is this.
+    ugfx_fill_rect(s, 0, menubar_h(), s->w, tabbar_h(), UTHEME_WINDOW_BG);
+    ugfx_fill_rect(s, 0, menubar_h() + tabbar_h() - 1, s->w, 1, UTHEME_BORDER);
+    if (g_panel_open) draw_panel(s, ses);
+    if (!ses) { ugfx_set_font(was_font); return; }
+
+    int ch = cell_h(), cw = cell_w();
+
+    // Scrolled back: the top rows come from history, the rest from the
+    // screen, and they meet without a seam because both are the same
+    // grid of cells. That is the payoff of scrollback being made of
+    // evicted ROWS rather than of a character stream.
+    for (int r = 0; r < g_rows; r++) {
+        int line = virt_of_row(ses, r);
+        const struct cell *row = virt_row(ses, line);
+        if (!row) continue;   // before the oldest line we kept
+        int sc0, sc1;
+        sel_cols(line, &sc0, &sc1);
+        draw_row(s, row, top + g_margin + r * ch, sc0, sc1);
+    }
+    draw_hits(s, ses, top);
 
     // The caret, only while FOCUSED and only while the program wants it
     // shown (`ESC[?25l` hides it -- a full-screen program parking the
@@ -1696,6 +1733,9 @@ static void draw(struct ugfx_surface *s, int focused) {
             }
         }
     }
+    draw_effect(s, top, gr);
+    // After the effect: the scrollbar is the window's, not the tube's.
+    draw_scrollbar(s, ses);
     ugfx_set_font(was_font);
 }
 
@@ -1756,11 +1796,13 @@ static void log_layout(void) {
     snprintf(b, sizeof b,
              "uterm: layout cursor %d rows %d cols %d tabs %d sel %d menu %d "
              "chrome %d rename %d sbview %d sbcount %d selbytes %d "
-             "find %d hits %d cur %d panel %d exited %d\n",
+             "find %d hits %d cur %d panel %d exited %d "
+             "effect %d curve %d margin %d cell %d %d\n",
              s->cr * g_cols + s->cc, g_rows, g_cols, g_ntabs,
              g_strip.selected, g_menu_shown, chrome_h(), g_rename_open,
              s->sb_view, s->sb_count, sel_measure(s, 0, 0),
-             g_find_open, g_nhits, g_hit_cur + 1, g_panel_open, s->exited);
+             g_find_open, g_nhits, g_hit_cur + 1, g_panel_open, s->exited,
+             g_effect, g_effect ? g_conf.crt.curve : 0, g_margin, cell_w(), cell_h());
     uapp_log_layout_line(b);
 
     // The chrome's rects, the same grammar Notepad reports -- a test
@@ -1935,6 +1977,8 @@ static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
 static void size_changed(int w, int h) {
     int cw = cell_w(), ch = cell_h();
     if (cw <= 0 || ch <= 0) return;
+    int curve_m = g_effect ? ucrt_margin(&g_conf.crt, grid_right(w), h - chrome_h()) : 0;
+    g_margin = curve_m > TERM_MARGIN ? curve_m : TERM_MARGIN;
     int rows = (h - chrome_h() - 2 * g_margin) / ch;
     // THE GUTTER COMES OFF THE WIDTH, and default_size() adds it back --
     // the two are inverses and a bar counted in only one of them is a
@@ -2075,6 +2119,14 @@ static void scroll_to(struct uapp *a, int want) {
 // line" position a selection needs to include the break.
 static struct selpoint point_at(struct session *s, int x, int y) {
     int cw = cell_w(), ch = cell_h();
+    // ON A CURVED SCREEN THE CELL UNDER THE POINTER IS WHERE THE GLASS
+    // SHOWS IT, not where it was drawn: ask the effect.
+    if (g_effect && g_conf.crt.curve) {
+        int sx, sy;
+        ucrt_source_point(&g_crt, x, y - chrome_h(), &sx, &sy);
+        x = sx;
+        y = sy + chrome_h();
+    }
     int r = (y - chrome_h() - g_margin) / ch;
     if (r < 0) r = 0;
     if (r >= g_rows) r = g_rows - 1;
@@ -2226,6 +2278,7 @@ static void reap_dead_tabs(void) {
 #define CTRL_SHIFT_V 0x16
 #define CTRL_SHIFT_C 0x03
 #define CTRL_SHIFT_F 0x06
+#define CTRL_SHIFT_E 0x05
 
 // One byte to the shell, the way a keystroke would arrive. THE MENU
 // SENDS THE SAME BYTE THE KEY DOES rather than reaching for
@@ -2285,6 +2338,7 @@ static unsigned menu_item_flags(int code) {
     switch (code) {
     case CMD_MENUBAR:   return g_menu_shown ? UUI_MI_CHECKED : 0;
     case CMD_PANEL:     return g_panel_open ? UUI_MI_CHECKED : 0;
+    case CMD_EFFECT:    return g_effect ? UUI_MI_CHECKED : 0;
     case CMD_FIND:      return g_find_open ? UUI_MI_CHECKED : 0;
     case CMD_NEXT_TAB:
     case CMD_PREV_TAB:  return g_ntabs > 1 ? 0 : UUI_MI_DISABLED;
@@ -2420,6 +2474,14 @@ static void do_command(struct uapp *a, int code) {
     case CMD_TOP:       if (s) s->sb_view = s->sb_count; break;
     case CMD_BOTTOM:    if (s) s->sb_view = 0; break;
     case CMD_MENUBAR:   g_menu_shown = !g_menu_shown; size_changed(uapp_width(a), uapp_height(a)); break;
+    case CMD_EFFECT:
+        // Turned on with a look that does nothing (every slider at off),
+        // it would look broken: the toggle then means the default look.
+        if (!g_effect && !ucrt_look_on(&g_conf.crt)) g_conf.crt = ucrt_presets[UCRT_PRESET_SUBTLE];
+        g_effect = !g_effect;
+        ulogf("uterm: effect %s\n", g_effect ? "on" : "off");
+        size_changed(uapp_width(a), uapp_height(a));
+        break;
     case CMD_PREFS:
         uui_menubar_close(&g_menu);   // a modal owns the input
         uui_menubar_close(&g_ctx);
@@ -2456,6 +2518,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     }
 
     if ((mods & KEY_MOD_SHIFT) && key == CTRL_SHIFT_F) { do_command(a, CMD_FIND); return; }
+    if ((mods & KEY_MOD_SHIFT) && key == CTRL_SHIFT_E) { do_command(a, CMD_EFFECT); uapp_redraw(a); return; }
     if (key == KEY_F9) { do_command(a, CMD_PANEL); return; }
 
     // --- then an open find bar: typing goes to the query, not the shell
@@ -2673,6 +2736,12 @@ static void on_prefs_commit(const struct term_conf *next) {
     struct term_conf old = g_conf;
     if (term_conf_save(next, &old) < 0)
         ulog("uterm: /etc/terminal.conf could not be written; the change is this session only\n");
+    // The dialog's "on" is what new windows do; it reaches this one when
+    // it CHANGED, so a window toggled from the menu keeps its state
+    // through an unrelated OK.
+    if (next->effect != old.effect) g_effect = next->effect;
+    else if (memcmp(&next->crt, &old.crt, sizeof next->crt) != 0 && ucrt_look_on(&next->crt))
+        g_effect = 1;   // a look just chosen is a look to see
     apply_conf(next);
 }
 
@@ -2942,6 +3011,8 @@ int main(void) {
     // Before uapp_run() too: default_size() measures the bar and the
     // panel, and runs before on_open.
     g_panel_open = g_conf.panel;
+    ucrt_init(&g_crt);
+    g_effect = g_conf.effect;
     uui_toolbar_init(&g_tb, tb_items, TB_COUNT);
     g_tb.item_flags = menu_item_flags;
     g_tb.accent_latch = 1;   // the open panel reads as a latched toggle

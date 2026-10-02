@@ -101,6 +101,16 @@ this the obvious way), not from how much history it accumulated.
   -- a terminal is monospace by definition -- so a proportional face
   gets a cell as wide as its widest advance there.
 
+- **A CRT EFFECT IS RUN BY THE APP OVER ITS OWN PIXELS, AND A CURVE
+  MOVES WHAT IS UNDER THE POINTER.** `ucrt_apply()` goes last in the
+  app's paint, over the rect it drew, with anything that must stay crisp
+  (a scrollbar, a find bar, a menu) drawn after it. Under a curve the
+  cell under the pointer is where the GLASS shows it: every pointer
+  path of that rect goes through `ucrt_source_point()` (the Terminal's
+  is `point_at()`), and the content keeps `ucrt_margin()` from the edge
+  or the corners are cut. Flicker and noise make the window repaint
+  every frame, so they are never on by default -- the caret-blink rule.
+
 - **A SHARED GEOMETRY HELPER MEASURES IN WHATEVER FACE THE CALLER
   CURRENTLY HAS SELECTED, AND `ugfx_set_font()` IS PER PROCESS.** Font
   selection is a process-wide register, not an argument, so

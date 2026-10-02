@@ -1878,6 +1878,19 @@ window without going through it will find its layout polls timing out.
   "a click opened something" is not a sweep's call. It closes each app by
   KILLING it, so System Update dies mid-check -- the case that froze the
   desktop before `group_defer_death()`. In `gui_regress.py`.
+- **`crt_test.py`** -- the Terminal's screen effect (`userland/ui/ucrt.c`):
+  off by default (a blank band of the grid is the page's colour alone),
+  Ctrl+Shift+E turns it on and the same band repeats a darker row at the
+  scanline pitch the app derives from its font, off again is plain;
+  Options > Screen effect > Curved > OK curves the window, puts the
+  grid's corner on the bezel and writes `/etc/terminal.conf` (read back
+  with `cat`); and a double-click where the banner's `tosh` SHOWS under
+  the curve selects those 4 bytes -- the shown position from this
+  tool's OWN model of the warp, so the app is not checking itself. It
+  prints the effect's first-frame cost. Positive controls, both by
+  `mutate.py`: dropping `point_at()`'s `ucrt_source_point()` call
+  reddens the double-click (`selbytes 0`), and dropping the scanline
+  gain reddens the pitch check. In `gui_regress.py`.
 - **`crashtest_test.py`** -- the fault paths and what the user is told:
   the app enumerates the kernel's fault kinds, kernel faults
   are refused while disarmed, a ring-3 crash kills the app WITHOUT taking

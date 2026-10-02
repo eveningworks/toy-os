@@ -9778,3 +9778,23 @@ separating the KINDS of event, not by giving each widget its own door.
 `tools/hover_sweep_test.py` is the standing check: it hovers every
 widget of every Start-menu app and fails if anything appears.
 
+## A CRT effect is CPU passes the APP runs, from a shared library -- not a compositor effect
+
+The Terminal can look like a CRT (mockups and choice, 2026-10-02):
+glow, scanlines, a phosphor mask, a vignette and a curved tube. Other
+programs do it in the app -- cool-retro-term and Windows Terminal
+(`retroTerminalEffect`) for terminals, RetroArch and DOSBox Staging
+(`glshader = crt-auto`) for games -- or in the compositor, per window or
+per screen (picom's window shaders, Hyprland's `screen_shader`, KWin's
+effects). Here there is no GPU: every pass is CPU time on every redrawn
+frame, about 13-30 ms for the Terminal's grid under KVM. In the app,
+that cost is paid only when the app repaints, and a Terminal repaints on
+output; in the compositor it would land in every frame the WM composes,
+for every window that asked. And only the app knows what the curve moves:
+a click on a curved terminal must be mapped through the warp to find its
+cell (`ucrt_source_point()`), and a game wants scanlines on its SOURCE
+lines, not on screen pixels, which only it can scale for. So it is a
+`userland/ui/` library (`ucrt.h`) an app runs over its own rect after
+drawing -- shared from the start, because DOOM is the next caller.
+Flicker and noise animate the window and are off in every preset.
+

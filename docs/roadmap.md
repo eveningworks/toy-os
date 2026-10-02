@@ -24,6 +24,7 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
+- [ ] The CRT effect in DOOM -- `ucrt` over the scaled frame, scanlines per SOURCE line (DOSBox's `crt-auto`), a setting  *(Desktop visual polish)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
@@ -687,6 +688,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~A screenshot tool that writes a real image file to disk~~ DONE 2026-09-15 -- `WIN_REQ_SCREENSHOT`, `/bin/screenshot`, the app
 - [x] ~~A PNG DECODER, which needs inflate~~ DONE 2026-09-15 -- `lib/uinflate.h`, 8-bit every colour type
 - [x] ~~A tween/easing helper, once a second real caller exists~~ DONE 2026-09-18 -- `lib/utween.c`, for smooth scrolling
+- [x] ~~A CRT screen effect for the Terminal~~ DONE 2026-10-02 -- `ui/ucrt.c`, Options > Screen effect, Ctrl+Shift+E
+- [ ] **NEXT** The CRT effect in DOOM -- `ucrt` over the scaled frame, scanlines per SOURCE line (DOSBox's `crt-auto`), a setting
 
 ### GUI clipboard + drag-and-drop
 

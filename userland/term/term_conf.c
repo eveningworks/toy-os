@@ -182,12 +182,20 @@ void term_conf_defaults(struct term_conf *c) {
     c->copy_on_select = 1;
     c->scroll_on_output = 1;
     c->confirm_close = 1;
+    // Off, and when turned on, the Subtle look -- the one that suits any
+    // scheme. Flicker and noise animate the window, so no preset has them.
+    c->effect = 0;
+    c->crt = ucrt_presets[UCRT_PRESET_SUBTLE];
 }
 
 // A WORD, never a number, for anything with names -- `cursor=block`
 // survives a reordering of the enum and reads correctly in `edit`.
 static const char *const CURSOR_WORDS[] = { "block", "underline", "bar" };
 #define CURSOR_WORD_COUNT ((int)(sizeof CURSOR_WORDS / sizeof CURSOR_WORDS[0]))
+
+static const char *const LEVEL_WORDS[] = { "off", "low", "medium", "high" };
+static const char *const CURVE_WORDS[] = { "off", "subtle", "strong" };
+static const char *const MASK_WORDS[] = { "off", "aperture", "slot" };
 
 static const char *cursor_word(int shape) {
     if (shape < 0 || shape >= CURSOR_WORD_COUNT) shape = TERM_CURSOR_BLOCK;
@@ -211,6 +219,14 @@ static void get_bool(const char *key, int *val) {
     if (!etc_config_buf_get(&g_buf, key, v, sizeof v) || !v[0]) return;
     if (strcmp(v, "on") == 0 || strcmp(v, "yes") == 0 || strcmp(v, "1") == 0) *val = 1;
     else if (strcmp(v, "off") == 0 || strcmp(v, "no") == 0 || strcmp(v, "0") == 0) *val = 0;
+}
+
+// A word from `words`, or the default kept: a misspelling is refused, not guessed.
+static void get_word(const char *key, int *val, const char *const *words, int n) {
+    char v[16];
+    if (!etc_config_buf_get(&g_buf, key, v, sizeof v) || !v[0]) return;
+    for (int i = 0; i < n; i++)
+        if (strcmp(v, words[i]) == 0) { *val = i; return; }
 }
 
 void term_conf_load(struct term_conf *c) {
@@ -257,6 +273,14 @@ void term_conf_load(struct term_conf *c) {
     get_bool("copy_on_select", &c->copy_on_select);
     get_bool("scroll_on_output", &c->scroll_on_output);
     get_bool("confirm_close", &c->confirm_close);
+    get_bool("effect", &c->effect);
+    get_word("crt_scanlines", &c->crt.scanlines, LEVEL_WORDS, UCRT_LEVEL_MAX + 1);
+    get_word("crt_glow", &c->crt.glow, LEVEL_WORDS, UCRT_LEVEL_MAX + 1);
+    get_word("crt_vignette", &c->crt.vignette, LEVEL_WORDS, UCRT_LEVEL_MAX + 1);
+    get_word("crt_curve", &c->crt.curve, CURVE_WORDS, UCRT_CURVE_COUNT);
+    get_word("crt_mask", &c->crt.mask, MASK_WORDS, UCRT_MASK_COUNT);
+    get_bool("crt_flicker", &c->crt.flicker);
+    get_bool("crt_noise", &c->crt.noise);
 }
 
 // One key, written only when it moved. `*failed` is sticky: a save that
@@ -298,6 +322,15 @@ int term_conf_save(const struct term_conf *c, const struct term_conf *old) {
     if (c->copy_on_select != old->copy_on_select) n += put_bool("copy_on_select", c->copy_on_select, &failed);
     if (c->scroll_on_output != old->scroll_on_output) n += put_bool("scroll_on_output", c->scroll_on_output, &failed);
     if (c->confirm_close != old->confirm_close) n += put_bool("confirm_close", c->confirm_close, &failed);
+    if (c->effect != old->effect) n += put_bool("effect", c->effect, &failed);
+    const struct ucrt_look *l = &c->crt, *o = &old->crt;
+    if (l->scanlines != o->scanlines) n += put("crt_scanlines", LEVEL_WORDS[l->scanlines], &failed);
+    if (l->glow != o->glow) n += put("crt_glow", LEVEL_WORDS[l->glow], &failed);
+    if (l->vignette != o->vignette) n += put("crt_vignette", LEVEL_WORDS[l->vignette], &failed);
+    if (l->curve != o->curve) n += put("crt_curve", CURVE_WORDS[l->curve], &failed);
+    if (l->mask != o->mask) n += put("crt_mask", MASK_WORDS[l->mask], &failed);
+    if (l->flicker != o->flicker) n += put_bool("crt_flicker", l->flicker, &failed);
+    if (l->noise != o->noise) n += put_bool("crt_noise", l->noise, &failed);
 
     ulogf("uterm: conf save %d key(s)%s\n", n, failed ? " (a write failed)" : "");
     return failed ? -1 : n;

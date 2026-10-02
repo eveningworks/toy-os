@@ -2,6 +2,7 @@
 #define TERM_H
 
 #include <stdint.h>
+#include "ui/ucrt.h"
 
 // The GUI Terminal's own preferences: what is in /etc/terminal.conf,
 // what a colour scheme is, and the dialog that edits both.
@@ -85,6 +86,8 @@ struct term_conf {
     int copy_on_select;
     int scroll_on_output;
     int confirm_close;    // ask before closing a window with more than one tab
+    int effect;           // a new window opens with the screen effect on
+    struct ucrt_look crt; // what the screen effect looks like, on or off
 };
 
 // Between the grid and the window edge, in pixels.

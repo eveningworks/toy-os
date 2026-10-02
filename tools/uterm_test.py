@@ -976,7 +976,7 @@ TB_NEWTAB, TB_FIND, TB_PANEL, TB_MENU = 0, 1, 2, 3
 # The ☰ menu's rows, by index -- burger_items[] in terminal.c, separators
 # counted. If a row is added there, these move.
 BURGER_NEW_TAB = 0
-BURGER_OPTIONS = 13
+BURGER_OPTIONS = 14
 KEY_F9 = "0xb0"
 
 

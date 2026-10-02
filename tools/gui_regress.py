@@ -120,6 +120,7 @@ TOOLS = [
     ("notepad", "notepad_client_test.py", "Notepad in ring 3"),
     ("clipboard", "clipboard_test.py", "the system text clipboard, across two apps"),
     ("uterm", "uterm_test.py", "Terminal + the ring-3 shell"),
+    ("crt", "crt_test.py", "the Terminal's screen effect: toggle, Options, the curve's pointer"),
     ("uapp", "uapp_test.py", "the TWP resize handshake"),
     ("fullscreen", "fullscreen_test.py", "the fullscreen state and the display lease, on virtio-gpu"),
     ("stride", "resize_stride_test.py", "a resized window's buffers agree with its size"),
@@ -261,6 +262,7 @@ COST_S = {
     "blank": 17,
     "wingeom": 70,
     "uterm": 16,
+    "crt": 30,         # three effect frames under TCG, an Options round trip
     "hover": 5,        # eight injected moves and two counter reads
     "osk": 20,         # ~40 keycap clicks, each confirmed against the WM
     "singleinst": 16,  # six launches, each waiting out a client's first frame

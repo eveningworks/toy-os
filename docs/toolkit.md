@@ -71,6 +71,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 |---|---|
 | `uambient.h` | A STAGE TINTED BY A PICTURE (YouTube's "ambient mode"): the colours a picture's surroundings take from it, and the radial ground painted in them. |
 | `uapp.h` | uapp -- Toykit's application layer: describe your app, supply callbacks, and let the library own the window handshake and the event loop. |
+| `ucrt.h` | A CRT SCREEN EFFECT, as CPU passes over one rect of a surface: phosphor glow, scanlines, a phosphor mask, a vignette, flicker, static noise, and a curved tube in a bezel. |
 | `ugfx.h` | ugfx -- the userland drawing runtime for ring-3 window clients. |
 | `ugfx_tex.h` | ugfx_tex.h -- a perspective-correct textured triangle. |
 | `ulog.h` | Toolkit diagnostics: one line to the app's stderr, which the kernel routes to its log and to a QMP test's console (CLAUDE.md's "diagnostics go to stderr"). |
