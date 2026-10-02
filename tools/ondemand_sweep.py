@@ -609,6 +609,8 @@ def main():
             flag = "" if ok else f"   [would skip: {why}]"
             print(f"  {name:<13} {script:<26} {what}{flag}")
         return 0
+    import tree_lock
+    tree_lock.hold()   # every tool reads this build
 
     # THE SHARED GUEST MUST HAVE A DESKTOP, or every attaching tool fails
     # at once with `no provider named gui`, twenty lines that each look

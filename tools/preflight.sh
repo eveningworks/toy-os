@@ -65,6 +65,16 @@ for arg in "$@"; do
   esac
 done
 
+# THE TEST LOCK (tools/tree_lock.py): refuse to start under another
+# test -- `make clean` would pull its build away -- then hold it for the
+# whole run, so nothing rebuilds or edits the tree under this one.
+python3 tools/tree_lock.py || exit 1
+exec 9>"$repo_root/.test-lock"
+flock -s 9
+mkdir -p "$repo_root/.test-lock.d" && echo "preflight.sh $*" > "$repo_root/.test-lock.d/$$"
+trap 'rm -f "$repo_root/.test-lock.d/$$"' EXIT
+export TOYOS_TEST_LOCK_HELD=$$
+
 step() { echo "== $1 =="; }
 fail() { echo "preflight: FAIL -- $1"; exit 1; }
 

@@ -641,6 +641,8 @@ def main():
 
     if args.logs:
         os.makedirs(args.logs, exist_ok=True)
+    import tree_lock
+    tree_lock.hold()   # the fresh disk and every tool read this build
 
     if args.host:
         return run_remote_suite(picked, args)

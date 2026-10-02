@@ -253,6 +253,13 @@ look fine.
   stream** (soundd keeps the card 2 s idle), so a restart fault needs a
   longer gap. The driver's `usbaudio: start`/`stop` lines are the
   evidence; `docs/bugs.md` has what is open.
+- **NOTHING REBUILDS OR EDITS THE TREE UNDER A RUNNING TEST, AND THAT IS
+  ENFORCED** (`tools/tree_lock.py`): a test holds a shared lock until it
+  exits, `make` refuses while it is held, and a PreToolUse hook
+  (`.claude/settings.json`, tracked) denies a source edit, a `make` or a
+  tree-moving `git`. Docs, `tools/` and `.claude/` stay editable. A NEW
+  tool that boots QEMU without `iso_guard` or `harness.Results` calls
+  `tree_lock.hold()` itself.
 - **`seed/sync/` KEEPS WHAT YOU DELETE FROM `data/`**: `make clean`
   (staging) THEN `make clean-disk` (the image). **NEVER hand-write into
   `seed/sync/`** -- gitignored build staging that `make clean` deletes;

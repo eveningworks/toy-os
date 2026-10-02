@@ -349,3 +349,25 @@ maintainer chose that over a one-off pass, so a change to an app carries
 its own cleanup and nothing moves untested. The toolkit's quality bar is
 unchanged -- KTESTs or a host check, a parser that rejects rather than
 guesses, a formatter that writes nothing when it does not fit.
+
+## A running test LOCKS the tree, rather than running from a snapshot of it
+
+A test that boots this build reads the live checkout for minutes --
+`update_server.py` serves `seed/sync` per request and `iso_guard.py`
+re-checks source mtimes before every boot -- so a rebuild or a source
+edit in that window fails the run with an error the code never had. It
+was a written rule, and it was broken twice in one session (2026-10-02).
+Three shapes were offered: a lock that `make` honours; the same lock
+plus a Claude Code hook that refuses edits; or running long tests from
+a reflinked SNAPSHOT of `build/` and `seed/sync`. The snapshot is the
+most robust and the largest change -- every tool that names a `REPO`
+path would have to learn the snapshot root, and a test against a copy
+no longer tests the tree a session is about to commit. The lock plus the
+hook was chosen: Cargo's build-directory lock and Bazel's "another
+command is running" are the shape, and the hook closes the half a
+Makefile cannot see (an edit). It is SHARED so a dozen parallel GUI
+tools coexist, released by the kernel so a killed test leaves nothing
+stale, and lets the holder's own `make` through by an inherited
+variable. Docs and `tools/` stay editable because neither reaches the
+image.
+

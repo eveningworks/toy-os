@@ -398,9 +398,18 @@ def warn_if_disk_stale(disk, repo: Path = REPO):
         print(f"iso_guard: WARNING -- {p}", file=sys.stderr)
 
 
+def _hold_lock():
+    """Whoever boots or flashes this build holds the test lock until it
+    exits, so no rebuild or source edit lands under it (tree_lock.py)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import tree_lock
+    tree_lock.hold()
+
+
 def assert_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso",
                      medium: str = "cd"):
     """Exit non-zero with an explanation if the boot media are stale."""
+    _hold_lock()
     if os.environ.get(BYPASS_ENV) == "1":
         print(f"iso_guard: {BYPASS_ENV}=1 -- booting {iso_name} without checking it "
               f"is current.", file=sys.stderr)
@@ -513,6 +522,7 @@ def assert_staged_file(local, repo: Path = REPO, staging: str = "seed/sync"):
 def assert_staging_fresh(repo: Path = REPO, staging: str = "seed/sync"):
     """Refuse a flash from a stale staging tree. Bypassed by the same
     env var as the ISO check, since it is the same mistake."""
+    _hold_lock()
     if os.environ.get(BYPASS_ENV):
         return
     why = check_staging_fresh(repo, staging)

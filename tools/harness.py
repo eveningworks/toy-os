@@ -30,6 +30,11 @@ import threading
 
 class Results:
     def __init__(self):
+        # A test is running: nothing may rebuild or edit the tree under
+        # it until this process exits (tree_lock.py). Here as well as in
+        # iso_guard because many tools launch QEMU without it.
+        import tree_lock
+        tree_lock.hold()
         self.rows = []                 # (name, ok, detail), in order
         self.passes, self.fails = [], []
 

@@ -4689,6 +4689,26 @@ window without going through it will find its layout polls timing out.
   as blank and REFORMATTED. To read one, check out a commit before the
   removal. `docs/tfs2-spec.md` is kept because several
   `docs/decisions/` entries reason from it.
+- **`tree_lock.py`** -- **THE TEST LOCK: nothing rebuilds or edits the
+  tree while a test reads it.** A shared `flock` on `.test-lock` at the
+  repo root (`make clean` deletes `build/`), held until the holder
+  exits, so a killed test leaves nothing stale; `.test-lock.d/<pid>`
+  names each holder for the message. `hold()` is called by
+  `iso_guard.py`'s boot and staging checks, `harness.Results`,
+  `gui_regress.py` and `ondemand_sweep.py`, and `preflight.sh` takes it
+  in shell for its whole run. A holder exports `TOYOS_TEST_LOCK_HELD`,
+  which lets its OWN `make` through. Two things refuse while it is held:
+  the Makefile (top-level, not `make -n` or `make help`), and `tree_lock.py
+  hook`, the PreToolUse hook in `.claude/settings.json`, which denies an
+  Edit/Write outside `docs/`, `tools/`, `.claude/` and `*.md`, a `make`
+  as a command, and a tree-moving `git` (stash, checkout, reset, pull,
+  merge, rebase and the like) -- read from the command with heredoc
+  bodies and quoted strings removed, so a script that only WRITES those
+  words is not refused. `python3 tools/tree_lock.py` says who holds it
+  (exit 1 if anyone does); `TOYOS_IGNORE_TEST_LOCK=1` bypasses both. It
+  exists because the written rule ("do not rebuild while a test is
+  running", in the skill's testing lessons) was broken twice in one
+  session.
 - **`tfs3_writer.py`** -- the host-side TFS3 tool: format
   (writes superblock backups + GDT snapshots, wipes a stale TFS2
   signature per the wipefs rule, keeps images sparse by skipping/

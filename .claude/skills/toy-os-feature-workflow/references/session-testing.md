@@ -2112,6 +2112,10 @@ and read the tool's own typing helpers before improvising.
 - **DO NOT REBUILD WHILE A TEST IS RUNNING.** A `make all` mid-run made
   `build/userland` newer than `build/.seeded`, and `iso_guard` refused
   the second boot. It was right to; the lesson is to let a run finish.
+  **ENFORCED SINCE 2026-10-02** (`tools/tree_lock.py`): the same mistake
+  twice in one session -- a `make all`, then a source edit, each under a
+  running `update_test` -- turned the written rule into a lock that
+  `make` and a PreToolUse hook both honour.
 
 **2026-08-29 (networking, and a fresh disk that was not fresh).**
 

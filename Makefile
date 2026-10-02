@@ -6,6 +6,18 @@
 # this line, `make` would build the config fragment and stop.
 .DEFAULT_GOAL := all
 
+# --- THE TEST LOCK (tools/tree_lock.py) -------------------------------
+#
+# A test that boots this build reads the tree for minutes, and a rebuild
+# under it surfaces as a stale-build 503 or a refused boot, reported as
+# a test failure. So make refuses while a test holds the lock -- unless
+# it is the holder's OWN make (TOYOS_TEST_LOCK_HELD, which the tool
+# checks). Only the top-level make asks; `make -n` and `make help` never
+# do. `filter-out --%` keeps `--jobserver-auth`'s letters out of the
+# dry-run test (the Linux kernel's form).
+TREE_LOCK_ASK = $(and $(filter 0,$(MAKELEVEL)),$(if $(findstring n,$(firstword -$(filter-out --%,$(MAKEFLAGS)))),,x),$(filter-out help,$(or $(MAKECMDGOALS),all)))
+$(if $(TREE_LOCK_ASK),$(if $(shell python3 tools/tree_lock.py >&2 || echo held),$(error the test lock is held -- see the line above)))
+
 BUILD = build
 
 # --- build.conf's OPTIONS half, and it must be read FIRST -----------
