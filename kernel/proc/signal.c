@@ -36,6 +36,7 @@
 #include "errno.h"
 #include "uaddr.h"  // UADDR_STACK_* -- where a frame is allowed to land
 #include "gdt.h"    // SEL_USER_CODE/SEL_USER_DATA -- reimposed on sigreturn
+#include "crash_report.h" // a core-dumping signal's report
 
 // Does `sig`'s DEFAULT action terminate the process?
 //
@@ -308,7 +309,14 @@ int signal_restore_frame(int pid, uint64_t *regs) {
 
 // The default action, once it is known that nothing else applies.
 // Terminates `pid`, from whichever of the two situations it is in.
-static void do_default_action(int pid, int sig) {
+// The signals whose default action DUMPS CORE on Linux (signal(7)'s
+// "Core"). A process killed by one gets the crash report a fault would
+// have written, so `kill -SEGV` and abort() leave the same evidence.
+int signal_dumps_core(int sig) {
+    return sig == SIGSEGV || sig == SIGILL || sig == SIGFPE || sig == SIGABRT;
+}
+
+static void do_default_action(int pid, int sig, uint64_t *regs) {
     // INIT CANNOT DIE OF A DEFAULT ACTION, and the guard has to be here
     // as well as in scheduler_kill(): when the victim is the RUNNING
     // process the branch below takes SYS_EXIT's path instead, which
@@ -324,6 +332,14 @@ static void do_default_action(int pid, int sig) {
 
     int code = SIGNAL_EXIT_BASE + sig;
     klog_printf("signal: pid %d terminated by SIG%s\n", pid, signal_name(sig));
+    // Only for the RUNNING process: the report reads its address space
+    // and its trap frame, which a process the scheduler switched away
+    // from does not have to hand.
+    if (regs && signal_dumps_core(sig) && pid == scheduler_current_pid()) {
+        char what[32];
+        k_snprintf(what, sizeof what, "Killed by SIG%s", signal_name(sig));
+        crash_report_write(what, regs, 0, 0);
+    }
 
     if (pid == scheduler_current_pid()) {
         // The process about to be resumed IS the one being killed, so
@@ -420,7 +436,7 @@ int signal_deliver_pending(int pid, uint64_t *regs, int at_syscall_entry) {
         // only way left.
     }
 
-    do_default_action(pid, sig);
+    do_default_action(pid, sig, regs);
     return 1;
 }
 

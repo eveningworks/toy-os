@@ -10,6 +10,9 @@
 #include "kversion.h"
 #include "string.h"
 #include "kpath.h"
+#include "query.h"
+#include "initcall.h"
+#include "clocksource.h"
 
 #define CRASH_DIR        "/var/crash"
 #define HEADER_CAP       8192      // the text half, one static buffer
@@ -39,6 +42,54 @@ static const char *reg_names[15] = {
     "rbp", "rdi", "rsi", "rdx", "rcx", "rbx", "rax",
 };
 
+// ---- QUERY_CRASH: this boot's crashes, for the desktop's notice -------
+//
+// A RING, NOT A FILE SCAN: the desktop asks "has anything crashed since I
+// last looked" on every client death, and /var/crash may hold weeks of
+// reports, or be absent on a live boot. Recorded before the report is
+// attempted, so a crash whose file could not be written is still told.
+#define CRASH_RING 8
+static struct query_crash g_ring[CRASH_RING];
+static uint32_t g_seq;   // crashes recorded this boot; the newest's seq
+
+static struct query_crash *crash_note(int pid, const char *exec, const char *what,
+                                      const uint64_t *regs, uint64_t cr2) {
+    struct query_crash *c = &g_ring[g_seq % CRASH_RING];
+    k_memset(c, 0, sizeof *c);
+    c->seq = ++g_seq;
+    c->pid = pid;
+    c->uptime_ns = clocksource_now_ns();
+    c->rip = regs[17];
+    c->vector = (uint32_t)regs[15];
+    c->error_code = (uint32_t)regs[16];
+    c->cr2 = c->vector == 14 ? cr2 : 0;
+    k_strlcpy(c->program, exec, sizeof c->program);
+    k_strlcpy(c->fault, what, sizeof c->fault);
+    return c;
+}
+
+static int crash_count(void) { return g_seq < CRASH_RING ? (int)g_seq : CRASH_RING; }
+
+static int crash_fill(int index, void *out) {
+    int n = crash_count();
+    if (index < 0 || index >= n) return 0;
+    uint32_t first = g_seq - (uint32_t)n;   // seq - 1 of the oldest held
+    k_memcpy(out, &g_ring[(first + (uint32_t)index) % CRASH_RING], sizeof g_ring[0]);
+    return 1;
+}
+
+static const struct query_provider crash_provider = {
+    .cls = QUERY_CRASH,
+    .name = "crash",
+    .record_size = sizeof(struct query_crash),
+    .flags = QUERY_F_LIST,
+    .count = crash_count,
+    .fill = crash_fill,
+};
+
+static void crash_query_init(void) { query_register(&crash_provider); }
+INITCALL(crash_query_init, INIT_QUERY);
+
 uint32_t crash_report_write(const char *what, const uint64_t *regs, uint64_t cr2,
                             int stack_overflow) {
     int pid = scheduler_current_pid();
@@ -46,6 +97,9 @@ uint32_t crash_report_write(const char *what, const uint64_t *regs, uint64_t cr2
         klog_printf("crash: no report -- the legacy loader's process has no pid\n");
         return 0;
     }
+    char exec[64];
+    if (!scheduler_exec_path(pid, exec, sizeof exec)) k_strlcpy(exec, "?", sizeof exec);
+    struct query_crash *noted = crash_note(pid, exec, what, regs, cr2);
     if (scheduler_preempt_depth() != 0) {
         klog_printf("crash: no report -- a filesystem operation is in flight "
                     "(preempt depth %d)\n", scheduler_preempt_depth());
@@ -56,8 +110,6 @@ uint32_t crash_report_write(const char *what, const uint64_t *regs, uint64_t cr2
         return 0;
     }
 
-    char exec[64];
-    if (!scheduler_exec_path(pid, exec, sizeof exec)) k_strlcpy(exec, "?", sizeof exec);
     const char *base = k_path_basename(exec);
 
     char path[64];
@@ -145,6 +197,7 @@ uint32_t crash_report_write(const char *what, const uint64_t *regs, uint64_t cr2
         if (!fs_write_range(path, written, g_page, 4096)) break;
         written += 4096;
     }
+    k_strlcpy(noted->report, path, sizeof noted->report);
     klog_printf("crash: report written to %s (%u bytes)\n", path, written);
     return written;
 }

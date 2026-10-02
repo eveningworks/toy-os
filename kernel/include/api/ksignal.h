@@ -20,6 +20,11 @@
 // follows.
 const char *signal_name(int sig);
 
+// Whether `sig`'s default action dumps core (signal(7)'s "Core"):
+// SIGSEGV, SIGILL, SIGFPE, SIGABRT. A death by one of these is a CRASH,
+// and writes a report; a SIGTERM or SIGKILL is someone asking.
+int signal_dumps_core(int sig);
+
 // The signal `name` denotes, or 0 if it denotes none.
 //
 // Accepts "TERM", "SIGTERM", "term", "sigterm" and "15" alike, so no

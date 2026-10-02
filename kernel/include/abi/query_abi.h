@@ -530,6 +530,12 @@ struct query_fsstat {
 // record. No SERIAL NUMBERS -- they identify a machine, and nothing here
 // needs that.
 #define QUERY_SMBIOS 46
+// The ring-3 crashes of THIS boot, oldest first, the last 8 -- what the
+// desktop's crash notice reads (struct query_crash). LIST. A crash is
+// recorded whether or not its report file could be written; `report` is
+// "" when it could not. Counted by `seq`, so a reader that remembers the
+// last one it saw tells a new crash from an old one.
+#define QUERY_CRASH 47
 
 #define QUERY_REMOTE_SESSION  0 // a session opened or closed
 #define QUERY_REMOTE_COMMAND  1 // a command line the remote shell ran
@@ -1408,6 +1414,28 @@ struct query_cpu {
 #define QUERY_CPU_ENABLED        (1u << 0) // usable now
 #define QUERY_CPU_ONLINE_CAPABLE (1u << 1) // ...or could be brought up later
 #define QUERY_CPU_X2APIC         (1u << 2) // from a type-9 entry, not type 0
+
+// --- QUERY_CRASH record -------------------------------------------------
+
+#define QUERY_CRASH_PROGRAM_MAX 64
+#define QUERY_CRASH_FAULT_MAX   40
+#define QUERY_CRASH_REPORT_MAX  80
+
+struct query_crash {
+    uint32_t seq;          // 1 for this boot's first crash, then on
+    int32_t  pid;
+    uint64_t uptime_ns;    // when it faulted
+    uint64_t rip;
+    uint64_t cr2;          // page faults; 0 otherwise
+    uint32_t vector;
+    uint32_t error_code;
+    char program[QUERY_CRASH_PROGRAM_MAX];   // its executable's path
+    char fault[QUERY_CRASH_FAULT_MAX];       // "Page fault", "Stack overflow"
+    char report[QUERY_CRASH_REPORT_MAX];     // /var/crash/<prog>-<pid>.crash, or ""
+};
+
+_Static_assert(sizeof(struct query_crash) <= 256,
+               "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
 
 // --- QUERY_SMBIOS record ------------------------------------------------
 
