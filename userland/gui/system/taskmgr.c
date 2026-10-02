@@ -32,6 +32,7 @@
 #include "ui/uui_focus.h"
 #include "lib/uconf.h"
 #include "lib/uopen.h"
+#include "lib/uappentry.h"
 #include "etc_config.h"
 #include "kpath.h"
 #include "query_abi.h"
@@ -93,39 +94,22 @@ const char *tm_status_text(const struct tm_proc *p) {
 // --- desktop entries -----------------------------------------------------
 
 #define TM_APPS_MAX 48
-#define APPS_DIR "/usr/wm/applications"   // uopen.c's DESKTOP_ENTRY_DIR
 struct tm_app g_apps[TM_APPS_MAX];
 int g_napps;
 
 // Read ONCE at start: a program installed while Task Manager is open is
 // shown under its process name until the next start, which is the
 // cheaper wrong answer than a directory walk every tick.
-static void load_apps(void) {
-    static struct sys_dirent ents[SYS_LISTDIR_MAX];
-    int n = sys_listdir(APPS_DIR, ents, SYS_LISTDIR_MAX);
-    struct etc_config_buf *cfg = malloc(sizeof *cfg);   // too big for a frame
-    if (!cfg) return;
-    for (int i = 0; i < n && g_napps < TM_APPS_MAX; i++) {
-        if (ents[i].is_dir) continue;
-        char path[96];
-        if (!k_path_join(APPS_DIR, ents[i].name, path, sizeof path)) continue;
-        if (!uconf_load(path, cfg)) continue;
-        struct tm_app *e = &g_apps[g_napps];
-        if (!etc_config_buf_get_in_or_top(cfg, UOPEN_ENTRY_SECTION, "Exec",
-                                          e->exec, sizeof e->exec)) continue;
-        if (!etc_config_buf_get_in_or_top(cfg, UOPEN_ENTRY_SECTION, "Name",
-                                          e->name, sizeof e->name))
-            strlcpy(e->name, ents[i].name, sizeof e->name);
-        if (!etc_config_buf_get_in_or_top(cfg, UOPEN_ENTRY_SECTION, "Icon",
-                                          e->icon, sizeof e->icon))
-            e->icon[0] = '\0';
-        // `Exec=` may carry arguments; the path is its first word.
-        char *sp = strchr(e->exec, ' ');
-        if (sp) *sp = '\0';
-        g_napps++;
-    }
-    free(cfg);
+static int add_app(const struct uappentry *e, void *ctx) {
+    (void)ctx;
+    struct tm_app *a = &g_apps[g_napps++];
+    strlcpy(a->exec, e->exec, sizeof a->exec);
+    strlcpy(a->name, e->name, sizeof a->name);
+    strlcpy(a->icon, e->icon, sizeof a->icon);
+    return g_napps >= TM_APPS_MAX;
 }
+
+static void load_apps(void) { uappentry_each(add_app, 0); }
 
 static int app_for_path(const char *path) {
     if (!path[0]) return -1;

@@ -24,6 +24,7 @@
 #include "ui/utheme.h"
 #include "ui/ugfx.h"
 #include "lib/ufile.h"
+#include "lib/uappentry.h"
 #include "lib/uclip.h"
 #include "rt/sys.h"
 #include <stdio.h>
@@ -35,7 +36,6 @@
 #include <sys/stat.h>
 
 #define CRASH_DIR   "/var/crash"
-#define ENTRY_DIR   "/usr/wm/applications"
 #define MAX_REPORTS 64
 #define HEAD_CAP    8192   // the kernel's own HEADER_CAP: the whole text half
 #define MAX_MAPS    48
@@ -62,29 +62,12 @@ static int g_dialog;             // 1 = the one-report face
 
 // --- what the desktop entries call a program -------------------------
 
+// The entry's Name= for the program, else its file name.
 static void friendly_name(const char *exec, char *out, int cap) {
+    struct uappentry e;
+    if (uappentry_find_exec(exec, &e)) { strlcpy(out, e.name, (size_t)cap); return; }
     const char *base = strrchr(exec, '/');
     strlcpy(out, base ? base + 1 : exec, (size_t)cap);
-    DIR *d = opendir(ENTRY_DIR);
-    if (!d) return;
-    struct dirent *e;
-    char path[160], buf[1024];
-    while ((e = readdir(d))) {
-        if (!strstr(e->d_name, ".desktop")) continue;
-        snprintf(path, sizeof path, ENTRY_DIR "/%s", e->d_name);
-        size_t n = ufile_read_head(path, (uint8_t *)buf, sizeof buf - 1);
-        buf[n] = '\0';
-        char name[40] = "", ex[96] = "";
-        for (char *l = buf; l && *l; ) {
-            char *nl = strchr(l, '\n');
-            if (nl) *nl = '\0';
-            if (!strncmp(l, "Name=", 5)) strlcpy(name, l + 5, sizeof name);
-            if (!strncmp(l, "Exec=", 5)) strlcpy(ex, l + 5, sizeof ex);
-            l = nl ? nl + 1 : 0;
-        }
-        if (name[0] && !strcmp(ex, exec)) { strlcpy(out, name, (size_t)cap); break; }
-    }
-    closedir(d);
 }
 
 // --- reading one report ----------------------------------------------

@@ -1463,14 +1463,13 @@ Convert Calculator first. Its grid is pure arithmetic today, it's
 engine can't express a uniform button grid it can't express anything.
 
 
-**One desktop-entry reader** (2026-10-02, asked for by the maintainer).
-Three programs answer "what is this program called" from
-`/usr/wm/applications`: the WM's `desktop.c`, Task Manager's
-`load_apps()` (through `uconf_load()`, the right parser) and Crash
-Reports' `friendly_name()` (hand-rolled line scanning). The shape is a
-libuapp module -- look up an entry by `Exec=`, iterate them -- built on
-`uconf`. Generic helpers elsewhere in the apps move out as each app is
-next touched (CLAUDE.md, "fix as touched"), not in a sweep.
+**The WM's `desktop.c` and `uopen.c` onto `lib/uappentry`** (2026-10-02).
+Four programs read `/usr/wm/applications`: the WM's `desktop.c`, `uopen.c`
+(Exec= by stem, Handles=), Task Manager and Crash Reports. The last two
+moved to `lib/uappentry` (read one entry, walk them, find by `Exec=`, on
+`uconf`) when it was written; the WM's loader and `uopen.c` move when each
+is next touched (CLAUDE.md, "fix as touched"). `uopen.c` needs `Handles=`,
+which the struct does not carry yet -- add the field then, not before.
 
 ### Runtime font loading & text metrics
 
