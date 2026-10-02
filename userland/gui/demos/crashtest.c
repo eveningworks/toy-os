@@ -15,6 +15,11 @@
 //   help from anyone to dereference NULL. What they demonstrate is
 //   process isolation: the WM notices, reports the crash and carries on.
 //
+//   DESKTOP -- the desktop restarts. "Crash the desktop" sends toywm a
+//   SIGSEGV, whose default action writes a crash report as a fault does
+//   (kernel/proc/signal.c): the screen holds the last frame while init
+//   restarts it, and the new desktop says what happened.
+//
 //   RING 0 -- the machine panics. These can only be done by the kernel,
 //   so they are asked for through SYS_CRASHTEST, and the KERNEL owns
 //   the list (abi/crash_abi.h). This app enumerates rather than
@@ -32,6 +37,7 @@
 // Log grammar, one line per action, so a test can assert on text:
 //   crashtest: ring3 <kind>
 //   crashtest: ring0 <kind> refused
+//   crashtest: desktop SIGSEGV to pid <n>
 //   crashtest: armed <0|1> kinds <n>
 #include "rt/sys.h"
 #include "ui/ulog.h"
@@ -60,6 +66,7 @@ enum {
     // Kernel kinds are offset above the ring-3 ones so one button group
     // can hold both and the code alone says which half was pressed.
     K0_BASE = 100,
+    DESKTOP_CRASH = 200,
 };
 
 static struct uui_button g_r3_btn[5];
@@ -70,6 +77,9 @@ static struct uui_button_group g_k0;
 static char g_k0_label[MAX_KERNEL_KINDS][CRASH_NAME_MAX];
 static int g_k0_count;
 static int g_armed;
+
+static struct uui_button g_dk_btn[1];
+static struct uui_button_group g_dk;
 
 static struct uui_statusbar g_status;
 static char g_status_msg[96];
@@ -117,6 +127,22 @@ static void do_ring3(int code) {
     ulogf("crashtest: ring3 trigger RETURNED without faulting\n");
 }
 
+// The desktop is a process like any other: found by name in the process
+// table and sent the signal. A real crash of toywm's own code would need
+// a way to ask it to fault; the signal's report is the same evidence.
+static void do_desktop(void) {
+    struct proc_info p;
+    for (int i = 0; i < SYS_PROC_MAX; i++) {
+        if (sys_proc_info(i, &p) != 0 || p.pid == 0 || strcmp(p.name, "toywm") != 0) continue;
+        char buf[64];
+        snprintf(buf, sizeof buf, "crashtest: desktop SIGSEGV to pid %d\n", (int)p.pid);
+        ulog(buf);
+        sys_kill(p.pid, SIGSEGV);
+        return;
+    }
+    ulog("crashtest: desktop -- no toywm process found\n");
+}
+
 static void do_kernel(struct uapp *a, int index) {
     struct crash_msg m;
     memset(&m, 0, sizeof m);
@@ -147,12 +173,16 @@ static void on_widget(struct uapp *a, int id, int reason) {
     int code = uui_button_group_take_activated(&g_r3);
     if (code) { do_ring3(code); return; }
 
+    code = uui_button_group_take_activated(&g_dk);
+    if (code == DESKTOP_CRASH) { do_desktop(); return; }
+
     code = uui_button_group_take_activated(&g_k0);
     if (code >= K0_BASE) do_kernel(a, code - K0_BASE);
 }
 
 static struct uui_item ITEMS[] = {
     { .ops = &uui_button_group_ops, .widget = &g_r3, .id = 1 },
+    { .ops = &uui_button_group_ops, .widget = &g_dk, .id = 4 },
     { .ops = &uui_button_group_ops, .widget = &g_k0, .id = 2 },
     { .ops = &uui_statusbar_ops,    .widget = &g_status, .id = 3 },
 };
@@ -166,6 +196,9 @@ static void build(void) {
                          UTHEME_BUTTON_BG, UTHEME_TEXT, i + 1);
     }
     uui_button_group_init(&g_r3, g_r3_btn, 5);
+    uui_button_init(&g_dk_btn[0], 0, 0, 150, 26, "crash the desktop",
+                    UTHEME_BUTTON_BG, UTHEME_TEXT, DESKTOP_CRASH);
+    uui_button_group_init(&g_dk, g_dk_btn, 1);
 
     // The kernel's list, enumerated rather than hardcoded.
     struct crash_msg m;
@@ -227,6 +260,9 @@ static void log_layout(void) {
                  g_k0.count);
         uapp_log_layout_line(buf);
     }
+    snprintf(buf, sizeof buf, "crashtest: layout desktop %d %d %d %d\n",
+             g_dk.buttons[0].x, g_dk.buttons[0].y, g_dk.buttons[0].w, g_dk.buttons[0].h);
+    uapp_log_layout_line(buf);
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
@@ -238,7 +274,10 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     // which half of the window ends the process and which ends the
     // machine.
     ugfx_draw_string(s, 8, 4, "Ring 3 -- this app dies", d->fg, d->bg);
-    ugfx_draw_string(s, 172, 4, "Ring 0 -- the machine panics", d->fg, d->bg);
+    if (g_dk.count > 0)
+        ugfx_draw_string(s, g_dk.buttons[0].x, 4, "Desktop -- it restarts", d->fg, d->bg);
+    if (g_k0.count > 0)
+        ugfx_draw_string(s, g_k0.buttons[0].x, 4, "Ring 0 -- the machine panics", d->fg, d->bg);
 }
 
 // A ROW of the two button groups; the status bar rides along at the end.
@@ -247,7 +286,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 static struct uui_layout LAYOUT = {
     .dir = UUI_ROW,
     .items = ITEMS,
-    .count = 3,
+    .count = 4,
 };
 
 int main(void) {
@@ -258,7 +297,7 @@ int main(void) {
         .flags = UAPP_SINGLE_INSTANCE,
         .layout = &LAYOUT,
         .widgets = ITEMS,
-        .widget_count = 3,
+        .widget_count = 4,
         .on_widget = on_widget,
         .on_draw_over = on_draw,
     };

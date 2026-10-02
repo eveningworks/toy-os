@@ -191,7 +191,7 @@ class RemoteConsole(DebugConsole):
         self._port = port
         self.timeout = timeout
         self.log_lines = []
-        self._klog_seen = 0
+        self._klog_last = None
         self._sess = _session(self.host, port, timeout)
         if not quiet and not RemoteConsole._announced:
             RemoteConsole._announced = True
@@ -244,7 +244,7 @@ class RemoteConsole(DebugConsole):
             if machine_is_up(self.host, self._port):
                 try:
                     self._sess = _session(self.host, self._port, self.timeout)
-                    self._klog_seen = 0     # a new boot, a new ring
+                    self._klog_last = None   # a new boot, a new ring
                     return True
                 except RuntimeError:
                     pass
@@ -275,10 +275,14 @@ class RemoteConsole(DebugConsole):
         lines = (self._sess.run("dmesg", self.timeout) or [])
         # `dmesg` echoes nothing of its own, but the shell prints the
         # command; Session.run() has already stripped that.
-        if len(lines) < self._klog_seen:
-            self._klog_seen = 0      # the ring wrapped, or the machine rebooted
-        new = lines[self._klog_seen:]
-        self._klog_seen = len(lines)
+        # ANCHORED ON THE LAST LINE SEEN, not on a count: a FULL ring keeps
+        # its length while it scrolls, so a count reported nothing new for
+        # the rest of the session. Lines carry a timestamp, so one is unique.
+        new = lines
+        if self._klog_last is not None and self._klog_last in lines:
+            new = lines[len(lines) - lines[::-1].index(self._klog_last):]
+        if lines:
+            self._klog_last = lines[-1]
         return new
 
     def events(self, prefix="uidemo:"):

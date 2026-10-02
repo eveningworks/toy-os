@@ -1856,10 +1856,14 @@ window without going through it will find its layout polls timing out.
   meaningless without the boot log). Same two-pass + `--verify` shape as
   `genrelocs.py`; the blob is deliberately pointer-free so it costs no
   relocations.
-- **`crashtest_test.py`** -- the fault paths (9 checks): the app
-  enumerates the kernel's fault kinds, kernel faults are refused while
-  disarmed, and a ring-3 crash kills the app WITHOUT taking the desktop
-  with it. In `gui_regress.py`, which is only safe because the kernel
+- **`crashtest_test.py`** -- the fault paths and what the user is told:
+  the app enumerates the kernel's fault kinds, kernel faults
+  are refused while disarmed, a ring-3 crash kills the app WITHOUT taking
+  the desktop with it, the crash notice names it, Details opens the
+  dialog and All reports the list -- then "crash the desktop" kills toywm
+  and the test checks the kernel HELD the last frame (its log line, and
+  no "console restored") and the restarted desktop says so. It ends on a
+  restarted desktop. In `gui_regress.py`, which is only safe because the kernel
   half is disarmed unless `faultinject` is on the command line.
 - **`player_test.py`** -- the Audio Player, on a machine with **no
   sound device**, which is the default boot and therefore the
