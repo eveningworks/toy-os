@@ -2247,15 +2247,15 @@ static void open_newtab_menu(void) {
     g_newtab_items[n++] = (struct uui_menu_item)UUI_MENU_ICON("Options...", CMD_PREFS, 0, "tb-gear", 0);
     int x, y, w, h;
     uui_toolbar_item_rect(&g_tb, TB_NEWTAB, &x, &y, &w, &h);
-    uui_menubar_open_below(&g_ctx, g_newtab_items, n, x, y, w, h, 0);
+    uui_menubar_open_below(&g_ctx, g_newtab_items, n, x, y, w, h);
 }
 
 static void open_burger_menu(void) {
     int x, y, w, h;
     uui_toolbar_item_rect(&g_tb, TB_MENU, &x, &y, &w, &h);
-    // Under the button, its right edge on the button's (KDE's ☰).
+    // Under the button, its left edge on the button's (KDE's ☰).
     uui_menubar_open_below(&g_ctx, burger_items,
-                           (int)(sizeof burger_items / sizeof burger_items[0]), x, y, w, h, 1);
+                           (int)(sizeof burger_items / sizeof burger_items[0]), x, y, w, h);
 }
 
 // The bar's own commands. Returns 0 for any other code.

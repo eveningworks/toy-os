@@ -284,11 +284,11 @@ void uui_menubar_open_at(struct uui_menubar *m, const struct uui_menu_item *item
                           int count, int x, int y);
 
 // As a BUTTON'S MENU: below the anchor rect (a toolbar button's), its
-// left edge on the button's -- or, with `align_right`, its RIGHT edge on
-// the button's, which is where a menu button at a window's right end
-// opens (KDE's and Windows 11's ☰). Same rules as open_at() otherwise.
+// left edge on the button's -- KDE's ☰, which runs past the window's
+// edge when it must; the popup provider flips it only at the SCREEN's.
+// Same rules as open_at() otherwise.
 void uui_menubar_open_below(struct uui_menubar *m, const struct uui_menu_item *items,
-                            int count, int ax, int ay, int aw, int ah, int align_right);
+                            int count, int ax, int ay, int aw, int ah);
 
 // --- geometry, for tests and for an app that reports its layout --------
 //
