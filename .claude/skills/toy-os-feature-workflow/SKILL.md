@@ -375,8 +375,9 @@ to this file too).
    Update
    `docs/roadmap.md` (checkbox list, `- [ ]`/`- [x]`) if this session
    only planned something rather than building it, striking it through
-   once it actually ships; update `README.md`'s own feature/command description instead
-   if it actually got built. See `references/doc-templates.md` for the
+   once it actually ships; update `docs/features.md`'s description of that area
+   instead if it actually got built (README.md is a front page: its Highlights
+   change only for a headline-level capability). See `references/doc-templates.md` for the
    exact shapes and real excerpts to copy the tone from -- don't
    freehand these from scratch, and double-check the template still
    matches the live files (see the note at the top of this skill about

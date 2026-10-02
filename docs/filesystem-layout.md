@@ -7,7 +7,7 @@ directory can't quietly appear without being described here first.
 
 This is about the **runtime filesystem** (`disk.img`, what you see from
 inside the OS). For the repository's own directory structure see
-`README.md`'s project-layout section.
+[architecture.md](architecture.md).
 
 ## Is this POSIX?
 

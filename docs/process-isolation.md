@@ -7,8 +7,7 @@
 
 The build-up of real ring0/ring3 privilege separation in toy-os, told
 as it happened -- what got added, what broke, and how each bug was
-found and fixed. Moved out of README.md (which now keeps just a short
-summary + a link here) because this is a full implementation
+found and fixed. Moved out of README.md because this is a full implementation
 walkthrough, not a feature list entry. See `docs/decisions.md` for
 shorter topic-indexed "why" answers, and `git log` for the history this
 was assembled from.

@@ -123,9 +123,12 @@ that literally.
 
 For a change that was actually built (not just planned): extend the
 existing feature/capability description in place, wherever the repo
-already documents that area (README's own feature list, `apps/README.md`
-for app-specific behavior, etc.) rather than appending a new paragraph
-somewhere else. A reader looking up "what does the font system
+already documents that area (`docs/features.md`, `apps/README.md` for
+app-specific behavior, etc.) rather than appending a new paragraph
+somewhere else. README.md has been a short FRONT PAGE since 2026-10-02 --
+highlights, try it, status, docs, license -- with build and run detail in
+`docs/building.md`; touch its Highlights only for a headline-level
+capability, and its Known gaps when one closes. A reader looking up "what does the font system
 support" should find a new Nordic-glyph note right next to the rest of
 the font description, not in a separate location. README.md was
 trimmed down to focus on current capabilities -- if what you're adding
