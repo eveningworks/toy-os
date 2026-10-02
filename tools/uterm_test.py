@@ -1470,34 +1470,16 @@ def check_scrollbar(dbg, qmp, tmp, res):
     if not bar:
         return
 
-    # THE TRACK IS ACTUALLY PAINTED, read as pixels rather than assumed
-    # from the rect: a reported rect proves the app computed one, not
-    # that anything reached the screen. The control is the strip of
-    # background just LEFT of the bar, which must stay the page -- half the
-    # assertion is the neighbour staying put.
+    # AN OVERLAY BAR (terminal.c's bar_rect): nothing drawn while there is
+    # nothing to scroll, a thin thumb at rest, the full groove under the
+    # pointer. Read as pixels, each against a control.
     c = win["content"]
-    gutter = ink(qmp, tmp, "sb_gutter.png",
-                 (c["x"] + bar[0], c["y"] + bar[1],
-                  c["x"] + bar[0] + bar[2], c["y"] + bar[1] + bar[3]), thresh=8)
-    beside = ink(qmp, tmp, "sb_gutter.png",
-                 (c["x"] + bar[0] - bar[2], c["y"] + bar[1],
-                  c["x"] + bar[0], c["y"] + bar[1] + bar[3]), thresh=8)
+    box = (c["x"] + bar[0], c["y"] + bar[1],
+           c["x"] + bar[0] + bar[2], c["y"] + bar[1] + bar[3])
     area = bar[2] * bar[3]
-    res.check("s2. the track is painted, and the margin beside it is not",
-              gutter > area // 2 and beside < area // 10,
-              f"{gutter}/{area} px in the gutter, {beside} beside it")
-
-    # THE SHAPE, read as pixels: the groove is a capsule
-    # (uui_scrollbar_style_default), so its four corners are background
-    # and the middle of each of its four edges is still track. Asserting
-    # only the corners would pass against a bar that was never drawn.
-    corners, middles = corner_shape(
-        qmp, tmp, "sb_shape.png",
-        (c["x"] + bar[0], c["y"] + bar[1],
-         c["x"] + bar[0] + bar[2], c["y"] + bar[1] + bar[3]), TRACK)
-    res.check("s2a. the track's corners are rounded away, its edges are not",
-              corners == 0 and middles == 4,
-              f"{corners}/4 corners still track-coloured, {middles}/4 edge midpoints")
+    empty = ink(qmp, tmp, "sb_empty.png", box, thresh=8)
+    res.check("s2. with no scrollback the bar is not drawn",
+              empty < area // 20, f"{empty}/{area} px inked in the bar's rect")
 
     fill_scrollback(dbg)
     sbcount = layout_field(dbg, "sbcount") or 0
@@ -1505,6 +1487,40 @@ def check_scrollbar(dbg, qmp, tmp, res):
               sbcount > 20, f"sbcount {sbcount}")
     if sbcount <= 20:
         return
+
+    # AT REST: a thumb on the rect's right edge and NO groove -- the text
+    # under the rest of the rect stays uncovered. The groove is told from
+    # text by SHAPE: down the bar's centre column it is one long run of
+    # its colour, where a glyph's anti-aliased edge is a few pixels.
+    from PIL import Image
+    p = os.path.abspath(os.path.join(tmp, "sb_rest.png"))
+    qmp.screenshot(p)
+    with Image.open(p) as im:
+        rgb = im.convert("RGB")
+        def near(px, col, tol):
+            return all(abs(px[i] - col[i]) < tol for i in range(3))
+        right = sum(near(rgb.getpixel((x, y)), (118, 121, 124), 12)
+                    for x in range(box[2] - 4, box[2]) for y in range(box[1], box[3]))
+        cx = box[0] + bar[2] // 2
+        run = best = 0
+        for y in range(box[1], box[3]):
+            run = run + 1 if near(rgb.getpixel((cx, y)), TRACK, 4) else 0
+            best = max(best, run)
+    res.check("s2c. at rest it is a thin thumb on the edge, with no groove",
+              right > 10 and best < bar[3] // 4,
+              f"thumb px on the edge {right}, longest groove run {best} of {bar[3]}")
+
+    # HOVERED: the full groove, a capsule -- its four corners background,
+    # the middle of each edge track. The pointer has to be REALLY there
+    # (warp_cursor): an injected move lasts one frame.
+    dbg.warp_cursor(qmp, c["x"] + bar[0] + bar[2] // 2, c["y"] + bar[1] + bar[3] // 3)
+    time.sleep(0.8)
+    corners, middles = corner_shape(qmp, tmp, "sb_shape.png", box, TRACK)
+    # Three midpoints, not four: the view is at the bottom, so the thumb
+    # covers the groove's bottom midpoint.
+    res.check("s2a. hovered, the groove grows in: corners rounded away, edges track",
+              corners == 0 and middles >= 3,
+              f"{corners}/4 corners still track-coloured, {middles}/4 edge midpoints")
 
     # The thumb, from the app's rect and the widget's own proportions.
     # Dragging it UP goes BACK into history: a vertical bar here is a

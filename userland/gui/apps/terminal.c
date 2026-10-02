@@ -84,6 +84,8 @@
 #include "ui/uui_dialog.h"
 #include "ui/uui_toolbar.h"
 #include "ui/uui_findbar.h"
+#include "ui/uui_anim.h"
+#include "lib/utween.h"
 #include <unistd.h>   // chdir/getcwd, around a new tab's spawn
 #include "keyboard.h"
 #include "ansi.h"   // the kernel's parser, compiled into libuapp too
@@ -460,14 +462,10 @@ static int g_rows = 24, g_cols = 80;  // one window, so one size for all
 
 // --- the scrollbar ----------------------------------------------------
 //
-// A RESERVED GUTTER, not an overlay: the grid narrows by the bar's width
-// and text never sits under it. Konsole, xterm and GNOME Terminal all do
-// this, and the alternative -- a bar over the last columns -- costs the
-// shell nothing but puts an indicator on top of its output.
-//
-// The width comes from the widget (uui_scrollbar_natural_size()), so it
-// tracks the font like everything else here; hardcoding one is what gave
-// Notepad an 8px strip that was genuinely hard to click.
+// AN OVERLAY, thin at rest and full under the pointer -- see bar_rect().
+// The full width comes from the widget (uui_scrollbar_natural_size()), so
+// it tracks the font like everything else here; hardcoding one is what
+// gave Notepad an 8px strip that was genuinely hard to click.
 static int chrome_h(void);
 
 // **CHROME IS MEASURED IN THE UI FACE, WHATEVER IS SELECTED.** This is
@@ -508,18 +506,41 @@ static int grid_right(int win_w) { return win_w - panel_w(); }
 // hit-testing and the drag maths all call -- two derivations is the
 // classic way a scrollbar draws in one place and responds in another.
 //
-// **INSET BY THE SAME g_margin THE TEXT USES**, on the right and at both
-// ends, so the track floats in the window rather than butting against
-// its edges -- which is what it looked like flush, a bar welded to the
-// frame. The width it RESERVES is unchanged, because size_changed()
-// already takes the margin off both sides before dividing into columns;
-// the gap costs no cells.
+// **AN OVERLAY, NOT A GUTTER** -- the Start menu's bar, Windows 11's and
+// GNOME's: it reserves no columns. At rest it is a 3 px thumb inside the
+// right margin, over no text; under the pointer or a drag it grows to
+// the full bar over the last column, which is what a gutter cost all the
+// time. This rect is the FULL bar, and the hover zone.
 static void bar_rect(int win_w, int win_h, int *x, int *y, int *w, int *h) {
     *w = bar_w();
-    *x = grid_right(win_w) - *w - g_margin;
+    *x = grid_right(win_w) - *w - 2;
     *y = chrome_h() + g_margin;
     *h = win_h - *y - g_margin;
     if (*h < 1) *h = 1;
+}
+
+// THE WIDENING IS A TWEEN, 0 (thin) to SB_FULL (the full bar): out over
+// SB_GROW_MS, back only after the pointer has been gone SB_LINGER_MS, so
+// a hand drifting off the bar does not snatch it away -- the Start
+// menu's numbers (userland/wm/start_menu.c). Frames come from
+// uui_anim_request() only while it moves.
+#define SB_FULL      256
+#define SB_GROW_MS   150
+#define SB_LINGER_MS 400
+static struct utween g_sb_tw;
+static int g_sb_want;                     // heading wide (1) or thin (0)
+static unsigned long long g_sb_collapse;  // when a pending shrink starts, else 0
+
+static void sb_hover(int over) {
+    unsigned long long now = uui_anim_now_ns();
+    if (over) {
+        g_sb_collapse = 0;
+        if (!g_sb_want) utween_retarget(&g_sb_tw, SB_FULL, SB_GROW_MS, now);
+        g_sb_want = 1;
+    } else if (g_sb_want && !g_sb_collapse) {
+        g_sb_collapse = now + (unsigned long long)SB_LINGER_MS * 1000000ull;
+    }
+    if (g_app) uapp_redraw(g_app);
 }
 
 // A thumb drag in progress: how far down the thumb the press landed, or
@@ -1612,20 +1633,42 @@ static void draw(struct ugfx_surface *s, int focused) {
     // The scrollbar. TOTAL is the whole virtual buffer -- scrollback plus
     // the screen -- and the offset is sb_view unconverted, because a
     // vertical bar here already counts from the bottom (uui_scrollbar.h).
-    // The track is drawn whether or not there is anything to scroll: it
-    // is an indicator as well as a handle (gui-guidelines point 8).
+    // Drawn only when there is history to scroll: an overlay bar is an
+    // indicator of somewhere else to go, and with none it would be a line
+    // down the margin saying nothing.
     //
     // Its colours are Plasma's DARK pair (#31363b track, #76797c thumb),
-    // not the toolkit theme's. This page is the ANSI palette on black by
-    // definition, and the near-white bar Notepad draws would be the
-    // brightest thing on the window -- which is what Konsole's own dark
-    // scheme avoids by doing exactly this.
+    // not the toolkit theme's: the near-white bar Notepad draws would be
+    // the brightest thing on a dark page.
     int bx, by, bw, bh;
     bar_rect(s->w, s->h, &bx, &by, &bw, &bh);
-    if (bw > 0)
-        uui_scrollbar_draw(s, bx, by, bw, bh,
-                            ses->sb_count + g_rows, g_rows, ses->sb_view,
-                            ugfx_rgb(49, 54, 59), ugfx_rgb(118, 121, 124), 0);
+    unsigned long long now = uui_anim_now_ns();
+    if (g_sb_collapse && now >= g_sb_collapse && g_bar_grab < 0) {
+        g_sb_collapse = 0;
+        g_sb_want = 0;
+        utween_retarget(&g_sb_tw, 0, SB_GROW_MS, now);
+    }
+    int e = utween_value(&g_sb_tw, now);
+    if (utween_active(&g_sb_tw) || g_sb_collapse) uui_anim_request();
+    if (bw > 0 && ses->sb_count > 0) {
+        int ty, th;
+        uui_scrollbar_thumb_rect(by, bh, ses->sb_count + g_rows, g_rows, ses->sb_view,
+                                 &ty, &th, bw, 0);
+        uint32_t page = VGA_RGB[VT_BG];
+        // Thin: a 3 px thumb on the bar's right edge. Wide: the groove and
+        // the inset thumb. Every frame between is the two blended, the
+        // groove growing in from the edge -- the Start menu's drawing.
+        if (e > 0) {
+            int gw = 3 + (bw - 3) * e / SB_FULL;
+            uui_fill_round_rect(s, bx + bw - gw, by, gw, bh, UUI_CAPSULE,
+                                ugfx_blend(page, ugfx_rgb(49, 54, 59), (uint8_t)(255 * e / SB_FULL)));
+        }
+        int inset = uui_scrollbar_thumb_inset(bw);
+        int tw = 3 + (bw - 2 * inset - 3) * e / SB_FULL;
+        int tr = (bx + bw - 1) - (inset - 1) * e / SB_FULL;
+        uui_fill_round_rect(s, tr - tw + 1, ty, tw, th, UUI_CAPSULE,
+                            g_bar_grab >= 0 ? ugfx_rgb(150, 153, 156) : ugfx_rgb(118, 121, 124));
+    }
 
     // The caret, only while FOCUSED and only while the program wants it
     // shown (`ESC[?25l` hides it -- a full-screen program parking the
@@ -1896,7 +1939,7 @@ static void size_changed(int w, int h) {
     // THE GUTTER COMES OFF THE WIDTH, and default_size() adds it back --
     // the two are inverses and a bar counted in only one of them is a
     // window that opens one column narrower than it asks for.
-    int cols = (grid_right(w) - 2 * g_margin - bar_w()) / cw;
+    int cols = (grid_right(w) - 2 * g_margin) / cw;   // the bar overlays (bar_rect)
     if (rows < 2) rows = 2;
     if (cols < 8) cols = 8;
     // Grow the buffers to fit; on a failed malloc keep the old
@@ -2691,7 +2734,8 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
 
     int bx, by, bw, bh;
     bar_rect(uapp_width(a), uapp_height(a), &bx, &by, &bw, &bh);
-    if (x >= bx) {
+    if (bw > 0 && ses->sb_count > 0 && x >= bx && x < bx + bw && y >= by) {
+        sb_hover(1);
         int total = ses->sb_count + g_rows;
         switch (uui_scrollbar_hit(bx, by, bw, bh, total, g_rows,
                                    ses->sb_view, x, y, 0)) {
@@ -2748,6 +2792,11 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     // menu is down -- its rows lie over the grid.
     int sbx, sby, sbw, sbh;
     bar_rect(uapp_width(a), uapp_height(a), &sbx, &sby, &sbw, &sbh);
+    int over_bar = sbw > 0 && ses->sb_count > 0 && x >= sbx && x < sbx + sbw
+                   && y >= sby && y < sby + sbh;
+    if (over_bar != g_sb_want || (over_bar && g_sb_collapse)) {
+        if (over_bar || g_bar_grab < 0) sb_hover(over_bar);
+    }
     // Not over the floating find bar either: it sits on the grid and
     // names its own cursor (the I-beam over its field only).
     int over_find = g_find_open && uui_hit(g_find.x, g_find.y, g_find.w, g_find.h, x, y);
@@ -2791,8 +2840,13 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
 
 static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
     if (modal_up()) return;
-    (void)x; (void)y; (void)buttons;
-    g_bar_grab = -1;
+    (void)buttons;
+    if (g_bar_grab >= 0) {
+        g_bar_grab = -1;
+        int bx, by, bw, bh;
+        bar_rect(uapp_width(a), uapp_height(a), &bx, &by, &bw, &bh);
+        if (!(x >= bx && x < bx + bw && y >= by && y < by + bh)) sb_hover(0);
+    }
     if (!g_selecting) return;
     g_selecting = 0;
     // **COPY ON SELECT**, which X11 calls the PRIMARY selection and
@@ -2872,7 +2926,7 @@ static int on_close_cb(struct uapp *a) {
 // g_menu -- chrome_h() is safe only because both halves of it are pure
 // font arithmetic.
 static void default_size(int *w, int *h) {
-    *w = g_conf.cols * cell_w() + 2 * g_margin + bar_w() + panel_w();
+    *w = g_conf.cols * cell_w() + 2 * g_margin + panel_w();
     *h = g_conf.rows * cell_h() + chrome_h() + 2 * g_margin;
 }
 

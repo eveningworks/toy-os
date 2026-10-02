@@ -4540,14 +4540,17 @@ any keycap's box**, so a test never derives a cap's position; the caps
 are named (`Space`, `Left`, `Enter`) partly for that reason, since a cap
 labelled `" "` cannot be passed as a console token.
 
-- **THE TERMINAL HAS A SCROLLBAR, IN A RESERVED GUTTER, AND THE GRID
-  NARROWS FOR IT.** Konsole, xterm and GNOME Terminal all reserve rather
-  than overlay; an overlay costs no columns and puts an indicator on top
-  of the shell's output. `size_changed()` subtracts the bar's width and
-  `default_size()` adds it back -- **the two are inverses, and a bar
-  counted in only one of them is a window that opens a column narrower
-  than it asked for.** The width comes from
-  `uui_scrollbar_natural_size()`, never a literal.
+- **THE TERMINAL'S SCROLLBAR IS AN OVERLAY: THIN AT REST, FULL UNDER THE
+  POINTER, AND THE GRID DOES NOT NARROW FOR IT.** It was a reserved
+  gutter (Konsole's, xterm's) until the maintainer found it too heavy
+  (2026-10-02); it is now the Start menu's bar -- Windows 11's and
+  GNOME Console's: a 3 px thumb inside the right margin over no text,
+  growing to `uui_scrollbar_natural_size()`'s width over the last column
+  while hovered or dragged, and drawn only when there is scrollback.
+  **`size_changed()` and `default_size()` both leave it out** -- they are
+  inverses, and a bar counted in only one of them is a window that opens
+  a column narrower than it asked for. `bar_rect()` is the full bar and
+  the hover zone, and the one geometry draw, hit-test and drag all use.
 
   Three things follow. **`sb_view` already counts from the BOTTOM**,
   which is what a vertical `uui_scrollbar`'s offset means
