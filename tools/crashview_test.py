@@ -150,6 +150,9 @@ def main():
             frames.append((int(m.group(1)), int(m.group(2), 16), m.group(3), m.group(4), int(m.group(5), 16)))
     if not check("the viewer read a backtrace", len(frames) >= 3, f"{len(frames)} frames"):
         return _res.finish("crashview_test")
+    view = dbg.logs("crashreports: view", clear=False)
+    check("the viewer offers Reopen for a desktop app",
+          bool(view) and view[-1].rstrip().endswith("reopen 1"), view[-1].strip() if view else "no view line")
     check("frame 0 is the report's rip", frames[0][1] == rip, f"{frames[0][1]:#x} vs {rip:#x}")
 
     hosts = {}

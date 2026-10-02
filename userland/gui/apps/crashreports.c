@@ -55,6 +55,7 @@ struct report {
     unsigned err;
     time_t when;
     unsigned size;
+    int can_reopen;       // a desktop app; a daemon is init's to restart
 };
 
 static struct report g_rep[MAX_REPORTS];
@@ -64,12 +65,17 @@ static int g_dialog;             // 1 = the one-report face
 
 // --- what the desktop entries call a program -------------------------
 
-// The entry's Name= for the program, else its file name.
-static void friendly_name(const char *exec, char *out, int cap) {
+// The entry's Name= for the program, else its file name. 1 when it has
+// an entry: only then is it a program a person starts, and so one
+// Reopen may start. toywm, fontd and telnetd are init's services -- a
+// second toywm evicts the live desktop, and init restarts it anyway
+// (the desktop's crash notice draws the same line, crash_notice.c).
+static int friendly_name(const char *exec, char *out, int cap) {
     struct uappentry e;
-    if (uappentry_find_exec(exec, &e)) { strlcpy(out, e.name, (size_t)cap); return; }
+    if (uappentry_find_exec(exec, &e)) { strlcpy(out, e.name, (size_t)cap); return 1; }
     const char *base = strrchr(exec, '/');
     strlcpy(out, base ? base + 1 : exec, (size_t)cap);
+    return 0;
 }
 
 // --- reading one report ----------------------------------------------
@@ -93,7 +99,7 @@ static int parse_report(const char *path, struct report *r) {
     r->when = c.when;
     r->size = c.size;
     ucrash_where(&c, r->where, sizeof r->where);
-    friendly_name(r->program, r->name, sizeof r->name);
+    r->can_reopen = friendly_name(r->program, r->name, sizeof r->name);
     return 1;
 }
 
@@ -240,7 +246,11 @@ static void command(struct uapp *a, int code) {
     case CMD_NOTEPAD: if (r) uapp_spawn(a, "/bin/wm/apps/notepad", r->path); break;
     case CMD_SHOW:   if (r) uapp_spawn(a, "/bin/wm/apps/files", r->path); break;
     case CMD_COPY:   if (r) { summary(r, text, sizeof text); uclip_set_text(text, (int)strlen(text)); } break;
-    case CMD_REOPEN: if (r) uapp_spawn(a, r->program, 0); uapp_quit(a, 0); return;
+    case CMD_REOPEN:
+        if (!r || !r->can_reopen) break;
+        uapp_spawn(a, r->program, 0);
+        uapp_quit(a, 0);
+        return;
     case CMD_ALL:    uapp_spawn(a, "/bin/wm/apps/crashreports", 0); uapp_quit(a, 0); return;
     case CMD_CLOSE:  uapp_quit(a, 0); return;
     case CMD_DELETE:
@@ -316,7 +326,7 @@ static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
     draw_details(s, r, x, y + ugfx_char_h(), w);
 }
 
-// The keyboard: the table in the list; the buttons in the dialog, Reopen
+// The keyboard: the table in the list; the buttons in the dialog, Reopen (if any)
 // first. Esc closes the dialog, as any dialog's does.
 static struct uui_focusable g_list_focus[1];
 static struct uui_focusable g_dlg_focus[5];
@@ -368,6 +378,10 @@ static const struct uui_toolbar_item VTB[] = {
 };
 #define LOG_ALL  "show-all-lines"   // ONE word: a link is an inline-code word (uui_markdown.h)
 #define LOG_FEW  "show-its-lines"
+
+static unsigned view_flags(int code) {
+    return code == CMD_REOPEN && !g_one.can_reopen ? UUI_MI_DISABLED : 0;
+}
 
 static void md(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void md(const char *fmt, ...) {
@@ -503,7 +517,8 @@ static int view_main(const char *path) {
     g_dialog = 2;
     ucrash_backtrace(&g_cr);
     // What a test reads: the frames as this program named them.
-    ulogf("crashreports: view %s frames %d stale %d\n", g_cr.file, g_cr.nframe, g_cr.stale);
+    ulogf("crashreports: view %s frames %d stale %d reopen %d\n", g_cr.file, g_cr.nframe, g_cr.stale,
+          g_one.can_reopen);
     for (int i = 0; i < g_cr.nframe; i++)
         ulogf("crashreports: frame %d 0x%llx %s %s +0x%llx\n", i, (unsigned long long)g_cr.frame[i].addr,
               g_cr.frame[i].module, g_cr.frame[i].func[0] ? g_cr.frame[i].func : "-",
@@ -512,6 +527,7 @@ static int view_main(const char *path) {
     uui_markdown_set_links(&g_doc, log_link, 0);
     build_doc();
     uui_toolbar_init(&g_vtb, VTB, (int)(sizeof VTB / sizeof VTB[0]));
+    g_vtb.item_flags = view_flags;
     g_v_items[0] = (struct uui_item){ .ops = &uui_toolbar_ops, .widget = &g_vtb, .id = ID_VTB,
                                       .flags = UUI_FILL_W, .name = "tb" };
     g_v_items[1] = (struct uui_item){ .ops = &uui_markdown_ops, .widget = &g_doc, .id = ID_DOC,
@@ -544,9 +560,12 @@ int main(int argc, char **argv) {
         button(&g_b_copy, "Copy", CMD_COPY, 0, 1);
         button(&g_b_all, "All reports", CMD_ALL, 0, 2);
         g_btn_items[3] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_gap, .flags = UUI_FILL_W };
-        button(&g_b_close, "Close", CMD_CLOSE, 0, 4);
+        // No Reopen for a service: Close is then the default button.
+        int reopen = g_one.can_reopen;
+        button(&g_b_close, "Close", CMD_CLOSE, !reopen, 4);
         button(&g_b_reopen, "Reopen", CMD_REOPEN, 1, 5);
-        g_btns = (struct uui_layout){ .dir = UUI_ROW, .items = g_btn_items, .count = 6, .margin = 10 };
+        g_btns = (struct uui_layout){ .dir = UUI_ROW, .items = g_btn_items, .count = reopen ? 6 : 5,
+                                      .margin = 10 };
         g_d_items[0] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_body,
                                           .flags = UUI_FILL_W | UUI_FILL_H, .name = "body" };
         g_d_items[1] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &g_btns, .flags = UUI_FILL_W };
@@ -554,8 +573,10 @@ int main(int argc, char **argv) {
         char title[64];
         snprintf(title, sizeof title, "%s crashed", g_one.name);
         struct uui_button *order[5] = { &g_b_reopen, &g_b_close, &g_b_all, &g_b_copy, &g_b_open };
-        for (int i = 0; i < 5; i++) g_dlg_focus[i] = (struct uui_focusable){ order[i], &uui_button_ops };
-        uui_focus_init(&g_focus, g_dlg_focus, 5);
+        int first = reopen ? 0 : 1;
+        for (int i = first; i < 5; i++)
+            g_dlg_focus[i - first] = (struct uui_focusable){ order[i], &uui_button_ops };
+        uui_focus_init(&g_focus, g_dlg_focus, 5 - first);
         uui_focus_set(&g_focus, 0);
         struct uapp_desc desc = {
             // ITS OWN app id: the WM remembers a window's size per id, and

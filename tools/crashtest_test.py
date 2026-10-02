@@ -202,6 +202,8 @@ def crash_ux(dbg, args):
           "notice" not in (state(dbg) or {}))
     if not dlg:
         return
+    check("the dialog offers Reopen for a desktop app",
+          "Reopen" in dbg.widgets("Crash Test crashed"))
 
     dbg.click(*dbg.widget_center("All reports", "Crash Test crashed"))
     lst = wait_for(lambda: dbg.window("Crash Reports"))
@@ -259,6 +261,26 @@ def crash_ux(dbg, args):
     check("the restarted desktop says it restarted",
           note is not None and note["title"] == "The desktop restarted after a problem",
           note["title"] if note else "no notice")
+    if note and note["details"][2]:
+        no_reopen(dbg, note)
+
+
+def no_reopen(dbg, note):
+    """A crashed SERVICE is init's to restart, so its report offers no
+    Reopen: a second toywm evicted the live desktop, and both crashed."""
+    click_rect(dbg, note["details"])
+    dlg = wait_for(lambda: dbg.window("toywm crashed"))
+    check("the restart notice's Details opens the desktop's crash dialog", dlg is not None)
+    if not dlg:
+        return
+    w = dbg.widgets("toywm crashed")
+    check("...which offers no Reopen for a service, and Close instead",
+          "Reopen" not in w and "Close" in w, ", ".join(sorted(w)))
+    dbg.logs("crashreports:", clear=True)
+    dbg.click(*dbg.widget_center("Open report", "toywm crashed"))
+    view = wait_for(lambda: [l for l in dbg.logs("crashreports: view", clear=False) if "toywm-" in l])
+    check("...and its viewer greys Reopen out", bool(view) and view[-1].rstrip().endswith("reopen 0"),
+          view[-1].strip() if view else "no view line")
 
 
 if __name__ == "__main__":
