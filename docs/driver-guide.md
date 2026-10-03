@@ -191,6 +191,16 @@ the machine then boots perfectly and cannot be given an address.
 interrupt it took; that one line is most of the diagnosis when a
 different revision turns up.
 
+**Do not trust the interrupt to cover every frame.** A ring driver that
+receives only from its handler loses the frame whose interrupt beat its
+descriptor writeback: the handler finds the ring empty, and the frame
+waits for whatever arrives next — under TFTP, the sender's 2 s timeout.
+It shows as a transfer that is right but occasionally seconds slow, on
+one chip revision and not another. `r8169`'s `r8169_rx_sweep()` is the
+remedy: a `poll_ms` sweep that drains the ring with interrupts masked
+(`irqflags.h`). A read-only sweep that only LOGS a frame found waiting
+is how to prove it before fixing it.
+
 ## 10. Before you commit
 
 - `tools/check_drivers.py`, `check_dispatch.py`, `check_docs.py` —

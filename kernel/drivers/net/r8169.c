@@ -27,6 +27,7 @@
 #include "string.h"
 #include "errno.h"
 #include "barrier.h"
+#include "irqflags.h" // irq_save() -- the ring timer must not race the handler
 #include "multiboot.h" // multiboot_cmdline() -- the `nor8169` flag
 #include "driver.h" // driver_bound() -- `lsdrv`
 
@@ -213,7 +214,19 @@ static int r8169_transmit(struct net_device *dev, const void *frame, uint32_t le
     return 0;
 }
 
-static void r8169_poll(struct net_device *dev) { drain_rx(dev); }
+// THE INTERRUPT CAN COME BEFORE THE FRAME. An RTL8168G raises its receive
+// status a moment before it writes the descriptor back, so the handler
+// can drain an empty ring and return -- and that frame then waits for
+// the NEXT interrupt. With TFTP the next one only came after the server
+// timed out, 2 s later, several times a transfer. (Linux's NAPI reads
+// the ring later, from a softirq.) A 10 ms sweep finishes the job, with
+// interrupts off so it cannot meet the handler inside drain_rx(); with
+// no interrupt at all it is the whole receive path.
+static void r8169_rx_sweep(struct net_device *dev) {
+    uint64_t f = irq_save();
+    if (g_present && !(g_r.rx[g_r.rx_cur].opts1 & R8169_DESC_OWN)) drain_rx(dev);
+    irq_restore(f);
+}
 
 // --- bring-up ----------------------------------------------------------
 
@@ -387,11 +400,11 @@ static void r8169_probe(const struct pci_device *pci) {
         reg_write16(REG_IMR, mask);
         klog_printf("r8169: xid %x, on IRQ %u\n", xid, line);
     } else {
-        g_dev.poll = r8169_poll;
-        g_dev.poll_ms = 10;
         klog_printf("r8169: xid %x, no usable interrupt -- receiving by poll\n", xid);
     }
 
+    g_dev.poll = r8169_rx_sweep;
+    g_dev.poll_ms = 10;
     if (!net_register(&g_dev)) { g_present = 0; return; }
 
     update_link(&g_dev);
