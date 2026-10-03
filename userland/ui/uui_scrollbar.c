@@ -1,5 +1,7 @@
 // scrollbar. Split out of uwidgets.c -- see ui/uui_scrollbar.h.
 #include "ui/uui_scrollbar.h"
+#include "ui/utheme.h"
+#include "ui/uui_primitives.h"
 
 // ---------------------------------------------------------------------
 // scrollbar
@@ -229,4 +231,51 @@ int uui_scrollbar_offset_for_drag(int y, int h, int total_lines, int visible_row
     if (offset < 0) offset = 0;
     if (offset > max_scroll) offset = max_scroll;
     return offset;
+}
+
+// --- the overlay bar --------------------------------------------------
+
+#define OVERLAY_THIN 3
+
+uint32_t uui_scrollbar_overlay_thumb(uint32_t ground, uint32_t ink, int wide) {
+    if (wide < 0) wide = 0;
+    if (wide > 255) wide = 255;
+    // At rest the outline grey; wide, a blend toward the ink.
+    return ugfx_blend(UTHEME_OUTLINE, ugfx_blend(ground, ink, 130), (uint8_t)wide);
+}
+
+int uui_scrollbar_overlay_width(void) {
+    int w = ugfx_char_h() - 1;
+    return w < 8 ? 8 : w;
+}
+
+void uui_scrollbar_draw_overlay(struct ugfx_surface *s, int x, int y, int w, int h,
+                                int total_lines, int visible_rows, int scroll_offset,
+                                uint32_t ground, uint32_t ink, int wide, unsigned flags) {
+    if (total_lines <= visible_rows) return;
+    if (wide < 0) wide = 0;
+    if (wide > 255) wide = 255;
+    int horiz = (flags & UUI_SCROLLBAR_HORIZ) != 0;
+    int bw = horiz ? h : w;
+    int tp, tl;   // the thumb along the scrolled axis -- the hit-test's own
+    uui_scrollbar_thumb_rect(horiz ? x : y, horiz ? w : h, total_lines, visible_rows,
+                             scroll_offset, &tp, &tl, bw, flags & UUI_SCROLLBAR_HORIZ);
+    int far = (horiz ? y + h : x + w) - 1;
+
+    // Thin: a 3 px thumb on the strip's far edge. Wide: a groove the
+    // run of the strip and EXACTLY the thumb's width -- the capsule in a
+    // channel of its own size, no rim of grey beside it. Every `wide`
+    // between is the two blended, the groove fading in as it widens.
+    int inset = uui_scrollbar_thumb_inset(bw);
+    int tw = OVERLAY_THIN + (bw - 2 * inset - OVERLAY_THIN) * wide / 255;
+    int edge = far - (inset - 1) * wide / 255;   // the thumb's outer edge
+    if (wide > 0) {
+        uint32_t gc = ugfx_blend(ground, ink, (uint8_t)(24 * wide / 255));
+        if (horiz) uui_fill_round_rect(s, x, edge - tw + 1, w, tw, UUI_CAPSULE, gc);
+        else       uui_fill_round_rect(s, edge - tw + 1, y, tw, h, UUI_CAPSULE, gc);
+    }
+    uint32_t held = ugfx_blend(ground, ink, (flags & UUI_SCROLLBAR_HELD) ? 170 : 130);
+    uint32_t tc = ugfx_blend(UTHEME_OUTLINE, held, (uint8_t)wide);
+    if (horiz) uui_fill_round_rect(s, tp, edge - tw + 1, tl, tw, UUI_CAPSULE, tc);
+    else       uui_fill_round_rect(s, edge - tw + 1, tp, tw, tl, UUI_CAPSULE, tc);
 }

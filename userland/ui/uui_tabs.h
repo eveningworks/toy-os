@@ -62,6 +62,9 @@
 struct uui_tab {
     const char *label;  // not owned
     int closable;       // draw a close box and report clicks on it
+    // Unsaved: a dot in the close box's place until the pointer is on
+    // the tab, which shows the close box again (Windows 11 Notepad's).
+    int modified;
 };
 
 struct uui_tabs {
@@ -96,6 +99,9 @@ struct uui_tabs {
     // -- four rounded corners and no baseline, Firefox's and libadwaita's
     // tab bar. The caller draws the line under the bar. Off by default.
     int floating;
+    // The baseline's colour; 0 = UTHEME_BORDER. Over a white page the
+    // separator colour is the right weight (Notepad).
+    uint32_t baseline;
 
     // Driven by the widget from pointer input; an app never sets these.
     int hovered;                // tab index under the cursor, or -1

@@ -2513,7 +2513,11 @@ window without going through it will find its layout polls timing out.
   emulator's CURSOR, which is what would be wrong if `\r` or overwrite
   were mishandled.
 - **`notepad_client_test.py`** -- drives the RING-3 Notepad and asserts
-  a full round trip: type, save, verify the bytes on disk via `cat` (a
+  tabs (New opens one and does not ask, Ctrl-W closes a clean one back to
+  the tab it came from and asks for a modified one), the edit history
+  (undoing everything typed makes the title CLEAN again -- dirty is a
+  position in the history -- and redo dirties it), find's match count,
+  and a full round trip: type, save, verify the bytes on disk via `cat` (a
   completely independent path -- the editor claiming success proves
   nothing), clear, reopen, and require the rendered text to match pixel
   for pixel. Two traps it encodes: `ls`'s output on this console is
@@ -2677,10 +2681,12 @@ window without going through it will find its layout polls timing out.
   setting left behind changes the machine for every later tool.
 
 - **`scrollbar_test.py`** -- scrollbar BEHAVIOUR, against the ring-3
-  Notepad: the thumb doesn't jump when grabbed anywhere on it, a drag is
-  reversible, the trough pages while an arrow steps, and the strip is
-  wide enough to hit. It measures the THUMB'S PIXELS (track and thumb
-  are known flat colours, so a column scan gives its exact top and
+  Notepad's OVERLAY bar: thin at rest, wide under the pointer, the thumb
+  doesn't jump when grabbed anywhere on it, a drag is reversible, the
+  trough pages, and the strip is wide enough to hit. The pointer is
+  parked on the strip at the end AWAY from the thumb, so its sprite
+  cannot split the thumb's run. It measures the THUMB'S PIXELS (anything
+  darker than the groove, so a column scan gives its exact top and
   height) rather than reading text, and takes the strip's rect from
   Notepad's own `notepad: layout scrollbar` line. Written after the
   ring-3 Notepad shipped a bar that scrolled -- so every other check
@@ -3271,7 +3277,10 @@ window without going through it will find its layout polls timing out.
   drag check goes red under the save control. Worth reading before
   adding a check here. In `gui_regress.py`.
 - **`diskmark_test.py`** -- drives the **Disk Mark** GUI benchmark and
-  asserts on it. **The load-bearing check is the NUMBERS, not the run
+  asserts on it, then on its run chart (samples and four phase marks),
+  its history (the run is a line in `/var/lib/diskmark/history` and F9
+  shows the table) and Stop (Esc kills, reaps and cleans up a second
+  run). **The load-bearing check is the NUMBERS, not the run
   finishing**: a build whose throughput arithmetic truncated to zero
   logged "all four passes complete" and drew four tiles reading
   `0.0 MB/s`, with correct IOPS beside them, so everything an "it ran"
@@ -5876,7 +5885,11 @@ window without going through it will find its layout polls timing out.
   compiler and a green run meant nothing. It writes to `tmp/ui/` and
   puts that `-I` first now, and asserts the edit changed something. In
   `ondemand_sweep.py`.
-- **`utext_hostcheck.py`** -- compiles `userland/ui/utext.c` with the
+- **`utext_hostcheck.py`** -- also checks the EDIT HISTORY
+  (`ui/uui_undo.c`: a word, a Backspace run, a replacement and a paste
+  are one step each, clean is a position, a full history forgets its
+  oldest steps) and that the line-number gutter takes its share of the
+  box in the hit test. It compiles `userland/ui/utext.c` with the
   host gcc, beside a NAIVE implementation of the same wrap rule written
   out longhand in the driver, and requires the two to agree over a
   corpus: this repository's own Markdown, a 4,000-line synthetic

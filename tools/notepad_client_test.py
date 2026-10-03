@@ -578,27 +578,54 @@ def run(dbg, qmp, tmp, shot_dir, res):
                   f"shape {shape_after} at {cur_pt} (I-beam is "
                   f"{DebugConsole.CURSOR_TEXT})")
 
-    # --- File > New asks as well, and that is the point ---------------
+    # --- New opens a TAB; closing a tab asks, and only when it must --
     #
-    # The confirm is not about CLOSING, it is about throwing the
-    # document away -- so New, Open and a Recent entry go through the
-    # same gate. Windows Notepad and gedit both ask here too.
+    # New used to replace the document, so it asked first. With tabs it
+    # opens one beside it (Windows 11 Notepad, Kate) and throws nothing
+    # away -- so it must NOT ask. Closing a tab is the discard now, and
+    # it asks for a modified one and not for a clean one.
+    def tabs():
+        for l in reversed(dbg.logs("notepad: layout tabcount", clear=False)):
+            n = l.split("tabcount")[1].split()
+            return int(n[0]), int(n[2])
+        return None
+
+    n0, cur0 = tabs() or (1, 0)
     key(dbg, "0x0e")                          # Ctrl-N
     dbg.settle()
     time.sleep(0.8)
+    res.check("New on a modified document opens a tab, and does not ask",
+              not dialog_buttons(dbg) and tabs() == (n0 + 1, n0), f"tabs {tabs()}, had {n0}")
+    res.check("...titled untitled", find_window(dbg, "untitled") is not None)
+
+    key(dbg, "0x17")                          # Ctrl-W: the clean new tab
+    dbg.settle()
+    time.sleep(0.8)
+    # ...and goes back to the tab it was opened FROM, as browsers do.
+    res.check("Ctrl-W closes a CLEAN tab without asking, back to the one before",
+              not dialog_buttons(dbg) and tabs() == (n0, cur0), f"tabs {tabs()}, was on {cur0}")
+
+    key(dbg, "0x17")                          # Ctrl-W: the modified one
+    dbg.settle()
+    time.sleep(0.8)
     btns = dialog_buttons(dbg)
-    res.check("File > New on a modified document asks before discarding it",
+    res.check("Ctrl-W on a MODIFIED tab asks before discarding it",
               len(btns) == 3, f"button rects reported: {btns}")
     if len(btns) != 3:
         return
-    press(1)                                  # Don't Save -> a fresh document
+    press(1)                                  # Don't Save -> the tab goes
+    res.check("...and Don't Save closes that tab", tabs() == (max(1, n0 - 1), max(0, n0 - 2))
+              or (tabs() or (0,))[0] == max(1, n0 - 1), f"tabs {tabs()}")
 
+    # On to an untitled document for what follows: a new tab.
+    key(dbg, "0x0e")
+    dbg.settle()
     deadline = time.time() + SPAWN_TIMEOUT_S
     fresh = False
     while time.time() < deadline and not fresh:
         fresh = find_window(dbg, "untitled") is not None
         time.sleep(0.3)
-    res.check("...and answering it gives an untitled document", fresh,
+    res.check("...and a new tab is untitled", fresh,
               "the title did not go back to `untitled`")
 
     # --- Save, on a document with no filename yet --------------------
@@ -661,6 +688,65 @@ def run(dbg, qmp, tmp, shot_dir, res):
               "the window survived an explicit Don't Save")
 
     markdown_checks(dbg, qmp, tmp, res)
+    history_and_find_checks(dbg, res)
+
+
+# --- the edit history and find ------------------------------------------
+
+def history_and_find_checks(dbg, res):
+    """Undo walks back to the SAVED state, and find counts what it finds.
+
+    The title's `*` is the observable for the history: dirty is a
+    POSITION in it (ui/uui_undo.h), so undoing everything typed into a
+    fresh document must make it clean again -- an undo that only
+    restored the text, or a dirty flag set by every edit, both fail.
+    """
+    dbg.send(f"gui spawn {SPAWN_PATH}")
+    deadline = time.time() + SPAWN_TIMEOUT_S
+    while time.time() < deadline and find_window(dbg, "untitled") is None:
+        time.sleep(0.3)
+
+    def title():
+        for w in dbg.json("gui windows --json")["windows"]:
+            if w.get("title", "").lstrip("*") == "untitled":
+                return w["title"]
+        return None
+
+    type_text(dbg, "alpha beta")
+    time.sleep(0.3)
+    res.check("typing marks the new document modified", title() == "*untitled", f"{title()}")
+    key(dbg, "0x1a")                          # Ctrl-Z: "beta"
+    key(dbg, "0x1a")                          # Ctrl-Z: "alpha "
+    dbg.settle()
+    time.sleep(0.3)
+    res.check("undoing everything typed makes it CLEAN again", title() == "untitled", f"{title()}")
+    key(dbg, "0x19")                          # Ctrl-Y
+    dbg.settle()
+    time.sleep(0.3)
+    res.check("redo makes it modified again", title() == "*untitled", f"{title()}")
+
+    key(dbg, "0x01")                          # Ctrl-A, then type over it
+    type_text(dbg, "one two one three one")
+    key(dbg, "0x06")                          # Ctrl-F
+    type_text(dbg, "one")
+    dbg.settle()
+    time.sleep(0.4)
+    matches = None
+    for l in reversed(dbg.logs("notepad: layout find.matches", clear=False)):
+        matches = int(l.split("find.matches")[1].split()[0])
+        break
+    res.check("find counts every match", matches == 3, f"matches {matches}")
+    key(dbg, ESC)
+
+    dbg.send("gui key 0xa5 alt")              # Alt+F4 -> ask -> Don't Save
+    dbg.settle()
+    time.sleep(0.8)
+    btns = dialog_buttons(dbg)
+    win = find_window(dbg, "untitled")
+    if len(btns) == 3 and win:
+        x, y, w, h = btns[1]   # content-relative, like every reported rect
+        c = win["content"]
+        dbg.send(f"gui click {c['x'] + x + w // 2} {c['y'] + y + h // 2}")
 
 
 # --- the Markdown preview ---------------------------------------------

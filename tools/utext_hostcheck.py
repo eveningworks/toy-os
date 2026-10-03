@@ -41,6 +41,10 @@ Plus, over the same corpus:
   - selection text out and pasted text in, including that '\r' is dropped
   - utext_putc REFUSES at capacity rather than dropping the oldest
     character (the bug that made Notepad open pci.ids as its last 8 KB)
+  - the edit HISTORY (ui/uui_undo.c): a word, a Backspace run, a
+    replacement and a paste are one step each, clean is a position,
+    a new edit drops the redo, a full history forgets its oldest steps
+  - the line-number GUTTER takes its share of the box in the hit test
 
 The corpus is this repository's own Markdown plus a synthetic document
 long enough to force the checkpoint table to compact (which is the part
@@ -398,10 +402,115 @@ static void check_semantics(void) {
     if (a != 0 || e != 7) fail("sel_all range", e - a, 7);
 }
 
+// --- the edit history (ui/uui_undo.h) ----------------------------------
+
+static int is(const struct utext *t, const char *want) {
+    int n = xlen(want);
+    return t->count == n && xcmp(t->buf, want, n) == 0;
+}
+static void type(struct utext *t, const char *s) {
+    for (; *s; s++) {
+        if (*s == '\n') { utext_sel_delete(t); utext_insert(t, '\n'); }
+        else utext_key(t, *s, 0);
+    }
+}
+#define EXPECT(t, want, what) \
+    do { if (!is(t, want)) { printf("FAIL %s: \"%.*s\" != \"%s\"\n", what, \
+                                    (t)->count, (t)->buf, want); fails++; } } while (0)
+
+static void check_undo(void) {
+    static char b[256];
+    static unsigned char hist[4096];
+    struct utext t;
+    struct uui_undo u;
+
+    // A typed word is ONE step, and the space after it belongs to it.
+    utext_init_buf(&t, b, (int)sizeof b);
+    uui_undo_init(&u, hist, (int)sizeof hist);
+    t.ed.undo = &u;
+    type(&t, "hello world");
+    utext_undo(&t); EXPECT(&t, "hello ", "undo a word");
+    utext_undo(&t); EXPECT(&t, "", "undo the first word");
+    if (utext_undo(&t)) fail("undo with nothing left", 1, 0);
+    utext_redo(&t); EXPECT(&t, "hello ", "redo a word");
+    utext_redo(&t); EXPECT(&t, "hello world", "redo the second");
+    if (t.ed.cursor != 11) fail("redo leaves the caret after it", t.ed.cursor, 11);
+
+    // Clean is a POSITION: undoing back to it is clean again.
+    uui_undo_mark_clean(&u);
+    type(&t, "!");
+    if (uui_undo_is_clean(&u)) fail("an edit makes it dirty", 1, 0);
+    utext_undo(&t);
+    if (!uui_undo_is_clean(&u)) fail("undo back to the save is clean", 0, 1);
+    EXPECT(&t, "hello world", "undo past the save point's edit");
+
+    // Typing over a selection is one step: the erase and the insert.
+    t.ed.sel_anchor = 6; t.ed.sel_active = 1; t.ed.cursor = 11;
+    utext_key(&t, 'Z', 0);
+    EXPECT(&t, "hello Z", "type over a selection");
+    utext_undo(&t); EXPECT(&t, "hello world", "undo a replacement in one step");
+
+    // A new edit after an undo drops what could have been redone.
+    type(&t, "?");
+    if (utext_redo(&t)) fail("redo after a new edit", 1, 0);
+
+    // A run of Backspaces is one step.
+    utext_init_buf(&t, b, (int)sizeof b);
+    uui_undo_init(&u, hist, (int)sizeof hist);
+    t.ed.undo = &u;
+    type(&t, "abc");
+    utext_key(&t, '\b', 0); utext_key(&t, '\b', 0); utext_key(&t, '\b', 0);
+    EXPECT(&t, "", "three backspaces");
+    utext_undo(&t); EXPECT(&t, "abc", "undo a backspace run");
+
+    // A paste over a selection is one step, CRs and all.
+    t.ed.sel_anchor = 0; t.ed.sel_active = 1; t.ed.cursor = 2;
+    utext_insert_text(&t, "X\r\nY", 4);
+    EXPECT(&t, "X\nYc", "paste over a selection");
+    utext_undo(&t); EXPECT(&t, "abc", "undo a paste in one step");
+    utext_redo(&t); EXPECT(&t, "X\nYc", "redo the paste");
+
+    // A full history forgets its OLDEST steps and keeps working: every
+    // remaining step undoes, and redoing them all lands on the end.
+    static unsigned char tiny[96];
+    utext_init_buf(&t, b, (int)sizeof b);
+    uui_undo_init(&u, tiny, (int)sizeof tiny);
+    t.ed.undo = &u;
+    type(&t, "one two three four five six seven eight nine ten");
+    int steps = 0;
+    while (utext_undo(&t) && steps < 100) steps++;
+    if (steps == 0 || steps >= 10) fail("a full history keeps some steps", steps, 3);
+    while (utext_redo(&t)) {}
+    EXPECT(&t, "one two three four five six seven eight nine ten", "redo all after forgetting");
+
+    // A load forgets the history.
+    utext_clear(&t);
+    if (uui_undo_can_undo(&u)) fail("clear forgets the history", 1, 0);
+}
+
+// The gutter takes its share of the box, and the hit test knows it.
+static void check_gutter(void) {
+    static char b[64];
+    struct utext t;
+    utext_init_buf(&t, b, (int)sizeof b);
+    utext_insert_text(&t, "abcdef\nghij", 11);
+    t.gutter = 1;
+    // Three digits plus a cell either side: 5 cells of 8 px.
+    int at = utext_index_at_point(&t, 0, 0, 400, 64, 5 * CW + 3 * CW + 1, 1);
+    if (at != 3) fail("a click right of the gutter", at, 3);
+    at = utext_index_at_point(&t, 0, 0, 400, 64, 5 * CW + 1, CH + 1);
+    if (at != 7) fail("a click on line 2 past the gutter", at, 7);
+    if (utext_line_count(&t) != 2) fail("logical lines", utext_line_count(&t), 2);
+    int ln, col;
+    utext_line_col(&t, 9, &ln, &col);
+    if (ln != 1 || col != 2) fail("line_col", ln * 100 + col, 102);
+    if (utext_line_index(&t, 1) != 7) fail("line_index", utext_line_index(&t, 1), 7);
+}
+
 int main(int argc, char **argv) {
     int corrupt = argc > 1 && xeq(argv[1], "--corrupt");
     int first = corrupt ? 2 : 1;
-    if (!corrupt) { check_semantics(); check_rule(); }
+    if (!corrupt) { check_semantics(); check_rule(); check_undo(); check_gutter(); }
     for (int i = first; i + 1 < argc; i += 3) {
         int cols = atoi(argv[i + 1]);
         int wrap = atoi(argv[i + 2]);
@@ -416,7 +525,8 @@ int main(int argc, char **argv) {
 def build(tmp):
     drv = hostcheck.write(tmp, "utext_host.c", DRIVER)
     return hostcheck.compile(
-        tmp, "utext_host", [drv, os.path.join(ROOT, "userland", "ui", "uui_edit.c")],
+        tmp, "utext_host", [drv, os.path.join(ROOT, "userland", "ui", "uui_edit.c"),
+                            os.path.join(ROOT, "userland", "ui", "uui_undo.c")],
         includes=[os.path.join(ROOT, "userland"), os.path.join(ROOT, "kernel", "include", "api"),
                   os.path.join(ROOT, "kernel", "include", "abi")], tool="utext_hostcheck")
 

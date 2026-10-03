@@ -1384,24 +1384,12 @@ void start_menu_draw(int mx, int my) {
     // costing the rows a gutter, and it can be dragged.
     int bx, by, bw, bh;
     if (sb_rect(&L, &bx, &by, &bw, &bh)) {
-        int total_rows = pane_lines(&L);
         int e = sb_amount();   // 0 thin .. SB_FULL wide, eased
-        int ty, th;
-        uui_scrollbar_thumb_rect(by, bh, total_rows, L.pane_rows, sb_offset(&L), &ty, &th, bw, 0);
-        // Thin: a 3 px thumb on the column's edge. Wide: uui_scrollbar's
-        // own groove and inset thumb. Every frame in between is the two
-        // blended -- the groove grows in from the edge as it darkens.
-        if (e > 0) {
-            int gw = 3 + (bw - 3) * e / SB_FULL;
-            uui_fill_round_rect(s, bx + bw - gw, by, gw, bh, UUI_CAPSULE,
-                                ugfx_blend(pane_bg, fg, (uint8_t)(24 * e / SB_FULL)));
-        }
-        int inset = uui_scrollbar_thumb_inset(bw);
-        int tw = 3 + (bw - 2 * inset - 3) * e / SB_FULL;
-        int tr = (bx + bw - 1) - (inset - 1) * e / SB_FULL;   // the thumb's right edge
-        uint32_t wide_c = ugfx_blend(pane_bg, fg, sb_drag ? 170 : 130);
-        uui_fill_round_rect(s, tr - tw + 1, ty, tw, th, UUI_CAPSULE,
-                            ugfx_blend(UTHEME_OUTLINE, wide_c, (uint8_t)(255 * e / SB_FULL)));
+        // The toolkit's overlay bar, which is this one's look moved there
+        // so Notepad and the Markdown preview draw the same.
+        uui_scrollbar_draw_overlay(s, bx, by, bw, bh, pane_lines(&L), L.pane_rows,
+                                   sb_offset(&L), pane_bg, fg, e * 255 / SB_FULL,
+                                   sb_drag ? UUI_SCROLLBAR_HELD : 0);
     }
 }
 

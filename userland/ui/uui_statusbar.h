@@ -25,7 +25,7 @@
 // So updating the status is assigning a string, and there is no
 // set/get pair to keep in sync.
 
-#define UUI_STATUSBAR_MAX_PANES 4
+#define UUI_STATUSBAR_MAX_PANES 8
 
 struct uui_status_pane {
     const char *text; // app-owned; NULL draws an empty pane

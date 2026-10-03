@@ -106,6 +106,28 @@ void uui_scrollbar_draw_styled(struct ugfx_surface *s, int x, int y, int w, int 
                                 uint32_t track_bg, uint32_t thumb_bg, unsigned flags,
                                 const struct uui_scrollbar_style *style);
 
+// The thumb is held by a drag: the overlay bar draws it darker.
+#define UUI_SCROLLBAR_HELD   0x04
+
+// THE OVERLAY BAR, Windows 11's and Plasma's -- the Start menu's, which
+// draws through this:
+// a thin thumb on the strip's far edge at rest, and the groove with a
+// full thumb while the pointer is on the strip or a drag holds it.
+// `wide` is how far between the two, 0..255, so a caller may ease it;
+// 255 on hover and 0 off is the plain version. Nothing at all is drawn
+// when everything fits. Drawn over `ground`, in `ink`'s family, so it
+// follows a dark document as well as a light one. Hit-testing and
+// dragging are the functions below, unchanged: the strip is the target
+// whatever its look.
+void uui_scrollbar_draw_overlay(struct ugfx_surface *s, int x, int y, int w, int h,
+                                int total_lines, int visible_rows, int scroll_offset,
+                                uint32_t ground, uint32_t ink, int wide, unsigned flags);
+// The overlay thumb's colour at `wide` -- for a test reading its pixels.
+uint32_t uui_scrollbar_overlay_thumb(uint32_t ground, uint32_t ink, int wide);
+// The overlay strip's width: a row less than a line, in the face
+// selected -- measure it in the interface face.
+int uui_scrollbar_overlay_width(void);
+
 enum uui_scrollbar_zone uui_scrollbar_hit(int x, int y, int w, int h,
                                            int total_lines, int visible_rows,
                                            int scroll_offset, int px, int py,

@@ -46,6 +46,11 @@ struct uui_splitter {
 
     int hovered, dragging, focused, disabled;
 
+    // The hairline's colour; 0 = UTHEME_BORDER. Between two white panes
+    // (Notepad's editor and preview) the border reads as a black rule,
+    // and the separator colour is the right weight.
+    uint32_t line;
+
     // The press anchor -- see the delta note above.
     int anchor_c, anchor_frac;
     unsigned long last_click_tick;

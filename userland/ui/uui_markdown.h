@@ -59,6 +59,12 @@ struct uui_markdown {
     int m_w;
     int bar_w;
     int thumb_grab;    // -1 when no drag is in progress
+    int bar_hot;       // the pointer is on the bar: the overlay bar widens
+
+    // uui_markdown_y_of()'s question during its walk: a source index
+    // plus one (0 = none asked), and the pen's y when the walk got there.
+    int find_at;
+    int found_y;
 
     struct uui_markdown_face face[UUI_MD_FACES];
     int faces_tried;
@@ -83,6 +89,19 @@ void uui_markdown_init(struct uui_markdown *m);
 // The document. Safe to call repeatedly; it resets the scroll only when
 // the text actually changed, so a redraw does not jump to the top.
 void uui_markdown_set_text(struct uui_markdown *m, const char *src, int len);
+
+// THE SAME TEXT, EDITED: a live preview of a buffer being typed into.
+// Keeps the scroll, and re-measures even when the length did not change
+// (typing over one character) -- set_text() would jump to the top on
+// every keystroke that changed the length and miss every one that
+// did not.
+void uui_markdown_set_text_live(struct uui_markdown *m, const char *src, int len);
+
+// Where source index `pos` is drawn, in document pixels from the top --
+// the block that line belongs to. A preview that follows an editor
+// scrolls to y_of(the editor's first visible line). A whole walk: ask
+// when the editor moved, not every frame. Needs the geometry set.
+int uui_markdown_y_of(struct uui_markdown *m, int pos);
 
 void uui_markdown_set_geometry(struct uui_markdown *m, int x, int y, int w, int h);
 

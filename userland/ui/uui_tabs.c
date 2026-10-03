@@ -34,6 +34,7 @@ void uui_tabs_init(struct uui_tabs *t, struct uui_tab *tabs, int count,
     t->show_new = 0;
     t->numbered = 0;
     t->floating = 0;
+    t->baseline = 0;
     t->hovered = -1;
     t->hovered_close = 0;
     t->hovered_new = 0;
@@ -312,7 +313,12 @@ static void draw_one(struct ugfx_surface *s, const struct uui_tabs *t, int i) {
         ugfx_draw_string_clipped(s, tx, ty, text_w, t->tabs[i].label, ink,
                                   UGFX_TRANSPARENT);
     }
-    if (has_close) {
+    if (has_close && t->tabs[i].modified && t->hovered != i) {
+        int d = bh / 2 < 6 ? 6 : bh / 2;
+        if (d > bw) d = bw;
+        uui_fill_round_rect(s, bx + (bw - d) / 2, by + (bh - d) / 2, d, d, UUI_CAPSULE,
+                            UTHEME_ACCENT);
+    } else if (has_close) {
         uint32_t cink = (t->hovered == i && t->hovered_close)
                           ? UTHEME_ACCENT : ink;
         draw_close(s, bx, by, bw, bh, cink);
@@ -360,7 +366,9 @@ static void ops_draw(struct ugfx_surface *s, const void *w) {
     // tab and then painted over by that tab's accent, so the break is a
     // consequence of the fill rather than a second calculation that has
     // to agree with it.
-    if (!t->floating) ugfx_fill_rect(s, t->x, t->y + t->h - 1, t->w, 1, UTHEME_BORDER);
+    if (!t->floating)
+        ugfx_fill_rect(s, t->x, t->y + t->h - 1, t->w, 1,
+                       t->baseline ? t->baseline : UTHEME_BORDER);
     for (int i = 0; i < t->count; i++) draw_one(s, t, i);
     draw_new(s, t);
 }

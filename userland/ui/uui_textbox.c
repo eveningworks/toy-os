@@ -67,6 +67,8 @@ void uui_textbox_init(struct uui_textbox *f, const char *initial) {
     f->len = i;
     uui_edit_init(&f->ed);
     f->ed.cursor = i;
+    uui_undo_init(&f->undo, f->undo_mem, sizeof f->undo_mem);
+    f->ed.undo = &f->undo;
     f->active = 0;
     f->disabled = 0;
     f->placeholder = 0;
@@ -107,6 +109,9 @@ void uui_textbox_set_text(struct uui_textbox *f, const char *text) {
     f->len = i;
     uui_edit_init(&f->ed);
     f->ed.cursor = i;
+    // Set from outside: not an edit, and nothing before it can be undone.
+    uui_undo_init(&f->undo, f->undo_mem, sizeof f->undo_mem);
+    f->ed.undo = &f->undo;
 }
 
 const char *uui_textbox_text(const struct uui_textbox *f) { return f->buf; }
@@ -172,6 +177,9 @@ int uui_textbox_key_mods(struct uui_textbox *f, int key, unsigned mods) {
     // with the multi-line editor. This widget used to carry its own,
     // which had none of that: the caret moved with arrows and nothing
     // else, so you could not select anything in a text field at all.
+    f->undo.buf = f->undo_mem;
+    f->undo.cap = sizeof f->undo_mem;
+    f->ed.undo = &f->undo;
     return uui_edit_key(&f->ed, &TB_EDIT_OPS, f, key, mods);
 }
 

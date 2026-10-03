@@ -264,6 +264,7 @@ static int walk(struct uui_markdown *m, struct ugfx_surface *s,
 
     int i = 0;
     while (i < m->len) {
+        if (m->find_at && i >= m->find_at - 1 && m->found_y < 0) m->found_y = c.pen_y;
         const char *ln;
         int n = umd_next_line(m->src, m->len, &i, &ln);
 
@@ -406,9 +407,7 @@ static int walk(struct uui_markdown *m, struct ugfx_surface *s,
 
 static int bar_width(struct uui_markdown *m) {
     if (m->bar_w > 0) return m->bar_w;
-    int w = 0;
-    uui_scrollbar_natural_size(&w, 0);
-    return w;
+    return uui_scrollbar_overlay_width();   // the overlay bar's strip
 }
 
 void uui_markdown_init(struct uui_markdown *m) {
@@ -447,6 +446,27 @@ void uui_markdown_set_text(struct uui_markdown *m, const char *src, int len) {
     m->scroll = 0;
     m->link_n = 0;                  // the old page's links are gone
     m->armed_link = m->hover_link = -1;
+}
+
+static int text_width(struct uui_markdown *m);
+
+void uui_markdown_set_text_live(struct uui_markdown *m, const char *src, int len) {
+    if (m->src != src) m->link_n = 0;
+    m->src = src;
+    m->len = len;
+    m->m_w = -1;                    // the measure no longer describes it
+    m->armed_link = m->hover_link = -1;
+}
+
+int uui_markdown_y_of(struct uui_markdown *m, int pos) {
+    if (!m->src || m->len <= 0 || m->w <= 0) return 0;
+    ensure_faces(m);
+    m->find_at = pos + 1;
+    m->found_y = -1;
+    int h = walk(m, 0, text_width(m), 0, 0);
+    int y = m->found_y < 0 ? h : m->found_y;
+    m->find_at = 0;
+    return y;
 }
 
 void uui_markdown_set_geometry(struct uui_markdown *m, int x, int y, int w, int h) {
@@ -506,10 +526,13 @@ void uui_markdown_draw(struct ugfx_surface *s, struct uui_markdown *m) {
             m->link[i].w = 0;
     ugfx_clear_clip_rect(s);
 
+    // THE OVERLAY BAR, the same as every editor's beside it.
     int bw = bar_width(m);
-    uui_scrollbar_draw(s, m->x + m->w - bw, m->y, bw, m->h,
-                        m->doc_h, m->h, m->doc_h - m->h - m->scroll,
-                        UTHEME_PANEL_BG, UTHEME_BORDER, 0);
+    uui_scrollbar_draw_overlay(s, m->x + m->w - bw, m->y, bw, m->h,
+                               m->doc_h, m->h, m->doc_h - m->h - m->scroll,
+                               UTHEME_WHITE, UTHEME_TEXT,
+                               (m->bar_hot || m->thumb_grab >= 0) ? 255 : 0,
+                               m->thumb_grab >= 0 ? UUI_SCROLLBAR_HELD : 0);
 }
 
 int uui_markdown_wheel(struct uui_markdown *m, int notches) {
@@ -610,9 +633,12 @@ static int op_press(void *w, int x, int y, unsigned mods) {
 static int op_motion(void *w, int x, int y, unsigned buttons) {
     struct uui_markdown *m = (struct uui_markdown *)w;
     if (!buttons) {
+        int bw = bar_width(m);
+        int hot = uui_hit(m->x + m->w - bw, m->y, bw, m->h, x, y);
         int h = link_at(m, x, y);          // a hovered link darkens
-        if (h == m->hover_link) return 0;
+        if (h == m->hover_link && hot == m->bar_hot) return 0;
         m->hover_link = h;
+        m->bar_hot = hot;
         return 1;
     }
     uui_markdown_motion(m, x, y);

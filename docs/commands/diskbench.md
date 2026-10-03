@@ -27,7 +27,7 @@ random, read and write — over a temp file it creates and removes.
     $ diskbench --size 16
     diskbench: syscall-bytes 65536
     diskbench: clock-granularity-ns 140
-    diskbench: progress SEQ-write 1
+    diskbench: progress SEQ-write 5 4194304 61230
     ...
     diskbench: result SEQ-write 7509 120 8323
     diskbench: io SEQ-write read 13223 50484 1319043
@@ -49,6 +49,12 @@ silently stopping.
 A file rather than a pipe because `SYS_SPAWN`'s `stdout_fd` must be a
 pipe write end, and `PIPE_MAX` is 8 KiB kernel-wide — a GUI slow to
 drain would block the benchmark it is timing.
+
+**A `progress` line is `<profile> <percent> <bytes-moved>
+<timed-microseconds>`**, cumulative within the profile: every 5%, and at
+least every quarter second of timed work, so a reader can draw the rate
+over the run (Disk Mark's chart) by differencing two of them. A reader
+that misses one loses resolution, never data.
 
 **The output is parsed, so its shape is a contract.** A `result` line is
 `<profile> <milli-MB/s> <IOPS> <microseconds>` — thousandths and

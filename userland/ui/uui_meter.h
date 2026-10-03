@@ -77,6 +77,12 @@ struct uui_meter {
     // bar.
     enum uui_meter_style style;
     const struct uui_chart *spark;   // NULL for none -- see set_spark()
+
+    // The number's own colour -- a read and a write told apart at a
+    // glance (Disk Mark); 0 = `fg`. The bar takes `accent`.
+    uint32_t value_fg;
+    // The reading being taken NOW: the card wears the accent ring.
+    int active;
 };
 
 // Sets the palette from the theme and everything else to empty. Call

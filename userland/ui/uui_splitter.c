@@ -20,6 +20,7 @@ void uui_splitter_init(struct uui_splitter *sp, int horizontal, int frac) {
     sp->horizontal = horizontal ? 1 : 0;
     sp->lo = sp->hi = sp->min_before = sp->min_after = 0;
     sp->hovered = sp->dragging = sp->focused = sp->disabled = 0;
+    sp->line = 0;
     sp->anchor_c = sp->anchor_frac = 0;
     sp->last_click_tick = 0;
     sp->def_frac = frac;
@@ -108,10 +109,11 @@ void uui_splitter_draw(struct ugfx_surface *s, const struct uui_splitter *sp) {
                         uui_state_bg(UTHEME_PANEL_BG, st));
 
     int t = uui_splitter_thickness();
+    uint32_t line = sp->line ? sp->line : UTHEME_BORDER;
     if (sp->horizontal)
-        ugfx_fill_rect(s, sp->x + t / 2, sp->y, 1, sp->h, UTHEME_BORDER);
+        ugfx_fill_rect(s, sp->x + t / 2, sp->y, 1, sp->h, line);
     else
-        ugfx_fill_rect(s, sp->x, sp->y + t / 2, sp->w, 1, UTHEME_BORDER);
+        ugfx_fill_rect(s, sp->x, sp->y + t / 2, sp->w, 1, line);
 
     if (sp->focused && !sp->disabled)
         uui_focus_ring(s, sp->x, sp->y, sp->w, sp->h);

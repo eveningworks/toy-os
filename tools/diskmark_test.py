@@ -21,6 +21,11 @@ the tiles are compared as PIXELS before and after the run, with the
 window CHROME sampled the same way as a control -- a frame that changed
 everywhere is a repaint, not a result.
 
+THE RUN'S CHART, THE HISTORY AND STOP: the chart reports how many
+samples and phase marks it holds, the finished run must be a line in
+/var/lib/diskmark/history that F9 shows, and a second run stopped with
+Esc must be killed, reaped and leave no files.
+
 GEOMETRY COMES FROM THE CLIENT (`diskmark: layout ...`), never
 re-derived here. Hand-computed coordinates cost two build-and-test
 cycles while this app was being written -- the click landed inside the
@@ -235,6 +240,49 @@ def main():
     # tick and buried dmesg.
     once = all(log.count(f"diskmark: result {p} ") <= 1 for p in PROFILES)
     check("each result was logged once, not every tick", once)
+
+    # THE RUN'S GRAPH: a trace with the four phases marked. Each phase
+    # is at least two points (a short one is drawn as its result), so a
+    # chart that never received a sample has fewer than eight.
+    chart = None
+    for line in con.send("sh dmesg").splitlines():
+        m = re.search(r"diskmark: layout chart (-?\d+) (-?\d+) (\d+) (\d+) samples (\d+) marks (\d+)", line)
+        if m:
+            chart = [int(v) for v in m.groups()]
+    check("the chart reported its rect, samples and marks", chart is not None)
+    if chart:
+        check("the chart holds the run (eight samples or more)", chart[4] >= 8,
+              f"{chart[4]} samples")
+        check("...with the four phases marked", chart[5] == 4, f"{chart[5]} marks")
+
+    # THE HISTORY: the finished run is a line in the file, and F9 shows it.
+    hist = con.send("sh cat /var/lib/diskmark/history")
+    rows = [l.split() for l in hist.splitlines() if len(l.split()) == 12 and l.split()[0].isdigit()]
+    check("the finished run was added to the history", any(r[1] == "16" for r in rows),
+          f"{len(rows)} rows")
+    con.send("gui key 0xb0")   # F9
+    con.settle()
+    shown = any("diskmark: layout history " in l for l in con.send("sh dmesg").splitlines()[-60:])
+    check("F9 shows the history table", shown)
+    con.send("gui key 0xb0")
+    con.settle()
+
+    # STOP: a second run, stopped at once. The child is killed AND reaped,
+    # and its scratch file goes with it -- diskbench has no handler.
+    con.click(ox + rx + rw // 2, oy + ry + rh // 2)
+    time.sleep(1.0)
+    con.send("gui key 0x1b")   # Esc is Stop
+    deadline = time.time() + 30
+    stopped = False
+    while time.time() < deadline:
+        time.sleep(1)
+        if "diskmark: stopped" in this_run(con.send("sh dmesg")):
+            stopped = True
+            break
+    check("Esc stops a run", stopped)
+    ls = con.send("sh ls /var/tmp") + con.send("sh ls /tmp")
+    check("...and the stopped run left no files", "diskmark.tmp" not in ls and "diskmark.out" not in ls)
+    check("...and its child was reaped", "diskbench" not in con.send("sh ps"))
 
     failures = [n for n, ok in checks if not ok]
     print()

@@ -3,11 +3,68 @@
 #include "ui/uui_edit.h"
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 #include "ui/uui_widget.h" // uui_key_is_shortcut
+#include "ui/uui_undo.h"
 
 void uui_edit_init(struct uui_edit *e) {
     e->cursor = 0;
     e->sel_anchor = 0;
     e->sel_active = 0;
+    e->undo = 0;
+}
+
+int uui_edit_insert(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
+                    int index, char c) {
+    if (!ops->insert(text, index, c)) return 0;
+    if (e->undo) uui_undo_note_insert(e->undo, index, &c, 1);
+    return 1;
+}
+
+int uui_edit_insert_text(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
+                         int index, const char *s, int n) {
+    int put = 0;
+    if (ops->insert_text) put = ops->insert_text(text, index, s, n);
+    else
+        while (put < n && ops->insert(text, index + put, s[put])) put++;
+    if (put > 0 && e->undo) uui_undo_note_insert(e->undo, index, s, put);
+    return put;
+}
+
+void uui_edit_erase(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
+                    int start, int end) {
+    int len = ops->len(text);
+    if (start < 0) start = 0;
+    if (end > len) end = len;
+    if (start >= end) return;
+    if (e->undo && e->undo->buf) {
+        // The bytes must be read BEFORE they go; a big range is copied
+        // straight into the history rather than through the stack.
+        char small[256];
+        int n = end - start;
+        if (n <= (int)sizeof small) {
+            for (int i = 0; i < n; i++) small[i] = ops->at(text, start + i);
+            uui_undo_note_erase(e->undo, start, small, n);
+        } else {
+            uui_undo_note_erase_from(e->undo, start, n, ops, text);
+        }
+    }
+    ops->erase(text, start, end);
+}
+
+static int step(struct uui_edit *e, const struct uui_edit_ops *ops, void *text, int redo) {
+    if (!e->undo) return 0;
+    int cur = e->cursor;
+    if (!uui_undo_apply(e->undo, redo, ops, text, &cur)) return 0;
+    e->cursor = cur;
+    uui_edit_clear_selection(e);
+    return 1;
+}
+
+int uui_edit_undo(struct uui_edit *e, const struct uui_edit_ops *ops, void *text) {
+    return step(e, ops, text, 0);
+}
+
+int uui_edit_redo(struct uui_edit *e, const struct uui_edit_ops *ops, void *text) {
+    return step(e, ops, text, 1);
 }
 
 int uui_edit_has_selection(const struct uui_edit *e) {
@@ -37,7 +94,7 @@ int uui_edit_delete_selection(struct uui_edit *e, const struct uui_edit_ops *ops
     if (!uui_edit_has_selection(e)) return 0;
     int start, end;
     uui_edit_range(e, &start, &end);
-    ops->erase(text, start, end);
+    uui_edit_erase(e, ops, text, start, end);
     e->cursor = start;
     uui_edit_clear_selection(e);
     return 1;
@@ -59,6 +116,7 @@ void uui_edit_place(struct uui_edit *e, const struct uui_edit_ops *ops, void *te
         e->cursor = index;
         uui_edit_clear_selection(e);
     }
+    if (e->undo) uui_undo_break(e->undo);   // a moved caret ends a typing run
 }
 
 // Moves the caret and maintains the selection the way every desktop
@@ -74,6 +132,7 @@ static void move(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
         uui_edit_clear_selection(e);
         // Collapsing: which end depends on which way this move went.
         e->cursor = (to <= e->cursor) ? start : end;
+        if (e->undo) uui_undo_break(e->undo);
         return;
     }
     uui_edit_place(e, ops, text, to, extend);
@@ -98,11 +157,21 @@ int uui_edit_key(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
         uui_edit_select_all(e, ops, text);
         return 1;
 
+    // ---- history: declined when there is none, so an app may use them
+    case 0x1A: // Ctrl-Z
+        if (!e->undo) return 0;
+        uui_edit_undo(e, ops, text);
+        return 1;
+    case 0x19: // Ctrl-Y
+        if (!e->undo) return 0;
+        uui_edit_redo(e, ops, text);
+        return 1;
+
     // ---- deletion -------------------------------------------------
     case '\b':
         if (uui_edit_delete_selection(e, ops, text)) return 1;
         if (e->cursor > 0) {
-            ops->erase(text, e->cursor - 1, e->cursor);
+            uui_edit_erase(e, ops, text, e->cursor - 1, e->cursor);
             e->cursor--;
         }
         uui_edit_clear_selection(e);
@@ -110,7 +179,7 @@ int uui_edit_key(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
 
     case KEY_DELETE:
         if (uui_edit_delete_selection(e, ops, text)) return 1;
-        if (e->cursor < len) ops->erase(text, e->cursor, e->cursor + 1);
+        if (e->cursor < len) uui_edit_erase(e, ops, text, e->cursor, e->cursor + 1);
         uui_edit_clear_selection(e);
         return 1;
 
@@ -163,8 +232,12 @@ int uui_edit_key(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
     // order is what stops a replacement from being an insert next to
     // text the user thought they had just overwritten.
     if (key >= 32 && key < 127) {
+        // Replacing a selection is ONE step: the erase and the insert.
+        int replacing = uui_edit_has_selection(e);
+        if (replacing && e->undo) uui_undo_begin(e->undo);
         uui_edit_delete_selection(e, ops, text);
-        if (ops->insert(text, e->cursor, (char)key)) e->cursor++;
+        if (uui_edit_insert(e, ops, text, e->cursor, (char)key)) e->cursor++;
+        if (replacing && e->undo) uui_undo_end(e->undo);
         uui_edit_clear_selection(e);
         return 1;
     }

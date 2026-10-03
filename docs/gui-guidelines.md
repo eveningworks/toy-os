@@ -315,6 +315,14 @@ from the thumb, never the other way round. A drag past either end
 clamps, and dragging back returns along the same path -- no accumulated
 drift.
 
+**0. It is the OVERLAY BAR** (`uui_scrollbar_draw_overlay()`, Windows
+11's and Plasma's, approved 2026-10-04): a 3 px thumb on the strip's far
+edge at rest; under the pointer the thumb widens and a groove EXACTLY
+its width runs the strip's length -- no rim of grey beside the capsule.
+No arrows. The strip is `uui_scrollbar_overlay_width()`, a row less than
+a line, measured in the interface face. The Start menu, Notepad and the
+Markdown viewer all draw through it, so they cannot drift apart.
+
 **3. The trough pages, the thumb drags, the arrows step.** A press on
 the track above the thumb goes back one visible page, below it forward
 one page, and a stepper arrow (where the app asks for them) moves one

@@ -19,6 +19,62 @@ void uui_chart_init(struct uui_chart *c, const char *label) {
     c->compact = 0;
     for (int i = 0; i < UUI_CHART_MAX; i++) c->samples[i] = c->parts[i] = 0;
     c->bg = c->grid = c->line = c->fill = c->part = UUI_COLOR_UNSET;
+    c->fit = 0;
+    for (int i = 0; i < UUI_CHART_SERIES; i++) c->series_col[i] = UUI_COLOR_UNSET;
+    uui_chart_clear(c);
+}
+
+void uui_chart_clear(struct uui_chart *c) {
+    c->count = c->head = 0;
+    c->has_parts = 0;
+    c->stride = 1;
+    c->pend_n = 0;
+    c->pend_sum = 0;
+    c->cur_series = 0;
+    c->mark_n = 0;
+    c->hover = -1;
+}
+
+void uui_chart_set_fit(struct uui_chart *c, int on) {
+    c->fit = on ? 1 : 0;
+    uui_chart_clear(c);
+}
+
+// Fit mode is LINEAR (head == count): oldest at 0.
+static void fit_commit(struct uui_chart *c) {
+    if (c->pend_n == 0) return;
+    if (c->count == UUI_CHART_MAX) {
+        // Full: every two samples become one, and the marks follow.
+        int n = 0;
+        for (int i = 0; i + 1 < c->count; i += 2) {
+            c->samples[n] = (uint32_t)(((uint64_t)c->samples[i] + c->samples[i + 1]) / 2);
+            c->series[n] = c->series[i + 1];
+            n++;
+        }
+        c->count = n;
+        for (int k = 0; k < c->mark_n; k++) c->marks[k].at /= 2;
+        c->stride *= 2;
+    }
+    c->samples[c->count] = (uint32_t)(c->pend_sum / (uint64_t)c->pend_n);
+    c->series[c->count] = (uint8_t)c->cur_series;
+    c->count++;
+    c->head = c->count % UUI_CHART_MAX;
+    c->pend_n = 0;
+    c->pend_sum = 0;
+}
+
+void uui_chart_set_series(struct uui_chart *c, int series) {
+    if (series < 0 || series >= UUI_CHART_SERIES || series == c->cur_series) return;
+    if (c->fit) fit_commit(c);   // never average across a change of series
+    c->cur_series = series;
+}
+
+void uui_chart_add_mark(struct uui_chart *c, const char *label) {
+    if (c->fit) fit_commit(c);
+    if (c->mark_n >= UUI_CHART_MARKS) return;
+    c->marks[c->mark_n].at = c->count;
+    c->marks[c->mark_n].label = label;
+    c->mark_n++;
 }
 
 void uui_chart_set_scale(struct uui_chart *c, uint32_t max) { c->scale_max = max; }
@@ -26,6 +82,11 @@ void uui_chart_set_interval(struct uui_chart *c, int ms)    { c->sample_ms = ms;
 void uui_chart_set_value(struct uui_chart *c, const char *value) { c->value = value; }
 
 void uui_chart_push_split(struct uui_chart *c, uint32_t total, uint32_t part) {
+    if (c->fit) {
+        c->pend_sum += total;
+        if (++c->pend_n >= c->stride) fit_commit(c);
+        return;
+    }
     if (part > total) part = total;
     if (part) c->has_parts = 1;   // a component cannot exceed its whole
     c->samples[c->head] = total;
@@ -40,16 +101,19 @@ void uui_chart_push(struct uui_chart *c, uint32_t value) {
 
 uint32_t uui_chart_last(const struct uui_chart *c) {
     if (!c->count) return 0;
+    if (c->fit) return c->samples[c->count - 1];
     return c->samples[(c->head + UUI_CHART_MAX - 1) % UUI_CHART_MAX];
 }
 
 int uui_chart_drawn(const struct uui_chart *c) {
+    if (c->fit) return c->count;
     int n = c->count < c->w ? c->count : c->w;
     return n < 0 ? 0 : n;
 }
 
 // The i'th DRAWN sample, oldest first.
 static int drawn_slot(const struct uui_chart *c, int i) {
+    if (c->fit) return i;
     int n = uui_chart_drawn(c);
     int first = (c->head + UUI_CHART_MAX - n) % UUI_CHART_MAX;
     return (first + i) % UUI_CHART_MAX;
@@ -103,6 +167,48 @@ static void span_text(const struct uui_chart *c, char *out, int cap) {
     else            snprintf(out, (unsigned)cap, "%lld s", sec);
 }
 
+// The x of sample `i` in fit mode: the history spread over the plot.
+static int fit_x(const struct uui_chart *c, int i) {
+    int span = c->count > 1 ? c->count - 1 : 1;
+    return c->x + 2 + (int)((int64_t)(c->w - 5) * i / span);
+}
+
+// FIT MODE: a polyline per series run, the marks as dividers with their
+// labels at the top of the plot.
+static void draw_fit(struct ugfx_surface *s, const struct uui_chart *c,
+                     int top, int bot, uint32_t bg, uint32_t line) {
+    int ph = bot - top;
+    uint32_t top_scale = scale_of(c);
+    uint32_t sep = UUI_COLOR(c->grid, UTHEME_SEPARATOR);
+    uint32_t dim = ugfx_blend(UTHEME_TEXT, bg, 120);
+    for (int k = 0; k < c->mark_n; k++) {
+        int mx = c->count > 0 ? fit_x(c, c->marks[k].at) : c->x + 2;
+        if (c->marks[k].at >= c->count && c->count > 0) mx = fit_x(c, c->count - 1);
+        if (k > 0) ugfx_draw_line(s, mx, top, mx, bot, sep, GEOM_ALIASED);
+        int nx = k + 1 < c->mark_n ? fit_x(c, c->marks[k + 1].at) : c->x + c->w - 2;
+        if (c->marks[k].label && nx - mx > 8)
+            ugfx_draw_string_clipped(s, mx + 4, top + 1, nx - mx - 6, c->marks[k].label,
+                                     dim, bg);
+    }
+    int px = 0, py = 0;
+    for (int i = 0; i < c->count; i++) {
+        uint32_t v = c->samples[i];
+        if (v > top_scale) v = top_scale;
+        int x = fit_x(c, i);
+        int y = bot - 1 - (int)((uint64_t)(ph - 2) * v / top_scale);
+        int sr = c->series[i];
+        uint32_t col = UUI_COLOR(c->series_col[sr], line);
+        if (i > 0 && c->series[i - 1] == sr) {
+            ugfx_draw_line(s, px, py, x, y, col, GEOM_AA);
+            ugfx_draw_line(s, px, py - 1, x, y - 1, col, GEOM_AA);
+        } else {
+            ugfx_fill_rect(s, x - 1, y - 1, 2, 2, col);
+        }
+        px = x;
+        py = y;
+    }
+}
+
 void uui_chart_draw(struct ugfx_surface *s, const struct uui_chart *c) {
     if (c->w <= 0 || c->h <= 0) return;
     uint32_t bg   = UUI_COLOR(c->bg, UTHEME_WHITE);
@@ -124,6 +230,11 @@ void uui_chart_draw(struct ugfx_surface *s, const struct uui_chart *c) {
     for (int q = 1; !c->compact && q < 4; q++) {
         int gy = top + ph * q / 4;
         ugfx_draw_line(s, c->x, gy, c->x + c->w - 1, gy, grid, GEOM_ALIASED);
+    }
+
+    if (c->fit) {
+        draw_fit(s, c, top, bot, bg, line);
+        goto frame;
     }
 
     // **ONE COLUMN PER SAMPLE, RIGHT-ALIGNED.** Scaling the series to
@@ -156,6 +267,7 @@ void uui_chart_draw(struct ugfx_surface *s, const struct uui_chart *c) {
         ugfx_draw_line(s, hx, top, hx, bot, edge, GEOM_ALIASED);
     }
 
+frame:
     if (!c->compact) {
         ugfx_draw_line(s, c->x, c->y, c->x + c->w - 1, c->y, edge, GEOM_ALIASED);
         ugfx_draw_line(s, c->x, c->y + c->h - 1, c->x + c->w - 1, c->y + c->h - 1, edge, GEOM_ALIASED);
@@ -224,7 +336,10 @@ static int chart_motion_op(void *w, int cx, int cy, unsigned buttons) {
     int was = c->hover;
     if (!uui_hit(c->x, c->y, c->w, c->h, cx, cy)) {
         c->hover = -1;
-    c->compact = 0;
+    } else if (c->fit) {
+        int span = c->count > 1 ? c->count - 1 : 1;
+        int i = c->w > 5 ? (int)((int64_t)(cx - c->x - 2) * span / (c->w - 5)) : -1;
+        c->hover = (c->count > 0 && i >= 0 && i < c->count) ? i : -1;
     } else {
         int n = uui_chart_drawn(c);
         int i = cx - (c->x + c->w - n);

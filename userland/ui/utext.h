@@ -75,7 +75,11 @@ struct utext_wrap {
     int      n;           // checkpoints in use
     int      stride;      // lines between checkpoints
     int      idx[UTEXT_CKPTS];
+    int      lno[UTEXT_CKPTS]; // the LOGICAL line idx[k] falls in, for the gutter
 };
+
+// A range drawn on a tinted ground behind its text -- a find hit.
+struct utext_mark { int start, end; uint32_t bg; };
 
 struct utext {
     char *buf;   // the caller's; utext never frees it
@@ -121,6 +125,23 @@ struct utext {
     struct uui_edit ed;
 
     struct utext_wrap wrap_cache;
+
+    // THE GUTTER AND THE CARET'S LINE, Kate's and KWrite's: line numbers
+    // in a column at the left -- on a logical line's FIRST row only, so a
+    // wrapped line reads as one -- and the caret's whole logical line
+    // tinted. Both off by default. A colour of 0 is derived from the
+    // draw call's fg/bg/sel_bg. Every call taking a box measures the
+    // text to the right of the gutter, so callers pass the same box.
+    int gutter;
+    int line_highlight;
+    uint32_t gutter_fg, gutter_bg, line_bg;
+
+    // Ranges tinted behind the text (find hits): the caller's array,
+    // sorted by start and not overlapping.
+    const struct utext_mark *marks;
+    int mark_count;
+
+    struct { int valid; unsigned rev; int lines; } nl_cache;
 };
 
 // `buf` must stay alive for as long as `t` is used, and holds `cap`
@@ -129,6 +150,28 @@ void utext_init_buf(struct utext *t, char *buf, int cap);
 
 // Empties the text; keeps the buffer.
 void utext_clear(struct utext *t);
+
+// THE EDIT HISTORY: point `ed.undo` at a uui_undo (ui/uui_undo.h) the
+// caller owns, and every edit below is recorded; Ctrl+Z and Ctrl+Y in
+// utext_key() walk it. utext_clear(), _putc() and _set() are LOADS, not
+// edits, and forget the history.
+int utext_undo(struct utext *t);
+int utext_redo(struct utext *t);
+
+// Logical lines ('\n' count + 1). Cached by revision.
+int utext_line_count(struct utext *t);
+// The logical line (0-based) and column of index `i`.
+void utext_line_col(const struct utext *t, int i, int *line, int *col);
+// The index where logical line `line` (0-based) begins.
+int utext_line_index(const struct utext *t, int line);
+// The logical line at the top of the view, for a preview that follows it.
+int utext_top_line(struct utext *t, int w, int h);
+// The index of the first character on screen, and the inverse: scroll so
+// the row holding `index` is the top one. The scroll counts from the
+// BOTTOM, so a resize moves the top; a caller that wants the top to
+// stay put asks for it before and puts it back after.
+int  utext_top_index(struct utext *t, int w, int h);
+void utext_scroll_index_to_top(struct utext *t, int w, int h, int index);
 
 // Appends at the END (not the cursor), for loading a file. REFUSES at
 // capacity rather than evicting: a document silently missing its head

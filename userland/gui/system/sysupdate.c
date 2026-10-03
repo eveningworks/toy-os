@@ -79,7 +79,7 @@ static int g_row_count;
 static struct uui_markdown g_notes;
 static char g_files_label[24] = "Files";
 static struct uui_tab g_tab_list[PAGE_COUNT] = {
-    { "What's new", 0 }, { g_files_label, 0 }, { "Log", 0 },
+    { "What's new", 0, 0 }, { g_files_label, 0, 0 }, { "Log", 0, 0 },
 };
 static struct uui_tabs g_tabs;
 

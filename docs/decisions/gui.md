@@ -10028,3 +10028,74 @@ window cannot describe one file two ways. **Past the screen's height
 the widget scrolls** rather than the window running under the taskbar,
 which it did in the first build -- a click meant for the last section
 landed on the taskbar button and minimised the window.
+
+## Undo is a log of operations in the shared edit core, and dirty is a position in it
+
+Notepad had no undo, and neither did any text field. The obvious place
+for one is the app -- Notepad keeping snapshots of its buffer -- and
+that is wrong twice. A snapshot per step is the kernel line editor's
+shape (`klineedit.c`, a 256-byte line) and costs a copy of a 4 MB
+document per keystroke; and an app-level undo leaves every other field
+on the desktop without one. GtkTextBuffer, QTextDocument and Scintilla
+all keep the history WITH THE TEXT.
+
+So `ui/uui_undo` is a log of operations -- "inserted these bytes at P",
+"erased these bytes from P" -- in caller-owned storage, recorded by
+`uui_edit`, the core every editable widget already shares. Undo applies
+the inverse; redo applies the record. Typing coalesces into words,
+Backspace runs into one step, and anything bracketed (a paste over a
+selection, typing over one) is one step. A full history drops its
+OLDEST steps whole rather than refusing new ones, which is what every
+editor does.
+
+**Dirty is the history's position, not a flag.** A flag set by every
+edit cannot be cleared by undoing them all, which is the first thing a
+person tries after an accidental keystroke; Kate, VS Code and Windows 11
+Notepad all go clean again when you undo back to the save.
+`uui_undo_mark_clean()` records the position at a save and
+`uui_undo_is_clean()` compares it; an edit made after undoing past it
+makes clean unreachable until the next save.
+
+## Notepad has tabs, and New and Open no longer ask
+
+With one document, New and Open threw it away, so they asked first.
+With tabs (Windows 11 Notepad, Kate, every browser) they open a tab
+beside it -- Open reuses a tab only when it is empty, unnamed and
+untouched, and switches to a file already open -- so nothing is
+discarded and nothing asks. The asking moved to what DOES discard:
+closing a modified tab, and closing the window, which asks for each
+unsaved tab in turn and shows it while asking. Closing a tab returns to
+the tab that was active before it, as browsers and Kate do, not to its
+neighbour. Ctrl-W became Close tab (the convention everywhere); Word
+wrap moved to Alt+Z, VS Code's binding.
+
+## The Markdown preview sits beside the source and follows it
+
+It used to replace the editor, read-only, toggled with Ctrl-E. GNOME
+Text Editor, Kate and every Markdown editor show the rendering BESIDE
+the source, live, which is what makes it useful while writing. The pane
+is a `uui_markdown` behind a `uui_splitter`; on every edit it is handed
+the buffer again (`uui_markdown_set_text_live()`, which keeps the scroll
+and re-measures even when the length did not change), and it scrolls to
+the block holding the editor's top line (`uui_markdown_y_of()`). Both
+are a walk of the document, so neither runs on a frame where nothing
+moved.
+
+## Disk Mark draws the run, and keeps every run
+
+CrystalDiskMark shows four numbers at the end. GNOME Disks draws
+throughput OVER the run, which is what shows a write cache filling, a
+device throttling, or an emulator stalling -- things a final average
+hides. So `diskbench`'s progress lines carry the bytes moved and the
+timed microseconds so far (cumulative, so a missed poll costs
+resolution, never data), Disk Mark differences them into a chart in
+`uui_chart`'s run mode, and each phase is marked.
+
+A benchmark is read against the last one, so finished runs go to
+`/var/lib/diskmark/history` (state the program must keep -- the FHS's
+`/var/lib`, not a cache) and the History table compares each with the
+run before it on the same volume and size; a comparison across sizes or
+disks says nothing. Any mounted, persistent, writable filesystem can be
+measured; a RAM-only one is refused because it would measure memcpy,
+and `/boot` is absent because it is mounted read-only by policy.
+

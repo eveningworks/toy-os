@@ -39,6 +39,8 @@
 //   * A selection is a RANGE, not a highlight: it survives cursor
 //     movement that extends it and dies on movement that does not.
 
+struct uui_undo;
+
 struct uui_edit {
     // Where the caret is, as a logical index into whatever the storage
     // is -- "just before character `cursor`", the convention utext
@@ -52,6 +54,10 @@ struct uui_edit {
     // instant a drag starts -- stays distinguishable from none at all.
     int sel_anchor;
     int sel_active;
+
+    // The edit HISTORY (ui/uui_undo.h), or NULL for none. Every change
+    // this core makes is recorded there, and Ctrl+Z / Ctrl+Y walk it.
+    struct uui_undo *undo;
 };
 
 // How this core reaches the caller's characters. Four slots, all
@@ -74,6 +80,11 @@ struct uui_edit_ops {
     int (*line_end)(void *text, int index);
     int (*line_up)(void *text, int index);
     int (*line_down)(void *text, int index);
+
+    // OPTIONAL: insert `n` characters at once, returning how many went
+    // in. Without it a paste or an undo inserts one character at a time,
+    // which in a flat buffer moves the whole tail once per character.
+    int (*insert_text)(void *text, int index, const char *s, int n);
 };
 
 void uui_edit_init(struct uui_edit *e);
@@ -102,8 +113,24 @@ int uui_edit_delete_selection(struct uui_edit *e, const struct uui_edit_ops *ops
 void uui_edit_place(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
                      int index, int extend);
 
+// THE ONLY WAY TEXT CHANGES, so the history sees every change: insert
+// one character (1 if it went in), insert a run, erase a range. A
+// widget's own entry points call these rather than its raw ops.
+int  uui_edit_insert(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
+                     int index, char c);
+int  uui_edit_insert_text(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
+                          int index, const char *s, int n);
+void uui_edit_erase(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
+                    int start, int end);
+
+// Undo / redo one step of `e->undo`, leaving the caret where it
+// happened. 0 when there is no history or nothing to step.
+int uui_edit_undo(struct uui_edit *e, const struct uui_edit_ops *ops, void *text);
+int uui_edit_redo(struct uui_edit *e, const struct uui_edit_ops *ops, void *text);
+
 // One keypress, with the modifiers as delivered (KEY_MOD_*). Returns 1
-// if it was consumed. Deliberately does NOT consume Enter: whether a
+// if it was consumed. Ctrl+Z and Ctrl+Y are undo and redo when there
+// is a history, and declined when there is none. Deliberately does NOT consume Enter: whether a
 // field commits, inserts a newline or ignores it is the widget's
 // decision, not this core's.
 int uui_edit_key(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,

@@ -5285,3 +5285,58 @@ main()'s local.
   `/bin/netctl`, and its once-a-second read shows the outcome. A control
   whose effect lags shows what was asked for a few seconds rather than
   flicking back.
+
+## EDITABLE TEXT HAS ONE HISTORY: `uui_undo`, RECORDED BY `uui_edit`
+
+- **Every change to editable text goes through `uui_edit_insert()` /
+  `_insert_text()` / `_erase()`**, which record into `uui_edit.undo`
+  when it is set. A widget's own entry points call these, never its raw
+  ops -- a raw insert is an edit the history never saw, and its undo
+  then lands every later step in the wrong place. utext and uui_textbox
+  both do; a new editable widget must.
+- **The storage is the caller's** (utext's rule). A `uui_textbox` embeds
+  512 bytes; Notepad gives each tab 256 KiB. A full history forgets its
+  OLDEST steps whole; one edit bigger than it empties it.
+- **A load is not an edit**: `utext_clear()`, `_putc()` and `_set()`
+  forget the history, and an app that writes the buffer behind utext's
+  back calls `uui_undo_reset()` itself (Notepad's load).
+- **Dirty is a POSITION**: `uui_undo_mark_clean()` at a save,
+  `uui_undo_is_clean()` for the title's star -- never a flag set by
+  edits, which cannot be cleared by undoing them.
+
+## `utext` DRAWS A GUTTER, THE CARET'S LINE AND MARKS -- AND EVERY CALL WITH A BOX KNOWS
+
+- **`gutter`, `line_highlight` and `marks` are fields, off by default.**
+  Every utext call taking `(x, y, w, h)` subtracts the gutter itself
+  (`text_box()`), so draw, hit-test, metrics and reveal cannot disagree;
+  a caller passes the same box whether or not it is on.
+- **Marks are the caller's sorted, non-overlapping array** (find hits);
+  the selection outranks a mark, a mark outranks the caret's line.
+
+## ONE SCROLLBAR LOOK: `uui_scrollbar_draw_overlay()`
+
+- **A scrolling view draws the OVERLAY bar** (docs/gui-guidelines.md's
+  scrollbar section, rule 0): the Start menu, Notepad and `uui_markdown`
+  draw through it. Hover is `wide` 0..255; `UUI_SCROLLBAR_HELD` while a
+  drag holds the thumb. Hit-testing and dragging are the same
+  `uui_scrollbar_hit()` / `_offset_for_drag()` as ever.
+- **The column under an overlay bar is the PAGE's colour**, painted by
+  the app: the bar draws only its thumb and groove.
+
+## CHROME IS MEASURED IN THE INTERFACE FACE, EVEN INSIDE A DOCUMENT'S
+
+- **Every toolkit size is font-derived from the CURRENT face** -- bar
+  heights, the scrollbar strip, the splitter's band. Code that runs with
+  a document face selected (Notepad's `doc_font()`) must measure the
+  chrome in the interface face (Notepad's `IN_UI_FONT`), or the drawing
+  and the hit-testing disagree by a few pixels: Notepad's text started
+  4 px low and its thumb was cut to 1 px under the splitter.
+
+## `uui_chart` HAS A RUN MODE: `uui_chart_set_fit()`
+
+- **A run, not a monitor**: the whole history across the width, a line
+  per series (`uui_chart_set_series()`), labelled phase marks
+  (`uui_chart_add_mark()`). Full, it halves its resolution and averages
+  `stride` pushes per sample, so the time axis stays uniform. Disk Mark
+  is the first caller; Task Manager's monitors stay in the default mode.
+

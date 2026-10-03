@@ -191,6 +191,17 @@ device as a choice, Mute all) and brightness (the panel, its mode,
 Scaling). The **on-screen keyboard** floats over the desktop, dragged by
 its bar, and docks full width with one button.
 
+**Notepad** is a tabbed editor in Kate's and Windows 11 Notepad's shape:
+a colour-coded command bar, a line-number gutter with the caret's line
+tinted, find with every hit highlighted, a live Markdown preview beside
+the source that scrolls with it, and undo and redo -- which every text
+field on the desktop has, from one edit history in the toolkit. Undoing
+back to what was saved makes a document clean again. **Disk Mark**
+draws the run as it happens -- four meter cards and GNOME Disks' graph
+of throughput over the run, its phases marked -- benchmarks any
+writable disk volume, can be stopped, and keeps every run in a history
+compared with the one before.
+
 **Images are decoded in ring 3, and the kernel never sees one.** A
 baseline JPEG decoder sits behind a codec table keyed on magic bytes,
 so a second format is a row and a file rather than a branch. All fixed

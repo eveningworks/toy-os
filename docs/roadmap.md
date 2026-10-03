@@ -737,8 +737,12 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Control panel with pluggable applets~~ done
 - [x] ~~Word wrap as a toggle in Notepad~~ DONE 2026-09-07 -- View > Word wrap, and a horizontal scrollbar when it is off
 - [x] ~~A Markdown preview in Notepad~~ DONE 2026-09-07 -- `uui_markdown`, over the same parser `/bin/doc` uses
-- [ ] Find/replace in Notepad
-- [ ] Undo/redo for editable text, in `uui_edit` where every edit already passes -- Notepad, text fields and `/bin/edit` all lack it
+- [x] ~~Find in Notepad~~ DONE 2026-10-04 -- `uui_findbar`, hits as utext marks; REPLACE is still to come
+- [ ] Replace in Notepad's find bar
+- [x] ~~Undo/redo for editable text, in `uui_edit`~~ DONE 2026-10-04 -- `uui_undo`, every field and Notepad; `/bin/edit` still lacks it
+- [ ] Undo in `/bin/edit` (it uses utext as storage only, and gives it no history)
+- [x] ~~Notepad tabs, line numbers, a live preview beside the source~~ DONE 2026-10-04 -- mockup N3
+- [ ] Notepad remembers its open tabs across a restart
 - [x] ~~An image viewer~~ DONE 2026-08-23 -- Image Viewer browses a directory rather than opening a file dialog
 - [x] ~~Image Viewer redesigned~~ DONE 2026-10-01 -- filmstrip, ambient stage, zoom and pan, rotate, Properties, slideshow
 - [x] ~~File Manager in colour~~ DONE 2026-10-01 -- action colours as theme roles, folders by kind, place tiles, breadcrumb chips
@@ -1265,7 +1269,7 @@ this to be better?".
 - [ ] Widget-local RGB literals bypass `utheme` -- ~12 widgets unconverted, plus five colours no palette role matches
 - [x] ~~System Settings' focus ring is the PAGE's controls -- Tab reaches neither the sidebar nor the buttons~~ DONE 2026-09-28
 - [ ] Audit the bare `redraw_pending = 1` sites in `userland/wm/` for a rect they could damage -- a focus change's title colour is next
-- [ ] Disk Mark's dropdown cannot be typed at while CLOSED -- the app routes no keys, so only the overlay path reaches it
+- [ ] Disk Mark's volume dropdown cannot be typed at while CLOSED -- the app routes no keys, so only the overlay path reaches it
 - [ ] On a machine with no invariant TSC, CPU percentages round to 0% for sub-tick work
 - [ ] `gfxbench`'s numbers are only meaningful under KVM or on real hardware
 - [ ] **Kernel-side `fsformat tfs3` writes ~73 MB of zeroed inode tables

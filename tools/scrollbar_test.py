@@ -66,9 +66,12 @@ SPAWN_PATH = "/bin/wm/apps/notepad"   # spawned directly -- see run()
 SPAWN_TIMEOUT_S = 20.0
 ENTER = "0x0d"
 
-# notepad.c's draw_scrollbar() colours: utheme.c's control_bg and outline.
-TRACK = (220, 220, 226)
-THUMB = (150, 155, 165)
+# THE OVERLAY BAR (ui/uui_scrollbar.h's uui_scrollbar_draw_overlay):
+# nothing but a thin thumb at rest, a groove and a full-width thumb
+# under the pointer. The thumb is a blend toward the text ink, the
+# groove only a faint one, the ground the document's white -- so "a
+# thumb pixel" is anything darker than THUMB_MAX.
+THUMB_MAX = 190
 
 # Enough lines to give the thumb real travel: ~20 rows are visible, so
 # this leaves a thumb about a fifth of the track with the rest to move
@@ -96,16 +99,15 @@ class Bar:
         self.y = content["y"] + layout[1]
         self.w = layout[2]
         self.h = layout[3]
-        # Arrows are square and as tall as the bar is wide
-        # (uui_scrollbar_arrow_h). Notepad turns them on, so the TRACK --
-        # the part the thumb can occupy -- is the strip between them.
-        self.arrow = self.w
-        self.track_y = self.y + self.arrow
-        self.track_h = self.h - 2 * self.arrow
+        # No arrows: the whole strip is the track.
+        self.track_y = self.y
+        self.track_h = self.h
 
     @property
     def cx(self):
-        return self.x + self.w // 2
+        # The overlay thumb hugs the strip's far edge, so its middle is
+        # there rather than at the strip's centre.
+        return self.x + self.w - 6
 
 
 def shot(qmp, tmp, name):
@@ -115,7 +117,11 @@ def shot(qmp, tmp, name):
     return Image.open(p).convert("RGB")
 
 
-def thumb_extent(im, bar):
+def is_thumb(px):
+    return max(px) <= THUMB_MAX
+
+
+def thumb_extent(im, bar, x=None):
     """(top, height) of the thumb, by scanning the strip's centre column.
 
     Returns (None, 0) if no thumb is drawn -- which is itself a real
@@ -123,8 +129,8 @@ def thumb_extent(im, bar):
     """
     top, run, best = None, 0, (None, 0)
     for y in range(bar.track_y, bar.track_y + bar.track_h):
-        px = im.getpixel((bar.cx, y))
-        if px == THUMB:
+        px = im.getpixel((bar.cx if x is None else x, y))
+        if is_thumb(px):
             if top is None:
                 top = y
             run += 1
@@ -141,7 +147,7 @@ def thumb_width(im, bar, thumb_y):
     """How many pixels wide the thumb actually is, on its own row."""
     n = 0
     for x in range(bar.x, bar.x + bar.w):
-        if im.getpixel((x, thumb_y)) == THUMB:
+        if is_thumb(im.getpixel((x, thumb_y))):
             n += 1
     return n
 
@@ -198,6 +204,25 @@ def run(dbg, qmp, tmp, res):
         return
     bar = Bar(win["content"], layout)
 
+    # AT REST it is an OVERLAY: a thin thumb on the strip's right edge and
+    # nothing at its centre. The pointer is parked off the strip first.
+    dbg.warp_cursor(qmp, bar.x - 60, bar.y + bar.h // 2)
+    time.sleep(0.4)
+    im = shot(qmp, tmp, "sb_rest.png")
+    rest_edge, _ = thumb_extent(im, bar, x=bar.x + bar.w - 2)
+    rest_mid, _ = thumb_extent(im, bar, x=bar.x + bar.w // 2)
+    res.check("at rest the bar is a thin thumb on its edge (an overlay bar)",
+              rest_edge is not None and rest_mid is None,
+              f"edge run at {rest_edge}, centre run at {rest_mid}")
+
+    # UNDER THE POINTER it widens. The pointer sits on the strip at the
+    # end AWAY from the thumb, so its sprite cannot split the thumb's run.
+    def hover_away(top, h):
+        far = bar.y + 2 if (top or 0) + h // 2 > bar.y + bar.h // 2 else bar.y + bar.h - 2
+        dbg.warp_cursor(qmp, bar.x + 1, far)
+        time.sleep(0.4)
+
+    hover_away(rest_edge, 20)
     im = shot(qmp, tmp, "sb_start.png")
     t0, th0 = thumb_extent(im, bar)
     if t0 is None:
@@ -233,6 +258,7 @@ def run(dbg, qmp, tmp, res):
     dbg.settle()
     time.sleep(0.4)
 
+    hover_away(press_y - dist, th0)
     im = shot(qmp, tmp, "sb_dragged.png")
     t1, th1 = thumb_extent(im, bar)
     moved = (t0 - t1) if t1 is not None else None
@@ -248,61 +274,41 @@ def run(dbg, qmp, tmp, res):
         dbg.drag(bar.cx, press_y, bar.cx, press_y + dist)
         dbg.settle()
         time.sleep(0.4)
+        hover_away(t1 + dist, th0)
         im = shot(qmp, tmp, "sb_back.png")
         t2, _ = thumb_extent(im, bar)
         res.check("dragging back the same distance returns the thumb to where it was",
                   t2 is not None and near(t2, t0, tol),
                   f"thumb at {t2}, started at {t0} (tol {tol})")
 
-    # 3. The trough pages and an arrow steps -- and the amounts differ by
-    #    a lot. Measured as two deltas from the same starting point, so
-    #    the claim is the RATIO rather than either number.
+    # 3. The trough PAGES: a click beside the thumb moves the view by a
+    #    screenful, many lines -- not one, and not to the click.
+    hover_away(t0, th0)
     im = shot(qmp, tmp, "sb_zones_a.png")
     base, base_h = thumb_extent(im, bar)
     if base is None:
-        res.check("a trough click pages and an arrow steps one line", False,
-                  "no thumb to measure from")
+        res.check("a trough click pages", False, "no thumb to measure from")
         return
-
-    # Whichever side of the thumb has room. Notepad pins to the newest
-    # line, so the thumb starts against one end -- picking a fixed side
-    # would make this check depend on where the earlier drags happened
-    # to leave it.
     room_below = base + base_h + 8 < bar.track_y + bar.track_h
     if room_below:
         trough_y = base + base_h + 6
-        arrow_y = bar.y + bar.h - bar.arrow // 2   # DOWN arrow
     elif base - 8 > bar.track_y:
         trough_y = base - 6
-        arrow_y = bar.y + bar.arrow // 2           # UP arrow
     else:
-        res.check("a trough click pages and an arrow steps one line", False,
-                  f"thumb fills the track (top {base}, h {base_h}, "
-                  f"track {bar.track_y}+{bar.track_h})")
+        res.check("a trough click pages", False,
+                  f"thumb fills the track (top {base}, h {base_h})")
         return
-
     dbg.click(bar.cx, trough_y)
     dbg.settle()
     time.sleep(0.4)
+    hover_away(base, base_h)
     im = shot(qmp, tmp, "sb_paged.png")
     paged, _ = thumb_extent(im, bar)
     page_delta = abs(paged - base) if paged is not None else 0
-
-    dbg.click(bar.cx, arrow_y)
-    dbg.settle()
-    time.sleep(0.4)
-    im = shot(qmp, tmp, "sb_stepped.png")
-    stepped, _ = thumb_extent(im, bar)
-    step_delta = abs(stepped - paged) if (stepped is not None and paged is not None) else 0
-
-    # The claim is the RATIO, not either number: a page is many lines and
-    # a step is one, so a bar that treated both zones the same -- or that
-    # paged from the arrow -- fails here whatever the absolute pixels.
-    res.check("a trough click pages and an arrow steps one line",
-              page_delta > 0 and step_delta > 0 and page_delta > step_delta * 3,
-              f"trough moved {page_delta}px, arrow moved {step_delta}px "
-              f"(want trough > 3x arrow, BOTH > 0 -- an arrow that moves "
-              f"nothing would satisfy the ratio alone)")
+    line_px = max(1, travel / max_scroll)
+    res.check("a trough click pages (several lines at once)",
+              page_delta > 4 * line_px,
+              f"trough moved {page_delta}px, one line is {line_px:.1f}px")
 
 
 def main():

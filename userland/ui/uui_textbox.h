@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include "ui/uui_edit.h"
+#include "ui/uui_undo.h"
 #include "ui/ugfx.h"
 #include "ui/uui_primitives.h"
 
@@ -43,6 +44,13 @@ struct uui_textbox {
     // `ed.cursor` is what `cursor` used to be; reach through it rather
     // than keeping a second copy.
     struct uui_edit ed;
+
+    // Every field has an edit history (Ctrl+Z / Ctrl+Y), in storage of
+    // its own: a field's text is small, so a few hundred bytes hold many
+    // steps. Re-pointed at each key, so a struct copied by value still
+    // records into its own copy.
+    struct uui_undo undo;
+    unsigned char undo_mem[512];
 
     int active; // 1 = focused: draws a caret and accepts keys
 

@@ -28,6 +28,11 @@
 // the one that keeps the eye where new data arrives.
 
 #define UUI_CHART_MAX 180
+#define UUI_CHART_MARKS 8
+#define UUI_CHART_SERIES 4
+
+// A labelled moment on the time axis -- "SEQ read" starting here.
+struct uui_chart_mark { int at; const char *label; };
 
 struct uui_chart {
     int x, y, w, h;
@@ -69,6 +74,22 @@ struct uui_chart {
     // UUI_COLOR_UNSET lets the theme answer at DRAW time -- see utheme.h
     // on why a widget must not resolve its colours when it is built.
     uint32_t bg, grid, line, fill, part;
+
+    // **A RUN, NOT A MONITOR** (uui_chart_set_fit()): the whole history
+    // spread across the width as a line, oldest at the left -- GNOME
+    // Disks' benchmark graph. It never scrolls anything off: when full it
+    // halves its resolution, averaging pairs, and from then on averages
+    // `stride` pushes into each sample, so the time axis stays uniform.
+    int fit;
+    int stride, pend_n;
+    uint64_t pend_sum;
+    // Which series each sample belongs to, drawn in series_col[] and
+    // never joined across a change -- a read and a write in one run.
+    uint8_t series[UUI_CHART_MAX];
+    uint32_t series_col[UUI_CHART_SERIES];
+    int cur_series;
+    struct uui_chart_mark marks[UUI_CHART_MARKS];
+    int mark_n;
 };
 
 void uui_chart_init(struct uui_chart *c, const char *label);
@@ -82,6 +103,14 @@ void uui_chart_set_scale(struct uui_chart *c, uint32_t max);
 void uui_chart_set_interval(struct uui_chart *c, int ms);
 
 void uui_chart_push(struct uui_chart *c, uint32_t value);
+
+// The run mode above; clears the history. Then: which series the next
+// pushes belong to (0..UUI_CHART_SERIES-1), and a labelled mark at the
+// next sample. `label` is not copied.
+void uui_chart_set_fit(struct uui_chart *c, int on);
+void uui_chart_set_series(struct uui_chart *c, int series);
+void uui_chart_add_mark(struct uui_chart *c, const char *label);
+void uui_chart_clear(struct uui_chart *c);
 
 // One sample where `part` is a component of `total` -- kernel time
 // within CPU time. `part` is clamped to `total`: a component larger

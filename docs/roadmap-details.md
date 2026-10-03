@@ -1688,16 +1688,6 @@ descend. The per-directory change counters (`SYS_FS_GENERATION_OF`) let
 it rescan only what changed. The treemap is a `userland/ui/` widget
 with a second plausible caller in Task Manager's memory view.
 
-### Undo/redo for editable text, in `uui_edit` where every edit already passes -- Notepad, text fields and `/bin/edit` all lack it
-
-`uui_edit` owns the cursor, selection and keymap for Notepad,
-`uui_textbox` and `/bin/edit`, and delegates each write to the buffer's
-owner -- so every insertion and deletion already passes through one
-place. An undo log there serves all three. Qt keeps it on the document
-(`QTextDocument` with `QUndoStack`); GTK's `GtkTextBuffer` does the
-same. The two decisions are the grouping (consecutive typing is one
-step, as in every real editor) and the bound on the log's memory.
-
 ### GUI clipboard + drag-and-drop
 
 The clipboard half is BUILT, and it landed differently from the sketch

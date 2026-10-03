@@ -1191,6 +1191,67 @@ def icon_tb_undo():
     return im
 
 
+def icon_tb_redo():
+    # Undo's arrow, mirrored.
+    return icon_tb_undo().transpose(Image.FLIP_LEFT_RIGHT)
+
+
+def icon_tb_save():
+    # A floppy: the body with its notched corner, the shutter, the label.
+    im, d = _tb()
+    d.polygon([(6, 6), (48, 6), (58, 16), (58, 58), (6, 58)], outline=TB_INK, width=5)
+    d.rectangle([18, 6, 42, 22], fill=TB_INK)
+    d.rounded_rectangle([16, 34, 48, 58], radius=3, outline=TB_INK, width=5)
+    return im
+
+
+def icon_tb_wrap():
+    # A line that runs to the edge and turns back under itself.
+    im, d = _tb()
+    d.line([6, 14, 58, 14], fill=TB_INK, width=6)
+    d.line([(6, 32), (46, 32)], fill=TB_INK, width=6)
+    d.arc([34, 32, 58, 52], start=270, end=450, fill=TB_INK, width=6)
+    d.line([(46, 52), (34, 52)], fill=TB_INK, width=6)
+    d.polygon([(22, 52), (36, 42), (36, 62)], fill=TB_INK)
+    d.line([6, 52, 16, 52], fill=TB_INK, width=6)
+    return im
+
+
+def icon_tb_preview():
+    # Source beside its rendering: a page split down the middle, lines
+    # on the left, a heading block and lines on the right.
+    im, d = _tb()
+    d.rounded_rectangle([4, 8, 60, 56], radius=4, outline=TB_INK, width=5)
+    d.line([32, 8, 32, 56], fill=TB_INK, width=5)
+    for y in (20, 30, 40):
+        d.line([12, y, 24, y], fill=TB_INK, width=4)
+    d.rectangle([38, 16, 54, 24], fill=TB_INK)
+    for y in (32, 42):
+        d.line([38, y, 54, y], fill=TB_INK, width=4)
+    return im
+
+
+def icon_tb_play():
+    im, d = _tb()
+    d.polygon([(14, 6), (58, 32), (14, 58)], fill=TB_INK)
+    return im
+
+
+def icon_tb_stop():
+    im, d = _tb()
+    d.rounded_rectangle([10, 10, 54, 54], radius=6, fill=TB_INK)
+    return im
+
+
+def icon_tb_history():
+    # A clock face with an arrow running back round it.
+    im, d = _tb()
+    d.arc([6, 6, 58, 58], start=200, end=500, fill=TB_INK, width=6)
+    d.polygon([(2, 22), (18, 34), (22, 16)], fill=TB_INK)
+    d.line([(32, 18), (32, 34), (44, 42)], fill=TB_INK, width=6, joint="curve")
+    return im
+
+
 def icon_tb_info():
     im, d = _tb()
     d.ellipse([4, 4, 60, 60], outline=TB_INK, width=6)
@@ -1673,6 +1734,13 @@ ICONS = {
     "tb-power": icon_tb_power,
     "tb-star": icon_tb_star,
     "tb-undo": icon_tb_undo,
+    "tb-redo": icon_tb_redo,
+    "tb-save": icon_tb_save,
+    "tb-wrap": icon_tb_wrap,
+    "tb-preview": icon_tb_preview,
+    "tb-play": icon_tb_play,
+    "tb-stop": icon_tb_stop,
+    "tb-history": icon_tb_history,
     "tb-back": icon_tb_back,
     "tb-forward": icon_tb_forward,
     "tb-refresh": icon_tb_refresh,

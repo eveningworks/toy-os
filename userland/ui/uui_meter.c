@@ -4,6 +4,7 @@
 #include "ui/uui_widget.h"
 #include "ui/utheme.h"
 #include "ui/uui_chart.h"
+#include "ui/uui_primitives.h"
 #include "fixed.h"
 #include <stddef.h>
 
@@ -26,6 +27,8 @@ void uui_meter_init(struct uui_meter *m) {
     m->value_font = NULL;
     m->style = UUI_METER_BAR;
     m->spark = NULL;
+    m->value_fg = 0;
+    m->active = 0;
 }
 
 void uui_meter_set(struct uui_meter *m, const char *caption,
@@ -85,7 +88,7 @@ static int ring_thickness(void) {
 // detail, bar. That is uui_label's `rows` rule arriving from the other
 // direction -- the caller reserves, the content fills -- and it is what
 // CLAUDE.md's natural_size rule requires.
-#define METER_TEXT_ROWS 3   // caption, unit, detail; the value is measured apart
+#define METER_TEXT_ROWS 2   // caption, detail; the value (unit beside it) is measured apart
 
 void uui_meter_natural_size(const struct uui_meter *m, int *out_w, int *out_h) {
     int pad = utheme_pad();
@@ -253,11 +256,18 @@ static void draw_ring(struct ugfx_surface *s, const struct uui_meter *m) {
     }
 }
 
+#define CARD_R 8
+
 void uui_meter_draw(struct ugfx_surface *s, const struct uui_meter *m) {
     if (m->w <= 0 || m->h <= 0) return;
 
-    ugfx_fill_rect(s, m->x, m->y, m->w, m->h, m->bg);
-    ugfx_draw_rect(s, m->x, m->y, m->w, m->h, UTHEME_BORDER);
+    // A ROUNDED CARD with a hairline, Windows 11's -- and the accent
+    // ring, two pixels, when this is the reading being taken.
+    uint32_t edge = m->active ? UTHEME_ACCENT : ugfx_blend(UTHEME_OUTLINE, m->bg, 120);
+    int ring = m->active ? 2 : 1;
+    uui_fill_round_rect(s, m->x, m->y, m->w, m->h, CARD_R, edge);
+    uui_fill_round_rect(s, m->x + ring, m->y + ring, m->w - 2 * ring, m->h - 2 * ring,
+                        CARD_R - ring, m->bg);
 
     if (m->style == UUI_METER_RING) {
         draw_ring(s, m);
@@ -276,25 +286,31 @@ void uui_meter_draw(struct ugfx_surface *s, const struct uui_meter *m) {
     // wider than its tile would run into the one beside it -- the
     // identical overlap bug this codebase has shipped twice
     // (docs/gui-guidelines.md).
+    uint32_t dim = ugfx_blend(m->fg, m->bg, 110);
     if (m->caption) {
-        ugfx_draw_string_clipped(s, x, y, inner, m->caption, m->fg, m->bg);
-        y += line;
-    }
-
-    if (m->value) {
-        const struct ugfx_font *was = push_value_font(m);
-        ugfx_draw_string_clipped(s, x, y, inner, m->value, m->fg, m->bg);
-        y += ugfx_char_h();
+        const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
+        ugfx_draw_string_clipped(s, x, y, inner, m->caption, dim, m->bg);
         ugfx_set_font(was);
+        y += line;
     }
 
-    if (m->unit) {
-        ugfx_draw_string_clipped(s, x, y, inner, m->unit, m->fg, m->bg);
-        y += line;
+    // The unit BESIDE the number, on its baseline row: "69.4 MB/s".
+    {
+        const struct ugfx_font *was = push_value_font(m);
+        int vh = ugfx_char_h();
+        int vw = m->value ? ugfx_text_width(m->value) : 0;
+        if (m->value)
+            ugfx_draw_string_clipped(s, x, y, inner, m->value,
+                                     m->value_fg ? m->value_fg : m->fg, m->bg);
+        ugfx_set_font(was);
+        if (m->unit && vw + line / 2 < inner)
+            ugfx_draw_string_clipped(s, x + vw + line / 3, y + vh - line - line / 6,
+                                     inner - vw - line / 3, m->unit, dim, m->bg);
+        y += vh;
     }
 
     if (m->detail) {
-        ugfx_draw_string_clipped(s, x, y, inner, m->detail, m->fg, m->bg);
+        ugfx_draw_string_clipped(s, x, y, inner, m->detail, dim, m->bg);
         y += line;
     }
 
@@ -310,10 +326,14 @@ void uui_meter_draw(struct ugfx_surface *s, const struct uui_meter *m) {
         // text, so this cannot land on top of one.
         int bar_y = m->y + m->h - pad - bar_h;
         if (bar_y < y) bar_y = y;
-        ugfx_fill_rect(s, x, bar_y, inner, bar_h, UTHEME_PANEL_BG);
+        if (bar_h > line / 2) bar_h = line / 2;
+        if (bar_h < 4) bar_h = 4;
+        bar_y = m->y + m->h - pad - bar_h;
+        uui_fill_round_rect(s, x, bar_y, inner, bar_h, UUI_CAPSULE,
+                            uui_state_bg(UTHEME_PANEL_BG, UUI_STATE_HOVER));
         int on = (inner * fill) / 1000;
-        if (on > 0) ugfx_fill_rect(s, x, bar_y, on, bar_h, m->accent);
-        ugfx_draw_rect(s, x, bar_y, inner, bar_h, UTHEME_BORDER);
+        if (on >= bar_h) uui_fill_round_rect(s, x, bar_y, on, bar_h, UUI_CAPSULE, m->accent);
+        else if (on > 0) ugfx_fill_rect(s, x, bar_y, on, bar_h, m->accent);
     }
 }
 

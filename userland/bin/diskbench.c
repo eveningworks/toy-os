@@ -29,7 +29,7 @@
 //
 // THE OUTPUT IS PARSED, so its shape is a contract. One line per event:
 //
-//   diskbench: progress <profile> <percent>
+//   diskbench: progress <profile> <percent> <bytes-moved> <timed-us>
 //   diskbench: result <profile> <milli-MB/s> <iops> <micros>
 //   diskbench: io <profile> <op> <calls> <sectors> <micros>
 //   diskbench: lookup <profile> <calls> <reads> <micros>
@@ -247,17 +247,22 @@ static void fail(const char *why) {
     emit("diskbench: error %s\n", why);
 }
 
-// Progress is reported at most once per percent: this is a pipe or a
-// file the GUI re-reads, and a line per request would be thousands of
-// them for a number that changed by nothing.
-static void progress(int profile, uint64_t moved, uint64_t total, int *last) {
+// Progress: the percentage every 5%, and -- for a GUI drawing the rate
+// over time -- at least every quarter second of TIMED work, with the
+// bytes moved and the timed microseconds so far. Cumulative, so a
+// reader that misses a line loses resolution and never data. Each line
+// is a rewrite of the report, so it is never per request.
+#define PROGRESS_EVERY_NS 250000000ull
+
+static void progress(int profile, uint64_t moved, uint64_t total, uint64_t elapsed,
+                     int *last, uint64_t *last_ns) {
     int pct = total ? (int)((moved * 100ull) / total) : 100;
-    // Every 5%, not every 1%: each one is a file rewrite, i.e. real disk
-    // I/O in the middle of a disk benchmark.
     pct -= pct % 5;
-    if (pct == *last) return;
+    if (pct == *last && elapsed - *last_ns < PROGRESS_EVERY_NS) return;
     *last = pct;
-    emit_transient("diskbench: progress %s %d\n", NAME[profile], pct);
+    *last_ns = elapsed;
+    emit_transient("diskbench: progress %s %d %llu %llu\n", NAME[profile], pct,
+                   (unsigned long long)moved, (unsigned long long)(elapsed / 1000ull));
 }
 
 // Scale to milli-MiB FIRST so the multiply cannot overflow at the
@@ -321,6 +326,7 @@ static int run_profile(int profile, const char *path, uint64_t total, int first)
     uint64_t moved = 0, ops = 0, elapsed = 0;
     uint64_t blocks = total / RND_BLOCK;
     int last_pct = -1;
+    uint64_t last_ns = 0;
     g_rand = 0x9E3779B9u;
 
     // A random pass covers an EIGHTH of the file: at 4 KiB an op, a full
@@ -354,7 +360,7 @@ static int run_profile(int profile, const char *path, uint64_t total, int first)
         // put the benchmark's own bookkeeping into the number it is
         // producing.
         elapsed += sys_monotonic_ns() - began;
-        progress(profile, moved, want, &last_pct);
+        progress(profile, moved, want, elapsed, &last_pct, &last_ns);
         began = sys_monotonic_ns();
     }
     elapsed += sys_monotonic_ns() - began;
