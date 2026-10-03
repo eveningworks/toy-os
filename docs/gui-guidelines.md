@@ -85,6 +85,7 @@ app; one shaped around an app's data stays in that app (CLAUDE.md).
 | `uui_gallery` | A few choices whose difference is SEEN -- a card per choice, its picture painted by the caller (a cursor theme's shapes; a wallpaper) |
 | `uui_listbox`, `uui_table` | Rows; rows with columns, a header and sorting |
 | `uui_tree` | Rows at a DEPTH, with collapsible parents -- navigation. A `UUI_TREE_HEADER` row is a section caption; a node may carry a right-hand `note` and a usage meter; `UUI_SEL_ROUNDED` is the design language's selection (the File Manager's side column) |
+| `uui_optlist` | A LIST of on/off options, each with a name, an optional value edited in place (a hint shown while empty) and a one-line description -- the Boot Manager's kernel words. Changes queue on the row; drain `uui_optlist_take_change()` in `on_widget` |
 | `uui_thumbstrip` | A filmstrip: one row of thumbnails, one selected (the pictures come from `lib/uthumb.h`) |
 | `uui_transport` | Previous / play-pause / next, the round play button in the middle -- media (the Audio Player's stage, the Image Viewer's slideshow pill); `dark` for a dark or ambient ground |
 | `uui_label` | A line of text the LAYOUT reserves a row for |

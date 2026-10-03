@@ -107,6 +107,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_markdown.h` | uui_markdown -- a Markdown DOCUMENT, drawn as a document: proportional text, headings at real sizes, code in a monospace face on a tinted ground, lists with hanging indents, rules, and tables. |
 | `uui_menubar.h` | uui_menubar -- a menu bar with nested pull-down menus, the control Windows and KDE both put across the top of an application window. |
 | `uui_meter.h` | A MEASURED VALUE, shown big: a caption, a number, its unit, an optional detail line and an optional fill bar. |
+| `uui_optlist.h` | A scrolling list of OPTIONS, one per row: a checkbox, the option's name, an optional value field edited in place, and a one-line description. |
 | `uui_pathbar.h` | A BREADCRUMB PATH: the folder you are in as a row of buttons, one per level, each of which takes you there -- Explorer's address bar, Dolphin's URL navigator, GTK's path bar. |
 | `uui_places.h` | PLACES AND DEVICES: the list down the left of a file window -- named folders a person goes to (Home, Documents, ...), then every mounted filesystem with how full it is. |
 | `uui_popup.h` | A POPUP SURFACE, as a widget sees it. |
