@@ -190,6 +190,10 @@ TESTS = [
     # on its deadline rather than on the next tick. SPAWNED: a sleep
     # parks, and the legacy `run` loader has no slot to park in.
     ("sleep_test", None, None, None),
+    # lib/uduration.h against a hand-worked table, then /bin/sleep end to
+    # end: never short, operands summed, junk refused. SPAWNED, since it
+    # spawns /bin/sleep and waits for it.
+    ("duration_test", None, None, None),
     # The message channel two ring-3 processes talk over, which is shm
     # plus a futex plus a wakeword and no kernel support of its own.
     # SPAWNED (exit code None) because the server half PARKS -- and a
