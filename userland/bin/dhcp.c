@@ -71,6 +71,9 @@ int main(int argc, char **argv) {
             break;
         if (want) {
             if (strcmp(dev.name, want)) continue;
+        } else if (dev.ip && udhcp_is_link_local(dev.ip)) {
+            // dhcpcd and NetworkManager keep asking while they hold one.
+            printf("dhcp: %s has only a link-local address -- asking again\n", dev.name);
         } else if (dev.ip) {
             // Said out loud rather than skipped silently: on a boot
             // where one card is already configured this is the whole

@@ -41,7 +41,9 @@ not take by hand.
 
 **With no argument it configures every device that has no address**,
 which is what `dhclient` does when no interface is named, and a card
-that already has one is left alone and said so. **Naming a device takes
+that already has one is left alone and said so. **A link-local address
+does not count**: it is the fallback for no lease, so a card holding one
+is asked again, as dhcpcd and NetworkManager keep asking. **Naming a device takes
 that device whatever state it is in**, which is how a card is re-leased
 by hand. The socket is bound to the card as well as to the port —
 Linux's `SO_BINDTODEVICE`, and the reason `bind` takes a device at all:

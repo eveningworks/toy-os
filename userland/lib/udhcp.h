@@ -81,6 +81,11 @@ int udhcp_once(struct udhcp *u, const struct query_netdev *dev);
 // cannot report carrier is not "down" and returns 1 at once.
 int udhcp_carrier_wait(const char *name);
 
+// 169.254/16 (RFC 3927), in host byte order as QUERY_NETDEV reports
+// it: the fallback udhcp_once() claims when nothing answers, which is
+// no lease -- a card holding one is still worth asking again.
+static inline int udhcp_is_link_local(uint64_t ip) { return (ip >> 16) == 0xA9FEu; }
+
 // Give the address up: forget the remembered lease and reset to INIT.
 void udhcp_release(struct udhcp *u);
 
