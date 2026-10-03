@@ -3,6 +3,8 @@
 #include "wm_shadow.h"
 #include "wm/wm_conf.h"
 #include "ui/ugfx.h"
+#include <stdlib.h>
+#include <string.h>
 
 #define DESKTOP_CONF "/etc/desktop.conf"
 
@@ -109,6 +111,70 @@ static int shadow_alpha(const struct tile *t, int px, int py,
     return edge_alpha(t, d);
 }
 
+// THE SHADOW ALREADY ON EACH PIXEL since an opaque paint last covered
+// it, one byte per screen pixel (wm_shadow.h). NULL when it could not be
+// had, which degrades to the old compounding rather than to no shadow.
+static unsigned char *g_rec;
+static int g_rec_w, g_rec_h;
+
+// The screen's back buffer only: a ghost snapshot (wm_anim.c) draws into
+// a buffer of its own size, and would otherwise reallocate this.
+static int rec_ready(const struct ugfx_surface *s) {
+    if (s != &g_wm_screen.back) return 0;
+    if (g_rec && g_rec_w == s->w && g_rec_h == s->h) return 1;
+    free(g_rec);
+    g_rec = calloc((size_t)s->w * (size_t)s->h, 1);
+    g_rec_w = g_rec ? s->w : 0;
+    g_rec_h = g_rec ? s->h : 0;
+    return g_rec != 0;
+}
+
+void wm_shadow_cover(int x, int y, int w, int h) {
+    if (!g_enabled) return;
+    struct ugfx_surface *s = wm_surface();
+    if (!rec_ready(s)) return;
+    int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > s->w) x1 = s->w;
+    if (y1 > s->h) y1 = s->h;
+    if (s->clip_active) {
+        if (x0 < s->clip_x0) x0 = s->clip_x0;
+        if (y0 < s->clip_y0) y0 = s->clip_y0;
+        if (x1 > s->clip_x1) x1 = s->clip_x1;
+        if (y1 > s->clip_y1) y1 = s->clip_y1;
+    }
+    for (int py = y0; py < y1 && x1 > x0; py++)
+        memset(g_rec + (size_t)py * g_rec_w + x0, 0, (size_t)(x1 - x0));
+}
+
+// Blend black over a run so each pixel ends at the DARKER of what it
+// has and `want` (from `cov`, or `alpha` throughout): the extra alpha
+// e that takes (1-r) to (1-a) is (a-r)/(1-r). The run is already
+// clipped to the surface and the clip by the caller.
+static void blend_max(struct ugfx_surface *s, int x0, int py, int n,
+                      const unsigned char *cov, int alpha) {
+    if (!rec_ready(s)) {
+        ugfx_blend_hspan(s, x0, py, n, 0x000000, cov, (uint8_t)alpha);
+        return;
+    }
+    unsigned char eff[SHADOW_SPAN_MAX];
+    unsigned char *rec = g_rec + (size_t)py * g_rec_w;
+    for (int done = 0; done < n; done += SHADOW_SPAN_MAX) {
+        int m = n - done < SHADOW_SPAN_MAX ? n - done : SHADOW_SPAN_MAX;
+        int any = 0;
+        for (int i = 0; i < m; i++) {
+            int a = cov ? cov[done + i] : alpha;
+            int r = rec[x0 + done + i];
+            if (a <= r) { eff[i] = 0; continue; }
+            eff[i] = (unsigned char)((a - r) * 255 / (255 - r));
+            rec[x0 + done + i] = (unsigned char)a;
+            any = 1;
+        }
+        if (any) ugfx_blend_hspan(s, x0 + done, py, m, 0x000000, eff, 0);
+    }
+}
+
 // One row of a LEFT or RIGHT band, where the coverage varies along the
 // run: built into `cov` and emitted as a single span. The run is at
 // most the shadow's reach plus a corner radius wide.
@@ -124,7 +190,7 @@ static void outer_span(struct ugfx_surface *s, const struct tile *t,
         cov[i] = (unsigned char)al;
         any |= al;
     }
-    if (any) ugfx_blend_hspan(s, x0, py, n, 0x000000, cov, 0);
+    if (any) blend_max(s, x0, py, n, cov, 0);
 }
 
 void wm_shadow_draw(int x, int y, int w, int h, int corner_r, enum wm_shadow_kind kind) {
@@ -181,10 +247,11 @@ void wm_shadow_draw(int x, int y, int w, int h, int corner_r, enum wm_shadow_kin
         if (!(py >= iy0 && py < iy1) && mid1 > mid0) {
             int dy = py < cy0 ? cy0 - py : (py > cy1 ? py - cy1 : 0);
             int al = edge_alpha(t, dy - t->cr);
-            if (al > 0) ugfx_blend_hspan(s, mid0, py, mid1 - mid0, 0x000000, 0, (uint8_t)al);
+            if (al > 0) blend_max(s, mid0, py, mid1 - mid0, 0, al);
         }
         outer_span(s, t, right0, bx1, py, cx0, cx1, cy0, cy1, cov);
     }
+    wm_shadow_cover(x, y, w, h);   // the body painted next is opaque
 }
 
 void wm_damage_window_rect(int x, int y, int w, int h) {

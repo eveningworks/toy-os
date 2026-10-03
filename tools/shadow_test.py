@@ -133,6 +133,44 @@ def run(dbg, qmp, tmp, res):
     res.check("desktop.shadows=on again: the shadow is back",
               below(im4, calc, 0.5, 2) < below(im4, calc, 0.5, FAR) - 8)
 
+    stacked(dbg, qmp, tmp, res, near_n)
+
+
+def stacked(dbg, qmp, tmp, res, single):
+    """Windows EXACTLY on top of each other cast one window's shadow.
+
+    Shadows combine by the darkest, not the product (wm_shadow.h): three
+    stacked inactive Notepads multiplied it to (1-a)^3 and ten made a
+    solid black ring. `single` is one inactive Notepad's luminance at
+    2/6/12 px below its edge, from the first phase.
+    """
+    first = dbg.window("untitled")
+    for _ in range(2):
+        dbg.open_app("Notepad")
+        dbg.settle(1.5)
+        top = [w for w in dbg.windows() if w["title"] == "untitled" and w["focused"]]
+        if not top:
+            res.check("a second Notepad opened, focused", False)
+            return
+        t = top[0]
+        dbg.send(f"gui drag {t['x'] + 200} {t['y'] + 10} "
+                 f"{first['x'] + 200} {first['y'] + 10}")
+        dbg.settle(0.8)
+    rects = {(w["x"], w["y"], w["w"], w["h"]) for w in dbg.windows() if w["title"] == "untitled"}
+    res.check("three Notepads sit exactly on one rect", len(rects) == 1, f"rects={rects}")
+    if len(rects) != 1:
+        return
+    # Calculator focused again, so all three are inactive like `single`.
+    calc = dbg.window("Calculator")
+    dbg.send(f"gui click {calc['x'] + 60} {calc['y'] + 10}")
+    dbg.settle(0.8)
+    im = shot(qmp, os.path.join(tmp, "shadow_stacked.png"))
+    w = dbg.window("untitled")
+    near = [below(im, w, 0.5, d) for d in (2, 6, 12)]
+    res.check("three stacked windows darken no more than one",
+              all(abs(a - b) <= 2 for a, b in zip(near, single)),
+              f"stacked={near} one window={single}")
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])

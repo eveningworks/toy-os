@@ -39,6 +39,16 @@ int wm_shadow_margin(void);
 // `corner_r` (0 for square) into the scene. Honours the active clip.
 void wm_shadow_draw(int x, int y, int w, int h, int corner_r, enum wm_shadow_kind kind);
 
+// OVERLAPPING SHADOWS COMBINE BY THE DARKEST, NOT THE PRODUCT: a pixel
+// already shadowed by alpha `s` since the last opaque paint over it is
+// taken only up to a new shadow's `a`, never to 1-(1-s)(1-a). Ten
+// identical windows stacked exactly used to compound into a solid black
+// ring. So every OPAQUE paint must clear the record under it:
+// wm_shadow_draw() clears its own casting rect (the body painted next),
+// and anything painted with no shadow first calls wm_shadow_cover().
+// Honours the active clip.
+void wm_shadow_cover(int x, int y, int w, int h);
+
 // wm_damage_rect() of the rect grown by wm_shadow_margin() on every
 // side: what a WINDOW's rect damages.
 void wm_damage_window_rect(int x, int y, int w, int h);

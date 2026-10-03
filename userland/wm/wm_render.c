@@ -1238,6 +1238,7 @@ static void draw_taskbar(void) {
         tb_ground(g.px, g.py, g.pw, g.ph, g.radius, p->bar, 1, p->edge);
     } else {
         ugfx_fill_rect(s, g.px, g.py, g.pw, g.ph, p->bar);
+        wm_shadow_cover(g.px, g.py, g.pw, g.ph);
         ugfx_fill_rect(s, g.px, g.py, g.pw, 1, p->edge);
     }
 
@@ -1643,6 +1644,7 @@ static void draw_one_window(int i, int focus, int covered, int has_damage, int l
         wm_client_draw(&windows[i]);
         apply_scene_clip(has_damage);
         if (windows[i].popup) corners_round(&windows[i]);
+        wm_shadow_cover(windows[i].x, windows[i].y, windows[i].w, windows[i].h);
         return;
     }
     // NOTHING UNTIL THE CLIENT'S FIRST PRESENT -- for a TOPLEVEL as
@@ -1684,12 +1686,17 @@ static void draw_one_window(int i, int focus, int covered, int has_damage, int l
     }
     draw_resize_grip(&windows[i]); // after on_draw() -- see its own comment
     corners_round(&windows[i]);    // last: the arc cuts chrome, content and grip alike
+    // A maximized window cast no shadow, so nothing cleared the record
+    // under it (wm_shadow.h).
+    wm_shadow_cover(windows[i].x, windows[i].y, windows[i].w, windows[i].h);
 }
 
 static void render_scene(int mx, int my, int has_damage) {
     apply_scene_clip(has_damage);
 
     int covered = wm_top_covers_screen();
+    // Everything under this frame's clip is painted afresh: no shadow on it yet.
+    wm_shadow_cover(0, 0, screen_w, screen_h);
     if (!covered) desktop_draw(); // background + icon grid, see desktop.h
 
     // Phase 3: a window whose rect doesn't overlap this frame's damage

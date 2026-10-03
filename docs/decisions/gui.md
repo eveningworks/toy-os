@@ -8951,6 +8951,20 @@ so a damage box that touches only a shadow still repaints the window
 that casts it. `tools/damage_sweep.py` ran clean over 43 interactions
 with the shadows on and its positive control still fired.
 
+**Why overlapping shadows take the darkest, not the product.** Each
+shadow used to blend over whatever was beneath it, so N windows stacked
+exactly (eleven Notepads opened from Crash Reports, all at the
+remembered geometry) darkened the band around them to (1-a)^N -- a solid
+black ring. An occluder over an occluder casts no extra shade, so a
+pixel's shadow is now the largest alpha any shadow asked of it since an
+opaque paint last covered it: a byte per screen pixel in `wm_shadow.c`,
+cleared by every opaque paint (`wm_shadow_cover()`, and implicitly by
+`wm_shadow_draw()` over the rect whose body comes next). Cascaded
+windows benefit too, where three or four edges met. The cost is 2 MiB at
+1080p and a memset of each painted window rect per frame.
+`tools/shadow_test.py` stacks three windows and requires one window's
+shadow.
+
 **Why the radii are line heights.** Plasma's medium shadow is about a
 title bar tall at the default font; a fixed pixel radius would be right
 at exactly one font size (`docs/gui-guidelines.md`, "Size everything
