@@ -47,7 +47,10 @@ static void fit_commit(struct uui_chart *c) {
         // Full: every two samples become one, and the marks follow.
         int n = 0;
         for (int i = 0; i + 1 < c->count; i += 2) {
-            c->samples[n] = (uint32_t)(((uint64_t)c->samples[i] + c->samples[i + 1]) / 2);
+            // NEVER ACROSS A CHANGE OF SERIES: a pair straddling one
+            // keeps the later sample whole, in its own series.
+            if (c->series[i] != c->series[i + 1]) c->samples[n] = c->samples[i + 1];
+            else c->samples[n] = (uint32_t)(((uint64_t)c->samples[i] + c->samples[i + 1]) / 2);
             c->series[n] = c->series[i + 1];
             n++;
         }

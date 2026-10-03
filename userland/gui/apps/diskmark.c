@@ -91,7 +91,8 @@ static int g_running_p = -1;          // the profile being measured now
 static uint64_t g_result[PROFILES];   // milli-MB/s
 static uint64_t g_iops[PROFILES], g_lat_us[PROFILES];
 static int g_run_mib;                 // what the CURRENT readings were taken at
-static char g_run_vol[64];
+static char g_run_vol[32];            // the history's field widths: %31s ...
+static char g_run_dev[16];            // ... and %15s
 static time_t g_run_when;
 
 static char g_value[PROFILES][24];
@@ -269,7 +270,7 @@ static void history_append(void) {
     if (!f) return;
     fprintf(f, "%lld %d %s %s %llu %llu %llu %llu %llu %llu %llu %llu\n",
             (long long)g_run_when, g_run_mib, g_run_vol[0] ? g_run_vol : "/",
-            chosen_vol() ? chosen_vol()->dev : "-",
+            g_run_dev[0] ? g_run_dev : "-",
             (unsigned long long)g_result[0], (unsigned long long)g_result[1],
             (unsigned long long)g_result[2], (unsigned long long)g_result[3],
             (unsigned long long)g_iops[P_RND_READ], (unsigned long long)g_iops[P_RND_WRITE],
@@ -504,7 +505,10 @@ static void begin_run(struct uapp *a) {
     } else {
         g_state = ST_RUNNING;
         g_run_mib = size_mib();
+        // As the history will read it back: one word, its field's width.
         strlcpy(g_run_vol, v->point, sizeof g_run_vol);
+        for (char *q = g_run_vol; *q; q++) if (*q == ' ') *q = '_';
+        strlcpy(g_run_dev, v->dev, sizeof g_run_dev);
         g_run_when = time(NULL);
         snprintf(g_status, sizeof g_status, "Running %d MiB on %s...", size_mib(), v->point);
         ulogf("diskmark: spawned %s as pid %d\n", BENCH_PATH, g_pid);
@@ -660,6 +664,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     struct ugfx_surface *s = uapp_surface(d);
     layout(s->w, s->h);
     update_panes();
+    g_vol.disabled = g_pid > 0;   // the run's volume is fixed until it ends
     for (int i = 0; i < PROFILES; i++) {
         g_meter[i].active = (g_state == ST_RUNNING && i == g_running_p);
         uui_meter_draw(s, &g_meter[i]);

@@ -3101,10 +3101,10 @@ window without going through it will find its layout polls timing out.
 - **`network_tray_test.py`** -- the taskbar's network item: the icon's
   state, the card behind it, its adapter switch, `/bin/netctl`'s
   `down`/`up`/`renew` through netd, and the visibility setting. The
-  switch is checked by its OUTCOME -- the kernel's `admin_down` and the
-  address through `gui network`, and "switched off" in `netctl`'s own
-  listing -- so a netd that answered "accepted" and did nothing (the
-  positive control) reddens exactly those two checks.
+  switch is checked by its OUTCOME -- the kernel's `admin_down` through
+  `gui network` (the address is KEPT), "switched off" in `netctl`'s own
+  listing, and a ping that gets no reply -- so a netd that answered
+  "accepted" and did nothing (the positive control) reddens them.
   **Its strongest check is the one that does not ask the compositor**:
   the interface name and address the panel reports must also appear in
   `/bin/netctl`'s output, which walks the same `QUERY_NETDEV` class

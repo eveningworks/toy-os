@@ -19,11 +19,16 @@
 - `renew DEVICE` -- ask for the lease again, the remembered address
   first (Windows' `ipconfig /renew`, networkctl's `renew`).
 - `down DEVICE` -- switch the card off: nothing is sent or received
-  whatever the cable says, and its address is cleared.
+  whatever the cable says, and nothing is routed through it; its
+  address stays, unused, for `up`.
 - `up DEVICE` -- switch it back on; netd leases it at once, asking for
-  the address it had.
+  the address it had. A card nobody leases (addressed by hand, or
+  `dhcp = no`) is simply back, with the address it kept.
 - `--no-wait` -- `renew` and `up` return once netd has the request,
-  instead of waiting up to 15 seconds for the address.
+  instead of waiting up to 15 seconds for a FRESH lease -- one netd has
+  acknowledged since the request (the lease file's `acked`), not merely
+  the address the card already had. Busy for longer than that, netd is
+  said to be busy, not absent: it still has the request.
 - `-h`, `--help` -- every command and option in one page.
 
 `DEVICE` is a card's name as `netctl` lists it. Exit status: 0 done, 1

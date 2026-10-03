@@ -70,13 +70,18 @@ struct net_device *ipv4_route(uint32_t dst, uint32_t *out_next_hop) {
     // registered device is the only sensible default, and a caller that
     // means a particular card names it (udp_output's `dev`), which is
     // how a DHCP client reaches the segment it is asking on.
+    //
+    // A SWITCHED-OFF CARD (`admin_down`) IS NOT A ROUTE, though it keeps
+    // its address: the next card that is up carries the traffic.
     if (dst == IP_BROADCAST) {
         if (out_next_hop) *out_next_hop = IP_BROADCAST;
+        for (int i = 0; i < net_device_count(); i++)
+            if (!net_device_at(i)->admin_down) return net_device_at(i);
         return net_device_at(0);
     }
     for (int i = 0; i < net_device_count(); i++) {
         struct net_device *d = net_device_at(i);
-        if (!d->ip || !d->netmask) continue;
+        if (d->admin_down || !d->ip || !d->netmask) continue;
         if ((d->ip & d->netmask) == (dst & d->netmask)) {
             if (out_next_hop) *out_next_hop = dst;   // on-link
             return d;
@@ -84,7 +89,7 @@ struct net_device *ipv4_route(uint32_t dst, uint32_t *out_next_hop) {
     }
     for (int i = 0; i < net_device_count(); i++) {
         struct net_device *d = net_device_at(i);
-        if (!d->ip || !d->gateway) continue;
+        if (d->admin_down || !d->ip || !d->gateway) continue;
         if (out_next_hop) *out_next_hop = d->gateway;
         return d;
     }

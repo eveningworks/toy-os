@@ -180,10 +180,11 @@ static int control(const struct netctl_msg *m) {
         restart_lease(c);
         return NETCTL_OK;
     case NETCTL_DOWN:
-        // The address goes with it, so nothing routes to a card that
-        // will not answer; the lease FILE stays, so `up` asks for the
-        // same address again.
-        if (sys_net_admin(c->name, NET_IFC_DOWN | NET_IFC_CLEAR) < 0) return NETCTL_REFUSED;
+        // THE ADDRESS STAYS, unused: the kernel routes nothing through a
+        // card that is down (ipv4_route), and a card addressed by hand
+        // or with dhcp = no has nobody to give it back on `up`. A leased
+        // card asks again on `up`, the remembered address first.
+        if (sys_net_admin(c->name, NET_IFC_DOWN) < 0) return NETCTL_REFUSED;
         printf("netd: %s: down, as asked\n", c->name);
         restart_lease(c);
         c->forced = 0;
@@ -202,6 +203,7 @@ static void serve_channel(void) {
     uchan_server_scan(&g_chan, 0, 0);
     int from;
     struct netctl_msg m;
+    memset(&m, 0, sizeof m);   // a short message leaves no stack bytes behind
     while ((from = uchan_server_recv(&g_chan, &m, sizeof m)) != 0) {
         m.dev[sizeof m.dev - 1] = '\0';
         struct netctl_msg reply;

@@ -110,10 +110,11 @@ static void show_one(const struct query_netdev *d) {
     // USB it is the controller's port, not the socket (docs/bugs.md).
     char at[20] = "";
     if (d->location[0]) snprintf(at, sizeof at, "  at %s", d->location);
-    printf("%s: %s  %02llx:%02llx:%02llx:%02llx:%02llx:%02llx%s  mtu %llu\n",
+    printf("%s: %s  %02x:%02x:%02x:%02x:%02x:%02x%s  mtu %llu\n",
            d->name, d->driver,
-           (d->mac) & 0xFF, (d->mac >> 8) & 0xFF, (d->mac >> 16) & 0xFF,
-           (d->mac >> 24) & 0xFF, (d->mac >> 32) & 0xFF, (d->mac >> 40) & 0xFF,
+           (unsigned)(d->mac & 0xFF), (unsigned)((d->mac >> 8) & 0xFF),
+           (unsigned)((d->mac >> 16) & 0xFF), (unsigned)((d->mac >> 24) & 0xFF),
+           (unsigned)((d->mac >> 32) & 0xFF), (unsigned)((d->mac >> 40) & 0xFF),
            at, (unsigned long long)d->mtu);
     if (d->admin_down) printf("    switched off (netctl up %s)\n", d->name);
     if (d->ip) printf("    inet %s  netmask %s  gateway %s\n", ip, mask, gw);
@@ -178,11 +179,13 @@ static int cmd_address(char **v, int n) {
     return cmd_status(v[0]);
 }
 
-// One request to netd. 1 and its result, or 0 when netd has no channel
-// up -- not running, or a build without one.
+// One request to netd: 1 and its result; -1 when netd has no channel up
+// (not running); 0 when it did not ANSWER in time -- which is not the
+// same thing: the request is in its ring and it will still act on it,
+// so falling back to the syscall then would apply it twice.
 static int ask_netd(uint32_t verb, const char *dev, uint32_t *result) {
     struct uchan_client c;
-    if (uchan_client_open(&c, NETCTL_SERVICE) < 0) return 0;
+    if (uchan_client_open(&c, NETCTL_SERVICE) < 0) return -1;
     struct netctl_msg m, reply;
     memset(&m, 0, sizeof m);
     m.verb = verb;
@@ -193,12 +196,27 @@ static int ask_netd(uint32_t verb, const char *dev, uint32_t *result) {
     return ok;
 }
 
-// Polls the card until it has an address the lease gave it, or the wait
-// runs out. Returns 1 with the address.
-static int wait_for_address(const char *dev, struct query_netdev *d) {
+// When netd's last ACK for this card came (the lease file's `acked`,
+// udhcp.c); 0 when there is no lease.
+static int lease_stamp(const char *dev, char *t, int cap) {
+    char path[64];
+    snprintf(path, sizeof path, "/var/dhcp-%s.lease", dev);
+    t[0] = 0;
+    return uconf_get(path, "acked", t, (uint32_t)cap) && t[0];
+}
+
+// Polls until the card has an address the lease gave it -- and, when
+// there was a lease before (`had`), until netd has WRITTEN A NEW ONE:
+// a renew keeps the same address, so "it has an address" would report
+// success at once whether or not the renew ever happened. Returns 1
+// with the address, 0 when the wait ran out.
+static int wait_for_lease(const char *dev, struct query_netdev *d, int had,
+                          const char *before) {
     unsigned long long until = sys_monotonic_ns() + (unsigned long long)WAIT_MS * 1000000ull;
     while (sys_monotonic_ns() < until) {
-        if (find(dev, d) && d->ip && (d->ip >> 16) != 0xA9FE) return 1;   // not 169.254/16
+        char now[24];
+        int fresh = !had || (lease_stamp(dev, now, sizeof now) && strcmp(now, before) != 0);
+        if (fresh && find(dev, d) && d->ip && (d->ip >> 16) != 0xA9FE) return 1;   // not 169.254/16
         sys_sleep_ms(250);
     }
     return 0;
@@ -208,11 +226,19 @@ static int cmd_control(uint32_t verb, const char *dev) {
     struct query_netdev d;
     if (!find(dev, &d)) { printf("netctl: no such device: %s\n", dev); return 1; }
     uint32_t r = 0;
-    if (!ask_netd(verb, dev, &r)) {
+    char before[24];
+    int had = lease_stamp(dev, before, sizeof before);
+    int asked = ask_netd(verb, dev, &r);
+    if (asked == 0) {
+        printf("netctl: netd did not answer in %d s -- it is busy, and will still act on it\n",
+               REPLY_MS / 1000);
+        return 1;
+    }
+    if (asked < 0) {
         // NO NETD: down and up are the kernel's switch and still work;
         // renew has nobody to lease.
         if (verb == NETCTL_RENEW) { printf("netctl: netd is not running -- nothing to renew with\n"); return 1; }
-        unsigned f = verb == NETCTL_DOWN ? NET_IFC_DOWN | NET_IFC_CLEAR : NET_IFC_UP;
+        unsigned f = verb == NETCTL_DOWN ? NET_IFC_DOWN : NET_IFC_UP;
         if (sys_net_admin(dev, f) < 0) { printf("netctl: %s refused it\n", dev); return 1; }
         printf("netctl: %s is %s (netd is not running, so nothing will lease it)\n",
                dev, verb == NETCTL_DOWN ? "down" : "up");
@@ -225,8 +251,16 @@ static int cmd_control(uint32_t verb, const char *dev) {
     }
     if (verb == NETCTL_DOWN) { printf("%s: down\n", dev); return 0; }
     if (g_no_wait) { printf("%s: asked\n", dev); return 0; }
-    if (!wait_for_address(dev, &d)) {
-        printf("%s: no address yet -- netd keeps asking (netctl status %s)\n", dev, dev);
+    // UP ON A CARD NOBODY LEASES (addressed by hand, or dhcp = no): it
+    // kept its address through `down`, and there is no lease to wait on.
+    if (verb == NETCTL_UP && !had && find(dev, &d) && d.ip && (d.ip >> 16) != 0xA9FE) {
+        char ip[24];
+        print_ip(ip, sizeof ip, d.ip);
+        printf("%s: %s\n", dev, ip);
+        return 0;
+    }
+    if (!wait_for_lease(dev, &d, had, before)) {
+        printf("%s: no new lease yet -- netd keeps asking (netctl status %s)\n", dev, dev);
         return 1;
     }
     char ip[24];

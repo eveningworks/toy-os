@@ -438,7 +438,7 @@ int calendar_handle_click(int mx, int my) {
     // timezone -- named by its SETTING, which a renamed page keeps.
     if (uui_hit(g.link_x, g.link_y, g.link_w, g.link_h, mx, my)) {
         calendar_close();
-        sys_spawn("/bin/wm/system/settings", "system.timezone", -1);
+        { int pid_ = sys_spawn("/bin/wm/system/settings", "system.timezone", -1); if (pid_ > 0) wm_track_launched(pid_); }   // reaped by the poll
         return 1;
     }
     // A click anywhere else inside the panel is swallowed, not passed

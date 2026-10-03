@@ -222,10 +222,17 @@ def main():
     check("...and has a switch for the adapter", c["switch"]["w"] > 0, str(c["switch"]))
     dbg.send(f"gui click {c['switch']['cx']} {c['switch']['cy']}")
     dbg.settle()
-    off = wait_for(lambda m: m["admin_down"] and m["ip"] == "none")
-    check("the switch takes the card down, its address with it",
-          off["admin_down"] and off["ip"] == "none", f"admin_down={off['admin_down']} ip={off['ip']}")
+    off = wait_for(lambda m: m["admin_down"])
+    # THE ADDRESS STAYS, unused (a card addressed by hand would have
+    # nobody to give it back); what proves "off" is that nothing goes out.
+    check("the switch takes the card down, keeping its address",
+          off["admin_down"] and off["ip"] != "none", f"admin_down={off['admin_down']} ip={off['ip']}")
     check("...and /bin/netctl says it is switched off", "switched off" in netctl(dbg))
+    dbg.timeout = 15
+    ping = dbg.send("sh ping -c 1 10.0.2.2") or ""
+    dbg.timeout = 6.0
+    check("...and nothing is routed through it: a ping gets no reply",
+          "bytes from" not in ping, ping.strip()[:160])
     qmp.screenshot(shot("net_switched_off.png"))
     c = net(dbg)
     dbg.send(f"gui click {c['switch']['cx']} {c['switch']['cy']}")

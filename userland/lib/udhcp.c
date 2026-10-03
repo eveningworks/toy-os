@@ -479,6 +479,11 @@ static void save_lease(const char *dev, const uint8_t *mac,
     ip_str(v, l->server); uconf_set(LEASE_FILE, "server", v);
     snprintf(v, sizeof v, "%u", l->seconds);
     uconf_set(LEASE_FILE, "seconds", v);
+    // WHEN IT WAS ACKED, in monotonic ms: a renew that gets the same
+    // lease writes the same values, so this is the one that says it
+    // happened (`netctl renew` waits on it).
+    snprintf(v, sizeof v, "%llu", (unsigned long long)(sys_monotonic_ns() / 1000000ull));
+    uconf_set(LEASE_FILE, "acked", v);
 }
 
 // The remembered address for this card, or 0. Deliberately returns only

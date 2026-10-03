@@ -4653,7 +4653,7 @@ reads yet, and reports `found` 0.
 - **`admin_down` is a decision, `link_up` a fact** -- Linux's IFF_UP
   beside carrier. Only `SYS_NET_CONFIG`'s `NET_IFC_DOWN`/`UP` set it,
   never a driver. Down, `net_tx()` returns `-ENETDOWN`, `net_rx()` drops
-  WITHOUT counting, and the default route skips the card. A new path
+  WITHOUT counting, and `ipv4_route()` skips the card. A new path
   that picks a device must skip it too.
 - **Ask netd through `lib/unetctl.h`** (`netctl` does), never by
   restarting it: a restart loses every card's lease. The reply is

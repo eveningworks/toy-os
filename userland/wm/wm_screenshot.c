@@ -132,6 +132,17 @@ int wm_screenshot_capture(int from, int mode, unsigned flags,
         wm_render_frame(mx, my);
         wm_render_hide_pid(0);
     }
+    // The hidden window has to come BACK, and a bare redraw_pending is
+    // not enough: it repaints everything only in a quiet frame, so
+    // beside an animating client the render is clipped to that client's
+    // rect and the tool's window stays gone (docs/conventions/gui.md).
+    // Asked HERE, before any path below can return: the back buffer is
+    // only read below, never redrawn, so asking early changes nothing
+    // about the copy.
+    if (flags & WIN_SHOT_NO_SELF) {
+        wm_damage_rect(0, 0, screen_w, screen_h);
+        redraw_pending = 1;
+    }
 
     char name[WIN_SHOT_NAME_MAX];
     snprintf(name, sizeof name, WIN_SHOT_NAME_FMT, from);
@@ -168,14 +179,5 @@ int wm_screenshot_capture(int from, int mode, unsigned flags,
     else                          wm_render_cursor_erase(&shot, rect->x, rect->y);
 
     unmap(p, bytes);
-
-    // The hidden window has to come BACK, and a bare redraw_pending is
-    // not enough: it repaints everything only in a quiet frame, so
-    // beside an animating client the render is clipped to that client's
-    // rect and the tool's window stays gone (docs/conventions/gui.md).
-    if (flags & WIN_SHOT_NO_SELF) {
-        wm_damage_rect(0, 0, screen_w, screen_h);
-        redraw_pending = 1;
-    }
     return 0;
 }

@@ -47,9 +47,9 @@
 // between the bars, flush, as a real editor's edit control does.
 #define TEXT_PAD 3
 
-#define PATH_MAX_LEN 64          // NOT FS_PATH_MAX -- this app's own
-                                 // buffers, still the old bound.
-                                 // See docs/roadmap.md.
+#define PATH_MAX_LEN 256         // NOT FS_PATH_MAX -- this app's own
+                                 // buffers; a longer path is REFUSED
+                                 // (path_fits), never truncated.
 #define MAX_DOCS 16              // tabs
 #define UNDO_BYTES (256 * 1024)  // each document's edit history
 
@@ -189,6 +189,9 @@ static struct uui_splitter g_split;
 // buffer the editor holds and scrolled to follow it -- GNOME Text
 // Editor's and Kate's live preview.
 static struct uui_markdown g_md;
+// The document each of these was last made from, by tab INDEX -- so
+// doc_remove() resets all three when the indices shift.
+static int g_md_doc = -1, g_find_doc = -1, g_view_doc = -1;
 static struct uui_statusbar g_statusbar;
 static char g_lncol[24];
 static char g_chars[24];
@@ -337,6 +340,14 @@ static struct uui_item *item_by_id(struct uui_item *items, int n, int id) {
 
 static void set_status(const char *s) { strlcpy(g_status, s, sizeof g_status); }
 
+// A path that does not fit is refused: a truncated one would be saved
+// to as a different file.
+static int path_fits(const char *path) {
+    if (strlen(path) < PATH_MAX_LEN) return 1;
+    set_status("path too long for this editor");
+    return 0;
+}
+
 // **.md OPENS WITH ITS PREVIEW, every other extension as text** -- and
 // the pane is a toggle either way.
 static int looks_like_markdown(const char *path) {
@@ -417,6 +428,10 @@ static void switch_to(int i) {
 // Removes tab `i` with no questions -- the asking is confirm_close().
 static void doc_remove(int i) {
     if (i < 0 || i >= g_ndocs) return;
+    // EVERYTHING KEYED BY A TAB INDEX FORGETS IT: the indices shift, and
+    // the preview would otherwise keep reading the freed buffer.
+    uui_markdown_set_text_live(&g_md, NULL, 0);
+    g_md_doc = g_find_doc = g_view_doc = -1;
     doc_free(g_docs[i]);
     for (int k = i; k + 1 < g_ndocs; k++) g_docs[k] = g_docs[k + 1];
     g_ndocs--;
@@ -425,7 +440,10 @@ static void doc_remove(int i) {
     int next = g_cur;
     if (g_cur == i && g_prev >= 0) next = g_prev;
     else if (g_cur > i) next = g_cur - 1;
-    if (g_ndocs == 0) { doc_new(); next = 0; }   // the window always has a document
+    if (g_ndocs == 0) {   // the window always has a document
+        if (!doc_new()) { uapp_quit(g_app, 1); g_ndocs = 0; return; }
+        next = 0;
+    }
     if (next >= g_ndocs) next = g_ndocs - 1;
     g_cur = next;
     g_prev = -1;
@@ -447,6 +465,7 @@ static void refresh_tabs(void) {
 // --- file I/O ---------------------------------------------------------
 
 static int load_into(struct uapp *a, struct doc *d, const char *path) {
+    if (!path_fits(path)) return 0;
     struct sys_stat st;
     if (sys_stat(path, &st) < 0) { set_status("open failed"); return 0; }
     if (st.size > (uint64_t)DOC_MAX_BYTES) {
@@ -502,6 +521,7 @@ static int open_path(struct uapp *a, const char *path) {
 }
 
 static int save_file(struct uapp *a, struct doc *d, const char *path) {
+    if (!path_fits(path)) return 0;
     int fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
     if (fd < 0) { set_status("save failed"); return 0; }
     uapp_busy_begin(a);
@@ -727,12 +747,26 @@ static void do_cut(void) {
     set_status("cut");
 }
 
+// THE DOCUMENT GROWS AS IT IS WRITTEN, not only when a file is loaded:
+// an untitled tab starts at the edit slack, and typing past it silently
+// did nothing. Up to the ceiling; past that the insert refuses as before.
+static void make_room(int more) {
+    if (T->count + more < T->cap) return;
+    int want = T->count + more;
+    if (want > DOC_MAX_BYTES) want = DOC_MAX_BYTES;
+    char *was = T->buf;
+    doc_reserve(cur(), want);
+    if (T->buf != was) g_md_doc = -1;   // the preview re-reads the moved buffer
+}
+
 static void do_paste(void) {
     clip_refresh();
     int n = 0;
     const char *txt = uclip_text(&g_clip, &n);
     if (!txt || n == 0) { set_status("clipboard holds no text"); return; }
+    make_room(n);
     int put = utext_insert_text(T, txt, n);
+    for (int i = 0; i < n; i++) if (txt[i] == '\r') n--;   // dropped, not refused
     if (put < n)
         snprintf(g_status, sizeof g_status, "pasted %d of %d -- document full", put, n);
     else
@@ -750,7 +784,6 @@ static void do_paste(void) {
 static struct utext_mark g_marks[FIND_MAX];
 static int g_nhits, g_hit_cur = -1;
 static unsigned g_find_rev;
-static int g_find_doc = -1;
 static char g_find_q[UUI_TEXTBOX_MAX];
 
 #define HIT_BG     ugfx_rgb(255, 231, 163)
@@ -962,7 +995,6 @@ static void draw_document(struct ugfx_surface *s, int focused) {
 // and scrolled to the block holding the editor's top line whenever that
 // line or the text moved. Both are a walk of the document, so neither
 // happens on a frame where nothing did.
-static int g_md_doc = -1;
 static unsigned g_md_rev;
 static int g_md_top = -1;
 
@@ -970,7 +1002,7 @@ static int g_md_top = -1;
 // bottom (utext.h), so a window opened at one size and then given its
 // remembered one showed a file from line 30. The first character on
 // screen is remembered per frame and put back at the top after a resize.
-static int g_view_w, g_view_h, g_view_doc = -1, g_view_top;
+static int g_view_w, g_view_h, g_view_top;
 
 static void keep_top(int cw, int ch) {
     const struct ugfx_font *was_doc = doc_font();
@@ -1052,8 +1084,9 @@ static int keep_text(void *ctx, const char *dir, const struct sys_dirent *e) {
     return dot && uopen_ext_matches(TEXT_EXTS, dot);
 }
 
-static void file_dialog(int saving) {
-    if (uui_filedialog_is_open(&g_fd)) return;
+// 1 if the chooser is up.
+static int file_dialog(int saving) {
+    if (uui_filedialog_is_open(&g_fd)) return 0;
     g_dlg_saving = saving;
     uui_menubar_close(&g_menu);   // a modal owns the input
 
@@ -1073,8 +1106,11 @@ static void file_dialog(int saving) {
         .filters = types,
         .filter_count = (int)(sizeof types / sizeof types[0]),
     };
-    if (!uui_filedialog_open(g_app, &g_fd, &o, dlg_done, g_app))
+    if (!uui_filedialog_open(g_app, &g_fd, &o, dlg_done, g_app)) {
         set_status("cannot open the chooser");
+        return 0;
+    }
+    return 1;
 }
 
 // --- closing: tabs and the window -------------------------------------
@@ -1372,7 +1408,12 @@ static void on_widget(struct uapp *a, int id, int reason) {
             run_pending(a);
             break;
         case ASK_SAVE:
-            if (!cur()->path[0]) { g_after_save = 1; file_dialog(1); }
+            if (!cur()->path[0]) {
+                // A chooser that never came up must not leave the close
+                // armed for whichever Save As finishes next.
+                g_after_save = file_dialog(1);
+                if (!g_after_save) g_pending = PEND_NONE;
+            }
             else if (save_file(a, cur(), cur()->path)) run_pending(a);
             else g_pending = PEND_NONE;   // the failure is in the status bar
             break;
@@ -1436,6 +1477,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // Ctrl or Alt with a character is a shortcut, never typed.
     if (uui_key_is_shortcut(key, mods)) return;
 
+    make_room(1);
     editor_key(key);
     // THE CARET STAYS ON SCREEN: typing where the view is not looking has
     // to bring the view along.

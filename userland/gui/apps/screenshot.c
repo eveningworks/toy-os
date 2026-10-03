@@ -83,6 +83,8 @@ static int g_pressed_ctl = -1;    // the pill control a press armed
 static int g_hot = -1;            // the pill control under the pointer
 
 static struct uapp *g_app;
+static int g_launch_delay;        // this copy was relaunched after a delay
+static int g_launch_mode = -1;
 
 static const uint32_t *frame(void) { return g_fr[g_pointer ? 1 : 0]; }
 
@@ -223,11 +225,18 @@ static int save_crop(const struct rect *r, char *path, int cap) {
     time_t now = time(NULL);
     struct tm tm;
     char stamp[32];
-    if (localtime_r(&now, &tm) && strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm))
-        snprintf(path, (size_t)cap, SHOT_DIR "/shot-%s.qoi", stamp);
-    else
-        snprintf(path, (size_t)cap, SHOT_DIR "/shot-%d.qoi", sys_getpid());
-    if (r->w != f->w || r->h != f->h) ushot_crop(f, r->x, r->y, r->w, r->h);
+    if (!(localtime_r(&now, &tm) && strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm)))
+        snprintf(stamp, sizeof stamp, "%d", sys_getpid());
+    // TWO IN ONE SECOND get -2, -3...: the name is per second, and the
+    // first file must not be written over (its card points at it).
+    struct sys_stat st;
+    snprintf(path, (size_t)cap, SHOT_DIR "/shot-%s.qoi", stamp);
+    for (int n = 2; sys_stat(path, &st) == 0 && n < 100; n++)
+        snprintf(path, (size_t)cap, SHOT_DIR "/shot-%s-%d.qoi", stamp, n);
+    if (r->w != f->w || r->h != f->h) {
+        int rc = ushot_crop(f, r->x, r->y, r->w, r->h);
+        if (rc < 0) return rc;
+    }
     // QOI, which this desktop's Image Viewer opens by default.
     return ushot_save(f, path, NULL);
 }
@@ -257,7 +266,9 @@ static void finish(struct uapp *a) {
 }
 
 static void shutter(struct uapp *a) {
-    if (DELAYS[g_delay_i] > 0) {
+    // Not in the copy that already WAITED: its shutter takes the shot,
+    // or a delayed capture would relaunch itself for ever.
+    if (DELAYS[g_delay_i] > 0 && g_launch_delay <= 0) {
         // A DELAY IS A RELAUNCH (the top of this file): the next copy
         // sleeps with no window and freezes the screen as it is then.
         char args[48];
@@ -545,8 +556,6 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 
 // --- life -------------------------------------------------------------
 
-static int g_launch_delay;
-static int g_launch_mode = -1;
 
 static void on_open(struct uapp *a) {
     g_app = a;

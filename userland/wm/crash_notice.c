@@ -65,6 +65,8 @@ static const struct gui_app *app_by_exec(const char *exec) {
     return 0;
 }
 
+static void card_rect(int i, int *x, int *y, int *w, int *h);
+
 static void push(const struct notice *n) {
     // The oldest falls off a full stack: its thumbnail goes with it.
     if (g_count == MAX_NOTICES) uimg_free(&g_n[MAX_NOTICES - 1].thumb);
@@ -72,6 +74,15 @@ static void push(const struct notice *n) {
     g_n[0] = *n;
     g_n[0].until = sys_monotonic_ns() + SHOW_NS;
     if (g_count < MAX_NOTICES) g_count++;
+    // THE STACK FITS THE SCREEN: picture cards are tall, and one off the
+    // top would have its buttons out of reach. The oldest goes.
+    for (;;) {
+        int x, y, w, h;
+        card_rect(g_count - 1, &x, &y, &w, &h);
+        if (y >= 0 || g_count <= 1) break;
+        uimg_free(&g_n[g_count - 1].thumb);
+        g_count--;
+    }
     crash_notice_open = 1;
     crash_notice_damage();
 }
@@ -130,8 +141,26 @@ static const char *basename_of(const char *p);
 #define ASSEMBLIES 4
 static struct { int pid; int have; char buf[PATH_MAX_NOTICE]; } g_asm[ASSEMBLIES];
 
+// A SCREENSHOT'S PATH ONLY: under /home/screenshots, plain characters,
+// no `..`. Any client may send the request, and the card decodes the
+// file in the compositor and offers to open it -- so it is held to what
+// the one kind ever names, which also keeps it fit for a JSON string.
+static int fit_path(const char *p) {
+    static const char dir[] = "/home/screenshots/";
+    if (k_strncmp(p, dir, sizeof dir - 1) != 0) return 0;
+    for (const char *c = p; *c; c++) {
+        int ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+                 (*c >= '0' && *c <= '9') || *c == '/' || *c == '-' || *c == '_' || *c == '.';
+        if (!ok) return 0;
+        if (c[0] == '.' && c[1] == '.') return 0;
+    }
+    return 1;
+}
+
+#define THUMB_SOURCE_MAX (64u * 1024 * 1024)   // a larger file gets a card without a picture
+
 static void tell_file(int kind, unsigned flags, const char *path) {
-    if (kind != WIN_NOTICE_SCREENSHOT) return;
+    if (kind != WIN_NOTICE_SCREENSHOT || !fit_path(path)) return;
     struct notice n;
     k_memset(&n, 0, sizeof n);
     n.kind = KIND_SHOT;
@@ -143,7 +172,8 @@ static void tell_file(int kind, unsigned flags, const char *path) {
     struct uimg full;
     k_memset(&full, 0, sizeof full);
     char dims[24] = "";
-    if (uimg_load(path, &full) == 0) {
+    struct sys_stat st;
+    if (sys_stat(path, &st) == 0 && st.size <= THUMB_SOURCE_MAX && uimg_load(path, &full) == 0) {
         int tw = ugfx_char_advance('n') * 44 - 2 * (ugfx_char_h() * 2 / 3);
         int th = tw * full.h / (full.w > 0 ? full.w : 1);
         int maxh = tw * 9 / 16;
@@ -163,7 +193,7 @@ void crash_notice_piece(int pid, int a, int kind, unsigned flags, const char *te
     int slot = -1;
     for (int i = 0; i < ASSEMBLIES; i++) if (g_asm[i].pid == pid) slot = i;
     if (slot < 0) for (int i = 0; i < ASSEMBLIES; i++) if (!g_asm[i].pid) { slot = i; break; }
-    if (slot < 0) slot = 0;   // a full table: the oldest assembly gives way
+    if (slot < 0) return;     // four senders mid-path already: refused, not stolen
     if (idx == 0) { g_asm[slot].pid = pid; g_asm[slot].have = 0; g_asm[slot].buf[0] = 0; }
     if (g_asm[slot].pid != pid || g_asm[slot].have != idx) { g_asm[slot].pid = 0; return; }
     k_strlcpy(g_asm[slot].buf + idx * (WIN_TITLE_LEN - 1), text,
@@ -296,6 +326,10 @@ const char *crash_notice_sub(void)  { return g_count ? g_n[0].sub : 0; }
 
 const char *crash_notice_describe(int details[4], int reopen[4]) {
     if (!g_count) return 0;
+    if (g_n[0].kind == KIND_SHOT) {   // a file card has no Details or Reopen
+        for (int i = 0; i < 4; i++) details[i] = reopen[i] = 0;
+        return g_n[0].title;
+    }
     for (int b = 0; b < 2; b++) {
         int *r = b ? reopen : details;
         if (!button_rect(0, b ? BTN_REOPEN : BTN_DETAILS, &r[0], &r[1], &r[2], &r[3]))

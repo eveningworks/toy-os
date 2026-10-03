@@ -221,7 +221,7 @@ int brightness_handle_click(int mx, int my) {
             }
         if (uui_hit(g.btn_x, g.btn_y, g.btn_w, g.btn_h, mx, my)) {
             brightness_close();
-            sys_spawn("/bin/wm/system/settings", g.seg_count ? SCALING_SETTING : BRIGHTNESS_SETTING, -1);
+            { int pid_ = sys_spawn("/bin/wm/system/settings", g.seg_count ? SCALING_SETTING : BRIGHTNESS_SETTING, -1); if (pid_ > 0) wm_track_launched(pid_); }   // reaped by the poll
         }
     }
     return 1;

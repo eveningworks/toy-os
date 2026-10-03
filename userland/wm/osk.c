@@ -109,7 +109,8 @@ struct osk_geom {
 };
 
 static int g_docked;
-static int g_float_x = -1, g_float_y = -1;   // -1: centred above the taskbar
+static int g_float_x, g_float_y;
+static int g_placed;   // 0: centred above the taskbar, until the bar is dragged
 static int g_drag, g_drag_dx, g_drag_dy;
 
 #define OSK_DOCK_LABEL  (g_docked ? "Float" : "Dock")
@@ -128,7 +129,7 @@ static void osk_geometry(struct osk_geom *g) {
         g->y = screen_h - taskbar_h - g->h;
     } else {
         int x = g_float_x, y = g_float_y;
-        if (x < 0) { x = (screen_w - g->w) / 2; y = screen_h - taskbar_h - 12 - g->h; }
+        if (!g_placed) { x = (screen_w - g->w) / 2; y = screen_h - taskbar_h - 12 - g->h; }
         if (x > screen_w - g->w) x = screen_w - g->w;
         if (y > screen_h - taskbar_h - g->h) y = screen_h - taskbar_h - g->h;
         if (x < 0) x = 0;
@@ -298,8 +299,14 @@ void osk_update_press(int mx, int my, uint8_t buttons) {
         // MOVED BY ITS BAR, the core damaging the rect it left
         // (wm_overlay.h); released, it stays where it was put.
         if (!(buttons & 0x1)) { g_drag = 0; return; }
-        g_float_x = mx - g_drag_dx;
-        g_float_y = my - g_drag_dy;
+        // CLAMPED AS IT IS STORED, so the bar stays under the pointer at
+        // the edges instead of the stored place running off the screen.
+        int x = mx - g_drag_dx, y = my - g_drag_dy;
+        if (x > screen_w - g.w) x = screen_w - g.w;
+        if (y > screen_h - taskbar_h - g.h) y = screen_h - taskbar_h - g.h;
+        g_float_x = x < 0 ? 0 : x;
+        g_float_y = y < 0 ? 0 : y;
+        g_placed = 1;
         osk_damage();
         return;
     }

@@ -477,7 +477,7 @@ int volume_handle_click(int mx, int my) {
         }
         if (uui_hit(g.gear_x, g.btn_y, g.gear_w, g.btn_h, mx, my)) {
             volume_close();
-            sys_spawn("/bin/wm/system/settings", VOLUME_SETTING, -1);
+            { int pid_ = sys_spawn("/bin/wm/system/settings", VOLUME_SETTING, -1); if (pid_ > 0) wm_track_launched(pid_); }   // reaped by the poll
             return 1;
         }
         // A PRESS ARMS THE DRAG, and the value follows the pointer from

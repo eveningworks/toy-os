@@ -38,6 +38,10 @@ static unsigned long long g_last_rx, g_last_tx, g_last_ns;
 // THE SWITCH ANSWERS AT ONCE. netd acts on its next pass, so for a few
 // seconds the card shows what was asked rather than flicking back.
 static int g_want_down = -1;
+// The card the switch last acted on, kept on the panel while it is off
+// -- or switching it off would hand the panel to the next card, and it
+// could not be switched back on from here.
+static char g_pin[NET_ABI_NAME_MAX];
 static unsigned long long g_want_until;
 
 #define HOVER_TRAY    1
@@ -97,21 +101,26 @@ static void read_files(void) {
     if (!uconf_get("/etc/resolv.conf", "nameserver", g_dns, sizeof g_dns)) g_dns[0] = 0;
 }
 
-// THE FIRST DEVICE WITH AN ADDRESS, else the first device at all. A
-// tray item is one glyph and cannot show two cards; picking the one
-// that is actually carrying traffic is what a person means by "am I
-// online". The count is reported so the panel can say there are others.
+// THE FIRST CARD THAT IS UP WITH AN ADDRESS, else the first device at
+// all -- unless the switch put a card down, which stays on the panel
+// while it is off. A tray item is one glyph and cannot show two cards;
+// picking the one actually carrying traffic is what a person means by
+// "am I online". The count is reported so the panel can say there are
+// others.
 static void read_devices(struct network_view *v, struct query_netdev *out) {
-    struct query_netdev d, best;
-    int have_best = 0, count = 0;
+    struct query_netdev d, best, pinned;
+    int have_best = 0, have_pin = 0, count = 0;
 
     k_memset(v, 0, sizeof *v);
     k_memset(&best, 0, sizeof best);
     QUERY_FOREACH(QUERY_NETDEV, d, i) {
-        if (count == 0 || (!have_best && d.ip) ||
-            (d.ip && !best.ip)) { best = d; have_best = d.ip != 0; }
+        int live = d.ip && !d.admin_down;
+        if (count == 0 || (!have_best && live)) { best = d; have_best = live; }
+        if (g_pin[0] && !k_strcmp(d.name, g_pin) && d.admin_down) { pinned = d; have_pin = 1; }
         count++;
     }
+    if (have_pin) best = pinned;
+    else g_pin[0] = 0;   // back up, or gone: the panel follows traffic again
     v->device_count = count;
     if (out) *out = best;
     if (!count) return;
@@ -363,7 +372,7 @@ static int hit(int x, int w, const struct network_geom *g, int mx, int my) {
 static void run_netctl(const char *verb) {
     char args[64];
     k_snprintf(args, sizeof args, "%s %s --no-wait", verb, g_view.name);
-    sys_spawn("/bin/netctl", args, -1);
+    { int pid_ = sys_spawn("/bin/netctl", args, -1); if (pid_ > 0) wm_track_launched(pid_); }   // reaped by the poll
 }
 
 int network_handle_click(int mx, int my) {
@@ -388,7 +397,12 @@ int network_handle_click(int mx, int my) {
         return my < screen_h - taskbar_h;
     }
     if (g.sw_w && uui_hit(g.sw_x - 4, g.sw_y - 4, g.sw_w + 8, g.sw_h + 8, mx, my)) {
+        // ONE REQUEST IN FLIGHT: each runs in its own netctl, and netd
+        // takes its rings in no particular order, so a quick second
+        // click could be applied first.
+        if (g_want_down >= 0 && sys_monotonic_ns() < g_want_until) return 1;
         int down = !shown_down();
+        if (down) k_strlcpy(g_pin, g_view.name, sizeof g_pin);
         run_netctl(down ? "down" : "up");
         g_want_down = down;
         g_want_until = sys_monotonic_ns() + 8000000000ull;
@@ -399,10 +413,10 @@ int network_handle_click(int mx, int my) {
         run_netctl("renew");
     } else if (hit(g.details_x, g.details_w, &g, mx, my)) {
         network_close();
-        sys_spawn("/bin/wm/system/taskmgr", "", -1);
+        { int pid_ = sys_spawn("/bin/wm/system/taskmgr", "", -1); if (pid_ > 0) wm_track_launched(pid_); }   // reaped by the poll
     } else if (hit(g.gear_x, g.gear_w, &g, mx, my)) {
         network_close();
-        sys_spawn("/bin/wm/system/settings", "system.net_recover", -1);
+        { int pid_ = sys_spawn("/bin/wm/system/settings", "system.net_recover", -1); if (pid_ > 0) wm_track_launched(pid_); }   // reaped by the poll
     }
     return 1;   // anything else inside the card is swallowed
 }

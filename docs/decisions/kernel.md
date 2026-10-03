@@ -8901,13 +8901,17 @@ exist: a way to switch a card off, and a way to ASK netd anything.
 **Switched off is a kernel flag, Linux's IFF_UP.** `admin_down` on the
 device, set from ring 3 through `SYS_NET_CONFIG`'s `NET_IFC_DOWN`/`UP`
 flags; down, `net_tx()` refuses with `-ENETDOWN` and `net_rx()` drops
-before counting, and the default route skips it. It is separate from
+before counting, and no route -- default, on-link, gateway or
+broadcast -- goes through it (`ipv4_route()`). It is separate from
 `link_up` for Linux's reason: one is somebody's decision, the other a
 fact about a cable. A netd-only "stop leasing" was the alternative and
 was rejected because the card would keep answering on its old address.
 `NET_IFC_CLEAR` came with it -- the zero-is-left-alone rule had made
-clearing an address impossible, and `down` takes the address away so
-nothing routes to a card that will not answer.
+clearing an address impossible. **`down` KEEPS the address**, unused, as
+Linux keeps it on an `ip link set down` card: it first cleared it, and a
+card addressed by hand or with `dhcp = no` then came back up with
+nothing, because nobody leases it (review, 2026-10-04). The router
+skipping a down card is what clearing was standing in for.
 
 **netd answers on a uchan channel, "accepted" at once.** The shape is
 init's `service` channel (`lib/uinitctl.h`) and systemd's
