@@ -194,7 +194,7 @@ int ubootmenu_set_next_at(const char *env_path, const char *title) {
 // umount-then-mount `remote.py flash` does, and Linux's shape for an ESP
 // that is `ro` until something needs it. Returns the device to restore
 // from in `dev`, or "" when /boot was writable already.
-static int boot_writable(char *dev, int cap) {
+int uboot_writable(char *dev, int cap) {
     struct query_fsinfo fs;
     dev[0] = 0;
     for (int i = 0; ; i++) {
@@ -217,7 +217,7 @@ static int boot_writable(char *dev, int cap) {
     return 0;
 }
 
-static void boot_restore(const char *dev) {
+void uboot_restore(const char *dev) {
     if (!dev[0]) return;
     struct mount_request req;
     memset(&req, 0, sizeof req);
@@ -229,8 +229,8 @@ static void boot_restore(const char *dev) {
 
 int ubootmenu_set_next(const char *title) {
     char dev[64];
-    if (boot_writable(dev, sizeof dev) < 0) return -1;
+    if (uboot_writable(dev, sizeof dev) < 0) return -1;
     int rc = ubootmenu_set_next_at(UBOOTMENU_ENV, title);
-    boot_restore(dev);
+    uboot_restore(dev);
     return rc;
 }

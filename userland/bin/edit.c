@@ -14,15 +14,10 @@
 // editor drew with `vga_putc()`, so it was the physical console or
 // nothing.
 //
-// **WHICH IS NOT YET THE SAME AS WORKING IN A WINDOW, and the reason is
-// worth knowing.** A full-screen program ADDRESSES its screen -- it
-// says "put the caret at row 4, column 12" -- and that needs a GRID.
-// The physical console has one (`kernel/lib/ansi.c` parses the escapes
-// and vga.c moves a real cursor). The GUI Terminal does not: its screen
-// is a character STREAM in a scrollback, which is right for a shell
-// transcript and cannot express "go back up three rows". Giving it a
-// grid is a named roadmap item, and it is the same item as the
-// alternate screen buffer -- not a gap to paper over here.
+// A full-screen program ADDRESSES its screen ("caret to row 4, column
+// 12"), so it needs a terminal with a GRID: the physical console has
+// one, and so does the GUI Terminal since it grew one (with the
+// alternate screen, so quitting restores the prompt).
 //
 // **THE TEXT MODEL IS `utext`, SHARED WITH NOTEPAD.** Not a third one:
 // `utext.h` says outright that Notepad hand-wrote sixty lines of key

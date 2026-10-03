@@ -490,6 +490,16 @@ manual steps to be worth automating:
   unknown entry, and a core recorded without `loadenv`. On demand: it
   reboots twice. **The debug console's shell has no redirection** -- a
   file the test needs in the guest goes in with `vm.py put`.
+- **`bootcfg_test.py`** -- `bootcfg` against a real `/boot`: an edit
+  lands with the old file as `grub.cfg.bak` (byte for byte), exactly one
+  line changes, no `.new` is left and `/boot` is read-only again; a
+  misspelt word is refused with a suggestion and the file is unchanged;
+  `--force` writes it and `undo` removes it. Then `bootcfg try 0
+  +target=text` and a reboot must come up in the TEXT target with
+  `bootcfg.trial` on the running command line, and the reboot after it
+  in the default again -- GRUB cleared the choice. On demand: it reboots
+  twice. `/tests/bootcfg_test` (in `usertest_run.py`) covers the model
+  itself on fixtures.
 
 - **`remote_test.py`** -- `telnetd`, `tftpd` and `remote.py` end to end
   against a QEMU guest, seven checks. On demand: it boots its own guest
@@ -5617,6 +5627,16 @@ window without going through it will find its layout polls timing out.
   would report that known limit on every run and bury the categorical
   bugs the harness is for. `--exact-float` shows the gap (two cases).
 
+- **`gen_bootwords.py`** -- `build/gen/bootwords.h`, the boot words
+  `bootcfg` and the Boot Manager accept, parsed out of
+  `docs/boot-flags.md`'s table at Makefile PARSE time (as `kconfig.h`
+  is) and rewritten only when it changed. The table is the only list of
+  boot words -- the kernel matches by substring with no registry -- so a
+  word documented there is accepted on the next build and one that is
+  not cannot be offered. The description is the Effect column's first
+  clause with markdown and shouting stripped; `--print` shows the result.
+  It fails the build if it finds fewer than ten rows, which is what a
+  reshaped table would look like.
 - **`gen_signames.py`** -- `signames.c` for the dash port, from
   `kernel/include/abi/signal_abi.h`. Replaces dash's own
   `src/mksignames.c` for two independent reasons, either of which would

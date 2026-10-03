@@ -57,4 +57,11 @@ int ubootmenu_set_next(const char *title);
 // The same, against an explicit environment-block path -- for the test.
 int ubootmenu_set_next_at(const char *env_path, const char *title);
 
+// /boot is mounted read-only; these remount it read-write around a
+// write and back. `dev` comes back "" when it was writable already, so
+// nested pairs compose and only the outer one restores. -1 when /boot
+// is not mounted or the remount failed (it is put back read-only).
+int uboot_writable(char *dev, int cap);
+void uboot_restore(const char *dev);
+
 #endif

@@ -47,6 +47,7 @@ position. Pick names that cannot be substrings of each other.
 | `live` | Forces the GRUB-module filesystem image to be mounted even when a real ATA disk is present. Without it the live image is used only when there is no disk. Only meaningful on `toy-os-live.iso`. | `kernel/fs/vfs.c` |
 | `faultinject` | Arms the kernel's DELIBERATE fault table (`SYS_CRASHTEST`, and `config set kernel.crash <kind>` from a shell, `kernel/core/crashtest.c`), so the Crash Test app's Ring 0 buttons actually panic the machine. Off by default: a crash hole has no business being open on an ordinary boot, and the app shows the buttons either way and reports the refusal. |
 | `panic=<seconds>` | What a kernel panic does after it has reported: count down that many seconds and RESTART, through the same reset as `reboot` minus its filesystem flush (`kernel/core/panic.c`). **Default 10** -- Windows restarts automatically, and Linux's `panic=N` is the same word. `panic=0` halts forever, as every panic did before; a negative value restarts at once. A key PRESSED on the PS/2 keyboard restarts early. It matters beyond convenience: the panic's log is kept in RAM (`kernel/panic_store.h`) and only a WARM reset carries it to the next boot, where logd appends it to the dead boot's log -- a machine left halted is power-cycled, and the record goes with it. A value that is not a number is refused and the default stands. | `kernel/core/panic.c` |
+| `bootcfg.trial` | Marks a boot as a `bootcfg try` trial entry; nothing in the kernel reads it. `bootcfg` and the Boot Manager find it on the running command line (`QUERY_CMDLINE`) to tell a trial boot from the entry it was copied from, which comparing words cannot do once either has been edited. `try --keep` strips it. | `userland/lib/ubootcfg.c` |
 
 ## Setting one
 
@@ -57,7 +58,13 @@ Note `grub.cfg` sets `timeout=0`, so no menu is drawn by default: hold
 **Shift** during boot to force it, or build with `make run MENU=1`, which
 sets a non-zero `GRUB_TIMEOUT`.
 
-**Permanently** — add the word to the `multiboot2` line in `grub.cfg`
+**On a running machine** — `bootcfg words 0 +nokaslr` (or the Boot
+Manager app, or System Settings > System > Startup) edits the installed
+`/boot/boot/grub/grub.cfg`, checked, keeping the old file as
+`grub.cfg.bak`; `bootcfg try 0 +nokaslr` boots the change ONCE first.
+Both accept only words in the table above (`--force` overrides).
+
+**Permanently, in the build** — add the word to the `multiboot2` line in `grub.cfg`
 and `make iso`. Note the repo-root `grub.cfg` is the SOURCE for two
 generated copies -- `iso/boot/grub/grub.cfg` in the ISO and
 `/boot/grub/grub.cfg` inside `disk.img`'s FAT32 boot partition, which is
@@ -101,6 +108,11 @@ the way the five above do. Two rules:
   code has them spread across five files with no registry, which is
   fine for five and is exactly why they need to be written down
   somewhere.
+  `tools/gen_bootwords.py` parses it at build time into the list
+  `bootcfg` and the Boot Manager accept -- a word that is not here is
+  refused there. Keep the shape: the word in backticks first in its
+  cell, and an Effect whose first clause reads on its own, since that
+  clause is the description the Boot Manager shows.
 
 A setting that a *user* would want to keep belongs in `/etc/toyos.conf`
 via `etc_config_get()`/`etc_config_set()` instead — see

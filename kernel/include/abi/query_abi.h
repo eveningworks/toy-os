@@ -542,6 +542,10 @@ struct query_fsstat {
 // table from `max_procs` and walks sys_proc_info() until it refuses an
 // index; there is no compile-time count in the ABI.
 #define QUERY_PROCLIMITS 48
+// The command line GRUB gave this kernel -- Linux's /proc/cmdline. A
+// LIST of slices in order, QUERY_CMDLINE_PART bytes each; concatenate
+// them. No records means GRUB passed none, which is a real answer.
+#define QUERY_CMDLINE 49
 
 #define QUERY_REMOTE_SESSION  0 // a session opened or closed
 #define QUERY_REMOTE_COMMAND  1 // a command line the remote shell ran
@@ -867,6 +871,14 @@ struct query_memmap {
     uint64_t base;
     uint64_t length;
     uint64_t type; // 1 = usable RAM; anything else is reserved of some kind
+};
+
+// QUERY_CMDLINE's record: one slice, NUL-terminated (the last may be
+// shorter).
+#define QUERY_CMDLINE_PART 192
+
+struct query_cmdline {
+    char part[QUERY_CMDLINE_PART + 1];
 };
 
 // QUERY_MMAUDIT's record -- ONE DANGLING MAPPING.

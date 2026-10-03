@@ -520,6 +520,13 @@ HIGHRES ?= 1
 KCONFIG_GEN := $(shell sh tools/gen_kconfig.sh '$(HZ)' '$(TICK)' '$(HIGHRES)' $(BUILD)/gen/kconfig.h 2>&1 || echo FAILED)
 $(if $(findstring FAILED,$(KCONFIG_GEN)),$(error $(KCONFIG_GEN)))
 
+# THE BOOT WORDS bootcfg and the Boot Manager accept, as
+# build/gen/bootwords.h -- parsed out of docs/boot-flags.md's table, the
+# only list of them there is. Parse time for the reason kconfig.h is;
+# rewritten only when the table changed.
+BOOTWORDS_GEN := $(shell python3 tools/gen_bootwords.py --out $(BUILD)/gen/bootwords.h 2>&1 || echo FAILED)
+$(if $(findstring FAILED,$(BOOTWORDS_GEN)),$(error $(BOOTWORDS_GEN)))
+
 # The target stays for `make version` by hand. NOTHING DEPENDS ON IT any
 # more: the parse-time call above has already run by the time any rule is
 # considered, and leaving it as a prerequisite made gen_version.sh run a

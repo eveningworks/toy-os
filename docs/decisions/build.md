@@ -2015,6 +2015,52 @@ Restart shows no flyout. The laptops needed `install --bootloader
 confirm` and the stanza added to their hand-kept `grub.cfg` (done
 2026-09-30, both).
 
+## grub.cfg is edited in place by one checked model, and a trial is told by its own word
+
+**The problem.** Changing a boot word on an installed machine meant
+`umount /boot`, `mount -w`, hand-editing a copy and `cp`-ing it back --
+one typo in a brace and GRUB stops at its prompt, one misspelt word and
+the kernel silently ignores it (its flags are matched by substring, with
+no registry to complain).
+
+**What real systems do.** Debian never edits grub.cfg: `/etc/default/grub`
+plus `update-grub` regenerates it. Fedora's `grubby` edits entries in
+place (`--args`, `--remove-args`, `--set-default`), and XP's `bootcfg.exe`
+did the same to boot.ini (`/addsw`, `/rmsw`, `/copy`). `bcdedit` edits a
+structured store. `visudo` and `systemctl edit` hand out a copy and check
+it before installing. `grub-reboot`/`bcdedit /bootsequence` boot an
+entry once.
+
+**What toy-os does.** `userland/lib/ubootcfg.c` keeps the file as TEXT and
+an edit rewrites only the lines it owns (a `set`, an entry's first or
+boot line), so comments and the one-shot stanza survive byte for byte --
+grubby's shape. Generating the file was declined: the repo's `grub.cfg`
+is already the build's source, and a second source on the installed
+machine would be two truths that can disagree. One model serves
+`/bin/bootcfg`, the Boot Manager and the Startup settings page, so the
+three cannot check or save differently.
+
+- **The check sorts problems by what they cost.** BROKEN (GRUB would not
+  get through: an unclosed brace or quote, no boot line, the default's
+  kernel missing) is never saved. RISKY (boots, probably not as meant:
+  an unknown word, timeout 0, the stanza gone) needs `--force`. Only a
+  problem the edit INTRODUCES blocks, or a fresh machine with no
+  `kernel.old` would need `--force` for everything.
+- **The word list is generated from `docs/boot-flags.md`**
+  (`tools/gen_bootwords.py`), the only list there is -- a second
+  hand-kept table would drift on the first new flag.
+- **The save is write-new, read back, keep `.bak`, rename in.** FAT32
+  has no atomic replace (`RENAME2_REPLACE` is `-ENOTSUP`), so there is a
+  moment with no grub.cfg between two synced renames -- the same window
+  `upd.c` accepts for the kernel. The `.bak` is what a GRUB prompt loads.
+- **A trial carries the word `bootcfg.trial`.** "Which entry did this
+  boot come from" first matched the running command line
+  (`QUERY_CMDLINE`, new for this) against the entries' words -- and
+  named the wrong entry in the first test, because an entry edited
+  after boot no longer matches and an untouched one sharing its old
+  words then does uniquely. GRUB passes no title. A word of the trial's
+  own survives any edit to the others, and the kernel ignores it.
+
 ## Release notes are `Release-note:` trailers on commits, cut at the machine's own build
 
 System Update shows what changed before it installs (chosen from

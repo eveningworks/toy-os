@@ -1,4 +1,5 @@
-// The firmware memory map, as a queryable FACT.
+// The firmware memory map and the kernel command line, as queryable
+// FACTS.
 //
 // Separate from multiboot.c for the same reason mem_query.c is separate
 // from pmm.c: the provider is a small adapter over a walk that already
@@ -81,7 +82,36 @@ static const struct query_provider memmap_provider = {
     .field_count = 0,
 };
 
+// QUERY_CMDLINE: the tag's string, in fixed slices -- a `kdebug=net`
+// line with a key outgrows one record.
+static int cmdline_count(void) {
+    const char *c = multiboot_cmdline();
+    if (!c || !*c) return 0;
+    return (int)((k_strlen(c) + QUERY_CMDLINE_PART - 1) / QUERY_CMDLINE_PART);
+}
+
+static int cmdline_fill(int index, void *out) {
+    const char *c = multiboot_cmdline();
+    if (index < 0 || index >= cmdline_count()) return 0;
+    struct query_cmdline *q = out;
+    k_memset(q, 0, sizeof *q);
+    k_strlcpy(q->part, c + (size_t)index * QUERY_CMDLINE_PART, sizeof q->part);
+    return 1;
+}
+
+static const struct query_provider cmdline_provider = {
+    .cls = QUERY_CMDLINE,
+    .name = "cmdline",
+    .record_size = sizeof(struct query_cmdline),
+    .flags = QUERY_F_LIST,
+    .count = cmdline_count,
+    .fill = cmdline_fill,
+    .fields = 0,
+    .field_count = 0,
+};
+
 void multiboot_query_init(void) {
     query_register(&memmap_provider);
+    query_register(&cmdline_provider);
 }
 INITCALL(multiboot_query_init, INIT_QUERY);

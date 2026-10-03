@@ -91,6 +91,10 @@ TESTS = [
     # `reboot --entry` (lib/ubootmenu.h). Ring 3's library, so not a
     # KTEST; tools/boot_entry_test.py proves GRUB honours what it writes.
     ("bootmenu_test", 0, None, None),
+    # The editable grub.cfg model behind bootcfg and the Boot Manager
+    # (lib/ubootcfg.h), on fixtures; tools/bootcfg_test.py is the real
+    # /boot and the reboot into a trial.
+    ("bootcfg_test", 0, None, None),
     # A process mapping a device's register file and READING it --
     # stage 1 of docs/umdf-design.md. The KTESTs beside dev_bar_check()
     # cover every refusal and cannot cover this one: they run on the

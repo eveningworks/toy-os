@@ -17,6 +17,11 @@ long-mode transition done by hand. Linear RGB framebuffer falling back
 to 80×25 VGA text. PS/2 keyboard and mouse sharing the 8042 through one
 dispatcher, with keyboard layouts as *data files* generated from Linux's
 own XKB data. PIT, CMOS RTC, PC speaker, MBR/GPT partition parsing.
+The installed `grub.cfg` is edited from inside the OS by `bootcfg`
+(grubby's shape, plus a visudo-style `edit`), checked before it is saved
+-- unknown boot words, unclosed braces, a missing kernel -- with the old
+file kept as `grub.cfg.bak`; `bootcfg try` boots a change ONCE through
+GRUB's own `next_entry`, so a bad word costs one power-cycle.
 
 Four block drivers behind one `block_device` registry the filesystems
 never look through: legacy IDE with Bus-Master DMA and a PIO fallback,
