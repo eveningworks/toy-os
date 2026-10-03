@@ -281,7 +281,14 @@ static int same_app(int a, int b) {
 // A menu is not a window the strip lists -- and neither is a DIALOG,
 // which belongs to the window that owns it (Win32 gives an owned window
 // no button of its own either). Both are `unlisted`.
-static int unlisted(int i) { return windows[i].popup || windows[i].dialog; }
+// A popup or a dialog has no button -- nor does a window a screenshot
+// is hiding (WIN_SHOT_NO_SELF): the tool is not in its own picture,
+// taskbar included.
+static int unlisted(int i) {
+    if (windows[i].popup || windows[i].dialog) return 1;
+    int hidden = wm_render_hidden_pid();
+    return hidden && wm_client_is_client_window(&windows[i]) && windows[i].client_pid == hidden;
+}
 
 // THE STRIP LISTS IN `task_rank` ORDER, never windows[] order:
 // windows[] is z-order, a click raises, and a raise moves the window to

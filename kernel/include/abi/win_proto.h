@@ -1192,6 +1192,18 @@ struct win_popup_pos {
 #define WIN_WIDGET_WH(w, h) (int32_t)(((w) << 16) | ((h) & 0xffff))
 #define WIN_WIDGET_W(c)     (int)(((uint32_t)(c) >> 16) & 0xffff)
 #define WIN_WIDGET_H(c)     (int)((uint32_t)(c) & 0xffff)
+// A NOTICE ABOUT A FILE THE CLIENT MADE -- the toast in the corner
+// GNOME and Windows put up after a screenshot: a thumbnail and Open /
+// Copy / Show in folder, which the COMPOSITOR acts on, so the card
+// outlives the client that asked for it (a screenshot tool quits at
+// once). The path rides `text` in WIN_TITLE_LEN - 1 byte pieces:
+// a: piece index | (pieces << 8), b: WIN_NOTICE_*, c: WIN_NOTICE_F_*.
+// The card goes up when the last piece arrives; nothing answers.
+#define WIN_REQ_NOTICE     39
+#define WIN_NOTICE_SCREENSHOT 1   // "Screenshot saved", the image as its thumbnail
+#define WIN_NOTICE_F_COPIED   0x1 // it is on the clipboard already: say so
+#define WIN_NOTICE_PIECES_MAX 4   // so a path of up to 124 bytes
+
 // What one window's map may hold. A window with more named widgets than
 // this reports the first WIN_WIDGET_MAX; nothing breaks, the tail is
 // simply not describable.

@@ -10099,3 +10099,36 @@ disks says nothing. Any mounted, persistent, writable filesystem can be
 measured; a RAM-only one is refused because it would measure memcpy,
 and `/boot` is absent because it is mounted read-only by policy.
 
+## Screenshot is an overlay over a frozen frame, and its card is the compositor's
+
+The Screenshot app was a form -- mode radios, a delay spinbox, a preview
+well, Take / Save As / Copy -- that went fullscreen only to drag a
+region. GNOME 42's shell (and Windows' Snipping Tool, behind PrtSc) put
+the choosing ON the screen instead: the frame freezes, a pill offers
+Region / Screen / Window and a shutter, and after the shutter there is
+no window at all, only a notification with the picture. Chosen from
+mockups (S3, 2026-10-04) with PrtSc, the toast and a copy-to-clipboard
+option.
+
+**The frame is captured twice before anything is shown**, with and
+without the pointer, so the pointer toggle works after the fact; both
+captures hide the tool (`WIN_SHOT_NO_SELF`), which now also hides its
+taskbar button and gives focus back to the window that had it for that
+one render -- otherwise the picture showed the app it was taken with.
+
+**The card is the compositor's** (`WIN_REQ_NOTICE`), not a client
+window: the tool quits at once, and an Open / Copy / Folder that died
+with it would be useless. It reuses the crash notice's stack, timing and
+drawing; the thumbnail is decoded and fitted once by the compositor from
+the saved file. There is no compositor-drawn toast API beyond this one
+kind, deliberately -- a general notification service (D-Bus's
+`org.freedesktop.Notifications`) is a bigger design than one caller
+justifies.
+
+**A delay is a relaunch**: there is no request to hide a window, and a
+client sleeping with one open is drawn as Not Responding. So the shutter
+with a delay spawns a fresh copy with `--delay N --mode M` and quits; it
+sleeps with no window and freezes the screen as it is then -- in Screen
+mode simply taking the shot, otherwise showing the overlay again, which
+is how the Snipping Tool's delay works.
+

@@ -119,10 +119,11 @@ const char *wm_shortcut_match(int key, unsigned mods) {
 int wm_shortcut_fire(int key, unsigned mods) {
     const char *cmd = wm_shortcut_match(key, mods);
     if (!cmd) return 0;
-    // NOT WAITED FOR, and not a tracked child: this is a launch. The
-    // compositor reaps through its own poll, the way every other thing
-    // it spawns is handled.
+    // NOT WAITED FOR: this is a launch, reaped by the compositor's own
+    // poll like everything else it spawns -- once it is TRACKED, which
+    // it was not, and every PrtSc left a zombie.
     int pid = sys_spawn(cmd, 0, -1);
+    if (pid > 0) wm_track_launched(pid);
     // THE ACTION A TEST WAITS FOR, once (docs/conventions/gui.md). It
     // names the COMMAND rather than the key, because what a test asserts
     // is that the right program started.

@@ -66,7 +66,8 @@ written.
 
 ## See also
 
-`lsdisplay` for what the screen actually is; the Screenshot app
-(`/bin/wm/apps/screenshot`) for a preview, a delay you can set, a window
-you point at and a region you drag rather than type; `docs/conventions/gui.md` for how the
+`lsdisplay` for what the screen actually is; the Screenshot overlay
+(`/bin/wm/apps/screenshot`, or PrtSc) for a region you drag and resize,
+a window you point at, a delay, and a card with Open / Copy / Folder
+afterwards; `docs/conventions/gui.md` for how the
 capture reaches a client at all.

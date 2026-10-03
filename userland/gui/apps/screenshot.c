@@ -1,26 +1,30 @@
-// Screenshot -- capture the screen, a window, or a dragged region.
+// Screenshot -- the shell's capture overlay, GNOME 42's shape (mockup
+// S3, 2026-10-04): PrtSc freezes the screen, dims it, and puts a pill at
+// the bottom -- Region / Screen / Window, the shutter, the pointer, copy
+// to the clipboard, a delay, close. There is no window to manage: the
+// shutter saves to /home/screenshots, the compositor puts up a card with
+// the picture and Open / Copy / Folder (WIN_REQ_NOTICE), and the app is
+// gone. /bin/screenshot is the other front end on lib/ushot.h.
 //
-// The second front end on lib/ushot.h; /bin/screenshot is the other, and
-// neither wraps the other. What this adds over the command is the two
-// things a command cannot have: a preview of what you just took, and a
-// region you drag rather than type as four numbers.
-//
-// **REGION SELECT WORKS ON A FROZEN CAPTURE, NOT ON THE LIVE SCREEN.**
-// A full-screen shot is taken first, the window goes fullscreen showing
-// that picture, the band is dragged over it, and the crop happens in
-// memory. Spectacle and GNOME's shell both do exactly this, and the
-// reason is that the alternative -- an overlay over the live screen --
-// means the thing being photographed can move while you are choosing
-// what to photograph.
+// **THE CHOICE IS MADE ON A FROZEN FRAME**, taken before the overlay is
+// shown: the thing being photographed cannot move while you choose
+// what to photograph (Spectacle and GNOME both do this). It is taken
+// twice, with and without the pointer, so the pointer toggle can be
+// flipped after the fact.
 //
 // **THE APP IS NEVER IN ITS OWN PICTURE**: every capture asks
-// WIN_SHOT_NO_SELF, so the compositor renders one frame without this
-// client's windows. The window visibly goes away and comes back, which
-// is what a screenshot tool is supposed to look like.
+// WIN_SHOT_NO_SELF, so the compositor renders the frame without this
+// client's window.
+//
+// A DELAY IS A RELAUNCH: the overlay goes away, a fresh copy of this
+// program sleeps, and the overlay comes back over the screen as it is
+// then (Windows' Snipping Tool) -- or, in Screen mode, the picture is
+// simply taken. There is no request to hide a window, and a client that
+// sleeps with one open is drawn as Not Responding.
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <time.h>
-#include <stdarg.h>
 #include <unistd.h>
 #include "rt/sys.h"
 #include "ui/ugfx.h"
@@ -28,591 +32,588 @@
 #include "ui/uapp.h"
 #include "ui/ulog.h"
 #include "ui/utheme.h"
-#include "ui/uui_button.h"
-#include "ui/uui_checkbox.h"
-#include "ui/uui_filedialog.h"
-#include "ui/uui_image.h"
-#include "ui/uui_label.h"
-#include "ui/uui_layout.h"
-#include "ui/uui_radio_list.h"
-#include "ui/uui_spinbox.h"
-#include "ui/uui_focus.h"
+#include "ui/uui_primitives.h"
+#include "lib/icon_cache.h"
 #include "lib/uclip.h"
+#include "lib/uconf.h"
 #include "lib/ushot.h"
-#include "kpath.h"   // k_path_basename -- the kernel's, linked into ring 3
-#include "rubberband.h"
+#include "keyboard.h"
 
-#define SHOT_DIR "/home/screenshots"
+#define SHOT_DIR  "/home/screenshots"
+#define PREFS     "/etc/screenshot.conf"   // the app's own (docs/conventions/gui.md)
+#define SELF_PATH "/bin/wm/apps/screenshot"
 
-enum {
-    ID_MODE = 1, ID_DELAY, ID_POINTER, ID_TAKE, ID_SAVE, ID_COPY, ID_PREVIEW,
-};
+enum { MODE_REGION, MODE_SCREEN, MODE_WINDOW, MODES };
+static const char *const MODE_NAME[MODES] = { "region", "screen", "window" };
+static const char *const MODE_LABEL[MODES] = { "Region", "Screen", "Window" };
+static const char *const MODE_ICON[MODES] = { "tb-region", "tb-screen", "tb-window" };
 
-enum { MODE_SCREEN, MODE_WINDOW, MODE_REGION };
+static const int DELAYS[] = { 0, 3, 5, 10 };
+#define DELAY_COUNT 4
 
-static const char *const MODE_LABELS[] = {
-    "Whole screen", "Active window", "Select a region",
-};
+// The preferences: the last mode, and the three toggles.
+static int g_mode = MODE_REGION;
+static int g_pointer;
+static int g_copy;
+static int g_delay_i;
 
-static struct uui_radio_list g_mode;
-static struct uui_spinbox    g_delay;
-static struct uui_checkbox   g_pointer;
-static struct uui_button     g_take, g_save, g_copy;
-static struct uui_image      g_preview;
-static struct uui_label      g_status_label, g_mode_label, g_delay_label;
-static struct uui_filedialog g_chooser;
-
-static struct uui_item   g_form_items[2], g_opt_items[3], g_btn_items[3], g_root_items[5];
-static struct uui_layout g_form, g_opts, g_btns, g_root;
-
-// THE TAB ORDER, and it is not optional: the radio list, the spinbox and
-// the checkbox all declare a `key` op, and a widget that takes keys gets
-// none until the app routes them (docs/conventions/gui.md). Reading order.
-static struct uui_focusable g_focusables[] = {
-    { &g_mode,    &uui_radio_list_ops },
-    { &g_delay,   &uui_spinbox_ops },
-    { &g_pointer, &uui_checkbox_ops },
-    { &g_take,    &uui_button_ops },
-    { &g_save,    &uui_button_ops },
-    { &g_copy,    &uui_button_ops },
-};
-static struct uui_focus g_focus;
-
-static char g_status[128] = "Ready.";
-static char g_last_path[UUI_FILEDIALOG_PATH_MAX];
-
+// The two frozen frames, copied out of the ONE capture object a process
+// may have (its buffer is named after the pid -- lib/ushot.h), and the
+// dimmed copy of whichever is shown.
 static struct ushot g_shot;
-static int g_shot_ok;      // g_shot holds a capture
-static int g_open;         // the compositor answered ushot_open()
+static uint32_t *g_fr[2];         // [0] without the pointer, [1] with it
+static uint32_t *g_dim;
+static int g_dim_of = -1;      // which frame g_dim was made from
+static int g_sw, g_sh;
+static int g_ok;
 
-// --- the overlay -------------------------------------------------------
-//
-// Both "Select a region" and "Active window" work the same way: a
-// full-screen capture is taken FIRST, the window goes fullscreen showing
-// that frozen picture, and the choice is made over it. While an overlay
-// is up the root layout's child count is ZERO and the router has no
-// widgets, so the toolkit draws and routes nothing and this file's
-// on_draw/on_press have the whole window.
-//
-// Choosing over a FROZEN picture rather than the live screen is what
-// Spectacle and GNOME's shell both do, and the reason is that the thing
-// being photographed must not move while you are deciding what to
-// photograph.
-enum { OVERLAY_NONE, OVERLAY_REGION, OVERLAY_PICK };
-static int g_overlay;
+// --- the selection ----------------------------------------------------
 
-static struct rubberband g_band;
-static int g_band_dragging;
+struct rect { int x, y, w, h; };
+static struct rect g_sel;         // the region; w == 0 is none yet
+static struct rect g_win;         // the window under the pointer
+static int g_win_have;
 
-// The window the pointer is over, as the compositor answers it
-// (WIN_SHOT_WINDOW_AT + WIN_SHOT_PROBE). `g_pick_have` separates "no
-// window there" from "a window of zero size", which cannot happen but
-// would be indistinguishable.
-static struct win_shot g_pick;
-static int g_pick_have;
+enum { DRAG_NONE, DRAG_NEW, DRAG_MOVE, DRAG_HANDLE };
+static int g_drag = DRAG_NONE;
+static int g_handle;              // 0..7, clockwise from the top-left
+static int g_ax, g_ay;            // the press point
+static struct rect g_start;       // the selection when the drag began
+static int g_pressed_ctl = -1;    // the pill control a press armed
+static int g_hot = -1;            // the pill control under the pointer
 
-// ARMED BY A PRESS INSIDE THE OVERLAY, and nothing else commits.
-//
-// The release that COMMITS the Take button also reaches on_release --
-// uapp routes to the widgets first and then calls the app's own handler
-// (ui/uapp.h) -- so by the time it arrives the picker is already up, and
-// without this it ended the picker on the very click that opened it.
-// It is also the arm-on-press/commit-on-release contract every control
-// here follows (docs/gui-guidelines.md): press on the window you want,
-// release on it.
-static int g_pick_armed;
+static struct uapp *g_app;
 
-static void status(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-static void status(const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(g_status, sizeof g_status, fmt, ap);
-    va_end(ap);
-    // No set_text: uui_label BORROWS its string (ui/uui_label.h), so the
-    // one at init points here for good and rewriting the buffer is the
-    // whole update.
+static const uint32_t *frame(void) { return g_fr[g_pointer ? 1 : 0]; }
+
+static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+// --- preferences ------------------------------------------------------
+
+static void prefs_load(void) {
+    char v[16];
+    if (uconf_get(PREFS, "mode", v, sizeof v))
+        for (int i = 0; i < MODES; i++) if (!strcmp(v, MODE_NAME[i])) g_mode = i;
+    if (uconf_get(PREFS, "pointer", v, sizeof v)) g_pointer = !strcmp(v, "on");
+    if (uconf_get(PREFS, "copy", v, sizeof v)) g_copy = !strcmp(v, "on");
+    if (uconf_get(PREFS, "delay", v, sizeof v)) {
+        int d = atoi(v);
+        for (int i = 0; i < DELAY_COUNT; i++) if (DELAYS[i] == d) g_delay_i = i;
+    }
 }
 
-// FILE-SCOPE, NOT A LOCAL: uui_image BORROWS the struct it is given and
-// reads it again at every redraw (ui/uui_image.h). A local one dangles
-// the moment this returns, and the widget then scales from a stack
-// address -- which faulted on the first repaint after a capture.
-static struct uimg g_preview_img;
+static void prefs_save(void) {
+    char d[8];
+    snprintf(d, sizeof d, "%d", DELAYS[g_delay_i]);
+    uconf_set(PREFS, "mode", MODE_NAME[g_mode]);
+    uconf_set(PREFS, "pointer", g_pointer ? "on" : "off");
+    uconf_set(PREFS, "copy", g_copy ? "on" : "off");
+    uconf_set(PREFS, "delay", d);
+}
 
-// THE MARKER FOR "THIS IS WHAT YOU WILL GET", used by both overlays.
+// --- the pill ---------------------------------------------------------
 //
-// Two rings, accent inside a dark outer line, because ONE ring is
-// invisible against a window whose own chrome is that colour -- which on
-// this theme is every focused title bar. The same reason
-// ugfx_draw_string_shadowed() exists.
-static void outline(struct ugfx_surface *s, int x, int y, int w, int h) {
-    uint32_t ink = UTHEME_ACCENT;
-    ugfx_draw_rect(s, x - 2, y - 2, w + 4, h + 4, UTHEME_TEXT);
-    ugfx_draw_rect(s, x - 1, y - 1, w + 2, h + 2, ink);
-    ugfx_draw_rect(s, x, y, w, h, ink);
-    ugfx_draw_rect(s, x + 1, y + 1, w - 2, h - 2, UTHEME_TEXT);
+// Laid out from the font, left to right: the three modes (icon over a
+// label), a rule, the shutter, a rule, pointer / copy / delay / close.
 
-    char size[32];
-    snprintf(size, sizeof size, "%d x %d", w, h);
-    // Inside the box when there is room above it, below the top edge
-    // otherwise -- a label drawn off the top of the screen is a label
-    // nobody sees, and the topmost window is exactly the common case.
-    int ly = y >= ugfx_char_h() + 6 ? y - ugfx_char_h() - 4 : y + 4;
-    ugfx_draw_string_shadowed(s, x + 4, ly, size, UTHEME_ACCENT_TEXT);
+enum { C_REGION, C_SCREEN, C_WINDOW, C_SHUTTER, C_POINTER, C_COPY, C_DELAY, C_CLOSE, CTLS };
+static const char *const CTL_NAME[CTLS] = {
+    "region", "screen", "window", "shutter", "pointer", "copy", "delay", "close",
+};
+
+static int unit(void) { return ugfx_char_h(); }
+
+static void ctl_rect(int c, struct rect *r) {
+    int u = unit();
+    int mw = u * 4, mh = u * 3 + u / 2;   // a mode: icon over its label
+    int sd = u * 3 + u / 2;               // the shutter's diameter
+    int ib = u * 2 + u / 3;               // a small icon button
+    int pad = u * 2 / 3, rule = u;
+    int total = pad + 3 * mw + rule + sd + rule + 4 * ib + 3 * (u / 4) + pad;
+    int x0 = (g_sw - total) / 2;
+    int ph = mh + 2 * pad;
+    int y0 = g_sh - ph - u * 4;
+    int x = x0 + pad;
+    for (int k = 0; k < CTLS; k++) {
+        struct rect q;
+        if (k <= C_WINDOW) { q.x = x; q.y = y0 + pad; q.w = mw; q.h = mh; x += mw; if (k == C_WINDOW) x += rule; }
+        else if (k == C_SHUTTER) { q.x = x; q.y = y0 + (ph - sd) / 2; q.w = q.h = sd; x += sd + rule; }
+        else { q.x = x; q.y = y0 + (ph - ib) / 2; q.w = q.h = ib; x += ib + u / 4; }
+        if (k == c) { *r = q; return; }
+    }
 }
 
-static void show_preview(void) {
-    g_preview_img.w = g_shot.w;
-    g_preview_img.h = g_shot.h;
-    g_preview_img.px = g_shot.px;
-    g_preview_img.has_alpha = 0;
-    uui_image_set(&g_preview, &g_preview_img);
+static void pill_rect(struct rect *r) {
+    struct rect a, b;
+    ctl_rect(C_REGION, &a);
+    ctl_rect(C_CLOSE, &b);
+    int pad = unit() * 2 / 3;
+    r->x = a.x - pad;
+    r->y = a.y - pad;
+    r->w = b.x + b.w + pad - r->x;
+    r->h = a.h + 2 * pad;
 }
 
-// /home/screenshots/shot-YYYYMMDD-HHMMSS.qoi. QOI rather than PNG
-// because this desktop can open a QOI and cannot open a PNG (lib/uimg.h)
-// -- a picture the system that made it cannot show is a strange default.
-// Save As... offers both.
-static void auto_save(void) {
+static int ctl_at(int x, int y) {
+    for (int c = 0; c < CTLS; c++) {
+        struct rect r;
+        ctl_rect(c, &r);
+        if (uui_hit(r.x, r.y, r.w, r.h, x, y)) return c;
+    }
+    return -1;
+}
+
+static int on_pill(int x, int y) {
+    struct rect r;
+    pill_rect(&r);
+    return uui_hit(r.x, r.y, r.w, r.h, x, y);
+}
+
+// --- the region's handles ---------------------------------------------
+
+static void handle_xy(const struct rect *s, int k, int *x, int *y) {
+    int xs[8] = { s->x, s->x + s->w / 2, s->x + s->w, s->x + s->w, s->x + s->w, s->x + s->w / 2, s->x, s->x };
+    int ys[8] = { s->y, s->y, s->y, s->y + s->h / 2, s->y + s->h, s->y + s->h, s->y + s->h, s->y + s->h / 2 };
+    *x = xs[k];
+    *y = ys[k];
+}
+
+static int handle_at(int x, int y) {
+    if (g_sel.w <= 0) return -1;
+    int r = unit() / 2 + 2;
+    for (int k = 0; k < 8; k++) {
+        int hx, hy;
+        handle_xy(&g_sel, k, &hx, &hy);
+        if (x >= hx - r && x <= hx + r && y >= hy - r && y <= hy + r) return k;
+    }
+    return -1;
+}
+
+// --- capture and finish -----------------------------------------------
+
+static void make_dim(void) {
+    const uint32_t *f = frame();
+    if (g_dim_of == g_pointer && g_dim) return;
+    if (!g_dim) g_dim = (uint32_t *)malloc((size_t)g_sw * (size_t)g_sh * 4);
+    if (!g_dim) return;
+    // A darkened copy, made once per frame shown rather than per paint.
+    for (int i = 0; i < g_sw * g_sh; i++) {
+        uint32_t p = f[i];
+        uint32_t r = ((p >> 16) & 0xFF) * 4 / 10, g = ((p >> 8) & 0xFF) * 4 / 10, b = (p & 0xFF) * 4 / 10;
+        g_dim[i] = 0xFF000000u | (r << 16) | (g << 8) | b;
+    }
+    g_dim_of = g_pointer;
+}
+
+// The area the shutter would take, or 0 when there is none yet.
+static int target(struct rect *r) {
+    if (g_mode == MODE_SCREEN) { r->x = r->y = 0; r->w = g_sw; r->h = g_sh; return 1; }
+    if (g_mode == MODE_WINDOW) { *r = g_win; return g_win_have && g_win.w > 0; }
+    *r = g_sel;
+    return g_sel.w >= 2 && g_sel.h >= 2;
+}
+
+static int save_crop(const struct rect *r, char *path, int cap) {
+    struct ushot *f = &g_shot;
+    // The chosen frame back into the capture object, which crops and saves.
+    memcpy(f->px, frame(), (size_t)g_sw * (size_t)g_sh * 4);
+    f->w = g_sw;
+    f->h = g_sh;
     sys_mkdir(SHOT_DIR);
     time_t now = time(NULL);
     struct tm tm;
     char stamp[32];
     if (localtime_r(&now, &tm) && strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm))
-        snprintf(g_last_path, sizeof g_last_path, SHOT_DIR "/shot-%s.qoi", stamp);
+        snprintf(path, (size_t)cap, SHOT_DIR "/shot-%s.qoi", stamp);
     else
-        snprintf(g_last_path, sizeof g_last_path, SHOT_DIR "/shot-%d.qoi", sys_getpid());
+        snprintf(path, (size_t)cap, SHOT_DIR "/shot-%d.qoi", sys_getpid());
+    if (r->w != f->w || r->h != f->h) ushot_crop(f, r->x, r->y, r->w, r->h);
+    // QOI, which this desktop's Image Viewer opens by default.
+    return ushot_save(f, path, NULL);
+}
 
-    int rc = ushot_save(&g_shot, g_last_path, NULL);
+// The shutter: save, copy if asked, the compositor's card, and gone.
+static void finish(struct uapp *a) {
+    struct rect r;
+    if (!target(&r)) return;
+    char path[128];
+    int rc = save_crop(&r, path, sizeof path);
     if (rc < 0) {
-        status("Could not save: %s", ushot_strerror(rc));
-        g_last_path[0] = '\0';
+        ulogf("screenshot: could not save: %s\n", ushot_strerror(rc));
+        uapp_quit(a, 1);
+        return;
+    }
+    unsigned flags = 0;
+    if (g_copy) {
+        // THE FILE, as the File Manager's Copy puts one: this clipboard
+        // holds files or text, not pixels (lib/uclip.h).
+        uclip_begin(0, UCLIP_COPY);
+        if (uclip_add(0, path) && uclip_commit(0) > 0) flags |= WIN_NOTICE_F_COPIED;
+    }
+    ulogf("screenshot: saved %s %dx%d\n", path, r.w, r.h);
+    uapp_notice(a, WIN_NOTICE_SCREENSHOT, flags, path);
+    prefs_save();
+    uapp_quit(a, 0);
+}
+
+static void shutter(struct uapp *a) {
+    if (DELAYS[g_delay_i] > 0) {
+        // A DELAY IS A RELAUNCH (the top of this file): the next copy
+        // sleeps with no window and freezes the screen as it is then.
+        char args[48];
+        snprintf(args, sizeof args, "--delay %d --mode %s", DELAYS[g_delay_i], MODE_NAME[g_mode]);
+        prefs_save();
+        sys_spawn(SELF_PATH, args, -1);
+        uapp_quit(a, 0);
+        return;
+    }
+    finish(a);
+}
+
+// --- input ------------------------------------------------------------
+
+static void set_mode(int m) {
+    g_mode = m;
+    g_win_have = 0;
+}
+
+static void activate(struct uapp *a, int c) {
+    switch (c) {
+    case C_REGION: case C_SCREEN: case C_WINDOW: set_mode(c - C_REGION); break;
+    case C_SHUTTER: shutter(a); return;
+    case C_POINTER: g_pointer = !g_pointer; break;
+    case C_COPY:    g_copy = !g_copy; break;
+    case C_DELAY:   g_delay_i = (g_delay_i + 1) % DELAY_COUNT; break;
+    case C_CLOSE:   prefs_save(); uapp_quit(a, 0); return;
+    }
+    uapp_redraw(a);
+}
+
+static void probe_window(int x, int y) {
+    struct win_shot r;
+    if (ushot_probe(&g_shot, WIN_SHOT_WINDOW_AT, x, y, &r) == 0 && r.w > 0) {
+        g_win.x = r.x; g_win.y = r.y; g_win.w = r.w; g_win.h = r.h;
+        // Clamped to the frame: a window hanging off the screen is
+        // captured as much of it as is on it.
+        int x1 = clampi(g_win.x + g_win.w, 0, g_sw), y1 = clampi(g_win.y + g_win.h, 0, g_sh);
+        g_win.x = clampi(g_win.x, 0, g_sw);
+        g_win.y = clampi(g_win.y, 0, g_sh);
+        g_win.w = x1 - g_win.x;
+        g_win.h = y1 - g_win.y;
+        g_win_have = g_win.w > 0 && g_win.h > 0;
     } else {
-        status("%dx%d saved to %s", g_shot.w, g_shot.h, g_last_path);
+        g_win_have = 0;
     }
 }
 
-// --- taking -----------------------------------------------------------
-
-static void enter_overlay(struct uapp *a, int kind) {
-    g_overlay = kind;
-    g_band_dragging = 0;
-    g_pick_have = 0;
-    g_pick_armed = 0;
-    rb_clear(&g_band);
-    // BOTH HALVES. Emptying the layout stops it drawing; the ROUTER
-    // draws and hit-tests `uapp_desc.widgets` independently, so a layout
-    // with no children still left every control on screen (ui/uapp.h).
-    g_root.count = 0;
-    uapp_set_widgets(a, 0, 0);
-    uapp_set_fullscreen(a, 1);
-    uapp_redraw(a);
-}
-
-static void leave_overlay(struct uapp *a) {
-    g_overlay = OVERLAY_NONE;
-    g_band_dragging = 0;
-    g_pick_have = 0;
-    g_pick_armed = 0;
-    g_root.count = 5;
-    uapp_set_widgets(a, g_root_items, 5);
-    uapp_set_fullscreen(a, 0);
-    uapp_redraw(a);
-}
-
-static void take(struct uapp *a) {
-    if (!g_open) {
-        status("No desktop is running.");
-        return;
-    }
-    int delay = uui_spinbox_value(&g_delay);
-    if (delay > 0) {
-        // A BLOCKING SLEEP IN A GUI CLIENT IS NORMALLY WRONG -- the
-        // compositor pings, and a client that does not answer is drawn
-        // as Not Responding. This one is deliberate and bounded: the
-        // delay exists so the person can arrange the screen, and an app
-        // that kept repainting itself while they did would be one more
-        // thing moving in the picture. See docs/conventions/gui.md on
-        // long work belonging in a child process -- this is not long
-        // work, it is an intentional pause.
-        uapp_flush(a);
-        sleep((unsigned)delay);
-    }
-
-    unsigned flags = WIN_SHOT_NO_SELF;
-    if (g_pointer.checked) flags |= WIN_SHOT_POINTER;
-
-    // EVERY MODE STARTS WITH A FULL-SCREEN CAPTURE. For "Whole screen"
-    // that is the answer; for the other two it is the frozen picture the
-    // choice is made over, and the crop happens in memory afterwards --
-    // so a window is captured as it was when you pressed the button, not
-    // as it is when you finally click it.
-    int rc = ushot_take(&g_shot, WIN_SHOT_SCREEN, flags, 0, 0, 0, 0);
-    if (rc < 0) {
-        g_shot_ok = 0;
-        status("%s", ushot_strerror(rc));
-        uapp_redraw(a);
-        return;
-    }
-    g_shot_ok = 1;
-
-    if (g_mode.selected == MODE_REGION) {
-        status("Drag a rectangle. Esc or the secondary button cancels.");
-        enter_overlay(a, OVERLAY_REGION);
-        return;
-    }
-    if (g_mode.selected == MODE_WINDOW) {
-        status("Point at a window and click it. Esc cancels.");
-        enter_overlay(a, OVERLAY_PICK);
-        return;
-    }
-    show_preview();
-    auto_save();
-    uapp_redraw(a);
-}
-
-// --- the chooser ------------------------------------------------------
-
-static void on_chosen(void *ctx, const char *path) {
-    struct uapp *a = ctx;
-    if (!path) return;
-    int rc = ushot_save(&g_shot, path, NULL);
-    if (rc < 0) status("Could not save: %s", ushot_strerror(rc));
-    else {
-        snprintf(g_last_path, sizeof g_last_path, "%s", path);
-        status("Saved to %s", path);
-    }
-    uapp_redraw(a);
-}
-
-static int keep_images(void *ctx, const char *dir, const struct sys_dirent *e) {
-    (void)ctx; (void)dir;
-    if (e->is_dir) return 1;
-    const char *dot = strrchr(e->name, '.');
-    return dot && (strcmp(dot, ".qoi") == 0 || strcmp(dot, ".png") == 0);
-}
-
-static const struct uui_filedialog_filter FILTERS[] = {
-    { "Images (.qoi .png)", keep_images, 0 },
-    UUI_FILEDIALOG_ALL_FILES,
-};
-
-// --- callbacks --------------------------------------------------------
-
-static void on_action(struct uapp *a, int code) {
-    switch (code) {
-    case ID_TAKE:
-        take(a);
-        break;
-    case ID_SAVE: {
-        if (!g_shot_ok) { status("Take a screenshot first."); uapp_redraw(a); break; }
-        if (uui_filedialog_is_open(&g_chooser)) break;
-        // k_path_basename() never fails and never returns NULL, so the
-        // empty answer -- no path yet, or a trailing slash -- is what
-        // selects the default name.
-        const char *name = k_path_basename(g_last_path);
-        struct uui_filedialog_opts o = {
-            .mode = UUI_FILEDIALOG_SAVE,
-            .title = "Save Screenshot",
-            .start_dir = SHOT_DIR,
-            .initial_name = name[0] ? name : "screenshot.qoi",
-            .filters = FILTERS,
-            .filter_count = 2,
-        };
-        uui_filedialog_open(a, &g_chooser, &o, on_chosen, a);
-        break;
-    }
-    case ID_COPY:
-        // THE FILE, NOT THE PIXELS. This clipboard carries files or
-        // text (lib/uclip.h), so what a paste in the File Manager gets
-        // is the saved image -- which is why Copy needs a saved file
-        // and says so rather than appearing to do nothing.
-        if (!g_last_path[0]) { status("Nothing saved yet to copy."); }
-        else {
-            uclip_begin(0, UCLIP_COPY);
-            if (uclip_add(0, g_last_path) && uclip_commit(0) > 0)
-                status("Copied %s to the clipboard.", g_last_path);
-            else
-                status("The clipboard refused it.");
-        }
-        uapp_redraw(a);
-        break;
-    default:
-        break;
-    }
-}
-
-static void on_draw(struct uapp *a, struct uapp_draw *d) {
-    // WHERE EVERY CONTROL IS, by name, so a test never derives geometry
-    // the app already knows (docs/conventions/gui.md). Gated off by
-    // default, so this costs nothing.
-    uapp_log_layout(a, "screenshot");
-    if (g_overlay)
-        uapp_logf_layout("screenshot: overlay %s %d %d %d %d",
-                          g_overlay == OVERLAY_PICK ? "pick" : "region",
-                          g_pick_have ? g_pick.x : g_shot.x,
-                          g_pick_have ? g_pick.y : g_shot.y,
-                          g_pick_have ? g_pick.w : g_shot.w,
-                          g_pick_have ? g_pick.h : g_shot.h);
-    if (!g_overlay) return;
-    struct ugfx_surface *s = uapp_surface(d);
-
-    // The frozen capture, 1:1 -- a fullscreen window's content area IS
-    // the screen, so the shot's own coordinates are the window's.
-    ugfx_blit(s, 0, 0, g_shot.w, g_shot.h, g_shot.px, g_shot.w);
-
-    int x = 0, y = 0, w = 0, h = 0, have = 0;
-    if (g_overlay == OVERLAY_REGION)
-        have = rb_rect(&g_band, &x, &y, &w, &h) && w > 0 && h > 0;
-    else if (g_pick_have) {
-        x = g_pick.x; y = g_pick.y; w = g_pick.w; h = g_pick.h;
-        have = w > 0 && h > 0;
-    }
-    if (have) outline(s, x, y, w, h);
-}
-
-// `buttons` IS TWO FIELDS, not a button mask: the low byte is the mask
-// and the next one is the KEY_MOD_* bits held (abi/win_proto.h). Reading
-// it raw makes every test here answer whatever the modifiers happen to
-// be -- which showed up as a band that could be started and never
-// dragged, with no error anywhere.
 static void on_press(struct uapp *a, int x, int y, unsigned mods) {
-    if (!g_overlay) return;
     unsigned buttons = WIN_MOUSE_BUTTONS(mods);
-    if (buttons & 2) { leave_overlay(a); status("Cancelled."); return; }
-    if (g_overlay == OVERLAY_PICK) { g_pick_armed = 1; return; }
-    if (g_overlay != OVERLAY_REGION) return;
-    rb_begin(&g_band, x, y, RB_REPLACE);
-    g_band_dragging = 1;
+    if (buttons & 2) { prefs_save(); uapp_quit(a, 0); return; }   // the secondary button closes
+    if (on_pill(x, y)) {
+        g_pressed_ctl = ctl_at(x, y);
+        return;
+    }
+    if (g_mode == MODE_WINDOW) {
+        probe_window(x, y);
+        if (g_win_have) shutter(a);
+        return;
+    }
+    if (g_mode == MODE_SCREEN) return;
+    g_ax = x;
+    g_ay = y;
+    g_start = g_sel;
+    int h = handle_at(x, y);
+    if (h >= 0) { g_drag = DRAG_HANDLE; g_handle = h; }
+    else if (g_sel.w > 0 && uui_hit(g_sel.x, g_sel.y, g_sel.w, g_sel.h, x, y)) g_drag = DRAG_MOVE;
+    else { g_drag = DRAG_NEW; g_sel.x = x; g_sel.y = y; g_sel.w = g_sel.h = 0; }
     uapp_redraw(a);
 }
 
-static void on_motion(struct uapp *a, int x, int y, unsigned mods) {
-    if (g_overlay == OVERLAY_PICK) {
-        // A LEAVE CARRIES NO POSITION, so it must not be probed -- the
-        // compositor would answer about (-1, -1).
-        if (x < 0 || y < 0) return;
-        struct win_shot r;
-        int ok = ushot_probe(&g_shot, WIN_SHOT_WINDOW_AT, x, y, &r) == 0;
-        // REDRAWN ONLY WHEN THE TARGET CHANGES. A repaint here is a
-        // full-screen blit, and one per pointer move over the same
-        // window is a megabyte of memcpy for an identical picture.
-        if (ok != g_pick_have ||
-            (ok && (r.x != g_pick.x || r.y != g_pick.y ||
-                    r.w != g_pick.w || r.h != g_pick.h))) {
-            g_pick = r;
-            g_pick_have = ok;
-            uapp_redraw(a);
-        }
-        return;
-    }
-    if (g_overlay != OVERLAY_REGION || !g_band_dragging) return;
-    // A DRAG NEEDS THE BUTTON STILL DOWN, and the pointer grab is not
-    // that fact (docs/conventions/gui.md): a motion with nothing held is
-    // a release this app never saw.
-    // IGNORED, NOT TREATED AS A RELEASE (docs/conventions/gui.md). A
-    // pointer LEAVE arrives here as a motion to (-1, -1) with no buttons
-    // -- "a leave carries no position" -- and ending the band on it made
-    // the drag impossible: the band began, the leave cancelled it, and
-    // the release found nothing in flight.
-    if (x < 0 || y < 0) return;
-    if (!(WIN_MOUSE_BUTTONS(mods) & 1)) return;
-    rb_motion(&g_band, x, y, 0, 0);
-    uapp_redraw(a);
+static void norm(struct rect *r, int x0, int y0, int x1, int y1) {
+    if (x1 < x0) { int t = x0; x0 = x1; x1 = t; }
+    if (y1 < y0) { int t = y0; y0 = y1; y1 = t; }
+    r->x = clampi(x0, 0, g_sw);
+    r->y = clampi(y0, 0, g_sh);
+    r->w = clampi(x1, 0, g_sw) - r->x;
+    r->h = clampi(y1, 0, g_sh) - r->y;
 }
 
-static void on_release(struct uapp *a, int x, int y, unsigned mods) {
-    (void)x; (void)y; (void)mods;
-
-    // PICKING COMMITS ON THE RELEASE, like every other control here
-    // (docs/gui-guidelines.md): a press that wandered onto a different
-    // window before letting go takes the one it ended on, which is what
-    // the outline was showing all along.
-    if (g_overlay == OVERLAY_PICK) {
-        if (!g_pick_armed) return;   // the click that OPENED the picker
-        if (!g_pick_have) { leave_overlay(a); status("No window there."); return; }
-        struct win_shot p = g_pick;
-        leave_overlay(a);
-        if (ushot_crop(&g_shot, p.x, p.y, p.w, p.h) < 0) {
-            status("That window is off the screen.");
-        } else {
-            show_preview();
-            auto_save();
+static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
+    if (x < 0) return;   // the pointer left
+    int hot = on_pill(x, y) ? ctl_at(x, y) : -1;
+    if (hot != g_hot) { g_hot = hot; uapp_redraw(a); }
+    if (g_mode == MODE_WINDOW && !on_pill(x, y)) {
+        struct rect was = g_win;
+        int had = g_win_have;
+        probe_window(x, y);
+        if (had != g_win_have || memcmp(&was, &g_win, sizeof was)) uapp_redraw(a);
+    }
+    if (!(buttons & 1) || g_drag == DRAG_NONE) {
+        // The cursor says what a press would do.
+        int c = WIN_CURSOR_DEFAULT;
+        if (g_mode == MODE_REGION && !on_pill(x, y)) {
+            int h = handle_at(x, y);
+            if (h == 1 || h == 5) c = WIN_CURSOR_RESIZE_V;   // the top and bottom middles
+            else if (h >= 0) c = WIN_CURSOR_RESIZE_H;
+            else if (g_sel.w > 0 && uui_hit(g_sel.x, g_sel.y, g_sel.w, g_sel.h, x, y)) c = WIN_CURSOR_MOVE;
         }
-        uapp_redraw(a);
+        uapp_set_cursor(a, c);
         return;
     }
-
-    if (g_overlay != OVERLAY_REGION || !g_band_dragging) return;
-    g_band_dragging = 0;
-
-    // THE RECT COMES OUT BEFORE rb_end(), which retires the band: asking
-    // afterwards returns 0 and touches none of the outputs, so the crop
-    // ran on four uninitialised numbers (api/rubberband.h).
-    int rx, ry, rw, rh;
-    int have = rb_rect(&g_band, &rx, &ry, &rw, &rh);
-    int was_band = rb_end(&g_band);
-    if (!have || !was_band || rw < 2 || rh < 2) {
-        leave_overlay(a);
-        status("That region was too small.");
-        uapp_redraw(a);
-        return;
-    }
-    leave_overlay(a);
-    if (ushot_crop(&g_shot, rx, ry, rw, rh) < 0) {
-        status("That region was outside the screen.");
+    int dx = x - g_ax, dy = y - g_ay;
+    if (g_drag == DRAG_NEW) {
+        norm(&g_sel, g_ax, g_ay, x, y);
+    } else if (g_drag == DRAG_MOVE) {
+        g_sel.x = clampi(g_start.x + dx, 0, g_sw - g_start.w);
+        g_sel.y = clampi(g_start.y + dy, 0, g_sh - g_start.h);
     } else {
-        show_preview();
-        auto_save();
+        int x0 = g_start.x, y0 = g_start.y, x1 = g_start.x + g_start.w, y1 = g_start.y + g_start.h;
+        int k = g_handle;
+        if (k == 0 || k == 6 || k == 7) x0 += dx;   // the left edge
+        if (k == 2 || k == 3 || k == 4) x1 += dx;   // the right
+        if (k == 0 || k == 1 || k == 2) y0 += dy;   // the top
+        if (k == 4 || k == 5 || k == 6) y1 += dy;   // the bottom
+        norm(&g_sel, x0, y0, x1, y1);
     }
+    uapp_redraw(a);
+}
+
+static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
+    (void)buttons;
+    if (g_pressed_ctl >= 0) {
+        int c = g_pressed_ctl;
+        g_pressed_ctl = -1;
+        if (ctl_at(x, y) == c) activate(a, c);   // commit on release, over the same control
+        return;
+    }
+    g_drag = DRAG_NONE;
+    if (g_sel.w < 2 || g_sel.h < 2) g_sel.w = g_sel.h = 0;   // a click is no region
     uapp_redraw(a);
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
-    // Esc cancels the BAND, which is not the same as closing a window --
-    // the rule Esc is barred from (docs/gui-guidelines.md) is closing.
-    if (g_overlay && key == 27) {
-        leave_overlay(a);
-        status("Cancelled.");
-        uapp_redraw(a);
+    switch (key) {
+    case 0x1B: prefs_save(); uapp_quit(a, 0); return;   // Esc closes, saving nothing
+    case '\n': case '\r': case ' ': shutter(a); return;
+    case 'r': set_mode(MODE_REGION); break;
+    case 's': set_mode(MODE_SCREEN); break;
+    case 'w': set_mode(MODE_WINDOW); break;
+    case 'p': g_pointer = !g_pointer; break;
+    case 'c': g_copy = !g_copy; break;
+    default: return;
     }
+    uapp_redraw(a);
 }
 
-// **FONT-DERIVED, AND IT OUTRANKS THE LAYOUT'S NATURAL SIZE.** Left to
-// the layout the window is exactly as tall as the controls, and the
-// preview -- whose natural height is zero until it holds a picture --
-// gets a one-pixel strip. The extra rows are the preview's; it is the
-// only UUI_FILL_H child, so the whole surplus lands there.
-static void on_size(int *w, int *h) {
-    *w = ugfx_char_advance('n') * 46;
-    *h = ugfx_char_h() * 30;
+// --- drawing ----------------------------------------------------------
+
+static void lit(struct ugfx_surface *s, const struct rect *r) {
+    if (r->w <= 0 || r->h <= 0) return;
+    ugfx_blit(s, r->x, r->y, r->w, r->h, frame() + (size_t)r->y * (size_t)g_sw + (size_t)r->x, g_sw);
 }
+
+static void frame_rect(struct ugfx_surface *s, const struct rect *r) {
+    ugfx_draw_rect(s, r->x - 1, r->y - 1, r->w + 2, r->h + 2, UTHEME_WHITE);
+    ugfx_draw_rect(s, r->x - 2, r->y - 2, r->w + 4, r->h + 4, ugfx_rgb(0, 0, 0));
+}
+
+static void size_label(struct ugfx_surface *s, const struct rect *r) {
+    char t[32];
+    snprintf(t, sizeof t, "%d x %d", r->w, r->h);
+    int u = unit(), tw = ugfx_text_width(t) + u, th = u + u / 2;
+    int x = r->x + (r->w - tw) / 2, y = r->y - th - u / 2;
+    if (y < u / 2) y = r->y + u / 2;
+    x = clampi(x, 2, g_sw - tw - 2);
+    uui_fill_round_rect(s, x, y, tw, th, UUI_CAPSULE, ugfx_rgb(24, 24, 28));
+    ugfx_draw_string(s, x + u / 2, y + (th - ugfx_char_h()) / 2, t, UTHEME_WHITE, ugfx_rgb(24, 24, 28));
+}
+
+static void draw_icon(struct ugfx_surface *s, const char *name, int cx, int cy, uint32_t ink) {
+    const struct uimg *ico = icon_get(name, unit() + unit() / 4);
+    if (ico) ugfx_blit_tinted(s, cx - ico->w / 2, cy - ico->h / 2, ico->w, ico->h, ico->px, ico->w, ink);
+}
+
+static void draw_pill(struct ugfx_surface *s) {
+    struct rect p;
+    pill_rect(&p);
+    int u = unit();
+    uint32_t ground = ugfx_rgb(244, 244, 246);
+    // A soft shadow under the card, then the card.
+    for (int k = 4; k >= 1; k--)
+        uui_glass_round_rect(s, p.x - k, p.y - k + 3, p.w + 2 * k, p.h + 2 * k, u + k,
+                             ugfx_rgb(0, 0, 0), (uint8_t)(18 + 6 * (4 - k)), 0);
+    uui_fill_round_rect(s, p.x, p.y, p.w, p.h, u, ground);
+
+    for (int c = 0; c < CTLS; c++) {
+        struct rect r;
+        ctl_rect(c, &r);
+        int on = (c <= C_WINDOW && g_mode == c - C_REGION) ||
+                 (c == C_POINTER && g_pointer) || (c == C_COPY && g_copy) ||
+                 (c == C_DELAY && g_delay_i > 0);
+        int hot = g_hot == c;
+        if (c == C_SHUTTER) {
+            // A ring and a disc: the camera's button.
+            uint32_t ring = hot ? uui_state_bg(UTHEME_ACCENT, UUI_STATE_HOVER) : UTHEME_ACCENT;
+            uui_fill_round_rect(s, r.x, r.y, r.w, r.h, UUI_CAPSULE, ring);
+            uui_fill_round_rect(s, r.x + 4, r.y + 4, r.w - 8, r.h - 8, UUI_CAPSULE, ground);
+            uui_fill_round_rect(s, r.x + 7, r.y + 7, r.w - 14, r.h - 14, UUI_CAPSULE, ring);
+            continue;
+        }
+        uint32_t bg = on ? UTHEME_ACCENT : hot ? uui_state_bg(ground, UUI_STATE_HOVER) : ground;
+        uint32_t ink = on ? UTHEME_ACCENT_TEXT : UTHEME_TEXT;
+        if (bg != ground) uui_fill_round_rect(s, r.x, r.y, r.w, r.h, u / 2, bg);
+        if (c <= C_WINDOW) {
+            int m = c - C_REGION;
+            draw_icon(s, MODE_ICON[m], r.x + r.w / 2, r.y + r.h / 2 - u / 2, ink);
+            int tw = ugfx_text_width(MODE_LABEL[m]);
+            ugfx_draw_string(s, r.x + (r.w - tw) / 2, r.y + r.h - u - u / 4, MODE_LABEL[m], ink, bg);
+        } else if (c == C_DELAY && g_delay_i > 0) {
+            char t[8];
+            snprintf(t, sizeof t, "%ds", DELAYS[g_delay_i]);
+            int tw = ugfx_text_width(t);
+            ugfx_draw_string(s, r.x + (r.w - tw) / 2, r.y + (r.h - ugfx_char_h()) / 2, t, ink, bg);
+        } else {
+            static const char *const icons[] = { 0, 0, 0, 0, "tb-pointer", "tb-copy", "tb-timer", "tb-close" };
+            draw_icon(s, icons[c], r.x + r.w / 2, r.y + r.h / 2, ink);
+        }
+    }
+    // The rules either side of the shutter.
+    struct rect w, sh, pt;
+    ctl_rect(C_WINDOW, &w);
+    ctl_rect(C_SHUTTER, &sh);
+    ctl_rect(C_POINTER, &pt);
+    uint32_t rule = ugfx_rgb(208, 208, 214);
+    ugfx_fill_rect(s, (w.x + w.w + sh.x) / 2, p.y + u, 1, p.h - 2 * u, rule);
+    ugfx_fill_rect(s, (sh.x + sh.w + pt.x) / 2, p.y + u, 1, p.h - 2 * u, rule);
+}
+
+static void log_layout(void) {
+    for (int c = 0; c < CTLS; c++) {
+        struct rect r;
+        ctl_rect(c, &r);
+        uapp_logf_layout("screenshot: layout %s %d %d %d %d\n", CTL_NAME[c], r.x, r.y, r.w, r.h);
+    }
+    struct rect p, t;
+    pill_rect(&p);
+    uapp_logf_layout("screenshot: layout pill %d %d %d %d\n", p.x, p.y, p.w, p.h);
+    if (target(&t))
+        uapp_logf_layout("screenshot: layout selection %d %d %d %d\n", t.x, t.y, t.w, t.h);
+    uapp_logf_layout("screenshot: layout mode %s\n", MODE_NAME[g_mode]);
+    uapp_logf_layout("screenshot: layout options pointer %d copy %d delay %d\n",
+                     g_pointer, g_copy, DELAYS[g_delay_i]);
+}
+
+static void on_draw(struct uapp *a, struct uapp_draw *d) {
+    struct ugfx_surface *s = uapp_surface(d);
+    if (!g_ok) return;
+    // ASKED AGAIN UNTIL IT TAKES: on_open runs before the loop does, and
+    // the request is refused until then (uapp.c).
+    uapp_set_fullscreen(a, 1);
+    make_dim();
+    struct rect r;
+    int have = target(&r);
+    if (g_mode == MODE_SCREEN) {
+        lit(s, &r);
+    } else {
+        if (g_dim) ugfx_blit(s, 0, 0, g_sw, g_sh, g_dim, g_sw);
+        if (have) {
+            lit(s, &r);
+            frame_rect(s, &r);
+            size_label(s, &r);
+        }
+        if (g_mode == MODE_REGION && have && g_drag != DRAG_NEW) {
+            int hr = unit() / 3 + 1;
+            for (int k = 0; k < 8; k++) {
+                int hx, hy;
+                handle_xy(&g_sel, k, &hx, &hy);
+                uui_fill_round_rect(s, hx - hr - 1, hy - hr - 1, 2 * hr + 2, 2 * hr + 2, UUI_CAPSULE,
+                                    ugfx_rgb(0, 0, 0));
+                uui_fill_round_rect(s, hx - hr, hy - hr, 2 * hr, 2 * hr, UUI_CAPSULE, UTHEME_WHITE);
+            }
+        }
+        if (!have) {
+            const char *hint = g_mode == MODE_REGION ? "Drag to select an area"
+                                                     : "Point at a window and click it";
+            int tw = ugfx_text_width(hint);
+            ugfx_draw_string_shadowed(s, (g_sw - tw) / 2, g_sh / 3, hint, UTHEME_WHITE);
+        }
+    }
+    draw_pill(s);
+    log_layout();
+}
+
+// --- life -------------------------------------------------------------
+
+static int g_launch_delay;
+static int g_launch_mode = -1;
 
 static void on_open(struct uapp *a) {
-    int rc = ushot_open_on(&g_shot, uapp_wmchan());
-    g_open = rc == 0;
-    if (!g_open) status("Cannot capture: %s", ushot_strerror(rc));
+    g_app = a;
+    if (ushot_open_on(&g_shot, uapp_wmchan()) < 0) {
+        ulog("screenshot: no compositor to capture from\n");
+        uapp_quit(a, 1);
+        return;
+    }
+    // BOTH FRAMES BEFORE ANYTHING IS SHOWN, without this window in them.
+    static const unsigned how[2] = { WIN_SHOT_NO_SELF, WIN_SHOT_NO_SELF | WIN_SHOT_POINTER };
+    for (int k = 0; k < 2; k++) {
+        int rc = ushot_take(&g_shot, WIN_SHOT_SCREEN, how[k], 0, 0, 0, 0);
+        size_t bytes = (size_t)g_shot.w * (size_t)g_shot.h * 4;
+        if (rc == 0 && !g_fr[k]) g_fr[k] = (uint32_t *)malloc(bytes);
+        if (rc < 0 || !g_fr[k]) {
+            ulogf("screenshot: %s\n", rc < 0 ? ushot_strerror(rc) : "out of memory");
+            uapp_quit(a, 1);
+            return;
+        }
+        memcpy(g_fr[k], g_shot.px, bytes);
+    }
+    g_sw = g_shot.w;
+    g_sh = g_shot.h;
+    g_ok = 1;
+    // A delayed SCREEN capture needs no choosing: that frame is the shot.
+    if (g_launch_delay > 0 && g_mode == MODE_SCREEN) { finish(a); return; }
+    uapp_set_fullscreen(a, 1);
+    ulogf("screenshot: overlay %dx%d mode %s\n", g_sw, g_sh, MODE_NAME[g_mode]);
     uapp_redraw(a);
 }
 
 static int on_close(struct uapp *a) {
     (void)a;
-    if (g_open) ushot_close(&g_shot);
-    uui_image_release(&g_preview);
+    ushot_close(&g_shot);
+    free(g_fr[0]);
+    free(g_fr[1]);
+    free(g_dim);
     return 1;
 }
 
-int main(void) {
-    // A radio list has no init(): its fields ARE the setup, the same way
-    // System Settings builds one.
-    g_mode.options  = MODE_LABELS;
-    g_mode.count    = 3;
-    g_mode.cols     = 1;
-    g_mode.selected = MODE_SCREEN;
-    // -1, NOT the zero a file-scope struct starts at: 0 is a valid row,
-    // so a zeroed `hovered` leaves the first one drawn hovered forever
-    // (System Settings sets this for the same reason).
-    g_mode.hovered  = -1;
-    g_mode.bg       = UUI_COLOR_UNSET;
-    g_mode.fg       = UUI_COLOR_UNSET;
-    uui_spinbox_init(&g_delay, 0, 0, 30, 1, "s");
-    // UUI_COLOR_UNSET, not a colour picked here: a widget resolves its
-    // own against the theme when it DRAWS (docs/conventions/gui.md), so
-    // this one follows the panel a repaint actually uses.
-    uui_checkbox_init(&g_pointer, 0, 0, 0, "Include the pointer",
-                      UUI_COLOR_UNSET, UUI_COLOR_UNSET);
-    uui_button_init(&g_take, 0, 0, 0, 0, "Take Screenshot",
-                    UTHEME_ACCENT, UTHEME_ACCENT_TEXT, ID_TAKE);
-    uui_button_init(&g_save, 0, 0, 0, 0, "Save As...",
-                    UTHEME_BUTTON_BG, UTHEME_TEXT, ID_SAVE);
-    uui_button_init(&g_copy, 0, 0, 0, 0, "Copy",
-                    UTHEME_BUTTON_BG, UTHEME_TEXT, ID_COPY);
-    uui_image_init(&g_preview, 0, UIMG_FIT_CONTAIN);
-    // A CEILING ON WHAT IT MAY ASK FOR. Without these its natural size
-    // is the picture's own, so a screen-sized capture would demand a
-    // screen-sized window and uui_layout would overflow rather than talk
-    // it down (ui/uui_image.h).
-    g_preview.max_w = 320;
-    g_preview.max_h = 180;
-    uui_label_init(&g_mode_label, "Capture");
-    uui_label_init(&g_delay_label, "Delay");
-    uui_label_init(&g_status_label, g_status);
-
-    g_form_items[0] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_delay_label,
-                                          .name = "delaylabel" };
-    g_form_items[1] = (struct uui_item){ .ops = &uui_spinbox_ops, .widget = &g_delay,
-                                          .id = ID_DELAY, .name = "delay" };
-    g_form.dir = UUI_ROW;
-    g_form.margin = 0;
-    g_form.items = g_form_items;
-    g_form.count = 2;
-
-    g_opt_items[0] = (struct uui_item){ .ops = &uui_radio_list_ops, .widget = &g_mode,
-                                         .id = ID_MODE, .name = "mode" };
-    g_opt_items[1] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &g_form,
-                                         .name = "delayrow" };
-    g_opt_items[2] = (struct uui_item){ .ops = &uui_checkbox_ops, .widget = &g_pointer,
-                                         .id = ID_POINTER, .name = "pointer" };
-    g_opts.dir = UUI_COLUMN;
-    g_opts.margin = 0;
-    g_opts.items = g_opt_items;
-    g_opts.count = 3;
-
-    g_btn_items[0] = (struct uui_item){ .ops = &uui_button_ops, .widget = &g_take,
-                                         .id = ID_TAKE, .name = "take" };
-    g_btn_items[1] = (struct uui_item){ .ops = &uui_button_ops, .widget = &g_save,
-                                         .id = ID_SAVE, .name = "saveas" };
-    g_btn_items[2] = (struct uui_item){ .ops = &uui_button_ops, .widget = &g_copy,
-                                         .id = ID_COPY, .name = "copy" };
-    g_btns.dir = UUI_ROW;
-    g_btns.margin = 0;
-    g_btns.items = g_btn_items;
-    g_btns.count = 3;
-
-    g_root_items[0] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_mode_label,
-                                          .flags = UUI_FILL_W, .name = "modelabel" };
-    g_root_items[1] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &g_opts,
-                                          .flags = UUI_FILL_W, .name = "options" };
-    // THE PREVIEW ABSORBS THE SPARE ROOM, which is what stops the
-    // buttons and the status line being pushed off a window that is
-    // taller than the controls need (docs/conventions/gui.md).
-    g_root_items[2] = (struct uui_item){ .ops = &uui_image_ops, .widget = &g_preview,
-                                          .id = ID_PREVIEW,
-                                          .flags = UUI_FILL_W | UUI_FILL_H,
-                                          .name = "preview" };
-    g_root_items[3] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &g_btns,
-                                          .flags = UUI_FILL_W, .name = "buttons" };
-    g_root_items[4] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_status_label,
-                                          .flags = UUI_FILL_W, .name = "status" };
-    g_root.dir = UUI_COLUMN;
-    g_root.items = g_root_items;
-    g_root.count = 5;
-
-    uui_focus_init(&g_focus, g_focusables,
-                   (int)(sizeof g_focusables / sizeof g_focusables[0]));
+int main(int argc, char **argv) {
+    prefs_load();
+    for (int i = 1; i + 1 < argc; i++) {
+        if (!strcmp(argv[i], "--delay")) g_launch_delay = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--mode"))
+            for (int m = 0, j = ++i; m < MODES; m++) if (!strcmp(argv[j], MODE_NAME[m])) g_launch_mode = m;
+    }
+    if (g_launch_mode >= 0) g_mode = g_launch_mode;
+    // THE DELAY HAPPENS BEFORE THERE IS A WINDOW, so nothing is drawn as
+    // Not Responding and nothing of this app is on the screen meanwhile.
+    if (g_launch_delay > 0 && g_launch_delay <= 60) sleep((unsigned)g_launch_delay);
 
     struct uapp_desc desc = {
-        .title        = "Screenshot",
-        .app_id       = "screenshot",
-        .on_size      = on_size,
-        .flags        = UAPP_RESIZABLE | UAPP_SINGLE_INSTANCE,
-        .min_w        = 320,
-        .min_h        = 300,
-        .layout       = &g_root,
-        // The same array twice: `layout` sizes and draws, `widgets` gets
-        // input (ui/uapp.h).
-        .widgets      = g_root_items,
-        .widget_count = 5,
-        .focus        = &g_focus,
-        .on_open      = on_open,
-        .on_action    = on_action,
-        .on_draw      = on_draw,
-        .on_press     = on_press,
-        .on_motion    = on_motion,
-        .on_release   = on_release,
-        .on_key       = on_key,
-        .on_close     = on_close,
+        .title      = "Screenshot",
+        .app_id     = "screenshot",
+        .w          = 320,
+        .h          = 200,
+        // RESIZABLE because the compositor only lets a resizable window
+        // go fullscreen; the overlay IS the fullscreen window.
+        .flags      = UAPP_SINGLE_INSTANCE | UAPP_RESIZABLE,
+        .on_open    = on_open,
+        .on_draw    = on_draw,
+        .on_press   = on_press,
+        .on_motion  = on_motion,
+        .on_release = on_release,
+        .on_key     = on_key,
+        .on_close   = on_close,
     };
     return uapp_run(&desc);
 }

@@ -4167,7 +4167,14 @@ window without going through it will find its layout polls timing out.
   with no descriptor and correctly shows nothing -- the swap check now
   names a saver that has options.
 - **`screenshot_test.py`** -- screen capture end to end: `/bin/screenshot`,
-  the Screenshot app, `--pointer`, `-w`, and the region band.
+  `--pointer`, `-w`, and the Screenshot OVERLAY through PrtSc -- Screen
+  mode equal to the screen as it was (the overlay, its pill and its
+  taskbar button absent, the focus where it was), a dragged and then
+  handle-resized region cropped to the pixel, the Window target
+  following the pointer, the compositor's card with Open / Copy /
+  Folder, Esc saving nothing, the copy toggle said on the card, and no
+  launch left a zombie. The cursor box and the taskbar clock (it shows
+  seconds) are left out of every comparison.
 
   **The assertion that matters is a ROUND TRIP, not "a file appeared".**
   A capture that wrote a well-formed image of the WRONG THING passes

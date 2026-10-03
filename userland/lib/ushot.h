@@ -44,6 +44,10 @@ struct ushot {
 // what a capture attempted from the text console gets), -ENOMEM.
 int ushot_open(struct ushot *s);
 
+// **ONE PER PROCESS.** The capture buffer is a shared-memory object named
+// after the pid, so a second struct ushot unlinks the first's and both
+// read the same pixels. Copy a frame out to keep two.
+
 // The same, on a channel the caller already holds. A process may hold
 // only ONE ring per server -- the name is derived from its pid -- so a
 // windowed app MUST pass uapp_wmchan() rather than opening a second,

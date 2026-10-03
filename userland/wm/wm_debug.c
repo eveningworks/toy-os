@@ -1205,10 +1205,25 @@ static void cmd_state(struct dbg_out *o, int json) {
         dbg_out_write(o, "},");
         int det[4], reo[4];
         const char *nt = crash_notice_describe(det, reo);
-        if (nt)
+        if (nt) {
             dbg_out_printf(o, "\"notice\":{\"title\":\"%s\",\"details\":[%d,%d,%d,%d],"
-                              "\"reopen\":[%d,%d,%d,%d]},", nt,
+                              "\"reopen\":[%d,%d,%d,%d],", nt,
                            det[0], det[1], det[2], det[3], reo[0], reo[1], reo[2], reo[3]);
+            const char *np = crash_notice_path();
+            const char *ns = crash_notice_sub();
+            dbg_out_printf(o, "\"path\":\"%s\",\"sub\":\"%s\",\"buttons\":[",
+                           np ? np : "", ns ? ns : "");
+            int first = 1;
+            for (int b = 1; b <= 3; b++) {
+                int r[4];
+                const char *lb = crash_notice_button(b, r);
+                if (!lb) continue;
+                dbg_out_printf(o, "%s{\"label\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}",
+                               first ? "" : ",", lb, r[0], r[1], r[2], r[3]);
+                first = 0;
+            }
+            dbg_out_write(o, "]},");
+        }
         dbg_out_printf(o, "\"dragging\":%d,\"resizing\":%d,\"content_pressed\":%d,",
                      dragging, resizing, content_pressed);
         // Resize proposals sent since boot -- see wm.c. One per drag

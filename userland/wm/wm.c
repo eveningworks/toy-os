@@ -191,9 +191,18 @@ int window_content_h(const struct window *win) { return window_has_chrome(win) ?
 // popup sits above its parent and the parent keeps the active title
 // bar, its taskbar button and the WM shortcuts (Alt+F4 must not ask a
 // menu to close). -1 with nothing to focus.
+//
+// A WINDOW A SCREENSHOT IS HIDING (WIN_SHOT_NO_SELF) IS SKIPPED, for the
+// one frame it is hidden: the capture tool opened, and so took focus,
+// moments before -- and the picture must show the window that had it.
 int wm_focus_index(void) {
-    for (int i = window_count - 1; i >= 0; i--)
-        if (windows[i].state != WIN_MINIMIZED && !windows[i].popup) return i;
+    int hidden = wm_render_hidden_pid();
+    for (int i = window_count - 1; i >= 0; i--) {
+        if (windows[i].state == WIN_MINIMIZED || windows[i].popup) continue;
+        if (hidden && wm_client_is_client_window(&windows[i]) && windows[i].client_pid == hidden)
+            continue;
+        return i;
+    }
     return -1;
 }
 

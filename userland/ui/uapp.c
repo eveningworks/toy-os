@@ -830,6 +830,25 @@ static int wmchan_send(uint32_t type, uint32_t window,
     return uchan_send(&g_wmchan, &m, sizeof m) == 0;
 }
 
+int uapp_notice(struct uapp *a, int kind, unsigned flags, const char *path) {
+    (void)a;
+    int piece = WIN_TITLE_LEN - 1;
+    int len = (int)strlen(path);
+    int pieces = (len + piece - 1) / piece;
+    if (pieces < 1) pieces = 1;
+    if (pieces > WIN_NOTICE_PIECES_MAX) return 0;
+    for (int i = 0; i < pieces; i++) {
+        char part[WIN_TITLE_LEN];
+        int n = len - i * piece;
+        if (n > piece) n = piece;
+        if (n < 0) n = 0;
+        memcpy(part, path + i * piece, (size_t)n);
+        part[n] = '\0';
+        if (!wmchan_send(WIN_REQ_NOTICE, 0, i | (pieces << 8), kind, (int)flags, part)) return 0;
+    }
+    return 1;
+}
+
 // The two requests that need an answer (lib/uwmchan.h). Returns the
 // compositor's `a`, or `fail` when there is no channel or no reply --
 // both of which the callers read as a refusal.

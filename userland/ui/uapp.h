@@ -526,6 +526,12 @@ int uapp_spawn(struct uapp *a, const char *path, const char *arg);
 // flip on the app's behalf, and the app notices nothing.
 void uapp_set_fullscreen(struct uapp *a, int on);
 
+// Ask the compositor for a notice about `path`, a file this app just
+// made (WIN_REQ_NOTICE): `kind` a WIN_NOTICE_*, `flags` WIN_NOTICE_F_*.
+// The card belongs to the compositor and outlives the app. 0 when it
+// could not be sent (no compositor, or a path too long for the pieces).
+int uapp_notice(struct uapp *a, int kind, unsigned flags, const char *path);
+
 // The toolkit's channel to the compositor, for a library that needs one
 // and must not open a second (a process holds one ring per server, named
 // after its pid). NULL when there is no compositor. lib/ushot.h.

@@ -621,6 +621,10 @@ whenever a headline here tells you something you did not already know.
 - **ONE SCROLLBAR LOOK: `uui_scrollbar_draw_overlay()`**
 - **CHROME IS MEASURED IN THE INTERFACE FACE, EVEN INSIDE A DOCUMENT'S**
 - **`uui_chart` HAS A RUN MODE: `uui_chart_set_fit()`**
+- **A "FILE SAVED" CARD IS THE COMPOSITOR'S: `uapp_notice()` /
+  `WIN_REQ_NOTICE`**
+- **A CAPTURE'S HIDDEN CLIENT IS ABSENT EVERYWHERE, AND `ushot` IS ONE
+  PER PROCESS**
 - **TRANSPARENCY IS GLASS THE COMPOSITOR PAINTS: A SURFACE'S GROUND GOES
   THROUGH `wm_glass_paint()`, FROSTED GLASS IS PART OF ITS RECT'S DAMAGE,
   AND A CLIENT ONLY MARKS WHERE ITS GLASS IS**

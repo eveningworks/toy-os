@@ -1252,6 +1252,51 @@ def icon_tb_history():
     return im
 
 
+def icon_tb_region():
+    # Corner brackets round a dashed square: "this part of the screen".
+    im, d = _tb()
+    for (x, y, dx, dy) in ((6, 6, 1, 1), (58, 6, -1, 1), (6, 58, 1, -1), (58, 58, -1, -1)):
+        d.line([x, y, x + 14 * dx, y], fill=TB_INK, width=6)
+        d.line([x, y, x, y + 14 * dy], fill=TB_INK, width=6)
+    for k in range(4):
+        d.rectangle([22 + k * 6, 22, 24 + k * 6, 24], fill=TB_INK)
+        d.rectangle([22 + k * 6, 40, 24 + k * 6, 42], fill=TB_INK)
+    return im
+
+
+def icon_tb_screen():
+    # A monitor on its stand.
+    im, d = _tb()
+    d.rounded_rectangle([4, 8, 60, 46], radius=4, outline=TB_INK, width=6)
+    d.line([32, 46, 32, 56], fill=TB_INK, width=6)
+    d.line([18, 58, 46, 58], fill=TB_INK, width=6)
+    return im
+
+
+def icon_tb_window():
+    # A window: frame and title bar.
+    im, d = _tb()
+    d.rounded_rectangle([4, 8, 60, 56], radius=5, outline=TB_INK, width=6)
+    d.rectangle([4, 8, 60, 22], fill=TB_INK)
+    return im
+
+
+def icon_tb_pointer():
+    # The arrow pointer.
+    im, d = _tb()
+    d.polygon([(14, 4), (52, 38), (34, 40), (44, 60), (36, 62), (26, 44), (14, 56)], fill=TB_INK)
+    return im
+
+
+def icon_tb_timer():
+    # A stopwatch: the face, the crown, a hand.
+    im, d = _tb()
+    d.ellipse([8, 12, 56, 60], outline=TB_INK, width=6)
+    d.rectangle([24, 2, 40, 8], fill=TB_INK)
+    d.line([32, 36, 32, 22], fill=TB_INK, width=6)
+    return im
+
+
 def icon_tb_info():
     im, d = _tb()
     d.ellipse([4, 4, 60, 60], outline=TB_INK, width=6)
@@ -1741,6 +1786,11 @@ ICONS = {
     "tb-play": icon_tb_play,
     "tb-stop": icon_tb_stop,
     "tb-history": icon_tb_history,
+    "tb-region": icon_tb_region,
+    "tb-screen": icon_tb_screen,
+    "tb-window": icon_tb_window,
+    "tb-pointer": icon_tb_pointer,
+    "tb-timer": icon_tb_timer,
     "tb-back": icon_tb_back,
     "tb-forward": icon_tb_forward,
     "tb-refresh": icon_tb_refresh,

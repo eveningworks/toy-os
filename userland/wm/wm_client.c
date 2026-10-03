@@ -17,6 +17,7 @@
 #include "wm/wm_watch.h" // WIN_EV_FSWATCH / WIN_EV_SETTING land there
 #include <stdlib.h>   // malloc: the client widget map
 #include "wm_internal.h"
+#include "crash_notice.h"
 #include "wm_peek.h"
 #include "wm_shadow.h"
 #include "wm_anim.h"   // wm_damage_window_rect(): a window's rect plus its shadow
@@ -1046,6 +1047,9 @@ void wm_client_chan_pump(void) {
         // win_event is 24 bytes and none of them fits.
         case WIN_REQ_TITLE:
             on_window_title(from, m.window, m.text);
+            break;
+        case WIN_REQ_NOTICE:
+            crash_notice_piece(from, m.a, m.b, (unsigned)m.c, m.text);
             break;
         case WIN_REQ_HINTS:
             on_window_hints(from, m.window, (unsigned)m.a, m.b, m.c);

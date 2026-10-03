@@ -5340,3 +5340,25 @@ main()'s local.
   `stride` pushes per sample, so the time axis stays uniform. Disk Mark
   is the first caller; Task Manager's monitors stay in the default mode.
 
+## A "FILE SAVED" CARD IS THE COMPOSITOR'S: `uapp_notice()` / `WIN_REQ_NOTICE`
+
+- **A client that made a file and is about to go asks for a notice**
+  (`uapp_notice(a, WIN_NOTICE_*, flags, path)`); the compositor draws
+  the card beside its crash notices and acts on Open / Copy / Folder
+  itself, so the card outlives the client. The path rides `text` in
+  pieces (`WIN_NOTICE_PIECES_MAX`).
+- **A new kind is a `WIN_NOTICE_*` and a branch in `crash_notice.c`**
+  (title, thumbnail, actions) -- never a client-drawn window pretending
+  to be a toast.
+
+## A CAPTURE'S HIDDEN CLIENT IS ABSENT EVERYWHERE, AND `ushot` IS ONE PER PROCESS
+
+- **`WIN_SHOT_NO_SELF` hides the asker's windows, its taskbar button and
+  its FOCUS** for the one frame rendered (`wm_render_hidden_pid()`): a
+  capture tool takes focus when it opens, and the picture must show the
+  window that had it. Anything new that draws per-window state asks the
+  same question.
+- **One `struct ushot` per process**: its buffer is named after the
+  pid, so a second one unlinks the first's. Copy a frame out to keep two
+  (the Screenshot overlay keeps two: with and without the pointer).
+
