@@ -29,7 +29,10 @@
 #include "doomkeys.h"
 #include "input_keys.h"   // key POSITIONS -- no KEY_* of its own to collide
 
+#include "doomstat.h"      // players[], consoleplayer -- for dg_message()
 #include "rt/sys.h"
+
+extern boolean message_dontfuckwithme;   // hu_stuff.c's, in no header
 
 // --- the frame ---------------------------------------------------------
 
@@ -200,3 +203,8 @@ int dg_start(int argc, char **argv) {
 }
 
 void dg_tick(void) { doomgeneric_Tick(); }
+
+void dg_message(const char *text) {
+    players[consoleplayer].message = (char *)text;
+    message_dontfuckwithme = true;
+}

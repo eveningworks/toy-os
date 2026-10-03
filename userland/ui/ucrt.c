@@ -240,11 +240,27 @@ int ucrt_apply(struct ucrt *c, struct ugfx_surface *s, int x, int y, int w, int 
     if (x + w > s->w) w = s->w - x;
     if (y + h > s->h) h = s->h - y;
     if (w < 8 || h < 8 || !ucrt_look_on(&c->look)) return 0;
-    if (ensure(c, w, h) != 0) return -1;
+    return ucrt_apply_from(c, &s->pixels[y * s->w + x], s->w, s, x, y, w, h);
+}
+
+int ucrt_apply_from(struct ucrt *c, const uint32_t *src, int stride,
+                    struct ugfx_surface *s, int x, int y, int w, int h) {
+    if (x < 0) { src -= x; w += x; x = 0; }
+    if (y < 0) { src -= (long)y * stride; h += y; y = 0; }
+    if (x + w > s->w) w = s->w - x;
+    if (y + h > s->h) h = s->h - y;
+    if (w <= 0 || h <= 0) return 0;
+    int plain = w < 8 || h < 8 || !ucrt_look_on(&c->look) || w > MAP_MAX || h > MAP_MAX;
+    if (plain || ensure(c, w, h) != 0) {
+        for (int r = 0; r < h; r++)
+            if (&s->pixels[(y + r) * s->w + x] != &src[(long)r * stride])
+                memcpy(&s->pixels[(y + r) * s->w + x], &src[(long)r * stride], (size_t)w * 4);
+        return plain ? 0 : -1;
+    }
     if (c->period < 2) c->period = 2;
     c->frame++;
 
-    for (int r = 0; r < h; r++) memcpy(&c->buf[r * w], &s->pixels[(y + r) * s->w + x], (size_t)w * 4);
+    for (int r = 0; r < h; r++) memcpy(&c->buf[r * w], &src[(long)r * stride], (size_t)w * 4);
     const struct ucrt_look *l = &c->look;
     if (l->glow) build_glow(c);
 
@@ -252,14 +268,22 @@ int ucrt_apply(struct ucrt *c, struct ugfx_surface *s, int x, int y, int w, int 
     // vignette x flicker gain. Rebuilt per frame because flicker moves
     // the row gain. Static, so ONE thread at a time may apply.
     static int col_gain[MAP_MAX + 1], row_gain[MAP_MAX + 1];
-    if (w > MAP_MAX || h > MAP_MAX) return 0;
     int vig = VIG[l->vignette];
     for (int i = 0; i < w; i++) col_gain[i] = vig ? vig_gain(i, w, vig) : 256;
     int flick = l->flicker ? 256 - (int)(rnd(c) % 10) : 256;
     int scan = SCAN[l->scanlines];
+    int lines = c->src_lines;
     for (int r = 0; r < h; r++) {
         int phase = r % c->period, g = 256;
-        if (phase == c->period - 1) g -= scan;
+        if (lines > 0) {
+            // The row's source line, against the next one's and the one
+            // after: the last pixel row of a line is its scanline, and a
+            // line four or more rows tall shades the row above it too.
+            long l0 = (long)r * lines / h, l1 = (long)(r + 1) * lines / h,
+                 l2 = (long)(r + 2) * lines / h;
+            if (l1 != l0) g -= scan;
+            else if (h >= 4 * lines && l2 != l0) g -= scan / 2;
+        } else if (phase == c->period - 1) g -= scan;
         else if (c->period >= 4 && phase == c->period - 2) g -= scan / 2;
         int v = vig ? vig_gain(r, h, vig) : 256;
         row_gain[r] = g * v / 256 * flick / 256;

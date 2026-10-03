@@ -25,6 +25,7 @@
 //     pointer grab TWS does not have. Keyboard controls are complete.
 //   * **No mouse look**, as above. Keyboard controls are complete.
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -34,6 +35,8 @@
 #include "ui/uapp.h"
 #include "ui/ugfx.h"
 #include "ui/ulog.h"
+#include "ui/ucrt.h"
+#include "lib/uconf.h"
 #include "win_proto.h"  // WIN_CLIENT_MAX_W -- the scratch row's bound
 #include "backends/doom/dg_toyos.h"
 #include "input_keys.h"   // INPUT_KEY_ENTER -- a key by position
@@ -78,6 +81,46 @@ struct doom_state {
 
 static struct doom_state g_st;
 
+// --- the screen effect -------------------------------------------------
+//
+// The Terminal's CRT presets (ui/ucrt.h) over the picture, cycled by
+// Alt+C and kept in /etc/doom.conf. A scanline closes each of DOOM's own
+// rows however tall the window makes them, and the picture is scaled
+// into g_pic and composed from there: a SCANOUT surface is never read.
+#define DOOM_CONF  "/etc/doom.conf"
+#define DOOM_LINES (DOOM_RESY / 2)   // doomgeneric draws 320x200 doubled
+
+static const char *const EFFECT_WORDS[] = { "off", "subtle", "classic", "curved" };
+static const char *const EFFECT_MESSAGES[] = {
+    "Screen effect: off", "Screen effect: Subtle", "Screen effect: Classic CRT",
+    "Screen effect: Curved",
+};
+_Static_assert(sizeof EFFECT_WORDS / sizeof EFFECT_WORDS[0] == UCRT_PRESET_COUNT + 1,
+               "one word per ucrt preset, plus off");
+
+static int g_effect;            // 0 off, else ucrt_presets[g_effect - 1]
+static struct ucrt g_crt;
+static uint32_t *g_pic;         // the scaled picture, when the effect is on
+static int g_pic_w, g_pic_h;
+static unsigned long long g_effect_ns;   // composing time since the last FPS line
+static int g_effect_frames;
+
+static void effect_load(void) {
+    char v[16];
+    if (!uconf_get(DOOM_CONF, "screen_effect", v, sizeof v)) return;
+    for (int i = 0; i <= UCRT_PRESET_COUNT; i++)
+        if (!strcmp(v, EFFECT_WORDS[i])) g_effect = i;
+}
+
+static void effect_cycle(struct uapp *a) {
+    g_effect = (g_effect + 1) % (UCRT_PRESET_COUNT + 1);
+    if (!uconf_set(DOOM_CONF, "screen_effect", EFFECT_WORDS[g_effect]))
+        ulogf("doom: could not save the screen effect to %s\n", DOOM_CONF);
+    ulogf("doom: screen effect %s\n", EFFECT_WORDS[g_effect]);
+    dg_message(EFFECT_MESSAGES[g_effect]);
+    uapp_redraw(a);
+}
+
 // --- the frame ---------------------------------------------------------
 //
 // doomgeneric calls this from inside its tick when a frame is finished.
@@ -106,8 +149,16 @@ static void on_frame_ready(void *ctx) {
             // and printf_float is a whole page of code to pull in for
             // one decimal place.
             unsigned long fps10 = ms ? (unsigned long)(FPS_REPORT_FRAMES * 10000ULL / ms) : 0;
-            ulogf("doom: %d frames, %lu.%lu fps over the last %llu ms\n",
-                  st->frames, fps10 / 10, fps10 % 10, ms);
+            if (g_effect_frames) {
+                unsigned long us = (unsigned long)(g_effect_ns / 1000 / (unsigned)g_effect_frames);
+                ulogf("doom: %d frames, %lu.%lu fps over the last %llu ms, screen effect %lu.%lu ms a frame\n",
+                      st->frames, fps10 / 10, fps10 % 10, ms, us / 1000, us % 1000 / 100);
+            } else {
+                ulogf("doom: %d frames, %lu.%lu fps over the last %llu ms\n",
+                      st->frames, fps10 / 10, fps10 % 10, ms);
+            }
+            g_effect_ns = 0;
+            g_effect_frames = 0;
         }
         st->last_report_ms = now;
     }
@@ -174,20 +225,47 @@ static void fit_rect(int cw, int ch, int *ox, int *oy, int *ow, int *oh) {
     *oy = (ch - h) / 2;
 }
 
-static void draw_scaled(struct ugfx_surface *s, const uint32_t *px,
-                         int dx, int dy, int dw, int dh) {
+static void scale_row(const uint32_t *px, int y, int dw, int dh, uint32_t *out) {
     if (dw != g_xmap_for_w) {
         for (int x = 0; x < dw; x++) g_xmap[x] = x * DOOM_RESX / dw;
         g_xmap_for_w = dw;
     }
+    const uint32_t *src = px + (size_t)(y * DOOM_RESY / dh) * DOOM_RESX;
+    for (int x = 0; x < dw; x++) out[x] = src[g_xmap[x]];
+}
+
+static void draw_scaled(struct ugfx_surface *s, const uint32_t *px,
+                         int dx, int dy, int dw, int dh) {
     for (int y = 0; y < dh; y++) {
-        const uint32_t *src = px + (size_t)(y * DOOM_RESY / dh) * DOOM_RESX;
-        for (int x = 0; x < dw; x++) g_row[x] = src[g_xmap[x]];
+        scale_row(px, y, dw, dh, g_row);
         // A row at a time rather than a whole scaled frame: a full one
         // would be WIN_CLIENT_MAX_W * _MAX_H * 4 = 8 MB of buffer to
         // hold a copy of something that is about to be copied again.
         ugfx_blit(s, dx, dy + y, dw, 1, g_row, dw);
     }
+}
+
+// The picture through the screen effect. -1 when there is no memory for
+// it, and the caller draws it plain.
+static int draw_effect(struct ugfx_surface *s, const uint32_t *px,
+                       int dx, int dy, int dw, int dh) {
+    if (dw != g_pic_w || dh != g_pic_h) {
+        free(g_pic);
+        g_pic = malloc((size_t)dw * dh * 4);
+        g_pic_w = g_pic ? dw : 0;
+        g_pic_h = g_pic ? dh : 0;
+        if (!g_pic) return -1;
+    }
+    for (int y = 0; y < dh; y++) scale_row(px, y, dw, dh, g_pic + (size_t)y * dw);
+
+    unsigned long long t0 = sys_monotonic_ns();
+    g_crt.look = ucrt_presets[g_effect - 1];
+    g_crt.src_lines = DOOM_LINES;
+    g_crt.period = dh / DOOM_LINES < 2 ? 2 : dh / DOOM_LINES;
+    int rc = ucrt_apply_from(&g_crt, g_pic, dw, s, dx, dy, dw, dh);
+    g_effect_ns += sys_monotonic_ns() - t0;
+    g_effect_frames++;
+    return rc == 0 ? 0 : -1;
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
@@ -237,7 +315,9 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     if (dx > 0)           ugfx_fill_rect(s, 0, dy, dx, dh, bg);
     if (dx + dw < cw)     ugfx_fill_rect(s, dx + dw, dy, cw - dx - dw, dh, bg);
 
-    if (dw == DOOM_RESX && dh == DOOM_RESY) {
+    if (g_effect && draw_effect(s, px, dx, dy, dw, dh) == 0) {
+        // drawn through the effect
+    } else if (dw == DOOM_RESX && dh == DOOM_RESY) {
         // The unscaled case, kept as a straight copy rather than left to
         // the general path: it is one blit against dh of them, and it is
         // what a window sized 640x400 by hand gets.
@@ -255,10 +335,10 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 // plays with Ctrl, Shift and Alt HELD. No filtering: Doom keeps its own
 // `gamekeydown[]` and wants every transition.
 //
-// Alt+Enter toggles fullscreen -- the one key the game does not see,
-// because it is the desktop's convention (every DOOM port since the
-// DOS days), not the game's binding. The toggle is taken from the
-// translated key; its Enter is kept from the game on both paths.
+// Alt+Enter toggles fullscreen -- a key the game does not see, because
+// it is the desktop's convention (every DOOM port since the DOS days),
+// not the game's binding. The toggle is taken from the translated key;
+// its Enter is kept from the game on both paths. Alt+C is the other.
 static int is_fullscreen_toggle(int key, unsigned mods) {
     return (key == 0x0A || key == 0x0D) && (mods & KEY_MOD_ALT);
 }
@@ -268,10 +348,15 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 }
 
 static void on_phys_key(struct uapp *a, int keycode, int down, unsigned mods) {
-    (void)a;
     if ((keycode == INPUT_KEY_ENTER || keycode == INPUT_KEY_KPENTER) &&
         (mods & KEY_MOD_ALT))
         return;
+    // Alt+C cycles the screen effect, kept from the game as Alt+Enter is.
+    // By position, both edges: on_key's translated Alt+C is not one code.
+    if (keycode == INPUT_KEY_C && (mods & KEY_MOD_ALT)) {
+        if (down) effect_cycle(a);
+        return;
+    }
     dg_push_key(keycode, down);
 }
 
@@ -305,6 +390,9 @@ static void on_open(struct uapp *a) {
     struct doom_state *st = uapp_state(a);
     st->app = a;
     dg_set_frame_ready(on_frame_ready, st);
+    ucrt_init(&g_crt);
+    g_crt.bezel = ugfx_rgb(0, 0, 0);
+    effect_load();
 
     // CHECKED BEFORE STARTING, so a missing WAD is a message in a window
     // rather than doomgeneric's own I_Error taking the process down. The

@@ -46,6 +46,11 @@ THE ASSERTIONS THAT MATTER, and why each is shaped the way it is:
     non-black column gives the drawn width directly. A check that only
     asserted the window resized would pass on a build that stretched the
     picture into the wrong shape, which is the actual failure mode.
+  * **Alt+C turns the screen effect on, and a scanline closes each of
+    DOOM's 200 rows.** Read from row PAIRS inside one source line: both
+    show the same game pixels, so a darker last row is the effect and
+    nothing else, whatever the demo is drawing. Off before and after,
+    and /etc/doom.conf read back rather than believed.
   * **The frame RATE.** Doom targets 35Hz and sleeps to hold it, so a
     number well under that means the emulator is not keeping up. Asserted
     loosely (>15 fps) because this is TCG and the host is shared -- the
@@ -122,7 +127,48 @@ def content_box(win):
     return (c["x"], c["y"], c["x"] + c["w"], c["y"] + c["h"])
 
 
+def alt_c(qmp):
+    qmp.key_down("alt")
+    time.sleep(0.2)
+    qmp.send_key("c")
+    time.sleep(0.2)
+    qmp.key_up("alt")
+    time.sleep(1.0)
+
+
+def scanline_dips(img, lines=200):
+    """(rows darker than the row above, rows measured) for each row that
+    CLOSES a DOOM source line and shares that line with the row above.
+
+    Both rows show the same source pixels, so their ratio is the screen
+    effect alone, whatever the game is drawing -- off, every pair is
+    identical. Measured over the middle half of the width, and skipped
+    where the picture is too dark to give a ratio."""
+    w, h = img.size
+    px = img.load()
+    x0, x1 = w // 4, 3 * w // 4
+
+    def mean(r):
+        return sum(sum(px[x, r]) for x in range(x0, x1)) / (x1 - x0)
+
+    dips = total = 0
+    for r in range(1, h):
+        line = r * lines // h
+        if (r + 1) * lines // h == line or (r - 1) * lines // h != line:
+            continue
+        a, b = mean(r), mean(r - 1)
+        if b < 60:
+            continue
+        total += 1
+        if a < 0.92 * b:
+            dips += 1
+    return dips, total
+
+
 def run(dbg, qmp, tmp, res):
+    # The screen effect starts OFF: a previous run, or a person, may have
+    # left /etc/doom.conf behind.
+    dbg.send("sh rm /etc/doom.conf")
     dbg.send(f"gui spawn {EXEC}")
 
     win = None
@@ -327,6 +373,36 @@ def run(dbg, qmp, tmp, res):
     if opened >= 0.05:
         qmp.send_key("esc")      # close the menu for the checks below
         time.sleep(1.0)
+
+    # --- Alt+C: the screen effect ------------------------------------
+    #
+    # Off by default, then Subtle: one scanline closing each of DOOM's 200
+    # rows in a 480-row picture (2.4 rows a line, so a fixed pitch would
+    # drift against them). The key reaches the app, the app saves it, and
+    # three more presses come back round to off.
+    dips, total = scanline_dips(shot("crt_off"))
+    res.check("the screen effect is off by default",
+              total > 40 and dips < total * 0.1,
+              f"{dips} of {total} source lines end darker with no effect on")
+    dbg.logs("doom: screen effect", clear=True)
+    alt_c(qmp)
+    dips, total = scanline_dips(shot("crt_subtle"))
+    res.check("Alt+C turns on scanlines, one closing each DOOM row",
+              total > 40 and dips > total * 0.9,
+              f"{dips} of {total} source lines end in a darker row")
+    said = " ".join(dbg.logs("doom: screen effect", clear=False))
+    conf = dbg.send("sh cat /etc/doom.conf") or ""
+    res.check("...and the choice is saved to /etc/doom.conf",
+              "subtle" in said and "screen_effect=subtle" in conf,
+              f"log {said!r}, conf {conf.strip()!r}")
+    for _ in range(3):
+        alt_c(qmp)
+    dips, total = scanline_dips(shot("crt_off_again"))
+    conf = dbg.send("sh cat /etc/doom.conf") or ""
+    res.check("three more presses cycle back to off",
+              "screen_effect=off" in conf and total > 40 and dips < total * 0.1,
+              f"conf {conf.strip()!r}, {dips} of {total} lines still dark")
+    dbg.send("sh rm /etc/doom.conf")
 
     # --- maximized, and still 4:3 ------------------------------------
     #

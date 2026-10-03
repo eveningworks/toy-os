@@ -78,4 +78,9 @@ int dg_start(int argc, char **argv);
 // One frame of game. Called from the app's on_tick.
 void dg_tick(void);
 
+// Puts `text` on the game's message line, as F5's "High detail" does --
+// shown with messages switched off too, and only while a level is up.
+// Kept by pointer: `text` must outlive the message.
+void dg_message(const char *text);
+
 #endif

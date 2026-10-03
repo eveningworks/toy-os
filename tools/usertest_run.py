@@ -197,6 +197,10 @@ TESTS = [
     # /bin/head, tail and wc on pipes, against a hand-worked fixture.
     # SPAWNED: it spawns them and waits.
     ("textcmd_test", None, None, None),
+    # ui/ucrt.h's scanline per SOURCE line (DOOM's 200 rows at any
+    # window height) and ucrt_apply_from() matching ucrt_apply() without
+    # writing its source.
+    ("ucrt_test", 0, ["all checks passed"], None),
     # The message channel two ring-3 processes talk over, which is shm
     # plus a futex plus a wakeword and no kernel support of its own.
     # SPAWNED (exit code None) because the server half PARKS -- and a

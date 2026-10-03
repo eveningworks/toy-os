@@ -48,6 +48,10 @@ int ucrt_animates(const struct ucrt_look *l);      // must be redrawn every fram
 struct ucrt {
     struct ucrt_look look;
     int period;          // scanline pitch in pixels, >= 2; the app's (a font's cell / 6)
+    // 0, or the rows the picture was DRAWN at, scaled up to fill the
+    // rect (DOOM's 200): then a scanline closes each of those rows,
+    // however many pixels it got, and `period` only sizes the glow.
+    int src_lines;
     uint32_t bezel;      // what is not glass, under a curve
 
     // Built by ucrt_apply() -- not the app's.
@@ -70,6 +74,13 @@ int ucrt_margin(const struct ucrt_look *l, int w, int h);
 // Runs c->look over the rect, in place. 0, or -1 when there was no
 // memory for it (the rect is left as drawn).
 int ucrt_apply(struct ucrt *c, struct ugfx_surface *s, int x, int y, int w, int h);
+
+// The same, reading the picture from `src` (`stride` pixels a row, the
+// rect's top-left first) and only WRITING the surface -- for a
+// UAPP_SCANOUT app, whose surface may be write-combining memory that is
+// ruinous to read. On failure the picture is copied across plain.
+int ucrt_apply_from(struct ucrt *c, const uint32_t *src, int stride,
+                    struct ugfx_surface *s, int x, int y, int w, int h);
 
 // The rect-relative point that was DRAWN where (px, py) now shows: 1,
 // or 0 on the bezel (with the nearest point on the glass in *sx/*sy).

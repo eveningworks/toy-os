@@ -9813,6 +9813,29 @@ drawing -- shared from the start, because DOOM is the next caller.
 Flicker and noise animate the window and are off in every preset.
 
 
+## DOOM's screen effect: a scanline per DOOM row, switched by a key, kept in /etc/doom.conf
+
+DOOM runs the Terminal's `ucrt` presets (mockups and choice, 2026-10-03)
+with two differences. **The scanline pitch follows DOOM's 200 rows, not
+the window's pixels** (`ucrt.src_lines`): the picture is 2.4 window rows
+a DOOM row at 640x480 and 5.4 at 1080p, so a fixed pitch either drifts
+against the game's pixels or thins to nothing fullscreen -- one dark line
+per source line is the 15 kHz look CRT shaders aim for (RetroArch's
+crt-* presets; DOSBox Staging's `crt-auto` picks by the video mode). A
+real VGA monitor double-scanned DOOM's 200 lines to 400, finer than a
+480-row window can draw. **It is switched by Alt+C, not a menu**, because
+the port is vendored byte for byte (`userland/ports/doom/README.md`) and
+DOOM's Options menu is already full to the status bar: a menu page would
+be a permanent patch to `m_menu.c`, where Crispy Doom carries its own.
+The key follows vanilla's F5 (detail), which says what it did on the
+message line -- `dg_message()` in the backend does the same. **The
+setting is the app's, in `/etc/doom.conf`**, not Chocolate Doom's
+extended config, which only knows the variables in its own list. And the
+picture is scaled into a buffer of the app's and composed from there
+(`ucrt_apply_from()`), because DOOM's surface may be the display's
+write-combining scanout buffer, which must never be read.
+
+
 ## System Settings hides the kernel and debugging pages until System Information says otherwise
 
 Asked for 2026-10-03, from mockups of three placements. The Kernel
