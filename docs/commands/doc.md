@@ -6,10 +6,10 @@
 
 ## Synopsis
 
-    doc [-c <category>] [--no-pager] [--color=<when>] <page>
-           doc -k <word>          search names, titles and summaries
-           doc -K <word>          search the full text of every page
-           doc -l [-c <category>] list every page
+    doc [OPTION]... PAGE
+    doc -k WORD
+    doc -K WORD
+    doc -l [-c CAT]
 
 ## Options
 
@@ -28,7 +28,7 @@
   Paging is off anyway when neither fd 0 nor fd 1 is a terminal.
 - `--color=<when>` -- `always`, `never`, or `auto` (the default:
   styled to a terminal, plain to a pipe or a file).
-- `-h`, `--help` -- the usage above, plus the pager's keys.
+- `-h`, `--help` -- every option and what it does, plus the pager's keys.
 
 `-c`, `-k` and `-K` each need their word: without one the usage is
 printed and nothing is searched.

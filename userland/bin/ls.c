@@ -48,6 +48,7 @@
 #include "lib/dirsort.h"
 #include "lib/udate.h"
 #include "lib/unum.h"
+#include "lib/uargs.h"
 #include <locale.h>
 #include "kpath.h"    // k_path_basename, for a path that names a file
 #include <unistd.h>
@@ -258,12 +259,30 @@ static int list_one(const struct opts *o, const char *path, int with_header) {
     return 0;
 }
 
-static void usage(void) {
-    put("usage: ls [-1aCFhlRrSt] [--color=never|always|auto] [dir]\n"
-        "  -l  long form      -C  multi-column     -h  human sizes\n"
-        "  -t  newest first   -S  largest first    -r  reverse\n"
-        "  -R  recurse        -a  accepted, no-op (no dotfile convention)\n");
-}
+static int f_one, f_cols, f_long, f_human, f_recurse, f_reverse, f_time, f_size, f_all, f_classify;
+static const char *f_color;
+
+static const struct uargs_opt OPTS[] = {
+    { 0, '1', 0, "one name per line (the default)", &f_one, 0 },
+    { 0, 'C', 0, "names in columns; ignored with -l", &f_cols, 0 },
+    { 0, 'l', 0, "long form: type, size and modification time", &f_long, 0 },
+    { 0, 'h', 0, "sizes as 4.0K, 12M rather than bytes", &f_human, 0 },
+    { 0, 't', 0, "newest first", &f_time, 0 },
+    { 0, 'S', 0, "largest first", &f_size, 0 },
+    { 0, 'r', 0, "reverse the order", &f_reverse, 0 },
+    { 0, 'R', 0, "list subdirectories too", &f_recurse, 0 },
+    { 0, 'a', 0, "accepted and ignored: there are no hidden files", &f_all, 0 },
+    { 0, 'F', 0, "accepted and ignored: a directory always ends in /", &f_classify, 0 },
+    { "color", 0, "WHEN", "never, always, or auto (colour on a terminal)", 0, &f_color },
+    { 0 },
+};
+
+static const struct uargs_prog PROG = {
+    .name = "ls",
+    .usage = "[OPTION]... [DIR]",
+    .summary = "List a directory, the current one by default, sorted by name.",
+    .opts = OPTS,
+};
 
 int main(int argc, char **argv) {
     setlocale(LC_ALL, "");
@@ -279,53 +298,23 @@ int main(int argc, char **argv) {
     char cwd[LS_PATH_MAX];
     const char *path = "/";
     if (getcwd(cwd, sizeof cwd) && cwd[0]) path = cwd;
-    int got_path = 0, bad = 0;
-
-    for (int i = 1; i < argc; i++) {
-        const char *a = argv[i];
-        if (a[0] == '-' && a[1] == '-') {
-            // The one long option. Compared in full rather than by
-            // prefix, so a typo is refused instead of guessed at --
-            // this file's own rule about parsers rejecting rather than
-            // guessing (CLAUDE.md).
-            if (strcmp(a, "--color=never") == 0) o.color = 0;
-            else if (strcmp(a, "--color=always") == 0) o.color = 1;
-            else if (strcmp(a, "--color=auto") == 0) o.color = sys_isatty(1);
-            else if (strcmp(a, "--help") == 0) { usage(); sys_exit(0); }
-            else {
-                put("ls: unknown option: ");
-                put(a);
-                put("\n");
-                bad = 1;
-            }
-        } else if (a[0] == '-' && a[1]) {
-            for (int j = 1; a[j]; j++) {
-                switch (a[j]) {
-                case 'l': o.long_form = 1; break;
-                case '1': o.columns = 0; break;
-                case 'C': o.columns = 1; break;
-                case 'h': o.human = 1; break;
-                case 'R': o.recurse = 1; break;
-                case 'r': o.reverse = 1; break;
-                case 't': o.sort = 't'; break;
-                case 'S': o.sort = 'S'; break;
-                case 'a': break; // accepted, no-op -- no dotfile convention here
-                case 'F': break; // accepted: the trailing '/' is unconditional
-                default:
-                    put("ls: unknown flag\n");
-                    bad = 1;
-                    break;
-                }
-            }
-        } else if (!got_path) {
-            path = a;
-            got_path = 1;
-        } else {
-            put("ls: only one directory at a time\n");
-            bad = 1;
-        }
+    struct uargs a;
+    if (uargs_parse(&a, &PROG, argc, argv)) sys_exit(a.status);
+    if (a.argc > 1) sys_exit(uargs_error(&PROG, "only one directory at a time"));
+    if (a.argc == 1) path = a.argv[0];
+    // Of each pair, the one typed LAST wins (a flag holds its position).
+    o.long_form = f_long != 0;
+    o.columns = f_cols > f_one;
+    o.human = f_human != 0;
+    o.recurse = f_recurse != 0;
+    o.reverse = f_reverse != 0;
+    if (f_time || f_size) o.sort = f_time > f_size ? 't' : 'S';
+    if (f_color) {
+        if (!strcmp(f_color, "never")) o.color = 0;
+        else if (!strcmp(f_color, "always")) o.color = 1;
+        else if (!strcmp(f_color, "auto")) o.color = sys_isatty(1);
+        else sys_exit(uargs_error(&PROG, "--color takes never, always or auto, not '%s'", f_color));
     }
-    if (bad) { usage(); sys_exit(2); }
 
     int rc = list_one(&o, path, 0);
 

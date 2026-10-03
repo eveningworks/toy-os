@@ -19,12 +19,57 @@
 #include "lib/ubootcfg.h"
 #include "lib/ubootwords.h"
 #include "lib/cmd.h"
+#include "lib/uargs.h"
 #include "rt/sys.h"
 
-#define USAGE "bootcfg [--file <cfg>] [--force] [list | check | known | undo | edit | " \
-              "words <entry> <+word|-key>... | default <entry> | timeout <seconds> | " \
-              "copy <entry> <title> [<+word|-key>...] | rename <entry> <title> | remove <entry> | " \
-              "try <entry> [<+word|-key>...] | try --keep | try --drop]"
+static const char *g_path = UBOOTMENU_CFG;
+static int g_force, g_keep, g_drop;
+
+static const struct uargs_opt OPTS[] = {
+    { "file",  0, "CFG", "edit CFG instead of /boot/boot/grub/grub.cfg", 0, &g_path },
+    { "force", 0, 0,     "save despite a risky problem (never a broken one)", &g_force, 0 },
+    { "keep",  0, 0,     "with try: move the trial's words to its entry", &g_keep, 0 },
+    { "drop",  0, 0,     "with try: remove the trial", &g_drop, 0 },
+    { 0 },
+};
+
+static const struct uargs_cmd CMDS[] = {
+    { "list",    0,                    "the menu, default marked (also a bare bootcfg)" },
+    { "words",   "ENTRY +WORD|-KEY...", "add, replace or remove boot words" },
+    { "default", "ENTRY",              "boot ENTRY when nobody chooses" },
+    { "timeout", "SECONDS",            "how long GRUB shows the menu, 0 to 3600" },
+    { "copy",    "ENTRY TITLE [WORDS]", "a new entry right after ENTRY" },
+    { "rename",  "ENTRY TITLE",        "retitle an entry" },
+    { "remove",  "ENTRY",              "delete an entry (never the default)" },
+    { "try",     "ENTRY [WORDS]",      "boot a changed copy ONCE, then --keep or --drop" },
+    { "edit",    0,                    "the file in /bin/edit, checked before it is saved" },
+    { "check",   0,                    "report the file's problems" },
+    { "undo",    0,                    "swap grub.cfg and grub.cfg.bak" },
+    { "known",   0,                    "every boot word this accepts" },
+    { 0 },
+};
+
+static const struct uargs_prog PROG = {
+    .name = "bootcfg",
+    .usage = "[OPTION]... [COMMAND [ARG]...]",
+    .summary = "Read and change GRUB's boot menu, /boot/boot/grub/grub.cfg. Every change\n"
+               "is checked, shown as a diff, and saved with the old file as grub.cfg.bak.",
+    .opts = OPTS,
+    .cmds = CMDS,
+    .notes = "ENTRY is a number from `bootcfg list`, or an exact title. WORDS are\n"
+             "+WORD (add, replacing a word of the same key) and -KEY (remove).\n"
+             "Exit status: 0 done, 1 refused or failed, 2 bad usage; check exits\n"
+             "1 for a risky file and 3 for one GRUB would stop at.",
+};
+
+// The command's own argument shape, from the table.
+static int wrong(const char *cmd) {
+    for (const struct uargs_cmd *c = CMDS; c->name; c++)
+        if (!strcmp(c->name, cmd))
+            return c->args ? uargs_error(&PROG, "'%s' takes %s", cmd, c->args)
+                           : uargs_error(&PROG, "'%s' takes no arguments", cmd);
+    return uargs_error(&PROG, "unknown command '%s'", cmd);
+}
 
 #define C_DIM   "\x1b[90m"
 #define C_RED   "\x1b[31m"
@@ -33,8 +78,6 @@
 #define C_BOLD  "\x1b[1m"
 #define C_OFF   "\x1b[0m"
 
-static const char *g_path = UBOOTMENU_CFG;
-static int g_force;
 static struct ubootcfg g_orig, g_cfg;
 static struct ubootcfg_problem g_now[24], g_was[24];
 
@@ -155,7 +198,7 @@ static int cmd_check(void) {
         printf("%s: %s\n", g_now[i].level == UBOOTCFG_BROKEN ? "broken" : "risky", g_now[i].msg);
     }
     if (!n) printf("bootcfg: %s checks out (%d entries)\n", g_path, g_cfg.count);
-    return ubootcfg_has(g_now, n, UBOOTCFG_BROKEN) ? 2 : n ? 1 : 0;
+    return ubootcfg_has(g_now, n, UBOOTCFG_BROKEN) ? 3 : n ? 1 : 0;
 }
 
 static int cmd_known(void) {
@@ -226,13 +269,14 @@ static int cmd_edit(void) {
 }
 
 static int cmd_try(int argc, char **argv) {
-    if (argc == 1 && (!strcmp(argv[0], "--keep") || !strcmp(argv[0], "--drop"))) {
+    if (g_keep || g_drop) {
+        if (argc || (g_keep && g_drop)) return uargs_error(&PROG, "try --keep or try --drop takes nothing else");
         int t = ubootcfg_trial_find(&g_cfg);
         if (t < 0) { printf("bootcfg: there is no trial entry\n"); return 1; }
-        int rc = argv[0][2] == 'k' ? ubootcfg_keep(&g_cfg, t) : ubootcfg_remove(&g_cfg, t);
+        int rc = g_keep ? ubootcfg_keep(&g_cfg, t) : ubootcfg_remove(&g_cfg, t);
         return rc < 0 ? refused() : save();
     }
-    if (argc < 1) { cmd_usage(USAGE); return 1; }
+    if (argc < 1) return wrong("try");
     int e = entry_arg(argv[0]);
     if (e < 0) return 1;
     // The trial starts from the entry's own words, edited like `words`.
@@ -265,27 +309,16 @@ static int cmd_try(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
-    int i = 1;
-    for (; i < argc && argv[i][0] == '-' && argv[i][1] == '-'; i++) {
-        if (!strcmp(argv[i], "--force")) g_force = 1;
-        else if (!strcmp(argv[i], "--file") && i + 1 < argc) g_path = argv[++i];
-        else if (!strcmp(argv[i], "--keep") || !strcmp(argv[i], "--drop")) break;
-        else { cmd_usage(USAGE); return 1; }
-    }
-    // --force may also follow the subcommand's arguments.
-    for (int k = i; k < argc; k++)
-        if (!strcmp(argv[k], "--force")) {
-            g_force = 1;
-            for (int j = k; j < argc - 1; j++) argv[j] = argv[j + 1];
-            argc--;
-            k--;
-        }
-    const char *cmd = i < argc ? argv[i++] : "list";
-    char **rest = argv + i;
-    int nrest = argc - i;
+    struct uargs a;
+    if (uargs_parse(&a, &PROG, argc, argv)) return a.status;
+    const char *cmd = a.argc ? a.argv[0] : "list";
+    char **rest = a.argv + 1;
+    int nrest = a.argc ? a.argc - 1 : 0;
+    if ((g_keep || g_drop) && strcmp(cmd, "try")) return uargs_error(&PROG, "--keep and --drop go with try");
 
-    if (!strcmp(cmd, "known")) return cmd_known();
+    if (!strcmp(cmd, "known")) return nrest ? wrong(cmd) : cmd_known();
     if (!strcmp(cmd, "undo")) {
+        if (nrest) return wrong(cmd);
         const char *why = 0;
         static struct ubootcfg before;
         if (ubootcfg_load(&before, g_path) < 0) before.len = 0;
@@ -297,10 +330,10 @@ int main(int argc, char **argv) {
     }
     if (load() < 0) return 1;
 
-    if (!strcmp(cmd, "list") && nrest == 0) return cmd_list();
-    if (!strcmp(cmd, "check") && nrest == 0) return cmd_check();
-    if (!strcmp(cmd, "edit") && nrest == 0) return cmd_edit();
-    if (!strcmp(cmd, "try")) return cmd_try(nrest, rest);
+    if (!strcmp(cmd, "list"))  return nrest ? wrong(cmd) : cmd_list();
+    if (!strcmp(cmd, "check")) return nrest ? wrong(cmd) : cmd_check();
+    if (!strcmp(cmd, "edit"))  return nrest ? wrong(cmd) : cmd_edit();
+    if (!strcmp(cmd, "try"))   return cmd_try(nrest, rest);
 
     int rc;
     if (!strcmp(cmd, "words") && nrest >= 2) {
@@ -332,8 +365,7 @@ int main(int argc, char **argv) {
         if (e < 0) return 1;
         rc = ubootcfg_remove(&g_cfg, e);
     } else {
-        cmd_usage(USAGE);
-        return 1;
+        return wrong(cmd);
     }
     return rc < 0 ? refused() : save();
 }

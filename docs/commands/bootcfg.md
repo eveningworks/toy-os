@@ -6,7 +6,7 @@
 
 ## Synopsis
 
-    bootcfg [--file <cfg>] [--force] [list | check | known | undo | edit | words <entry> <+word|-key>... | default <entry> | timeout <seconds> | copy <entry> <title> [<+word|-key>...] | rename <entry> <title> | remove <entry> | try <entry> [<+word|-key>...] | try --keep | try --drop]
+    bootcfg [OPTION]... [COMMAND [ARG]...]
 
 ## Options
 
@@ -24,16 +24,21 @@
 - `try <entry> [words]` -- a trial: a copy titled `<title> (trial)` with
   the words, chosen for **the next boot only**; it offers to restart.
   `try --keep` moves the trial's words to its entry and removes it;
-  `try --drop` removes it.
+  `try --drop` removes it (`--keep` and `--drop` are options that only
+  `try` takes).
 - `edit` -- the file in `/bin/edit`, as a copy; see below.
-- `check` -- report the file's problems; exit 2 if any would stop GRUB,
+- `check` -- report the file's problems; exit 3 if any would stop GRUB,
   1 for the others.
 - `undo` -- swap `grub.cfg` and `grub.cfg.bak`, so a second `undo` redoes.
 - `known` -- every boot word it accepts, with its value's shape.
 - `--force` -- save despite a RISKY problem the edit introduces.
-- `--file <cfg>` -- another file than `/boot/boot/grub/grub.cfg`.
+- `--file=<cfg>` -- another file than `/boot/boot/grub/grub.cfg`.
+- `-h`, `--help` -- every command and option in one page, as GNU tools
+  print it.
 
-`<entry>` is a number from `list` or a title matched exactly.
+`<entry>` is a number from `list` or a title matched exactly. A usage
+error -- an unknown command or option, missing arguments -- exits 2 with
+`Try 'bootcfg --help'`.
 
 ## Description
 

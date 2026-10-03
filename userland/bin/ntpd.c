@@ -40,6 +40,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include "lib/uargs.h"
 
 #define NTP_PACKET 48
 
@@ -434,42 +435,39 @@ static void supervise(void) {
     }
 }
 
-static const char *const USAGE =
-    "ntpd -- set this machine's clock from a network time server\n"
-    "\n"
-    "usage: ntpd [-1 | -q] [-p port] [server]\n"
-    "  -1        sync once and exit, instead of staying resident\n"
-    "  -q        report the offset and change nothing\n"
-    "  -p port   the server's UDP port (default 123)\n"
-    "\n"
-    "With no server, `system.ntp_server` is used. Resident syncing\n"
-    "obeys `system.ntp` and `system.ntp_interval`; -1 and -q do not.\n";
+static int f_once, f_query;
+static const char *f_port;
+
+static const struct uargs_opt OPTS[] = {
+    { 0, '1', 0,      "sync once and exit, instead of staying resident", &f_once, 0 },
+    { 0, 'q', 0,      "report the offset and change nothing", &f_query, 0 },
+    { 0, 'p', "PORT", "the server's UDP port (default 123)", 0, &f_port },
+    { 0 },
+};
+
+static const struct uargs_prog PROG = {
+    .name = "ntpd",
+    .usage = "[-1 | -q] [-p PORT] [SERVER]",
+    .summary = "Set this machine's clock from a network time server.",
+    .opts = OPTS,
+    .notes = "With no SERVER, `system.ntp_server` is used. Resident syncing obeys\n"
+             "`system.ntp` and `system.ntp_interval`; -1 and -q do not.",
+};
 
 int main(int argc, char **argv) {
     int once = 0, query = 0;
     const char *server = 0;
 
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-1") == 0) once = 1;
-        else if (strcmp(argv[i], "-q") == 0) query = 1;
-        else if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
-            int p = atoi(argv[++i]);
-            if (p < 1 || p > 65535) {
-                say("ntpd: %s is not a port\n", argv[i]);
-                return 1;
-            }
-            g_port = (uint16_t)p;
-        }
-        else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            sys_print(USAGE);
-            return 0;
-        } else if (argv[i][0] == '-') {
-            say("ntpd: unknown option %s\n", argv[i]);
-            sys_print(USAGE);
-            return 1;
-        } else {
-            server = argv[i];
-        }
+    struct uargs a;
+    if (uargs_parse(&a, &PROG, argc, argv)) return a.status;
+    if (a.argc > 1) return uargs_error(&PROG, "one server at a time");
+    if (a.argc == 1) server = a.argv[0];
+    once = f_once != 0;
+    query = f_query != 0;
+    if (f_port) {
+        int p = atoi(f_port);
+        if (p < 1 || p > 65535) return uargs_error(&PROG, "'%s' is not a port", f_port);
+        g_port = (uint16_t)p;
     }
 
     if (server) g_server_override = server;

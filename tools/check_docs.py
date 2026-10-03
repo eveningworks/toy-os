@@ -587,6 +587,75 @@ def check_command_synopsis_matches(problems):
                              f"program's own usage line: {usage!r}")
 
 
+def _literals(text):
+    """C's adjacent string literals at the start of `text`, joined."""
+    m = re.match(r'((?:\s*"(?:[^"\\]|\\.)*")+)', text)
+    if not m:
+        return None
+    return _unescape("".join(re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))))
+
+
+def uargs_table(body):
+    """A program's lib/uargs.h table, or None: (name, usage forms, long
+    options, short options, command names)."""
+    prog = re.search(r'struct\s+uargs_prog\s+\w+\s*=\s*\{(.*?)\n\};', body, re.S)
+    if not prog:
+        return None
+    block = prog.group(1)
+    name = re.search(r'\.name\s*=\s*"([^"]+)"', block)
+    usage = re.search(r'\.usage\s*=\s*(.*)', block, re.S)
+    if not name or not usage:
+        return None
+    usage = _literals(usage.group(1)) or ""
+    longs, shorts, cmds = [], [], []
+    opts = re.search(r'struct\s+uargs_opt\s+\w+\[\]\s*=\s*\{(.*?)\n\};', body, re.S)
+    if opts:
+        for lng, sh in re.findall(r"\{\s*(?:\"([^\"]+)\"|0)\s*,\s*(?:'(.)'|0)\s*,", opts.group(1)):
+            if lng:
+                longs.append(lng)
+            if sh:
+                shorts.append(sh)
+    table = re.search(r'struct\s+uargs_cmd\s+\w+\[\]\s*=\s*\{(.*?)\n\};', body, re.S)
+    if table:
+        cmds = re.findall(r'\{\s*"([^"]+)"\s*,', table.group(1))
+    return name.group(1), usage.split("\n"), longs, shorts, cmds
+
+
+def check_command_options_documented(problems):
+    """A program built on lib/uargs.h declares its options and commands
+    in a table; its page must carry the usage line(s) and name every one
+    of them. The table is what -h/--help prints, so this is the page and
+    the help agreeing -- the part a person adding a flag forgets."""
+    pages_dir = os.path.join(REPO, "docs", "commands")
+    bin_dir = os.path.join(REPO, "userland", "bin")
+    if not os.path.isdir(pages_dir) or not os.path.isdir(bin_dir):
+        return
+    for src in sorted(os.listdir(bin_dir)):
+        if not src.endswith(".c"):
+            continue
+        page = os.path.join(pages_dir, os.path.splitext(src)[0] + ".md")
+        if not os.path.isfile(page):
+            continue
+        t = uargs_table(open(os.path.join(bin_dir, src), encoding="utf-8").read())
+        if t is None:
+            continue
+        name, forms, longs, shorts, cmds = t
+        text = open(page, encoding="utf-8").read()
+        rel = f"docs/commands/{os.path.basename(page)}"
+        for form in forms:
+            if f"{name} {form}".rstrip() not in text:
+                problems.append(f"{rel} does not carry the usage line {name} {form!r}")
+        for lng in longs:
+            if f"--{lng}" not in text:
+                problems.append(f"{rel} does not mention --{lng}, which {name} accepts")
+        for sh in shorts:
+            if not re.search(r"(?<![\w-])-" + re.escape(sh) + r"(?![\w])", text):
+                problems.append(f"{rel} does not mention -{sh}, which {name} accepts")
+        for c in cmds:
+            if f"`{c}" not in text and f"`{name} {c}" not in text:
+                problems.append(f"{rel} does not name the command `{c}`, which {name} accepts")
+
+
 def main():
     problems = []
     for check in (check_no_changelog_pointers,
@@ -605,7 +674,8 @@ def main():
                   check_every_driver_is_listed,
                   check_every_command_has_a_page,
                   check_commands_index_is_current,
-                  check_command_synopsis_matches):
+                  check_command_synopsis_matches,
+                  check_command_options_documented):
         check(problems)
 
     if not problems:

@@ -1427,3 +1427,32 @@ columns -- so `ls --color=always | less` lost the tail of every coloured
 line. Nobody had noticed because `less`'s only other input was plain.
 `doc` emits styled text by default, which is what turned a latent bug
 into a visible one.
+
+## `--help` is generated from the table the parser reads
+
+**The problem.** Five of a hundred commands answered `--help`, each
+with its own text and layout, and the rest printed one `usage:` line.
+The maintainer asked for Linux's `-h`/`--help` on every command.
+
+**What real systems do.** GNU coreutils hand-writes each `--help` in C
+and GENERATES its man pages from that output (`help2man`). clap, cobra,
+argparse and git's parse-options generate the help from the same
+declared table the parser reads. BSD prints a usage line and leaves the
+rest to `man`.
+
+**What toy-os does: the table, with GNU's page.** Hand-written help was
+declined because it is a second copy of what the parser accepts, which
+drifts the first time a flag is added -- the reason `check_docs.py`
+already compares `cmd_usage()` strings with the pages. Printing the
+manual page as help was declined too: the pages are prose for `doc`,
+and their Options bullets read as paragraphs, not a summary. So
+`lib/uargs.h` takes a table of options and commands, parses argv from
+it and prints GNU's flat page from it (chosen from mockups over a
+per-command `cmd --help` page); `check_docs.py` checks the table against
+the manual page, so help, parser and manual are held together by the
+build rather than by memory.
+
+**Exit 2 for a usage error**, bash's and most tools' convention, so a
+script can tell "you called it wrong" from "it refused". `bootcfg
+check` moved its broken-file status from 2 to 3 to keep that apart.
+

@@ -6,12 +6,12 @@
 
 ## Synopsis
 
-    config list
+    config COMMAND [ARG]...
 
 ## Options
 
-- `-h`, `--help` -- print the summary of every subcommand and exit; the
-  `help` subcommand and a bare `config` do the same.
+- `-h`, `--help` -- every command and what it does; `config help` and a
+  bare `config` print the same.
 
 ## Description
 
@@ -36,6 +36,7 @@ directory of text cannot provide about itself. See
 | `config find <text>` | Search key names **and** values across every registered config file, `file:key=value` per hit. Case-insensitive. |
 | `config register <name> <path> [description]` | Declare a new config file by writing a descriptor into `/etc/config.d`. Picked up live. |
 | `config unregister <name>` | Remove that descriptor. A built-in cannot be unregistered. |
+| `config help` | Every command and what it does -- the same page as `-h`. |
 
 **System Settings is GENERATED from the same registry** — it holds no
 list of settings and no list of categories, it asks

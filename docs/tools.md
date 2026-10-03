@@ -211,8 +211,10 @@ manual steps to be worth automating:
   a number or a target version, a DUPLICATED roadmap entry, a roadmap item
   that WRAPS onto a second line or runs past 140 characters, a
   roadmap-details HEADING that names no roadmap item or bug any more, a
-  stale decisions index, a link to a doc that does not exist, and a tool
-  in `tools/` that CLAUDE.md never mentions. The one-line rule is checked
+  stale decisions index, a link to a doc that does not exist, a tool
+  in `tools/` that CLAUDE.md never mentions, and a command whose
+  `lib/uargs.h` table names a usage form, option or command its
+  `docs/commands` page does not. The one-line rule is checked
   rather than stated for the usual reason: the roadmap reached 2,939
   lines by accumulating a paragraph per item, and nothing noticed. The duplicate check earns its
   place on its own -- two of this repo's own roadmap edits duplicated an

@@ -6,7 +6,7 @@
 
 ## Synopsis
 
-    less [file]
+    less [FILE]
 
 ## Options
 

@@ -33,6 +33,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include "lib/usetting.h" // the MERGED registry -- see the header
+#include "lib/uargs.h"
 
 static void put(const char *s) { sys_print(s); }
 
@@ -687,85 +688,86 @@ static int cmd_unregister(const char *name) {
 
 // --- usage ------------------------------------------------------------
 
-static int usage(void) {
-    putline("config -- read, change and find this machine's configuration");
-    putline("");
-    putline("Settings (typed, validated, applied):");
-    putline("  config list                 every setting, its value, and its file");
-    putline("  config get <name>           one value");
-    putline("  config set <name> <value>   validate, apply and persist");
-    putline("  config set <name>=<value>   the same");
-    putline("  config unset <name>         forget it, so the built-in default returns");
-    putline("  config where <name>         just the file holding it");
-    putline("  config diff                 settings whose file differs from what is live");
-    putline("  config reload               re-read the files after editing them by hand");
-    putline("");
-    putline("Config files:");
-    putline("  config files                every known config file, and where it came from");
-    putline("  config show <name|path>     print one, verbatim");
-    putline("  config find <text>          search names AND values across all of them");
-    putline("  config register <name> <path> [description]");
-    putline("  config unregister <name>");
-    putline("");
-    putline("Settings are ordinary text under /etc -- `edit` them freely, then");
-    putline("`config reload`. `config diff` shows what an edit has not applied yet.");
-    return 0;
-}
+static const struct uargs_cmd CMDS[] = {
+    { 0, 0, "Settings (typed, validated, applied)" },
+    { "list",       0,                         "every setting, its value, and its file" },
+    { "get",        "NAME",                    "one value" },
+    { "set",        "NAME VALUE",              "validate, apply and persist (also NAME=VALUE)" },
+    { "unset",      "NAME",                    "forget it, so the built-in default returns" },
+    { "where",      "NAME",                    "just the file holding it" },
+    { "diff",       0,                         "settings whose file differs from what is live" },
+    { "reload",     0,                         "re-read the files after editing them by hand" },
+    { 0, 0, "Config files" },
+    { "files",      0,                         "every known config file, and where it came from" },
+    { "show",       "NAME|PATH",               "print one, verbatim" },
+    { "find",       "TEXT",                    "search names AND values across all of them" },
+    { "register",   "NAME PATH [DESCRIPTION]", "make a file known to `config files`" },
+    { "unregister", "NAME",                    "forget a registered file" },
+    { "help",       0,                         "this page, as -h does" },
+    { 0 },
+};
+
+static const struct uargs_prog PROG = {
+    .name = "config",
+    .usage = "COMMAND [ARG]...",
+    .summary = "Read, change and find this machine's configuration.",
+    .cmds = CMDS,
+    .notes = "Settings are ordinary text under /etc -- `edit` them freely, then\n"
+             "`config reload`. `config diff` shows what an edit has not applied yet.",
+};
 
 int main(int argc, char **argv) {
-    if (argc < 2) return usage();
-    const char *cmd = argv[1];
-
-    if (!strcmp(cmd, "help") || !strcmp(cmd, "-h") || !strcmp(cmd, "--help")) return usage();
+    struct uargs a;
+    if (uargs_parse(&a, &PROG, argc, argv)) return a.status;
+    // The positionals from here: v[0] is the command.
+    char **v = a.argv;
+    int n = a.argc;
+    if (n == 0 || !strcmp(v[0], "help")) { uargs_help(&PROG); return 0; }
+    const char *cmd = v[0];
     if (!strcmp(cmd, "list"))   return cmd_list();
     if (!strcmp(cmd, "diff"))   return cmd_diff();
     if (!strcmp(cmd, "reload")) return cmd_reload();
     if (!strcmp(cmd, "files"))  return cmd_files();
 
-    if (!strcmp(cmd, "get") && argc >= 3)   return cmd_get(argv[2]);
-    if (!strcmp(cmd, "where") && argc >= 3) return cmd_where(argv[2]);
-    if (!strcmp(cmd, "unset") && argc >= 3) return cmd_unset(argv[2]);
-    if (!strcmp(cmd, "show") && argc >= 3)  return cmd_show(argv[2]);
-    if (!strcmp(cmd, "find") && argc >= 3)  return cmd_find(argv[2]);
-    if (!strcmp(cmd, "unregister") && argc >= 3) return cmd_unregister(argv[2]);
+    if (!strcmp(cmd, "get") && n >= 2)   return cmd_get(v[1]);
+    if (!strcmp(cmd, "where") && n >= 2) return cmd_where(v[1]);
+    if (!strcmp(cmd, "unset") && n >= 2) return cmd_unset(v[1]);
+    if (!strcmp(cmd, "show") && n >= 2)  return cmd_show(v[1]);
+    if (!strcmp(cmd, "find") && n >= 2)  return cmd_find(v[1]);
+    if (!strcmp(cmd, "unregister") && n >= 2) return cmd_unregister(v[1]);
 
-    if (!strcmp(cmd, "register") && argc >= 4) {
+    if (!strcmp(cmd, "register") && n >= 3) {
         // The description is the whole REST of the line, rejoined --
         // it is prose, and the shell split it on spaces. Taking only
-        // argv[4] silently registered "Settings" for a description
+        // v[3] silently registered "Settings" for a description
         // someone typed as "Settings for my app".
         char desc[SETTING_ABI_FILE_MAX * 2];
         size_t used = 0;
         desc[0] = '\0';
-        for (int i = 4; i < argc && used + 1 < sizeof desc; i++) {
+        for (int i = 3; i < n && used + 1 < sizeof desc; i++) {
             used += snprintf(desc + used, sizeof desc - used, "%s%s",
-                             used ? " " : "", argv[i]);
+                             used ? " " : "", v[i]);
         }
-        return cmd_register(argv[2], argv[3], desc);
+        return cmd_register(v[1], v[2], desc);
     }
 
-    if (!strcmp(cmd, "set") && argc >= 3) {
+    if (!strcmp(cmd, "set") && n >= 2) {
         // Both spellings, because both are what people type. `name=value`
         // is split here rather than in the shell so the whole thing can
         // arrive as one argument.
         char name[SETTING_ABI_NAME_MAX];
         const char *eq = 0;
-        for (const char *p = argv[2]; *p; p++) { if (*p == '=') { eq = p; break; } }
+        for (const char *p = v[1]; *p; p++) { if (*p == '=') { eq = p; break; } }
         if (eq) {
-            int n = (int)(eq - argv[2]);
+            int n = (int)(eq - v[1]);
             if (n >= (int)sizeof name) { putline("config: name too long"); return 1; }
-            memcpy(name, argv[2], (size_t)n);
+            memcpy(name, v[1], (size_t)n);
             name[n] = '\0';
             return cmd_set(name, eq + 1);
         }
-        if (argc >= 4) return cmd_set(argv[2], argv[3]);
-        putline("config: set needs a value -- `config set <name> <value>`");
-        return 1;
+        if (n >= 3) return cmd_set(v[1], v[2]);
+        return uargs_error(&PROG, "set needs a value -- set NAME VALUE");
     }
 
-    char line[128];
-    snprintf(line, sizeof line, "config: unknown subcommand '%s'", cmd);
-    putline(line);
-    putline("");
-    return usage();
+    return uargs_error(&PROG, "'%s' needs more arguments", cmd);
 }

@@ -22,6 +22,7 @@
 #include "lib/ufile.h"
 #include "lib/umd.h"
 #include "lib/upager.h"
+#include "lib/uargs.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,11 +41,26 @@
 // not Markdown's, which is why umd_section_para() is asked by name.
 #define SUMMARY_SECTION "Description"
 
-static const char *USAGE =
-    "doc [-c <category>] [--no-pager] [--color=<when>] <page>\n"
-    "       doc -k <word>          search names, titles and summaries\n"
-    "       doc -K <word>          search the full text of every page\n"
-    "       doc -l [-c <category>] list every page";
+static const char *f_cat, *f_color, *f_apropos, *f_search;
+static int f_nopager, f_list;
+
+static const struct uargs_opt OPTS[] = {
+    { "category", 'c', "CAT",  "only pages in CAT (cmd is the one there is)", 0, &f_cat },
+    { "list",     'l', 0,      "list every page with its summary", &f_list, 0 },
+    { "apropos",  'k', "WORD", "search names, titles and summaries", 0, &f_apropos },
+    { "search",   'K', "WORD", "search the full text of every page", 0, &f_search },
+    { "no-pager", 0,   0,      "print straight to the terminal", &f_nopager, 0 },
+    { "color",    0,   "WHEN", "never, always, or auto (colour on a terminal)", 0, &f_color },
+    { 0 },
+};
+
+static const struct uargs_prog PROG = {
+    .name = "doc",
+    .usage = "[OPTION]... PAGE\n-k WORD\n-K WORD\n-l [-c CAT]",
+    .summary = "Read the manual: the page for a command, or search them all.",
+    .opts = OPTS,
+    .more = upager_keys,
+};
 
 // ------------------------------------------------------- growing sink
 
@@ -363,41 +379,19 @@ int main(int argc, char **argv) {
     int want_list = 0;
     int color_mode = 0;       // 0 auto, 1 always, 2 never
 
-    for (int i = 1; i < argc; i++) {
-        const char *a = argv[i];
-        if (strcmp(a, "-h") == 0 || strcmp(a, "--help") == 0) {
-            cmd_usage(USAGE);
-            sys_print("\n");
-            sys_print(upager_keys());
-            return 0;
-        } else if (strcmp(a, "--no-pager") == 0) {
-            o.pager = 0;
-        } else if (strcmp(a, "--color=always") == 0) {
-            color_mode = 1;
-        } else if (strcmp(a, "--color=never") == 0) {
-            color_mode = 2;
-        } else if (strcmp(a, "--color=auto") == 0) {
-            color_mode = 0;
-        } else if (strcmp(a, "-l") == 0 || strcmp(a, "--list") == 0) {
-            want_list = 1;
-        } else if ((strcmp(a, "-c") == 0 || strcmp(a, "--category") == 0)
-                   && i + 1 < argc) {
-            o.cat = argv[++i];
-        } else if ((strcmp(a, "-k") == 0 || strcmp(a, "--apropos") == 0)
-                   && i + 1 < argc) {
-            kword = argv[++i];
-        } else if ((strcmp(a, "-K") == 0 || strcmp(a, "--search") == 0)
-                   && i + 1 < argc) {
-            Kword = argv[++i];
-        } else if (a[0] == '-' && a[1]) {
-            cmd_usage(USAGE);
-            return 1;
-        } else if (!page) {
-            page = a;
-        } else {
-            cmd_usage(USAGE);
-            return 1;
-        }
+    struct uargs a;
+    if (uargs_parse(&a, &PROG, argc, argv)) return a.status;
+    if (a.argc > 1) return uargs_error(&PROG, "one page at a time");
+    if (a.argc == 1) page = a.argv[0];
+    if (f_nopager) o.pager = 0;
+    if (f_cat) o.cat = f_cat;
+    want_list = f_list != 0;
+    kword = f_apropos;
+    Kword = f_search;
+    if (f_color) {
+        if (!strcmp(f_color, "always")) color_mode = 1;
+        else if (!strcmp(f_color, "never")) color_mode = 2;
+        else if (strcmp(f_color, "auto")) return uargs_error(&PROG, "--color takes never, always or auto, not '%s'", f_color);
     }
 
     // COLOUR IS DECIDED BY WHERE THE OUTPUT IS GOING, not by whether a
@@ -435,7 +429,7 @@ int main(int argc, char **argv) {
     if (want_list || (!page && o.cat)) { apropos(NULL, &o, cats, ncats, 1); return 0; }
 
     if (!page) {
-        cmd_usage(USAGE);
+        uargs_error(&PROG, "which page? `doc -l` lists them");
         sys_print("doc: categories:");
         for (int i = 0; i < ncats; i++) { sys_print(" "); sys_print(cats[i]); }
         sys_print("\n");

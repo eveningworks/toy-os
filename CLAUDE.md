@@ -525,7 +525,9 @@ the network on a dedicated e1000 BUILT; real hardware is next).
 - **A NEW COMMAND NEEDS ITS `docs/commands/` PAGE IN THE SAME CHANGE** --
   the build refuses otherwise, and a declared `cmd_usage()` string must
   appear on it verbatim (exemptions: `check_docs.py`'s
-  `COMMAND_PAGE_EXEMPT`).
+  `COMMAND_PAGE_EXEMPT`). **It takes its arguments through
+  `lib/uargs.h`'s table**, which gives it `-h`/`--help`; the page must
+  name every option and command in the table.
 - **A new convention goes in `docs/conventions/<area>.md` AND its
   headline in `INDEX.md`**, or it is invisible to the next session.
 - **A decision entry** goes in its area's file, then

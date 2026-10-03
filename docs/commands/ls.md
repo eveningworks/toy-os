@@ -6,7 +6,7 @@
 
 ## Synopsis
 
-    ls [flags] [dir]
+    ls [OPTION]... [DIR]
 
 ## Options
 
@@ -22,7 +22,8 @@
   here, and the trailing `/` on a directory is unconditional.
 - `--color=never`, `--color=always`, `--color=auto` -- whether to colour
   directories. `auto` is the default.
-- `--help` -- print the flag summary and exit.
+- `--help` -- every option and what it does. Only the long form: `-h`
+  is human-readable sizes, as in GNU `ls`.
 
 ## Description
 

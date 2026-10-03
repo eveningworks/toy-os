@@ -19,6 +19,7 @@
 // a file is worse than one that says it did.
 #include "rt/sys.h"
 #include "lib/upager.h"
+#include "lib/uargs.h"
 #include <string.h>
 #include <stdio.h>
 #include <fcntl.h>
@@ -40,23 +41,20 @@ static void read_all(int fd) {
     if (g_len >= LESS_MAX_BYTES) g_truncated = 1;
 }
 
-static void usage(void) {
-    // The keys come from upager_keys() rather than being spelled again
-    // here: two lists of one keymap drift, and the pager owns the map.
-    sys_print("usage: less [file]\n"
-              "  With no file, reads stdin -- `dmesg | less`.\n"
-              "\n");
-    sys_print(upager_keys());
-}
+static const struct uargs_prog PROG = {
+    .name = "less",
+    .usage = "[FILE]",
+    .summary = "Page through FILE, or through standard input -- `dmesg | less`.",
+    .more = upager_keys,   // the pager owns its keymap; one list, not two
+};
 
 int main(int argc, char **argv) {
     int fd = 0;   // stdin by default, so `cmd | less` works
-    if (argc > 1 && (strcmp(argv[1], "--help") == 0
-                     || strcmp(argv[1], "-h") == 0)) {
-        usage();
-        return 0;
-    }
-    if (argc > 1) {
+    struct uargs a;
+    if (uargs_parse(&a, &PROG, argc, argv)) return a.status;
+    if (a.argc > 1) return uargs_error(&PROG, "one file at a time");
+    if (a.argc == 1) {
+        argv[1] = a.argv[0];
         fd = open(argv[1], O_RDONLY);
         if (fd < 0) {
             char msg[160];

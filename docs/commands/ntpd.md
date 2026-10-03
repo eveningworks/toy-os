@@ -6,10 +6,7 @@
 
 ## Synopsis
 
-    ntpd [-1 | -q] [-p port] [server]
-      -1        sync once and exit, instead of staying resident
-      -q        report the offset and change nothing
-      -p port   the server's UDP port (default 123)
+    ntpd [-1 | -q] [-p PORT] [SERVER]
 
 ## Options
 
@@ -17,7 +14,7 @@
 - `-q` -- report the offset and change nothing; given with `-1`, `-q`
   wins and the clock is left alone.
 - `-p <port>` -- the server's UDP port, 1..65535; 123 by default.
-- `-h`, `--help` -- print the usage and exit.
+- `-h`, `--help` -- every option and what it does.
 - `<server>` -- the host to ask, outranking `system.ntp_server` for this
   run only. Both `-1` and `-q` ignore `system.ntp`.
 
