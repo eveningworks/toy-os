@@ -70,7 +70,6 @@ SYSCALL_HANDLER sys_do_proc_info(uint64_t *regs, uint64_t rdi, uint64_t rsi) {
 
 int sys_exit(struct syscall_ctx *c) {
     int code = (int)c->a0;
-    klog_write("syscall: exit() called by ring-3 process\n");
     if (scheduler_current_pid()) {
         // Scheduler-managed process (spawned by scheduler_demo_run(),
         // see scheduler.c) -- hand its CPU slot to the next ready

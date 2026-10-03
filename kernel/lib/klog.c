@@ -35,10 +35,11 @@
 // dmesg's timestamps often look on real hardware.
 //
 // Ring buffer, not a growing one: KLOG_BUF_SIZE bytes, oldest bytes
-// silently overwritten once full -- same one-shot,
-// no-history-beyond-N tradeoff a real kernel's dmesg ring buffer
-// makes. A toy OS session producing more than 16KB of log output in
-// one boot isn't a case worth handling specially.
+// silently overwritten once full -- the tradeoff a real kernel's dmesg
+// ring makes. 128 KiB, Linux's CONFIG_LOG_BUF_SHIFT=17 default: at 16
+// KiB a desktop's USB retries had flushed the boot lines (the NIC's
+// revision, the controller's port map) before anyone could read them.
+// `log` (/var/log, logd) is the record that outlives the ring.
 #include "scheduler.h" // scheduler_preempt_disable(): a write is not split
 #include "klog.h"
 #include "vga.h"
@@ -48,7 +49,7 @@
 #include "string.h"   // k_strstr -- the loglevel= flag
 #include "kfmt.h"
 
-#define KLOG_BUF_SIZE 16384
+#define KLOG_BUF_SIZE (128 * 1024)
 
 static char klog_buf[KLOG_BUF_SIZE];
 static uint32_t klog_head = 0;  // next write position, wraps mod KLOG_BUF_SIZE

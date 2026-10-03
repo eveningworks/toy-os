@@ -220,7 +220,7 @@ look fine.
 
 - **A PROBE THAT OUTRUNS THE LOG DESTROYS THE EVIDENCE IT GATHERS, AND A
   RATE-LIMITED PROBE LOOKS EXACTLY LIKE A LOOP THAT STOPPED.** The klog
-  ring holds a few hundred lines: stay under a line a second, give every
+  ring holds a few thousand lines (128 KiB): stay under a line a second, give every
   probe in a comparison the SAME limiter, and use a file-backed serial
   log for anything verbose.
 - **Four ways a GUI test passes without testing anything:** "it
