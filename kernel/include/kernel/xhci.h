@@ -80,6 +80,13 @@ int xhci_set_ep0_mps(uint8_t slot, uint16_t mps);
 int xhci_control(uint8_t slot, const uint8_t setup[8],
                  void *buf, uint16_t len, int in);
 
+// 0 once a control transfer on `slot` has TIMED OUT: the transfer is
+// never cancelled, so ep0 is wedged behind it and every later one would
+// wait its full deadline too. xhci_control() then refuses at once until
+// the slot is disabled and set up again. A driver's poll loop asks this
+// to stop polling a device that has gone.
+int xhci_slot_usable(uint8_t slot);
+
 // Adds one interrupt-IN endpoint to a configured device and starts its
 // transfer ring, via a Configure Endpoint command. `ep_addr`, `mps` and
 // `interval` come from the endpoint descriptor. Returns 0, or a

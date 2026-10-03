@@ -206,6 +206,7 @@ struct xhci_slot {
     void    *out_ctx;       // Device Context, written BY the controller
     uint64_t out_ctx_phys;
     struct xhci_ring ep0;
+    uint8_t  ep0_dead;      // a control transfer timed out (xhci_slot_usable())
 };
 
 static struct xhci_hc g_hc;
@@ -1244,10 +1245,15 @@ void xhci_slot_set_hub(uint8_t slot, uint8_t n_ports, uint8_t ttt) {
     sc[2] = (sc[2] & ~(3u << 16)) | (((uint32_t)ttt & 3u) << 16);
 }
 
+int xhci_slot_usable(uint8_t slot) {
+    return slot && slot <= XHCI_MAX_SLOTS && g_slots[slot].in_use && !g_slots[slot].ep0_dead;
+}
+
 int xhci_control(uint8_t slot, const uint8_t setup[8],
                  void *buf, uint16_t len, int in) {
     if (!slot || slot > XHCI_MAX_SLOTS || !g_slots[slot].in_use) return -1;
     struct xhci_slot *sl = &g_slots[slot];
+    if (sl->ep0_dead) return -1;
 
     // The SETUP packet rides in the TRB itself (IDT), so there is no
     // buffer to allocate for it. Transfer Type: 0 = no data stage,
@@ -1290,6 +1296,12 @@ int xhci_control(uint8_t slot, const uint8_t setup[8],
 
     if (wait_completion(&g_xfer_done, "control transfer") < 0) {
         g_xfer_done.ring_lo = g_xfer_done.ring_hi = 0;
+        // NOT CANCELLED, so ep0 is wedged behind it: refuse what follows
+        // rather than let a driver's poll spend a deadline per read --
+        // an RTL8156 bind once held USB's only worker for minutes this way.
+        sl->ep0_dead = 1;
+        klog_printf(KLOG_WARN "usb: slot %u: control endpoint stuck -- "
+                    "refused until the device is set up again\n", slot);
         // The first four setup bytes identify the request
         // (bmRequestType, bRequest, wValue) -- enough to say WHICH
         // request went unanswered, which is the whole question.

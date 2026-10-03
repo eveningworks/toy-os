@@ -203,7 +203,7 @@ void rtl_enable_aldps(void) {
 
 uint16_t rtl_phy_status(uint16_t desired) {
     uint16_t st = 0;
-    for (int i = 0; i < TIMEOUT_MS / 10; i++) {
+    for (int i = 0; i < TIMEOUT_MS / 10 && xhci_slot_usable(g_rtl.slot); i++) {
         st = rtl_ocp_read(OCP_PHY_STATUS) & PHY_STAT_MASK;
         if (desired ? st == desired
                     : (st == PHY_STAT_LAN_ON || st == PHY_STAT_PWRDN || st == PHY_STAT_EXT_INIT))
@@ -216,7 +216,9 @@ uint16_t rtl_phy_status(uint16_t desired) {
 
 void rtl_wait_autoload(void) {
     for (int i = 0; i < TIMEOUT_MS / 10; i++) {
-        if (rtl_read2(PLA_BOOT_CTRL, MCU_PLA) & AUTOLOAD_DONE) return;
+        uint16_t v;
+        if (!rtl_read2_ok(PLA_BOOT_CTRL, MCU_PLA, &v)) return;   // the device has gone
+        if (v & AUTOLOAD_DONE) return;
         rtl_wait_ms(10);
     }
 }
