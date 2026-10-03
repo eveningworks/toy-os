@@ -19,11 +19,11 @@
 
 // --- single-line text field -------------------------------------------
 
-// 64 rather than 48, so a field can hold a whole setting value:
-// SETTING_ABI_VALUE_MAX is 64, and System Settings edits a string
-// setting through this widget. A shorter field would truncate what it
-// was handed, which is a silent wrong answer rather than a full field.
-#define UUI_TEXTBOX_MAX 64
+// Room for a whole setting value (SETTING_ABI_VALUE_MAX, asserted in
+// System Settings) and for a pasted `sha256sum` line -- 64 hex digits,
+// two spaces and a name -- which Properties compares. A shorter field
+// truncates what it is handed: a silent wrong answer, not a full field.
+#define UUI_TEXTBOX_MAX 128
 
 struct uui_textbox {
     // Content-relative geometry -- see apps/ui/ui_radio_list.h's note.

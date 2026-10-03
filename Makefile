@@ -1188,6 +1188,7 @@ uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
 # nothing in any other, so the code sits in /lib once however many
 # programs use it.
 ULIB_SO_sum = $(BUILD)/lib/libhash.so
+ULIB_SO_properties = $(BUILD)/lib/libhash.so
 ULIB_SO_wget = $(LIBHTTP_SO) $(LIBSSL_SO)
 ULIB_SO_speedtest = $(LIBHTTP_SO) $(LIBSSL_SO)
 ULIB_SO_hwdata = $(LIBHTTP_SO) $(LIBSSL_SO)

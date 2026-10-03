@@ -9884,3 +9884,26 @@ is open, so scripts and links do not depend on the tick. The tick is the
 app's furniture (`/etc/settings.conf`, beside the sidebar width), not a
 registry setting -- a setting would itself need a page, and `config`
 already reaches every hidden one.
+
+## Properties is one page that grows, with the File Manager's pane drawn by the same widget
+
+**The problem.** Properties was a fixed list of read-only rows; Files'
+details pane drew its own, smaller list of the same facts.
+
+**What real systems do.** Windows and Dolphin use a tabbed dialog
+(General, Details, Security/Permissions, Checksums) with OK/Cancel/Apply.
+macOS Get Info is ONE window of collapsible sections under a preview,
+which grows as they open; edits apply as made.
+
+**What toy-os does: Get Info's shape** (chosen from mockups over tabs
+and over a compact card). Tabs hide most of what the window can show,
+and the design language makes the content the hero, so a picture sits
+on a stage tinted by it. Edits -- rename, permission bits, Opens with --
+apply at once with a status line, as the File Manager's rename in place
+already does; a staged OK/Apply would be a second model for one
+desktop. The facts are one library (`lib/ufileinfo.h`) and one widget
+(`uui_fileinfo`) shared with the details pane, so the pane and the
+window cannot describe one file two ways. **Past the screen's height
+the widget scrolls** rather than the window running under the taskbar,
+which it did in the first build -- a click meant for the last section
+landed on the taskbar button and minimised the window.

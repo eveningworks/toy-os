@@ -76,7 +76,7 @@ app; one shaped around an app's data stays in that app (CLAUDE.md).
 | Widget | For |
 |---|---|
 | `uui_button`, `uui_button_group` | One button; a GRID of them (a keypad) |
-| `uui_checkbox` | An independent on/off OPTION, in a form or a dialog |
+| `uui_checkbox` | An independent on/off OPTION, in a form or a dialog; `accent` gives the design language's rounded, accent-filled box with a tick |
 | `uui_switch` | An on/off STATE that takes effect -- a setting (Windows 11's toggle) |
 | `uui_radio_list` | A few mutually-exclusive options, all visible |
 | `uui_segmented` | Two to four SHORT mutually-exclusive choices side by side; a view switch |
@@ -85,6 +85,7 @@ app; one shaped around an app's data stays in that app (CLAUDE.md).
 | `uui_gallery` | A few choices whose difference is SEEN -- a card per choice, its picture painted by the caller (a cursor theme's shapes; a wallpaper) |
 | `uui_listbox`, `uui_table` | Rows; rows with columns, a header and sorting |
 | `uui_tree` | Rows at a DEPTH, with collapsible parents -- navigation. A `UUI_TREE_HEADER` row is a section caption; a node may carry a right-hand `note` and a usage meter; `UUI_SEL_ROUNDED` is the design language's selection (the File Manager's side column) |
+| `uui_fileinfo` | A file's preview and facts from `lib/ufileinfo.h`: a hero (its picture on a tinted stage, else its icon; a folder's volume bar) over collapsible sections, with SLOTS for an app's own controls -- Properties, and the File Manager's details pane in `compact` form |
 | `uui_optlist` | A LIST of on/off options, each with a name, an optional value edited in place (a hint shown while empty) and a one-line description -- the Boot Manager's kernel words. Changes queue on the row; drain `uui_optlist_take_change()` in `on_widget` |
 | `uui_thumbstrip` | A filmstrip: one row of thumbnails, one selected (the pictures come from `lib/uthumb.h`) |
 | `uui_transport` | Previous / play-pause / next, the round play button in the middle -- media (the Audio Player's stage, the Image Viewer's slideshow pill); `dark` for a dark or ambient ground |

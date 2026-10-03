@@ -57,4 +57,23 @@ int uopen_resolve(const char *path, char *exec, int cap);
 // opens in the File Manager. Returns the pid, or a negative value.
 int uopen_spawn(const char *path);
 
+// --- choosing what opens a type (Properties' "Opens with") ---------------
+
+struct uopen_app {
+    char entry[48];   // the desktop entry's stem: "imgview"
+    char name[48];    // its Name=: "Image Viewer"
+    char exec[64];
+};
+
+// The apps whose Handles= claims `path`'s extension, in entry order, then
+// every other app that opens files of some kind (any Handles=), plus
+// whatever opens it now when that is none of them. `*current` is the
+// index of the one that opens it now, -1 for none. Returns the count.
+int uopen_apps_for(const char *path, struct uopen_app *out, int max, int *current);
+
+// Make `entry` open every file with `path`'s extension -- the override
+// `open -s` writes. 0, or -1 when the path has no extension or the file
+// cannot be written.
+int uopen_set_default(const char *path, const char *entry);
+
 #endif

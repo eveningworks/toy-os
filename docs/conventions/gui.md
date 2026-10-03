@@ -3641,7 +3641,17 @@ real scanout hardware does. Do not write a pixel assertion for one.
     ("at least 4.2 MB"), because a floor presented as a total is a wrong
     answer wearing a right answer's clothes. It is NOT single-instance:
     two files have two sets of properties, and comparing them is why you
-    open the second.
+    open the second. **Its facts are `lib/ufileinfo.h` and its view is
+    `uui_fileinfo`**, the widget the File Manager's details pane draws
+    in its compact form, so the two cannot disagree: a hero (the picture
+    on a stage tinted by it, else the type's icon; a folder's volume
+    bar) over sections that open and close. **The window grows with
+    its sections and the widget scrolls past the screen**; an app's own
+    controls sit in a section's SLOT, placed where
+    `uui_fileinfo_slot_rect()` says and hidden when it says 0. **Rename,
+    permission bits and Opens with apply AT ONCE** with a status line,
+    as rename in place does -- no OK/Apply; the SHA-256 is computed in
+    slices per tick and compared with a pasted sum.
   - **Refresh is `SYS_FS_GENERATION` polled in the tick**, the desktop's
     idiom -- one integer compare, no disk I/O, and a copy finishing in
     another process appears with nobody pressing anything. **An app that

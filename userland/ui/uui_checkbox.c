@@ -66,8 +66,25 @@ void uui_checkbox_draw(struct ugfx_surface *s, const struct uui_checkbox *cb) {
     }
 
     int bs = box_size(cb);
-    ugfx_draw_rect(s, cb->x, cb->y, bs, bs, fg);
-    if (cb->checked) {
+    if (cb->accent) {
+        int r = bs / 4 > 1 ? bs / 4 : 1;
+        uint32_t edge = cb->checked && !cb->disabled ? UTHEME_ACCENT : UTHEME_OUTLINE;
+        uui_fill_round_rect(s, cb->x, cb->y, bs, bs, r, edge);
+        if (!cb->checked || cb->disabled)
+            uui_fill_round_rect(s, cb->x + 1, cb->y + 1, bs - 2, bs - 2, r - 1 > 0 ? r - 1 : 0, UTHEME_WHITE);
+        if (cb->checked) {
+            uint32_t tick = cb->disabled ? fg : UTHEME_ACCENT_TEXT;
+            int x0 = cb->x + bs * 2 / 9, y0 = cb->y + bs / 2, x1 = cb->x + bs * 4 / 9, y1 = cb->y + bs * 7 / 10;
+            int x2 = cb->x + bs * 7 / 9, y2 = cb->y + bs * 3 / 10;
+            for (int k = 0; k < 2; k++) {
+                ugfx_draw_line(s, x0, y0 + k, x1, y1 + k, tick, GEOM_AA);
+                ugfx_draw_line(s, x1, y1 + k, x2, y2 + k, tick, GEOM_AA);
+            }
+        }
+    } else {
+        ugfx_draw_rect(s, cb->x, cb->y, bs, bs, fg);
+    }
+    if (cb->checked && !cb->accent) {
         int inset = bs / 4 > 0 ? bs / 4 : 1;
         ugfx_fill_rect(s, cb->x + inset, cb->y + inset,
                         bs - 2 * inset, bs - 2 * inset, fg);

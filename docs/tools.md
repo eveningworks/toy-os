@@ -501,6 +501,16 @@ manual steps to be worth automating:
   and the file is unchanged; the Settings page's default dropdown moves
   `bootcfg`'s `*` and back. In `gui_regress.py`. Positive control: with
   the app's `ubootcfg_save()` call removed, "Save writes it" goes red.
+- **`properties_test.py`** -- Properties on a picture and a folder. The
+  hero is checked BY PIXEL (the stage is not the page grey, the picture
+  area is not flat) since a window that logs its rows can still paint a
+  blank hero; a section header opens its section; clearing Others > Read
+  changes the mode as `stat` sees it; Compute SHA-256 equals `sum -a
+  sha256`; another app under Opens with lands in `/etc/mimeapps.conf`;
+  a typed name renames the file (`ls`) and retitles the window; a
+  folder's Contains settles on the true recursive count. In
+  `gui_regress.py`. Positive control: with `ufileinfo_chmod()`'s
+  `sys_chmod` call skipped, the mode check goes red.
 - **`bootcfg_test.py`** -- `bootcfg` against a real `/boot`: an edit
   lands with the old file as `grub.cfg.bak` (byte for byte), exactly one
   line changes, no `.new` is left and `/boot` is read-only again; a

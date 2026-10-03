@@ -130,3 +130,63 @@ int uopen_spawn(const char *path) {
         return spawn_with("/bin/wm/apps/files", path);
     return -1;
 }
+
+// The extension, lowercased, as the override file keys it. 0 for none.
+static int ext_of(const char *path, char *ext, int cap) {
+    const char *dot = strrchr(k_path_basename(path), '.');
+    if (!dot || !dot[1]) return 0;
+    int n = 0;
+    for (; dot[n] && n < cap - 1; n++) ext[n] = (char)tolower((unsigned char)dot[n]);
+    ext[n] = '\0';
+    return 1;
+}
+
+int uopen_apps_for(const char *path, struct uopen_app *out, int max, int *current) {
+    static struct sys_dirent entries[SYS_LISTDIR_MAX];
+    char ext[16], now[UOPEN_PATH_MAX] = "";
+    int count = 0;
+    *current = -1;
+    if (!ext_of(path, ext, sizeof ext)) return 0;
+    if (!uopen_resolve(path, now, sizeof now)) now[0] = '\0';
+    int n = sys_listdir(DESKTOP_ENTRY_DIR, entries, SYS_LISTDIR_MAX);
+    struct etc_config_buf *cfg = malloc(sizeof *cfg);
+    if (!cfg) return 0;
+    // Two passes, Windows' "Open with" order: the apps that claim this
+    // extension, then every other app that opens files at all.
+    for (int pass = 0; pass < 2; pass++)
+    for (int i = 0; i < n && count < max; i++) {
+        const char *nm = entries[i].name;
+        size_t len = strlen(nm);
+        if (entries[i].is_dir || len < 9 || strcmp(nm + len - 8, ".desktop")) continue;
+        char entry[UOPEN_PATH_MAX], list[128];
+        struct uopen_app *a = &out[count];
+        if (!k_path_join(DESKTOP_ENTRY_DIR, nm, entry, sizeof entry) || !uconf_load(entry, cfg)) continue;
+        if (!etc_config_buf_get_in_or_top(cfg, UOPEN_ENTRY_SECTION, "Handles", list, sizeof list) ||
+            !list[0] || uopen_ext_matches(list, ext) != (pass == 0) ||
+            !etc_config_buf_get_in_or_top(cfg, UOPEN_ENTRY_SECTION, "Exec", a->exec, sizeof a->exec))
+            continue;
+        if (!etc_config_buf_get_in_or_top(cfg, UOPEN_ENTRY_SECTION, "Name", a->name, sizeof a->name))
+            strlcpy(a->name, k_path_basename(a->exec), sizeof a->name);
+        snprintf(a->entry, sizeof a->entry, "%.*s", (int)(len - 8), nm);
+        if (now[0] && !strcmp(now, a->exec)) *current = count;
+        count++;
+    }
+    free(cfg);
+    // An override naming a program no entry claims still opens the file:
+    // list it, or the choice would vanish from the list showing it.
+    if (now[0] && *current < 0 && count < max) {
+        struct uopen_app *a = &out[count];
+        strlcpy(a->exec, now, sizeof a->exec);
+        strlcpy(a->name, k_path_basename(now), sizeof a->name);
+        strlcpy(a->entry, now, sizeof a->entry);
+        *current = count++;
+    }
+    return count;
+}
+
+int uopen_set_default(const char *path, const char *entry) {
+    char ext[16];
+    if (!ext_of(path, ext, sizeof ext)) return -1;
+    return uconf_set(UOPEN_CONF, ext, entry) ? 0 : -1;
+}
+

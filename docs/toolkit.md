@@ -36,6 +36,7 @@
 | `ueffect.h` | A WINDOW EFFECT'S OPTIONS -- what it declares, and what the user chose. |
 | `uelfsym.h` | uelfsym -- function names for addresses in an ELF64 file on disk, and the bytes at an address: what a crash report's backtrace needs to name a frame and to check it follows a call. |
 | `ufile.h` | Reading a whole file into one allocation, in one place. |
+| `ufileinfo.h` | ufileinfo -- the facts about one path, gathered once: what Properties and the File Manager's details pane show (ui/uui_fileinfo.h draws them). |
 | `ufileop.h` | ufileop -- copying, moving and deleting files and trees, once. |
 | `ufiletype.h` | WHAT KIND OF FILE A NAME IS, in words and as an icon -- the File Manager's Type column, its details pane and Properties all ask, and three private tables would drift into three answers. |
 | `uhistory.h` | Command history for a ring-3 line editor. |
@@ -96,6 +97,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_dropdown.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |
 | `uui_edit.h` | uui_edit -- what EDITING TEXT means, in one place. |
 | `uui_filedialog.h` | --- the file chooser, as a window ------------------------------------ |
+| `uui_fileinfo.h` | uui_fileinfo -- a file's preview and facts, drawn from a struct ufileinfo (lib/ufileinfo.h): a HERO (its picture on a stage tinted by it, else its type's icon; the name and a one-line summary; a fo... |
 | `uui_fileview.h` | --- fileview: a directory, as a widget ------------------------------- |
 | `uui_findbar.h` | uui_findbar -- a find control: a lens, a query field, an "N of M" readout, previous / next, and close. |
 | `uui_focus.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |

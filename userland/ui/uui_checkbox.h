@@ -39,6 +39,11 @@ struct uui_checkbox {
     // legible from the tick. An app that wants it sets this to 1.
     int hover_effect;
 
+    // The design language's box: rounded, filled in the accent with a
+    // white tick when checked (as uui_optlist draws it). Opt-in, so
+    // the forms already tested against the square mark keep it.
+    int accent;
+
     uint32_t bg, fg;
 };
 

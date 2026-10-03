@@ -1,7 +1,8 @@
 // The details pane: a preview of the selection and its facts, down the
 // right of the window -- Explorer's (Alt+Shift+P) and Dolphin's
 // Information panel. Nothing selected, it describes the folder itself;
-// several marked, their count and total.
+// several marked, their count and total. One item is drawn by the same
+// widget as Properties (ui/uui_fileinfo.h), so the two cannot disagree.
 //
 // One of the File Manager's units -- see fm_internal.h for what is
 // where and why these share their state directly.
@@ -12,6 +13,8 @@
 #include "lib/udate.h"
 #include "lib/ufiletype.h"
 #include "lib/icon_cache.h"
+#include "lib/ufileinfo.h"
+#include "ui/uui_fileinfo.h"
 #include "kpath.h"
 #include <string.h>
 #include <stdio.h>
@@ -20,34 +23,65 @@ static int g_dx, g_dy, g_dw, g_dh;   // the pane's rect, from layout_all()
 
 #define PAD 12
 
+// One item -- the selection, or the folder itself -- is the shared facts
+// widget in its compact form (ui/uui_fileinfo.h, Properties' hero and
+// General rows). Several marked keep their count and total, which no
+// single-file view can say.
+static struct ufileinfo g_fi;
+static struct uui_fileinfo g_info;
+static char g_fi_key[UUI_FILEVIEW_PATH_MAX + 32];   // path + mtime it was read for
+
 int details_width(int cw) {
     int w = ugfx_char_advance('n') * 28;
     return w > cw / 3 ? cw / 3 : w;
 }
 
-static int preview_h(void) { return (g_dw - 2 * PAD) * 3 / 5; }
 static int line_h(void)    { return ugfx_char_h() + 4; }
 
-// How many fact rows details_draw() writes for what is selected now --
-// its branches, counted, so the buttons sit right under the last one.
-static int fact_rows(void) {
+// The path the pane describes, or 0 with several marked.
+static int described(char *path, int cap, const struct sys_dirent **ent) {
     struct uui_fileview *fv = active();
     const struct sys_dirent *e = uui_fileview_selected_entry(fv);
     const char *dir = uui_fileview_dir(fv);
-    if (uui_fileview_mark_count(fv) > 1) return 2;          // Size, Location
-    if (e) return e->is_dir ? 2 : 3;                        // (Size,) Modified, Location
-    return (dir[0] == '/' && !dir[1]) ? 1 : 2;              // Items (, Location)
+    *ent = e;
+    if (uui_fileview_mark_count(fv) > 1) return 0;
+    if (e) return k_path_join(dir, e->name, path, (size_t)cap);
+    strlcpy(path, dir, (size_t)cap);
+    return 1;
 }
 
-// Where the buttons go: under the preview, two name lines, the type and
-// the facts.
+// Re-read the facts only when the item (or its mtime) changed: the
+// picture's headers are a file read, and this runs on every paint.
+static void refresh(void) {
+    static int inited;
+    if (!inited) { uui_fileinfo_init(&g_info); g_info.compact = 1; inited = 1; }
+    char path[UUI_FILEVIEW_PATH_MAX];
+    const struct sys_dirent *e;
+    if (!described(path, sizeof path, &e)) { g_fi_key[0] = 0; return; }
+    char key[sizeof g_fi_key];
+    snprintf(key, sizeof key, "%s|%u", path, e ? (unsigned)e->modified.second + 60u * e->modified.minute : 0u);
+    if (strcmp(key, g_fi_key)) {
+        strlcpy(g_fi_key, key, sizeof g_fi_key);
+        ufileinfo_load(&g_fi, path, UFI_HEADERS);
+        if (!e) g_fi.files = uui_fileview_count(active());   // the folder itself: its items
+        uui_fileinfo_set(&g_info, &g_fi);
+    }
+    g_info.preview = 0;
+    if (e && !e->is_dir && g_opt.thumbs)
+        g_info.preview = pane_thumb(0, uui_fileview_dir(active()), e,
+                                    uui_fileinfo_preview_px(&g_info, g_dw));
+}
+
+// Where the buttons go: under whatever the pane drew.
 static int buttons_y(void) {
-    return g_dy + PAD + preview_h() + 10 + 2 * line_h() + line_h() + 8 +
-           fact_rows() * line_h() + 10;
+    if (g_fi_key[0]) return g_dy + uui_fileinfo_height(&g_info, g_dw) + 4;
+    return g_dy + PAD + (g_dw - 2 * PAD) * 3 / 5 + 10 + 3 * line_h() + 8 + 2 * line_h() + 10;
 }
 
 void details_layout(int x, int y, int w, int h) {
     g_dx = x; g_dy = y; g_dw = w; g_dh = h;
+    refresh();
+    uui_fileinfo_set_geometry(&g_info, x + 1, y, w - 1, uui_fileinfo_height(&g_info, w - 1));
     int bw, bh, bw2;
     uui_button_natural_size(&g_dp_open, &bw, &bh);
     uui_button_natural_size(&g_dp_props, &bw2, &bh);
@@ -59,104 +93,43 @@ void details_layout(int x, int y, int w, int h) {
     g_dp_props.disabled = g_dp_open.disabled;
 }
 
-// A label and its value, one row. A value too long keeps its END --
-// "...share/wallpapers" -- because the end of a path is the part that
-// says where.
-static int fact(struct ugfx_surface *s, int y, const char *k, const char *v, uint32_t bg) {
-    int kw = ugfx_char_advance('n') * 9, vw = g_dw - 2 * PAD - kw;
-    uint32_t dim = uui_state_bg(UTHEME_TEXT, UUI_STATE_DISABLED);
-    ugfx_draw_string_clipped(s, g_dx + PAD, y, kw, k, dim, bg);
-    char buf[80];
-    if (ugfx_text_width(v) > vw) {
-        const char *t = v;
-        while (*t && ugfx_text_width(t) + ugfx_text_width("...") > vw) t++;
-        snprintf(buf, sizeof buf, "...%s", t);
-        v = buf;
+// Several marked: their count, total size and folder.
+static void draw_marked(struct ugfx_surface *s, uint32_t bg) {
+    struct uui_fileview *fv = active();
+    int marks = uui_fileview_mark_count(fv);
+    int bx = g_dx + PAD, by = g_dy + PAD, bw = g_dw - 2 * PAD, bh = (g_dw - 2 * PAD) * 3 / 5;
+    const struct uimg *ico = icon_get("file", bh * 2 / 3);
+    if (ico) ugfx_blit_alpha(s, bx + (bw - ico->w) / 2, by + (bh - ico->h) / 2, ico->w, ico->h, ico->px, ico->w);
+    char title[48], h[24], path[UUI_FILEVIEW_PATH_MAX];
+    snprintf(title, sizeof title, "%d items selected", marks);
+    int y = by + bh + 10;
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
+    ugfx_draw_string_clipped(s, bx, y, bw, title, UTHEME_TEXT, bg);
+    ugfx_set_font(was);
+    y += 3 * line_h() + 8;
+    unsigned long long bytes = 0;
+    for (int i = 0; i < marks; i++) {
+        struct sys_stat st;
+        if (uui_fileview_marked_path(fv, i, path, sizeof path) &&
+            !uui_fileview_marked_is_dir(fv, i) && sys_stat(path, &st) == 0)
+            bytes += st.size;
     }
-    ugfx_draw_string_clipped(s, g_dx + PAD + kw, y, vw, v, UTHEME_TEXT, bg);
-    return y + line_h();
+    human_size(h, sizeof h, bytes);
+    uint32_t dim = uui_state_bg(UTHEME_TEXT, UUI_STATE_DISABLED);
+    int kw = ugfx_char_advance('n') * 9;
+    ugfx_draw_string_clipped(s, bx, y, kw, "Size", dim, bg);
+    ugfx_draw_string_clipped(s, bx + kw, y, bw - kw, h, UTHEME_TEXT, bg);
+    y += line_h();
+    ugfx_draw_string_clipped(s, bx, y, kw, "Location", dim, bg);
+    ugfx_draw_string_elided(s, bx + kw, y, bw - kw, uui_fileview_dir(fv), UTHEME_TEXT, bg);
 }
 
 void details_draw(struct ugfx_surface *s) {
-    uint32_t bg = ugfx_blend(UTHEME_PANEL_BG, UTHEME_WHITE, 128);
+    uint32_t bg = ugfx_blend(UTHEME_PANEL_BG, UTHEME_WHITE, 128);   // a side pane, a step lighter
     ugfx_fill_rect(s, g_dx, g_dy, g_dw, g_dh, bg);
     ugfx_fill_rect(s, g_dx, g_dy, 1, g_dh, UTHEME_BORDER);
     ugfx_set_clip_rect(s, g_dx, g_dy, g_dw, g_dh);
-
-    struct uui_fileview *fv = active();
-    const struct sys_dirent *e = uui_fileview_selected_entry(fv);
-    int marks = uui_fileview_mark_count(fv);
-    const char *dir = uui_fileview_dir(fv);
-
-    // --- the preview: the picture itself, else the type's icon ---------
-    int bx = g_dx + PAD, by = g_dy + PAD, bw = g_dw - 2 * PAD, bh = preview_h();
-    const struct uimg *pic = 0;
-    if (e && !e->is_dir && marks <= 1 && g_opt.thumbs) pic = pane_thumb(0, dir, e, bh);
-    if (pic) {
-        int x = bx + (bw - pic->w) / 2, y = by + (bh - pic->h) / 2;
-        if (pic->has_alpha) ugfx_blit_alpha(s, x, y, pic->w, pic->h, pic->px, pic->w);
-        else                ugfx_blit(s, x, y, pic->w, pic->h, pic->px, pic->w);
-        ugfx_draw_rect(s, x - 1, y - 1, pic->w + 2, pic->h + 2, UTHEME_BORDER);
-    } else {
-        int ipx = bh * 2 / 3;
-        const char *name = e ? ufiletype_icon(e->name, e->is_dir) : "folder";
-        const struct uimg *ico = icon_get(marks > 1 ? "file" : name, ipx);
-        if (ico) ugfx_blit_alpha(s, bx + (bw - ico->w) / 2, by + (bh - ico->h) / 2,
-                                 ico->w, ico->h, ico->px, ico->w);
-    }
-
-    // --- the name, bold, over two lines at most ------------------------
-    char title[UUI_FILEVIEW_PATH_MAX + 24], type[40];
-    if (marks > 1) {
-        snprintf(title, sizeof title, "%d items selected", marks);
-        strlcpy(type, "", sizeof type);
-    } else if (e) {
-        strlcpy(title, e->name, sizeof title);
-        strlcpy(type, ufiletype_name(e->name, e->is_dir), sizeof type);
-    } else {
-        strlcpy(title, (dir[0] == '/' && !dir[1]) ? "System" : k_path_basename(dir), sizeof title);
-        strlcpy(type, "Folder", sizeof type);
-    }
-    int y = by + bh + 10;
-    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
-    const char *rest = title;
-    char line[UUI_FILEVIEW_PATH_MAX + 24];
-    for (int n = 0; n < 2 && *rest; n++) {
-        rest = uui_label_wrap_next(rest, bw, line, sizeof line);
-        ugfx_draw_string_clipped(s, bx, y + n * line_h(), bw, line, UTHEME_TEXT, bg);
-    }
-    ugfx_set_font(was);
-    y += 2 * line_h();
-    ugfx_draw_string_clipped(s, bx, y, bw, type, uui_state_bg(UTHEME_TEXT, UUI_STATE_DISABLED), bg);
-    y += line_h() + 8;
-
-    // --- the facts ------------------------------------------------------
-    char v[64], h[24];
-    if (marks > 1) {
-        unsigned long long bytes = 0;
-        char path[UUI_FILEVIEW_PATH_MAX];
-        for (int i = 0; i < marks; i++) {
-            struct sys_stat st;
-            if (uui_fileview_marked_path(fv, i, path, sizeof path) &&
-                !uui_fileview_marked_is_dir(fv, i) && sys_stat(path, &st) == 0)
-                bytes += st.size;
-        }
-        human_size(h, sizeof h, bytes);
-        y = fact(s, y, "Size", h, bg);
-        y = fact(s, y, "Location", dir, bg);
-    } else if (e) {
-        if (!e->is_dir) {
-            human_size(h, sizeof h, e->size);
-            y = fact(s, y, "Size", h, bg);
-        }
-        udate_format(v, sizeof v, &e->modified, UDATE_DATE | UDATE_TIME);
-        y = fact(s, y, "Modified", v, bg);
-        y = fact(s, y, "Location", dir, bg);
-    } else {
-        snprintf(v, sizeof v, "%d", uui_fileview_count(fv));
-        y = fact(s, y, "Items", v, bg);
-        k_path_dirname(dir, v, sizeof v);
-        if (!(dir[0] == '/' && !dir[1])) y = fact(s, y, "Location", v, bg);
-    }
+    if (g_fi_key[0]) uui_fileinfo_draw(s, &g_info);
+    else draw_marked(s, bg);
     ugfx_clear_clip_rect(s);
 }
