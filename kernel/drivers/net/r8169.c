@@ -171,16 +171,25 @@ static void drain_rx(struct net_device *dev) {
     }
 }
 
+static uint16_t g_imr;   // the mask the handler puts back
+
+// THE MASK IS DROPPED WHILE THE HANDLER RUNS, re(4)'s re_intr_msi(): an
+// MSI is raised on a status bit going 0 -> 1, so an event landing while
+// an earlier one is still set raises nothing, and the device can sit
+// with work pending and no interrupt coming. Re-enabling the mask after
+// the drain makes a still-set bit raise a fresh one.
 static void r8169_irq(uint64_t *regs) {
     (void)regs;
     if (!g_present) return;
     uint16_t status = reg_read16(REG_ISR);
-    if (!status) return;               // a shared INTx line: not ours
+    if (!status || status == 0xFFFF) return;   // a shared INTx line, or a gone device
+    reg_write16(REG_IMR, 0);
     reg_write16(REG_ISR, status);      // write-one-to-clear
 
     if (status & (ISR_ROK | ISR_RER | ISR_RDU | ISR_FOVW)) drain_rx(&g_dev);
     if (status & ISR_LINKCHG) update_link(&g_dev);
     if (status & ISR_SYSERR) klog_write(KLOG_ERR "r8169: the chip reports a system error\n");
+    reg_write16(REG_IMR, g_imr);
 }
 
 static int r8169_transmit(struct net_device *dev, const void *frame, uint32_t len) {
@@ -323,14 +332,30 @@ static void r8169_probe(const struct pci_device *pci) {
 
     reg_write32(REG_TCR, TCR_IFG_STD | TCR_DMA_UNLIM);
 
-    // THE RECEIVER IS CONFIGURED AFTER IT IS ENABLED, which is re(4)'s
-    // order and not an accident: some revisions latch RCR only while
-    // the receive engine is running.
-    reg_write8(REG_CR, CR_RX_ENB | CR_TX_ENB);
-    reg_write32(REG_RCR, RCR_FIFO_NONE | RCR_DMA_UNLIM |
-                         RCR_BROAD | RCR_MULTI | RCR_INDIV);
-    reg_write32(REG_MAR0, 0xFFFFFFFFu);
-    reg_write32(REG_MAR0 + 4, 0xFFFFFFFFu);
+    // THE ORDER DEPENDS ON THE GENERATION, as in re(4)'s re_init_locked().
+    // Older revisions latch RCR only while the receive engine runs, so
+    // they are enabled first and configured after. The 8168G family is
+    // configured FIRST and enabled after, with its RXDV gate opened and
+    // EARLYOFF_V2 set. Done the old way, an RTL8168G received exactly one
+    // lap of the ring (32 frames) and then nothing, every bring-up, while
+    // the 8168GU worked. Its gate read open (MISC 0x3f), so the order,
+    // EARLYOFF_V2 or the handler's IMR re-arm cured it -- not isolated.
+    uint32_t fam = xid & TCR_FAMILY;
+    int g_family = fam == HWREV_8168G || fam == HWREV_8168GU ||
+                   fam == HWREV_8168H || fam == HWREV_8411B;
+    uint32_t rcr = RCR_FIFO_NONE | RCR_DMA_UNLIM | RCR_BROAD | RCR_MULTI | RCR_INDIV;
+    if (g_family) {
+        reg_write32(REG_MISC, reg_read32(REG_MISC) & ~MISC_RXDV_GATED);
+        reg_write32(REG_RCR, rcr | RCR_EARLYOFF_V2);
+        reg_write32(REG_MAR0, 0xFFFFFFFFu);
+        reg_write32(REG_MAR0 + 4, 0xFFFFFFFFu);
+        reg_write8(REG_CR, CR_RX_ENB | CR_TX_ENB);
+    } else {
+        reg_write8(REG_CR, CR_RX_ENB | CR_TX_ENB);
+        reg_write32(REG_RCR, rcr);
+        reg_write32(REG_MAR0, 0xFFFFFFFFu);
+        reg_write32(REG_MAR0 + 4, 0xFFFFFFFFu);
+    }
 
     net_location_pci(&g_dev, pci->bus, pci->device, pci->function);
     g_dev.driver = "r8169";
@@ -347,6 +372,7 @@ static void r8169_probe(const struct pci_device *pci) {
     // would be an interrupt whose handler has nothing to do.
     uint16_t mask = ISR_ROK | ISR_RER | ISR_RDU |
                     ISR_LINKCHG | ISR_FOVW | ISR_SYSERR;
+    g_imr = mask;
 
     uint8_t line = pci_irq_line(pci);
     uint8_t vector = pci_msi_request(pci, r8169_irq);

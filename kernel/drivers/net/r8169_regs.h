@@ -26,6 +26,7 @@
 #define REG_CPCR      0xE0   // the C+ command register
 #define REG_RDSAR     0xE4   // receive ring base, 64-bit
 #define REG_MTPS      0xEC
+#define REG_MISC      0xF0   // 8168G family: MISC_RXDV_GATED lives here
 
 #define CR_RESET      0x10
 #define CR_RX_ENB     0x08
@@ -51,10 +52,17 @@
 #define RCR_BROAD     0x00000008
 #define RCR_DMA_UNLIM 0x00000700  // burst 7 == unlimited
 #define RCR_FIFO_NONE 0x0000E000  // threshold 7 == whole frame
+#define RCR_EARLYOFF_V2 0x00000800  // 8168G family: re(4) sets it on every one
 
 #define TCR_DMA_UNLIM 0x00000700
 #define TCR_IFG_STD   0x03000000  // the IEEE 802.3 interframe gap
 #define TCR_HWREV     0x7CF00000  // the chip version, XID
+#define TCR_FAMILY    0x7CC00000  // re(4)'s RL_TXCFG_HWREV: the revision without the minor bits
+#define HWREV_8168G   0x4C000000
+#define HWREV_8168GU  0x50800000
+#define HWREV_8168H   0x54000000
+#define HWREV_8411B   0x5C800000
+#define MISC_RXDV_GATED 0x00080000  // set: the receive path is blocked
 
 #define CPCR_PCI_MRW  0x0008      // memory read/write multiple
 #define CPCR_RXCSUM   0x0020
