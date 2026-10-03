@@ -211,7 +211,8 @@ static void job_done(void) {
 // read (abi/signal_abi.h).
 static void report_signal(struct tosh *sh, int code) {
     int sig = code - SIGNAL_EXIT_BASE;
-    if (sig <= 0 || sig > SIGNAL_MAX) return;
+    // SIGPIPE is the reader going away, not a failure -- bash is silent too.
+    if (sig <= 0 || sig > SIGNAL_MAX || sig == SIGPIPE) return;
     emit(sh, sig == SIGINT ? "^C\n" : "\n");
     if (sig != SIGINT) {
         emit(sh, "killed by SIG");

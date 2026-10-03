@@ -351,9 +351,8 @@ KTEST("tty", "a pty read tells WOULD BLOCK from END OF FILE") {
 }
 
 KTEST("tty", "a slave write with no master is discarded and reported") {
-    // pipe_write()'s answer, for the same reason: there is no SIGPIPE
-    // here, so the write is dropped and says so rather than raising
-    // something this kernel cannot deliver.
+    // A pty raises no SIGPIPE (a dead PIPE does, kernel/proc/pipe.c):
+    // the write is dropped and says so.
     int idx = pty_create();
     if (idx < 0) KTEST_SKIP("no free pty");
     pty_close_master(idx);

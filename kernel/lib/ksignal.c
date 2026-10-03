@@ -19,16 +19,23 @@ static const struct {
     { SIGHUP,  "HUP"  },
     { SIGINT,  "INT"  },
     { SIGQUIT, "QUIT" },
+    { SIGILL,  "ILL"  },
+    { SIGABRT, "ABRT" },
+    { SIGFPE,  "FPE"  },
     { SIGKILL, "KILL" },
     { SIGSEGV, "SEGV" },
+    { SIGPIPE, "PIPE" },
     { SIGTERM, "TERM" },
     { SIGCHLD, "CHLD" },
     { SIGCONT, "CONT" },
     { SIGSTOP, "STOP" },
     { SIGTSTP, "TSTP" },
     { SIGTTIN, "TTIN" },
+    { SIGTTOU, "TTOU" },
     { SIGWINCH,"WINCH"},
 };
+// tools/check_signals.py fails the gate on a signal the header defines
+// and this table does not name.
 #define SIGNAL_COUNT (int)(sizeof SIGNALS / sizeof SIGNALS[0])
 
 const char *signal_name(int sig) {

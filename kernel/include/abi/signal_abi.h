@@ -46,13 +46,11 @@
                     // misnomer everywhere -- there is no FPU trap here
 #define SIGKILL  9  // uncatchable, unignorable -- what a force-quit sends
 #define SIGSEGV 11  // a memory fault (#PF or #GP), given a name
-#define SIGPIPE 13  // wrote to a pipe nobody is reading. **THE NUMBER
-                    // EXISTS; THE DELIVERY DOES NOT YET** -- pipe_write()
-                    // still reports zero bytes rather than raising this,
-                    // so a producer cannot tell a dead pipe from a short
-                    // write (docs/roadmap.md). Defined because a shell
-                    // must be able to NAME it: dash ignores it around
-                    // its own pipelines, and `trap` prints it.
+#define SIGPIPE 13  // wrote to a pipe nobody is reading. Raised by
+                    // sys_write() on a dead pipe, which also fails EPIPE
+                    // for a caller that ignores it (kernel/proc/pipe.c).
+                    // A shell says nothing when a job dies of it, as
+                    // bash does: the reader left, nothing went wrong.
 #define SIGTERM 15  // ask politely; `kill` with no signal named
 #define SIGCHLD 17  // a child exited. Default action: IGNORE
 #define SIGCONT 18  // resume a stopped process. Default action: CONTINUE

@@ -6171,6 +6171,15 @@ window without going through it will find its layout polls timing out.
   whatever stale data it is still carrying. See
   `docs/decisions.md`'s versioning entry for the full v0.0.9 writeup.
 
+- **`check_signals.py`** -- EVERY SIGNAL `abi/signal_abi.h` DEFINES HAS
+  A NAME in `kernel/lib/ksignal.c`'s `SIGNALS` table, which is what
+  `signal_name()` reads in both rings (`kill -NAME`, the shell's "killed
+  by SIGx", `strace`). The table is a hand-kept copy of the header and
+  fell five behind it -- ILL, ABRT, FPE, PIPE, TTOU -- so a pipeline
+  whose reader went away printed `killed by SIG?`. Reads the header with
+  `gen_signames.py`'s parser, so dash's table and this one agree on what
+  counts as a signal. Run by `preflight.sh`.
+
 - **`check_syscalls.py`** -- NO TWO ROWS OF `syscall_table.c` RESOLVE TO
   THE SAME NUMBER. The table is built with designated initializers, so a
   row's index IS its syscall number -- a good property with one hole: C

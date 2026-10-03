@@ -178,6 +178,9 @@ python3 tools/check_dispatch.py || fail "dispatch-chain check"
 step "check_syscalls.py (no two syscalls on one number)"
 python3 tools/check_syscalls.py || fail "syscall number check"
 
+step "check_signals.py (a signal the name table does not name)"
+python3 tools/check_signals.py || fail "signal name check"
+
 step "check_widget_ops.py (widget ops tables with a slot left NULL)"
 python3 tools/check_widget_ops.py || fail "widget ops check"
 
