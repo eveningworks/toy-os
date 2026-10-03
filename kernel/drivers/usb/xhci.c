@@ -613,6 +613,35 @@ static void intel_port_mux(const struct pci_device *d) {
                 ss_before, pci_config_read32(d, INTEL_USB3_PSSEN), ss_mask);
 }
 
+// Intel's PORT DISABLE OVERRIDES (Sunrise Point and later): firmware
+// may switch a socket's USB2 or SuperSpeed half off here, which looks
+// exactly like a port nothing is plugged into. Read only -- logged
+// because no other evidence of it exists on a machine with no serial.
+#define INTEL_USB2PDO    0xE4
+#define INTEL_USB3PDO    0xE8
+
+static void intel_pdo_log(const struct pci_device *d) {
+    if (d->vendor_id != 0x8086) return;
+    klog_printf("usb: intel port disable overrides: usb2 0x%x usb3 0x%x\n",
+                pci_config_read32(d, INTEL_USB2PDO), pci_config_read32(d, INTEL_USB3PDO));
+}
+
+// Every USB3 port's PORTSC and link-error count, once, after the scan:
+// a SuperSpeed half that never trains reads RxDetect with nothing else
+// to say so.
+static void log_usb3_ports(void) {
+    char line[256];
+    int n = k_snprintf(line, sizeof line, "usb: usb3 ports:");
+    for (uint32_t i = 0; i < g_hc.usb3.count && n > 0 && n < (int)sizeof line - 24; i++) {
+        uint32_t p = g_hc.usb3.first - 1 + i;
+        if (p >= g_hc.max_ports || p >= XHCI_MAX_PORTS) break;
+        n += k_snprintf(line + n, sizeof line - n, " %u=0x%x/%u", p + 1,
+                        mr32(g_hc.op, XHCI_PORTSC(p)),
+                        mr32(g_hc.op, XHCI_PORTSC(p) + 8) & 0xFFFFu);
+    }
+    klog_printf("%s\n", line);
+}
+
 static int legacy_handoff(void) {
     if (!g_hc.legsup_off) return 1;   // no such capability; nothing owns it
 
@@ -3168,6 +3197,7 @@ static void usb_probe(const struct pci_device *d) {
     // hand over first, and a port that arrives during the reset is one
     // the port scan below will find anyway.
     intel_port_mux(d);
+    intel_pdo_log(d);
 
     if (!reset_controller()) {
         // THE MOST IMPORTANT BOOT TO INSTRUMENT IS THE ONE WHERE THIS
@@ -3302,6 +3332,7 @@ static void usb_probe(const struct pci_device *d) {
     usb_query_init();
     power_ports();
     scan_ports();
+    log_usb3_ports();
 }
 
 // --- introspection ----------------------------------------------------
