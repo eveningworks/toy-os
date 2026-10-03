@@ -61,6 +61,10 @@
 // second file shape in the same directory, because the text belongs to
 // the group rather than to any setting in it -- putting it on each
 // setting would mean four copies of one string.
+//
+// A `category.<category>` or `group.<category>.<group>` file may also
+// carry `Debug=1`: a page of kernel knobs or diagnostics, which a UI
+// lists only when asked to.
 #define SETTING_TEXT_KEY_DESC   "Description"
 #define SETTING_TEXT_KEY_WIDGET "Widget"
 #define SETTING_TEXT_KEY_APPLIES  "Applies"
@@ -68,6 +72,7 @@
 #define SETTING_TEXT_KEY_ORDER    "Order"
 #define SETTING_TEXT_KEY_PREVIEW  "Preview"
 #define SETTING_TEXT_KEY_LABEL    "Label"
+#define SETTING_TEXT_KEY_DEBUG    "Debug"
 #define SETTING_TEXT_CHOICE_PREFIX "Choice."
 #define SETTING_TEXT_GROUP_PREFIX  "group."
 

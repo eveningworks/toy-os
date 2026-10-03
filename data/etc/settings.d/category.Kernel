@@ -1,3 +1,6 @@
 # Where this category's pages sit in the System Settings sidebar.
 # Lower first; see data/etc/settings.d/README.md.
 Order=110
+# Debug=1: listed only when "Kernel and debugging settings" is ticked on
+# System Information; see data/etc/settings.d/README.md.
+Debug=1

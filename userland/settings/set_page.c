@@ -518,6 +518,10 @@ void relayout_page(void) {
         PAGE[n++] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &si_row };
         FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &g_si_devmgr, &uui_button_ops };
         FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &g_si_copy, &uui_button_ops };
+        g_si_debug_cb.checked = g_show_debug;
+        PAGE[n++] = (struct uui_item){ .ops = &uui_setting_row_ops, .widget = &g_si_debug,
+                                       .flags = UUI_FILL_W };
+        FOCUS[FOCUS_COUNT++] = (struct uui_focusable){ &g_si_debug_cb, &uui_checkbox_ops };
     }
     // An effect's options live in its Settings... dialog, not on the page.
     int page_slots = (g_saver_slot >= 0 && owner_uses_dialog(g_page_owner_kind))
@@ -603,6 +607,7 @@ int refit_prose(void) {
                      ? g_saver_slot : g_slot_count;
     for (int i = 0; i < page_slots; i++)
         if (g_slot[i].setting >= 0 && uui_setting_row_fit(&g_slot[i].row)) changed = 1;
+    if (g_show_sysinfo && uui_setting_row_fit(&g_si_debug)) changed = 1;
     if (changed) relayout_page();
     return changed;
 }

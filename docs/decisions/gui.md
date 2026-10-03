@@ -9798,3 +9798,30 @@ lines, not on screen pixels, which only it can scale for. So it is a
 drawing -- shared from the start, because DOOM is the next caller.
 Flicker and noise animate the window and are off in every preset.
 
+
+## System Settings hides the kernel and debugging pages until System Information says otherwise
+
+Asked for 2026-10-03, from mockups of three placements. The Kernel
+category (heap red-zones, the scheduler's time slice, "panic the kernel
+now", USB port resets) and System › Diagnostics (the GUI tests' layout
+log) are knobs for someone debugging the machine, and they sat in the
+sidebar beside the wallpaper.
+
+**What real systems do.** Android hides Developer options entirely until
+Build number is tapped seven times, then lists the page with a master
+switch on it. Windows 11 always lists System › For developers and gates
+behaviour behind a Developer Mode toggle there. GNOME leaves such keys to
+a separate tool (dconf Editor); macOS to `defaults` on the command line.
+
+**What toy-os does.** Android's shape, one step easier: a **Kernel and
+debugging settings** checkbox on System Information, unticked by default.
+Which pages it hides is DATA -- `Debug=1` in a `category.` or `group.`
+file in `/etc/settings.d`, read by `usetting_page_debug()` -- because the
+app keeps no list of pages and a hard-coded "Kernel" would be the first.
+Hidden means hidden from SEARCH too, or typing "heap" would find what the
+box was meant to keep out of the way; opening a page BY NAME
+(`settings kernel.heap_debug`) still works and lists that page while it
+is open, so scripts and links do not depend on the tick. The tick is the
+app's furniture (`/etc/settings.conf`, beside the sidebar width), not a
+registry setting -- a setting would itself need a page, and `config`
+already reaches every hidden one.

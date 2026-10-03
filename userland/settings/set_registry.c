@@ -138,6 +138,16 @@ int group_matches(int g) {
     return 0;
 }
 
+// DEBUGGING PAGES ARE LISTED ONLY WHEN ASKED FOR (`Debug=1`,
+// lib/usetting.h) -- and the open page stays listed, or a page opened by
+// name would leave the sidebar highlighting nothing.
+int g_show_debug;
+static int g_group_debug[MAX_GROUPS];
+
+int group_shown(int g) {
+    return g_show_debug || !g_group_debug[g] || (g == g_page_group && !g_show_sysinfo);
+}
+
 void rebuild_sidebar(void) {
     // Read BEFORE g_nodes is rewritten: the sidebar holds a row index into
     // this same array, so afterwards it would name whatever row took its place.
@@ -233,6 +243,10 @@ void rebuild_sidebar(void) {
         }
     }
 
+    // After the sort, so the flag stays with its page.
+    for (int g = 0; g < g_group_count; g++)
+        g_group_debug[g] = usetting_page_debug(g_group_cat[g], g_group_key[g]);
+
     // THE ROW LABEL IS THE PAGE'S OWN. Every page sits under a heading
     // naming its category, so position disambiguates -- "Display" under
     // Kernel is not "Display" under Display -- and a category's only page
@@ -251,7 +265,8 @@ void rebuild_sidebar(void) {
     for (int c = 0; c < g_cat_count; c++) {
         int heading = 0;
         for (int g = 0; g < g_group_count; g++) {
-            if (strcmp(g_group_cat[g], g_cat[c]) != 0 || !group_matches(g)) continue;
+            if (strcmp(g_group_cat[g], g_cat[c]) != 0 || !group_shown(g) ||
+                !group_matches(g)) continue;
             if (g_node_count + 2 > rows_max) break;
             if (!heading) {
                 heading = 1;

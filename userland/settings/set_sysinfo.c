@@ -22,6 +22,11 @@ static int g_loaded_once;
 
 struct uui_custom g_si_view;
 struct uui_button g_si_copy, g_si_devmgr;
+// "Kernel and debugging settings": shows the `Debug=1` pages in the
+// sidebar (set_registry.c). A view preference, so it acts at once rather
+// than staging for Apply.
+struct uui_checkbox g_si_debug_cb;
+struct uui_setting_row g_si_debug;
 
 static void add(struct si_row *rows, int *n, const char *key, const char *val) {
     if (*n >= SI_ROWS || !val[0]) return;          // a fact nobody reported is not a row
@@ -210,6 +215,11 @@ void sysinfo_init(void) {
     g_si_view = (struct uui_custom){ .draw = draw_view };
     uui_button_init(&g_si_devmgr, 0, 0, 0, 0, "Open Device Manager", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_SI_DEVMGR);
     uui_button_init(&g_si_copy, 0, 0, 0, 0, "Copy to clipboard", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_SI_COPY);
+    uui_checkbox_init(&g_si_debug_cb, 0, 0, 0, 0, UTHEME_WHITE, UTHEME_TEXT);
+    uui_setting_row_init(&g_si_debug, "Kernel and debugging settings",
+                         "List the kernel and diagnostics pages in the sidebar",
+                         (struct uui_item){ .ops = &uui_checkbox_ops, .widget = &g_si_debug_cb,
+                                            .id = ID_SI_DEBUG, .name = "si_debug" });
 }
 
 // "Key: value" lines, as KDE's Copy to Clipboard gives them.

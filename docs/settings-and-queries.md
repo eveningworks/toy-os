@@ -381,6 +381,12 @@ kernel files.
 A setting with no `group` gets a page of its own, named by its label,
 which is what every setting did before groups existed.
 
+**Debugging pages start hidden.** `Debug=1` in `category.<category>` or
+`group.<category>.<group>` keeps those pages out of System Settings'
+sidebar and search until **Kernel and debugging settings** is ticked on
+System Information -- the whole Kernel category and System › Diagnostics
+carry it. `data/etc/settings.d/README.md` has the details.
+
 **Grouping never touches the config file.** Both are registry metadata;
 each setting still writes its own `name=value` line to its own file, so
 moving a setting between groups migrates no data.

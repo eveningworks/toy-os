@@ -60,6 +60,7 @@ from harness import Results  # noqa: E402
 DEFAULT_SOCK = ".vm.serial"
 SETTINGS = "/bin/wm/system/settings"
 CONF = "/etc/toyos.conf"
+SETTINGS_CONF = "/etc/settings.conf"
 
 
 
@@ -109,14 +110,14 @@ def last(pattern):
     return hits[-1] if hits else None
 
 
-def stored_value(dbg, key):
-    """What /etc/toyos.conf actually holds for `key`, or None.
+def stored_value(dbg, key, conf=CONF):
+    """What /etc/toyos.conf (or `conf`) actually holds for `key`, or None.
 
     Straight off the disk through the serial console's own `sh`, which
     shares nothing with the path the GUI used to write it -- different
     process, different code, no registry involved on the way out.
     """
-    out = dbg.send(f"sh cat {CONF}")
+    out = dbg.send(f"sh cat {conf}")
     for line in out.splitlines():
         line = line.strip()
         if line.startswith(key + "="):
@@ -313,6 +314,29 @@ def advanced_toggle(dbg, mark):
              "h": int(m.group(4)), "shown": int(m.group(5))}
 
 
+def parse_rows(lines):
+    """The sidebar rows the app reported, in order, from `lines`."""
+    rows = []
+    for line in lines:
+        m = re.search(r"settings: row (\d+) id (\d+) y (-?\d+) depth (\d+) (.+)", line)
+        if m:
+            rows.append({"row": int(m.group(1)), "id": int(m.group(2)),
+                          "y": int(m.group(3)), "depth": int(m.group(4)),
+                          "label": m.group(5).strip()})
+    return rows
+
+
+def rows_under(rows, heading):
+    """The page labels listed under `heading`."""
+    out, inside = [], False
+    for r in rows:
+        if r["depth"] == 0:
+            inside = r["label"] == heading
+        elif inside:
+            out.append(r["label"])
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     port_guard.add_instance_args(ap)   # --instance N, or the legacy --sock/--qmp-port
@@ -343,6 +367,11 @@ def main():
         if stored_value(dbg, "timezone") == "losangeles":
             break
         time.sleep(0.3)
+
+    # THE DEBUGGING PAGES START HIDDEN, which is the app's own furniture
+    # in SETTINGS_CONF -- a hand run after a ticked one would inherit it.
+    dbg.send(f"sh rm {SETTINGS_CONF}")
+    dbg.settle()
 
     # NOT DebugConsole.spawn(): it polls with logs(), which CLEARS what
     # it returns, and would eat the app's own startup lines.
@@ -387,13 +416,7 @@ def main():
     check("it listed the registered settings", (n or 0) >= 9, f"{n} settings")
 
     # --- the sidebar is a FLAT list of pages, from the registry -------
-    rows = []
-    for line in _log:
-        m = re.search(r"settings: row (\d+) id (\d+) y (-?\d+) depth (\d+) (.+)", line)
-        if m:
-            rows.append({"row": int(m.group(1)), "id": int(m.group(2)),
-                          "y": int(m.group(3)), "depth": int(m.group(4)),
-                          "label": m.group(5).strip()})
+    rows = parse_rows(_log)
     # **A HEADING PER CATEGORY, ITS PAGES UNDER IT.** Every heading
     # (depth 0) is an inert caption and every page (depth 1) a
     # destination, so the two can never be mistaken for each other --
@@ -592,20 +615,16 @@ def main():
     check("every heading has a page under it", not orphans, f"bare headings: {orphans}")
 
     def under(heading):
-        """The page labels listed under `heading`."""
-        out, inside = [], False
-        for r in rows:
-            if r["depth"] == 0:
-                inside = r["label"] == heading
-            elif inside:
-                out.append(r["label"])
-        return out
+        return rows_under(rows, heading)
 
-    # The kernel tunables are registered with no /etc file at all, so
-    # this asserts that "no file" did not quietly mean "no row".
-    check("the kernel tunables have pages of their own, under Kernel",
-          "Memory" in under("Kernel") and "Diagnostics" in under("Kernel"),
-          f"Kernel: {under('Kernel')}")
+    # `Debug=1` pages (category.Kernel, group.System.Diagnostics) are
+    # left out until System Information's checkbox is ticked -- which
+    # the System Information phase below does, and undoes.
+    check("the kernel and debugging pages are hidden by default",
+          "Kernel" not in [r["label"] for r in rows if r["depth"] == 0]
+          and "Diagnostics" not in under("System") and under("System"),
+          f"headings={[r['label'] for r in rows if r['depth'] == 0]} "
+          f"System: {under('System')}")
     # A name MAY repeat across categories now -- position says which --
     # but never within one, where nothing would tell the two apart.
     heads = [r["label"] for r in rows if r["depth"] == 0]
@@ -618,7 +637,7 @@ def main():
 
     # Pages from three different categories, so the walk is exercised
     # across the list rather than at one end of it.
-    for group in ("Shell", "Diagnostics", "Wallpaper"):
+    for group in ("Shell", "Mouse", "Wallpaper"):
         check(f"the sidebar offers a {group} page",
               row_named(group) is not None,
               f"labels={[r['label'] for r in rows]}")
@@ -1370,6 +1389,68 @@ def main():
             check("the System Information page draws its text", False,
                   "it, or the settings page it is measured against, never opened -- "
                   "the pixels would be some other page's")
+
+        # --- KERNEL AND DEBUGGING SETTINGS: ticked, listed; unticked, gone
+        #
+        # The rows are the app's own report after each click, and the
+        # file is read back through `sh cat`, which shares nothing with
+        # the app's write. Unticked again before anything below runs, so
+        # the rest of this tool keeps the row list it took at the start.
+        if info_page:
+            def debug_toggle(mark):
+                drain(dbg)
+                hits = _since(mark, r"settings: debug_toggle (-?\d+) (-?\d+) (-?\d+) "
+                                    r"(-?\d+) checked (\d+)")
+                return [int(v) for v in hits[-1].groups()] if hits else None
+
+            def flip_debug():
+                """Click the checkbox; returns the rows reported after it."""
+                # BELOW THE FOLD at the default size: wheel the page until
+                # the app reports the box inside the viewport.
+                tg = debug_toggle(0)
+                for _ in range(8):
+                    if not tg or fully_inside({"y": tg[1], "h": tg[3]}, py0, ph0):
+                        break
+                    mark_w = len(drain(dbg))
+                    dbg.warp_cursor(qmp, cx + px0 + pw0 // 2, cy + py0 + ph0 // 2)
+                    for _ in range(3):
+                        dbg.send("gui wheel -1")
+                    dbg.settle()
+                    time.sleep(0.4)
+                    tg = debug_toggle(mark_w) or tg
+                if not tg or not fully_inside({"y": tg[1], "h": tg[3]}, py0, ph0):
+                    check("the debugging checkbox is on screen", False, f"toggle={tg}")
+                    return None
+                mark_t = len(drain(dbg))
+                click(tg[0] + tg[2] // 2, tg[1] + tg[3] // 2)
+                deadline = time.time() + 4
+                while time.time() < deadline and not _since(mark_t, r"settings: show_debug"):
+                    time.sleep(0.2)
+                    drain(dbg)
+                return parse_rows(_log[mark_t:])
+
+            shown = flip_debug()
+            if shown is not None:
+                heads = [r["label"] for r in shown if r["depth"] == 0]
+                check("ticking it lists the Kernel pages and System > Diagnostics",
+                      "Memory" in rows_under(shown, "Kernel")
+                      and "Diagnostics" in rows_under(shown, "Kernel")
+                      and "Diagnostics" in rows_under(shown, "System"),
+                      f"Kernel: {rows_under(shown, 'Kernel')} "
+                      f"System: {rows_under(shown, 'System')}")
+                check("...in the order /etc/settings.d gives: Kernel last before About",
+                      heads[-2:] == ["Kernel", "About"], f"headings={heads}")
+                check("...and the tick is remembered in /etc/settings.conf",
+                      stored_value(dbg, "show_debug", SETTINGS_CONF) == "1",
+                      f"show_debug={stored_value(dbg, 'show_debug', SETTINGS_CONF)!r}")
+                hidden = flip_debug()
+                if hidden is not None:
+                    check("unticking it puts the sidebar back as it opened",
+                          [r["label"] for r in hidden] == [r["label"] for r in rows],
+                          f"{len(hidden)} rows vs {len(rows)} at the start")
+                    check("...and remembers that too",
+                          stored_value(dbg, "show_debug", SETTINGS_CONF) == "0",
+                          f"show_debug={stored_value(dbg, 'show_debug', SETTINGS_CONF)!r}")
 
     # --- A STRING SETTING IS EDITABLE, not a dead empty control -------
     #

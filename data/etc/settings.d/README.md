@@ -63,6 +63,18 @@ file is `group.System.Startup target`, spaces and all.
 
 A file named `category.<category>` carries that category's `Order=`.
 
+## Debugging pages — `Debug=1`
+
+`Debug=1` in `category.<category>` marks every page of that category as
+a debugging one, and in `group.<category>.<group>` marks one page.
+System Settings leaves those pages out of its sidebar, and out of its
+search, until **Kernel and debugging settings** is ticked on System
+Information -- Android's Developer options, rather than Windows' always-
+listed For developers page. The tick is the app's own furniture, kept in
+`/etc/settings.conf` as `show_debug`; opening a hidden page by name
+(`settings kernel.heap_debug`) still works. `category.Kernel` and
+`group.System.Diagnostics` carry it.
+
 ## Where a page sits — `Order=`
 
 The sidebar is sorted by a DECLARED weight, lower first: `Order=` in

@@ -88,4 +88,9 @@ int usetting_dispatch(struct setting_msg *m);
 int usetting_category_order(const char *category);
 int usetting_group_order(const char *category, const char *group);
 
+// WHETHER A PAGE IS A DEBUGGING ONE -- `Debug=1` in its category's file
+// or its own. System Settings hides those until "Kernel and debugging
+// settings" is ticked (Android's Developer options). 0 when no file says.
+int usetting_page_debug(const char *category, const char *group);
+
 #endif // ULIB_USETTING_H

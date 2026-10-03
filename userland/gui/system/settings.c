@@ -126,6 +126,7 @@ void focus_ring_close(void) {
 static void report_rows(void);
 
 static void navigate(int node_id) {
+    int was = g_page_group;
     g_page_node = node_id;
     // New cards: the previous fit says nothing about them.
     g_prose_fitted = 0;
@@ -143,9 +144,14 @@ static void navigate(int node_id) {
         // nothing to confirm it by.
         ulogf("settings: page %s slots 0 advanced 0 captions 0 disabled 0\n",
               g_page_title_text);
-        return;
+    } else if (node_id >= NODE_GROUP_BASE) {
+        open_group(node_id - NODE_GROUP_BASE);
     }
-    if (node_id >= NODE_GROUP_BASE) open_group(node_id - NODE_GROUP_BASE);
+    // A hidden page opened by name stayed listed only while it was open.
+    if (was >= 0 && was < g_group_count && !group_shown(was)) {
+        rebuild_sidebar();
+        report_rows();
+    }
 }
 
 // LEAVING A PAGE WITH CHANGES ASKS -- Apply, Discard or stay -- which is
@@ -266,6 +272,13 @@ static void on_widget(struct uapp *a, int id, int reason) {
         }
         break;
     }
+    case ID_SI_DEBUG:
+        g_show_debug = g_si_debug_cb.checked;
+        uconf_set(SETTINGS_CONF, "show_debug", g_show_debug ? "1" : "0");
+        rebuild_sidebar();
+        ulogf("settings: show_debug %d rows %d\n", g_show_debug, g_node_count);
+        report_rows();
+        break;
     case ID_ADVANCED:
         g_show_advanced = g_advanced_cb.checked;
         if (g_page_group >= 0) open_group(g_page_group);
@@ -407,11 +420,20 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     }
 
     // Where the sidebar is scrolled to, on a CHANGE -- nothing else says.
-    static int last_top = -1;
-    if (g_tree.top != last_top) {
+    // The row count too: the debugging pages change it without a scroll.
+    static int last_top = -1, last_rows = -1;
+    if (g_tree.top != last_top || g_node_count != last_rows) {
         last_top = g_tree.top;
+        last_rows = g_node_count;
         ulogf("settings: sidebar top %d visible %d rows %d\n", g_tree.top,
               uui_sidebar_visible_rows(&g_tree), g_node_count);
+    }
+
+    static int last_debug_y = -1;
+    if (g_show_sysinfo && g_si_debug_cb.y != last_debug_y) {
+        last_debug_y = g_si_debug_cb.y;
+        ulogf("settings: debug_toggle %d %d %d %d checked %d\n", g_si_debug_cb.x,
+              g_si_debug_cb.y, g_si_debug_cb.w, g_si_debug_cb.h, g_si_debug_cb.checked);
     }
 
     // WHERE EACH CONTROL ENDED UP, whenever one MOVES -- a page change
@@ -530,12 +552,18 @@ static void on_size(int *w, int *h) {
         // The sidebar has already chosen its first ITEM (row 0 is a
         // heading, which names no page).
         int g = g_open_setting ? group_of_setting(g_open_setting) : -1;
-        if (g >= 0) uui_sidebar_select_id(&g_tree, NODE_GROUP_BASE + g);
+        if (g >= 0) {
+            // Listed while open even when it is a hidden debugging page.
+            g_page_group = g;
+            rebuild_sidebar();
+            uui_sidebar_select_id(&g_tree, NODE_GROUP_BASE + g);
+        }
         if (g_node_count > 0) navigate(uui_sidebar_selected_id(&g_tree));
     }
     // Font-derived, so HERE rather than in main(): ugfx_char_h() is 0
     // until uapp_run() has fetched the font.
     g_advanced_cb.size = ugfx_char_h();
+    g_si_debug_cb.size = ugfx_char_h();
     g_page_title.font = ugfx_font_session(UGFX_FONT_BOLD);
 
     // Wide enough for a card's text beside its control, tall enough that
@@ -625,6 +653,9 @@ int main(int argc, char **argv) {
         char v[12];
         if (uconf_get(SETTINGS_CONF, "sidebar", v, sizeof v))
             uui_splitter_set_frac(&g_side_split, atoi(v));
+        // Hidden unless ticked: the pages are knobs for whoever is
+        // debugging the machine, not for using it.
+        g_show_debug = uconf_get(SETTINGS_CONF, "show_debug", v, sizeof v) && !strcmp(v, "1");
     }
     LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = ITEMS,
                                   .count = (int)(sizeof ITEMS / sizeof ITEMS[0]) };

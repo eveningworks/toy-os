@@ -296,6 +296,17 @@ int usetting_group_order(const char *category, const char *group) {
     return order_of(path);
 }
 
+int usetting_page_debug(const char *category, const char *group) {
+    char path[192], v[8];
+    if (!category || !category[0]) return 0;
+    if (snprintf(path, sizeof path, SETTING_TEXT_DIR "/category.%s", category) > 0 &&
+        uconf_get(path, SETTING_TEXT_KEY_DEBUG, v, sizeof v) && !strcmp(v, "1"))
+        return 1;
+    if (!group || !group[0]) return 0;
+    return snprintf(path, sizeof path, SETTING_TEXT_DIR "/group.%s.%s", category, group) > 0 &&
+           uconf_get(path, SETTING_TEXT_KEY_DEBUG, v, sizeof v) && !strcmp(v, "1");
+}
+
 // --- the by-name helpers ---------------------------------------------
 
 int usetting_get(const char *name, char *out, size_t cap) {

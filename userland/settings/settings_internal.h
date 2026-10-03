@@ -92,7 +92,7 @@ enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER, CTRL_SPIN, CTRL_TEXT,
 
 enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST,
        ID_OPTS, ID_OPTS_OK, ID_OPTS_CANCEL, ID_SEARCH, ID_RESET, ID_APPLY,
-       ID_ASK, ID_FOOTER, ID_SI_COPY, ID_SI_DEVMGR, ID_CLOCK_CHANGE,
+       ID_ASK, ID_FOOTER, ID_SI_COPY, ID_SI_DEVMGR, ID_SI_DEBUG, ID_CLOCK_CHANGE,
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
 
 // The focus ring: FOCUS_LEAD entries before the page's controls (search,
@@ -216,6 +216,8 @@ const char *group_key_of(int i);
 const char *category_icon(const char *cat);
 extern char g_filter[UUI_TEXTBOX_MAX];
 int group_matches(int g);
+extern int g_show_debug;
+int group_shown(int g);
 void rebuild_sidebar(void);
 int reload_settings(void);
 uint32_t registry_generation(void);
@@ -319,6 +321,8 @@ void region_preview_refresh(void);
 // set_sysinfo.c
 extern struct uui_custom g_si_view;
 extern struct uui_button g_si_copy, g_si_devmgr;
+extern struct uui_checkbox g_si_debug_cb;
+extern struct uui_setting_row g_si_debug;
 void sysinfo_init(void);
 void sysinfo_load(void);
 int  sysinfo_tick(void);
