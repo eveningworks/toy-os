@@ -561,9 +561,15 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
 
     // Damage only the CONTENT area, not the whole window: the chrome
     // hasn't changed, and over-damaging is how a compositor quietly
-    // stops being a compositor.
-    wm_damage_rect(window_content_x(win), window_content_y(win),
-                    window_content_w(win), window_content_h(win));
+    // stops being a compositor. EXCEPT THE FIRST: nothing of a window --
+    // chrome, corners, shadow -- is drawn before its first present
+    // (draw_one_window), so that is when all of it appears; the damage
+    // its creation declared was spent on a frame that drew none of it.
+    if (first)
+        wm_damage_window_rect(win->x, win->y, win->w, win->h);
+    else
+        wm_damage_rect(window_content_x(win), window_content_y(win),
+                        window_content_w(win), window_content_h(win));
     if (first) wm_anim_open(idx);
     redraw_pending = 1;
     wm_resize_shown(idx, 0);
