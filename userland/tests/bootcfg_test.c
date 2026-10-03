@@ -1,5 +1,5 @@
 // The editable grub.cfg model behind `bootcfg`, the Boot Manager and the
-// Startup page (lib/ubootcfg.h), on fixture text and files in /tmp.
+// Boot menu settings page (lib/ubootcfg.h), on fixture text and files in /tmp.
 //
 // WHAT A BROKEN VERSION WOULD STILL PASS, which is what shaped this:
 //

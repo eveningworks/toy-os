@@ -1,0 +1,6 @@
+# Boot Manager -- see this directory's README.md for the format.
+Name=Boot Manager
+Exec=/bin/wm/system/bootmgr
+Category=system
+Comment=GRUB's boot menu: entries, boot words, default and timeout
+Icon=bootmgr

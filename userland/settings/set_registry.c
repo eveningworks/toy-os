@@ -124,6 +124,11 @@ static int setting_matches(int i) {
     return 0;
 }
 
+static int startup_matches(void) {
+    return !g_filter[0] || has_word("Boot menu GRUB", g_filter) ||
+           has_word("Default boot entry timeout next restart", g_filter);
+}
+
 int group_matches(int g) {
     if (!g_filter[0]) return 1;
     // THE OPEN PAGE STAYS LISTED WHILE IT HOLDS A CHANGE: the filter may
@@ -277,6 +282,17 @@ void rebuild_sidebar(void) {
             g_nodes[g_node_count++] = (struct uui_sidebar_row){
                 .label = g_group_display[g], .kind = UUI_SIDEBAR_ITEM,
                 .id = NODE_GROUP_BASE + g };
+            shown++;
+        }
+        // Boot menu is set_startup.c's page, not a registry group: it joins
+        // System's pages by hand, its heading added if nothing else drew it.
+        if (!strcmp(g_cat[c], "System") && startup_matches() && g_node_count + 2 <= rows_max) {
+            if (!heading)
+                g_nodes[g_node_count++] = (struct uui_sidebar_row){
+                    .label = g_cat[c], .kind = UUI_SIDEBAR_HEADING,
+                    .icon = category_icon(g_cat[c]) };
+            g_nodes[g_node_count++] = (struct uui_sidebar_row){
+                .label = "Boot menu", .kind = UUI_SIDEBAR_ITEM, .id = NODE_STARTUP };
             shown++;
         }
     }

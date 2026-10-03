@@ -744,6 +744,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Scientific mode for Calculator
 - [x] ~~Device Manager: devices by bus with their bound driver, properties, and unbind/rebind~~ DONE 2026-09-28
 - [x] ~~A Network tab in Task Manager~~ DONE 2026-09-29 -- an Ethernet device on the Performance page, as Windows has it
+- [x] ~~A boot menu editor~~ DONE 2026-10-03 -- `bootcfg`, the Boot Manager and Settings > System > Boot menu, over one checked model
+- [ ] The Boot Manager's Text view has no line numbers, though its problems are reported by line
 - [ ] A hex viewer, read-only first, for disk images, fonts and WADs on the machine itself -- Okteta, HxD
 - [ ] Paint: pencil, shapes, fill, select and copy, saving PNG/JPEG/QOI -- needs a reusable colour-picker widget
 - [ ] Clock: timer, stopwatch, alarms through `soundd`, and a world clock over the timezone city list

@@ -105,4 +105,4 @@ cut there leaves GRUB at its prompt, where `configfile
 
 `reboot --entry` for a one-shot boot of an existing entry,
 `docs/boot-flags.md` for the words, the Boot Manager app and System
-Settings > System > Startup for the same edits in a window.
+Settings > System > Boot menu for the same edits in a window.

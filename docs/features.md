@@ -21,7 +21,10 @@ The installed `grub.cfg` is edited from inside the OS by `bootcfg`
 (grubby's shape, plus a visudo-style `edit`), checked before it is saved
 -- unknown boot words, unclosed braces, a missing kernel -- with the old
 file kept as `grub.cfg.bak`; `bootcfg try` boots a change ONCE through
-GRUB's own `next_entry`, so a bad word costs one power-cycle.
+GRUB's own `next_entry`, so a bad word costs one power-cycle. The same
+model is in a window twice: the Boot Manager (each entry's words as a
+checklist, the file as checked text) and System Settings > System > Boot
+menu for the default, the timeout and the next restart.
 
 Four block drivers behind one `block_device` registry the filesystems
 never look through: legacy IDE with Bus-Master DMA and a PIO fallback,

@@ -490,6 +490,15 @@ manual steps to be worth automating:
   unknown entry, and a core recorded without `loadenv`. On demand: it
   reboots twice. **The debug console's shell has no redirection** -- a
   file the test needs in the guest goes in with `vm.py put`.
+- **`bootmgr_test.py`** -- the Boot Manager and System Settings > Boot
+  menu write the real `grub.cfg`. The word list is DRAWN (a word the
+  entry has has an accent checkbox, one it lacks a white one, by pixel);
+  choosing an entry shows it; ticking a word and Save puts it in the file
+  as `bootcfg` -- the independent reader -- sees it, with a `.bak`; a
+  stray `}` typed into the Text view is a problem, Save opens the refusal
+  and the file is unchanged; the Settings page's default dropdown moves
+  `bootcfg`'s `*` and back. In `gui_regress.py`. Positive control: with
+  the app's `ubootcfg_save()` call removed, "Save writes it" goes red.
 - **`bootcfg_test.py`** -- `bootcfg` against a real `/boot`: an edit
   lands with the old file as `grub.cfg.bak` (byte for byte), exactly one
   line changes, no `.new` is left and `/boot` is read-only again; a

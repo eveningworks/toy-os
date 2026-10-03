@@ -153,6 +153,7 @@ TOOLS = [
     ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
     ("devmgr", "devmgr_test.py", "the device tree and its icons, disable/enable through the dialog"),
+    ("bootmgr", "bootmgr_test.py", "Boot Manager and Settings > Boot menu write grub.cfg; a broken file is refused"),
     ("sysupdate", "sysupdate_test.py", "System Update: finds, shows and installs a change, by pixel and by sum"),
     ("help", "help_test.py", "Help: contents, links, history and full-text search"),
     ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
@@ -258,6 +259,7 @@ COST_S = {
     "uapp": 19,
     "taskmgr": 19,
     "devmgr": 25,      # a row-by-row select twice, a disable and an enable
+    "bootmgr": 25,     # two apps, a save, a refused save, four bootcfg reads
     "help": 15,        # a dozen settled clicks and keys, one screenshot
     "uidemo": 17,
     "blank": 17,

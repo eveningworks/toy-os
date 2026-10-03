@@ -277,6 +277,7 @@ int main(int argc, char **argv) {
     struct tty_termios saved;
     int is_tty = sys_tcgetattr(0, &saved) == 0;
     if (is_tty) sys_tty_raw(0);
+    ansi("\x1b[?1049h");   // the alternate screen: quitting gives the transcript back
 
     char status[48];
     status[0] = '\0';
@@ -317,8 +318,6 @@ int main(int argc, char **argv) {
     }
 
     if (is_tty) sys_tcsetattr(0, &saved);
-    // Leave a clean screen and the caret at the top, as every full-screen
-    // program does on its way out.
-    ansi("\x1b[2J\x1b[H");
+    ansi("\x1b[?1049l");
     return rc;
 }

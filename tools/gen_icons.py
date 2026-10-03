@@ -1170,6 +1170,27 @@ def icon_tb_power():
     return im
 
 
+def icon_tb_star():
+    # A five-pointed star: "the default", as favourites and Windows'
+    # default-app marks draw it.
+    im, d = _tb()
+    pts = []
+    for k in range(10):
+        r = 28 if k % 2 == 0 else 12
+        a = -math.pi / 2 + k * math.pi / 5
+        pts.append((32 + r * math.cos(a), 34 + r * math.sin(a)))
+    d.polygon(pts, fill=TB_INK)
+    return im
+
+
+def icon_tb_undo():
+    # An arrow curling back to the left.
+    im, d = _tb()
+    d.arc([14, 16, 58, 56], start=180, end=450, fill=TB_INK, width=7)
+    d.polygon([(4, 36), (24, 36), (14, 20)], fill=TB_INK)
+    return im
+
+
 def icon_tb_info():
     im, d = _tb()
     d.ellipse([4, 4, 60, 60], outline=TB_INK, width=6)
@@ -1377,6 +1398,17 @@ def icon_devmgr():
     d.line([36, 31, 46, 31], fill=WHITE, width=3)
     for x in range(16, 50, 6):
         d.line([x, 44, x, 51], fill=WHITE, width=3)       # the fingers
+    return im
+
+
+def icon_bootmgr():
+    # A boot MENU: three entries, the first picked by a pointer -- what
+    # GRUB's screen looks like, which is the thing this app edits.
+    im, d = tile((84, 96, 150))
+    d.polygon([(10, 15), (20, 21), (10, 27)], fill=WHITE)
+    d.rounded_rectangle([24, 14, 54, 28], radius=3, fill=WHITE)
+    d.rounded_rectangle([24, 33, 54, 39], radius=3, outline=WHITE, width=2)
+    d.rounded_rectangle([24, 45, 54, 51], radius=3, outline=WHITE, width=2)
     return im
 
 
@@ -1589,6 +1621,7 @@ ICONS = {
     "cat-storage": icon_cat_storage,
     "cat-sound": icon_cat_sound,
     "devmgr": icon_devmgr,
+    "bootmgr": icon_bootmgr,
     "sysupdate": icon_sysupdate,
     "dev-usb": icon_dev_usb,
     "badge-warning": icon_badge_warning,
@@ -1638,6 +1671,8 @@ ICONS = {
     "tb-close": icon_tb_close,
     "tb-pin": icon_tb_pin,
     "tb-power": icon_tb_power,
+    "tb-star": icon_tb_star,
+    "tb-undo": icon_tb_undo,
     "tb-back": icon_tb_back,
     "tb-forward": icon_tb_forward,
     "tb-refresh": icon_tb_refresh,

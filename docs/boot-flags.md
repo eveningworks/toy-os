@@ -59,7 +59,7 @@ Note `grub.cfg` sets `timeout=0`, so no menu is drawn by default: hold
 sets a non-zero `GRUB_TIMEOUT`.
 
 **On a running machine** — `bootcfg words 0 +nokaslr` (or the Boot
-Manager app, or System Settings > System > Startup) edits the installed
+Manager app, or System Settings > System > Boot menu) edits the installed
 `/boot/boot/grub/grub.cfg`, checked, keeping the old file as
 `grub.cfg.bak`; `bootcfg try 0 +nokaslr` boots the change ONCE first.
 Both accept only words in the table above (`--force` overrides).

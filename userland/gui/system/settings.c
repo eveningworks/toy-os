@@ -131,7 +131,20 @@ static void navigate(int node_id) {
     // New cards: the previous fit says nothing about them.
     g_prose_fitted = 0;
     g_prose_fit_w = 0;
-    if (node_id == NODE_SYSINFO) {
+    if (node_id == NODE_STARTUP) {
+        g_show_sysinfo = 0;
+        g_show_startup = 1;
+        g_page_group = -1;
+        g_slot_count = 0;
+        strlcpy(g_page_title_text, "Boot menu", sizeof g_page_title_text);
+        strlcpy(g_page_desc_text, "GRUB's boot menu on this machine. Changes are saved at once.",
+                sizeof g_page_desc_text);
+        strlcpy(g_status, "The boot menu", sizeof g_status);
+        startup_load();
+        relayout_page();
+        ulogf("settings: page %s slots 0 advanced 0 captions 0 disabled 0\n", g_page_title_text);
+    } else if (node_id == NODE_SYSINFO) {
+        g_show_startup = 0;
         g_show_sysinfo = 1;
         g_page_group = -1;
         g_slot_count = 0;
@@ -272,6 +285,11 @@ static void on_widget(struct uapp *a, int id, int reason) {
         }
         break;
     }
+    case ID_SU_DEFAULT:
+    case ID_SU_TIMEOUT:
+    case ID_SU_NEXT:
+        startup_changed(id);
+        break;
     case ID_SI_DEBUG:
         g_show_debug = g_si_debug_cb.checked;
         uconf_set(SETTINGS_CONF, "show_debug", g_show_debug ? "1" : "0");
@@ -311,6 +329,9 @@ static void on_action(struct uapp *a, int code) {
         break;
     case ID_SI_DEVMGR:
         sys_spawn("/bin/wm/system/devmgr", 0, -1);
+        break;
+    case ID_SU_OPEN:
+        sys_spawn("/bin/wm/system/bootmgr", 0, -1);
         break;
     case ID_OPTS:
         open_options_dialog(a);
@@ -558,6 +579,9 @@ static void on_size(int *w, int *h) {
             rebuild_sidebar();
             uui_sidebar_select_id(&g_tree, NODE_GROUP_BASE + g);
         }
+        // "bootmenu" names set_startup.c's page, which holds no setting.
+        if (g_open_setting && !strcmp(g_open_setting, "bootmenu"))
+            uui_sidebar_select_id(&g_tree, NODE_STARTUP);
         if (g_node_count > 0) navigate(uui_sidebar_selected_id(&g_tree));
     }
     // Font-derived, so HERE rather than in main(): ugfx_char_h() is 0
@@ -608,6 +632,7 @@ int main(int argc, char **argv) {
     uui_dialog_init(&g_ask);
     sysinfo_init();
     clock_init();
+    startup_init();
 
     // Apply is the PRIMARY action, so it wears the accent.
     uui_button_init(&g_reset, 0, 0, 0, 0, "Reset", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_RESET);
