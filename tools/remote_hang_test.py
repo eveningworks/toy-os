@@ -119,6 +119,24 @@ def lost_ack_server():
     return udp_server(behave), b"a" * 512 + b"b" * 100
 
 
+def double_ack_server():
+    """Every DATA block is ACKed TWICE -- what a fast machine's ACKs look
+    like when a window crosses its retransmission. A client that resends
+    on the stale second copy snowballs (RFC 1123's Sorcerer's Apprentice);
+    one that listens again sends each block about once."""
+    seen = {"data": 0}
+
+    def behave(s, pkt, addr):
+        if pkt[1] == 2:                                    # WRQ: options ignored
+            s.sendto(bytes([0, 4, 0, 0]), addr)
+        elif pkt[1] == 3:
+            seen["data"] += 1
+            ack = bytes([0, 4]) + pkt[2:4]
+            s.sendto(ack, addr)
+            s.sendto(ack, addr)
+    return udp_server(behave), seen
+
+
 def chatty_telnet():
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
@@ -160,7 +178,10 @@ def main():
     r = load(args.against)
     fails = []
 
+    ran = []
+
     def check(name, ok, detail=""):
+        ran.append(name)
         print(f"  {'PASS' if ok else 'FAIL'}  {name}" + ("" if ok else f"\n        {detail}"))
         if not ok:
             fails.append(name)
@@ -174,6 +195,13 @@ def main():
         done, err = bounded(lambda: r.do_put("127.0.0.1", port, src, "/x", 0.5, quiet=True))
         check("put gives up on a server that only repeats a stale ACK",
               done and gave_up(err), "still running" if not done else f"ended with {err!r}")
+
+        port, seen = double_ack_server()
+        blocks = (4000 + 511) // 512
+        done, err = bounded(lambda: r.do_put("127.0.0.1", port, src, "/x", 0.5, quiet=True))
+        check("put sends each block about once when every ACK arrives twice",
+              done and err is None and seen["data"] <= 2 * blocks,
+              f"{seen['data']} DATA packets for {blocks} blocks, ended with {err!r}")
 
         port = udp_server(same_block)
         done, err = bounded(lambda: r.do_get("127.0.0.1", port, "/x", os.path.join(tmp, "out"), 0.5))
@@ -216,7 +244,7 @@ def main():
             r.Session = real_session
         check("the chmod pass uses the flash's held session", used, detail)
 
-    print(f"\nremote_hang_test: {5 - len(fails)} passed, {len(fails)} failed")
+    print(f"\nremote_hang_test: {len(ran) - len(fails)} passed, {len(fails)} failed")
     # Daemon threads may still be spinning inside a hung call: leave hard.
     sys.stdout.flush()
     os._exit(1 if fails else 0)

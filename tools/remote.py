@@ -539,29 +539,35 @@ def do_put(host, port, local, remote, timeout, quiet=False):
                 payload = data[(b - 1) * blksize: b * blksize]
                 s.sendto(bytes([0, OP_DATA]) + (b & 0xFFFF).to_bytes(2, "big")
                          + payload, peer)
-            try:
-                pkt, _ = s.recvfrom(65536)
-            except socket.timeout:
-                tries += 1
-                if tries > 5:
-                    raise RuntimeError(f"no ACK after block {acked}")
-                continue
-            if pkt[1] == OP_ERROR:
-                raise RuntimeError(_tftp_error(pkt))
-            if pkt[1] != OP_ACK:
-                continue
-            a = int.from_bytes(pkt[2:4], "big")
-            # A PARTIAL ACK IS THE RECOVERY PATH, not an error: it says
-            # how far the server got, and the next window starts there.
-            want = (acked + n) & 0xFFFF
+            # A STALE ACK MEANS LISTEN AGAIN, NEVER SEND AGAIN. Resending
+            # the window on every ACK that moved nothing is RFC 1123's
+            # Sorcerer's Apprentice: each resend draws more stale ACKs,
+            # each of those another window -- a 3 MB put to a fast machine
+            # moved ~330,000 frames for ~2,200. Only silence resends.
             before = acked
-            if a == want:
-                acked += n
-            elif ((a - acked) & 0xFFFF) <= n:
-                acked += (a - acked) & 0xFFFF
-            # Only a MOVE is progress: an ACK for the block already
-            # confirmed advances nothing, and resetting on it was a hang.
+            heard = False     # a stale ACK is not silence: the stall bounds it
+            while acked == before and time.time() <= stall:
+                try:
+                    pkt, _ = s.recvfrom(65536)
+                except socket.timeout:
+                    break
+                heard = True
+                if pkt[1] == OP_ERROR:
+                    raise RuntimeError(_tftp_error(pkt))
+                if pkt[1] != OP_ACK:
+                    continue
+                a = int.from_bytes(pkt[2:4], "big")
+                # A PARTIAL ACK IS THE RECOVERY PATH, not an error: it says
+                # how far the server got, and the next window starts there.
+                if a == (acked + n) & 0xFFFF:
+                    acked += n
+                elif ((a - acked) & 0xFFFF) <= n:
+                    acked += (a - acked) & 0xFFFF
             if acked == before:
+                if not heard:
+                    tries += 1
+                    if tries > 5:
+                        raise RuntimeError(f"no ACK after block {acked}")
                 continue
             tries = 0
             stall = time.time() + timeout * STALL_ROUNDS
