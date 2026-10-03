@@ -888,3 +888,17 @@ three front ends gain it there at once. Adding one to this shim would be
 the second keymap the rule exists to prevent -- Tab is the current gap,
 and the answer is to route `kernel/lib/completion.c` in, not to write
 completion here.
+
+## RING 3 IS BUILT `-ffreestanding`, SO A SMALL `memcpy()` IS A CALL -- `__builtin_memcpy` IN A HOT LOOP
+
+`-ffreestanding` implies `-fno-builtin`: the compiler may not assume
+`memcpy` is the C library's, so it never inlines one, however small and
+constant. A fixed-size `memcpy()` used to move bytes in or out of a
+vector or a packed word -- the portable way to type-pun -- becomes a
+call into tolibc per use. **Write `__builtin_memcpy()` for those**: with a
+constant size it is inlined even under `-fno-builtin`, and a variable-size
+one still calls `memcpy` as before. And **time ring-3 code with the
+tree's flags**: `ucrt.c`'s first vectorised version used `memcpy()` for
+its loads, measured 3x faster in a plain host build and 2x SLOWER on
+the ASUS (`tools/ucrt_hostcheck.py --bench` compiles freestanding for
+this reason).

@@ -9836,6 +9836,28 @@ picture is scaled into a buffer of the app's and composed from there
 write-combining scanout buffer, which must never be read.
 
 
+## The CRT effect's passes are SSE2, written with GCC's vector types
+
+`ucrt` was 3x too slow for DOOM on the ASUS (2026-10-03: Classic 28.5 ms
+a frame in the 640x480 window). Compiler flags moved it under 10% --
+`-O3` and auto-vectorisation do nothing for loops whose channels are
+packed into one word -- so the passes were rewritten for SSE2, which
+every x86-64 CPU has and ring 3 is built without forbidding (the kernel
+alone is `-mno-sse`). pixman, the compositing library under cairo and
+the X server, has exactly these loops (blend, scale, bilinear) and
+carries SSE2 versions of them beside its C ones; that is the shape
+followed. **Written with GCC's vector types** (`vector_size`,
+`__builtin_convertvector`, `__builtin_shufflevector`) rather than
+`<emmintrin.h>`: the intrinsics header pulls `<mm_malloc.h>` and the C
+library into a freestanding build, and the vector types say the
+arithmetic in C operators. The one operation they cannot express,
+SSE2's multiply-high, is the builtin `__builtin_ia32_pmulhuw128`. No
+scalar fallback is kept, because toy-os is x86-64 only; the
+straightforward integer arithmetic lives instead as the MODEL in
+`tools/ucrt_hostcheck.py`, which the vector code must match within 1
+per channel. Result on the ASUS: 8.4 ms, 58 fps in the window.
+
+
 ## System Settings hides the kernel and debugging pages until System Information says otherwise
 
 Asked for 2026-10-03, from mockups of three placements. The Kernel

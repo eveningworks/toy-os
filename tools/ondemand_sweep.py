@@ -92,6 +92,10 @@ TOOLS = [
     # an argument, so nothing here needs a guest.
     ("utween_host", "utween_hostcheck.py",     "the easing tween lands, is monotonic, eases out", False,
      None,                                                                                   False),
+    # The CRT effect's vectorised passes against a plain integer model,
+    # within 1 per channel. Host-only, gcc alone, under -ffreestanding.
+    ("ucrt_host",   "ucrt_hostcheck.py",       "the CRT effect's passes match their integer model", False,
+     None,                                                                                   False),
     # Shapes' teapot mesh against a float evaluation, and the depth-
     # tested triangle it is drawn with. Host-only, gcc alone.
     ("teapot_host", "teapot_hostcheck.py",     "the teapot mesh and the depth-tested triangle", False,

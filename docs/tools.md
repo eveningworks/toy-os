@@ -5385,6 +5385,23 @@ window without going through it will find its layout polls timing out.
   guest had drawn with it. `--positive-control` compiles a LINEAR curve
   and must fail on the ease-out check. Needs only gcc.
 
+- **`ucrt_hostcheck.py`** -- compiles `userland/ui/ucrt.c`, the CRT
+  effect, with the host gcc and the tree's `-ffreestanding`, and checks
+  every pass against a plain integer model of it written in Python: the
+  2x2 average, the box blur, the glow, the screen blend, the mask, the
+  row x column gain and the bilinear warp, within 1 per channel (the
+  screen's 255 + glow rounding to 256 is clamped before the gain, not
+  after). The curve's geometry is read from the code's own map, so this
+  checks the sampling, not the float maths that places it --
+  `crt_test.py` clicks through the curve for that. Odd sizes are in the
+  set because the glow pads its half image to even ones.
+  `--positive-control` drops the padding row's copy between blur passes
+  and must fail; `--bench` prints ms per preset at 640x480 and 1440x1080.
+  **BENCH WITH THE TREE'S FLAGS**: `-ffreestanding` implies
+  `-fno-builtin`, so a small `memcpy()` that the host inlines is a call
+  in the tree -- a vector load written that way made the effect twice as
+  SLOW on the ASUS while a plain host build showed it 3x faster.
+
 - **`teapot_hostcheck.py`** -- compiles Shapes' teapot mesh
   (`userland/shapes/teapot.c`) and `ugfx_tri3d()` (`userland/ui/ugfx_tex.c`)
   with the host gcc. The mesh is judged against a FLOAT evaluation of

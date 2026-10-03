@@ -1010,3 +1010,5 @@ whenever a headline here tells you something you did not already know.
 - **A GitHub Release's notes follow ONE shape, and it is terse.**
 - **A COMMIT THAT CHANGES SOMETHING A PERSON CAN SEE OR DO CARRIES A
   `Release-note:` TRAILER**
+- **RING 3 IS BUILT `-ffreestanding`, SO A SMALL `memcpy()` IS A CALL --
+  `__builtin_memcpy` IN A HOT LOOP**

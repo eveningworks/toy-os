@@ -56,9 +56,11 @@ struct ucrt {
 
     // Built by ucrt_apply() -- not the app's.
     int w, h, map_curve;
-    uint32_t *map;       // per pixel: the source point in 12.4 fixed, x<<16|y, or UCRT_BEZEL
-    uint32_t *buf;       // the rect as drawn, then as composed
+    uint32_t *map;       // per pixel: source index << 8 | x weight << 4 | y weight, or UCRT_BEZEL
+    uint32_t *buf;       // the rect as composed, for the curve to warp from
     uint32_t *half, *half2;   // the glow, at half resolution
+    void *col_sums;           // its column blur's running sums
+    uint64_t *lanes;          // per column, as 16-bit lanes: the glow, the gain, the two masks
     int hw, hh;
     unsigned frame;
     uint32_t rng;

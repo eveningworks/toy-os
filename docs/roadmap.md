@@ -24,7 +24,6 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] A cheaper `ucrt`: glow and the curve's warp cost DOOM its 35 fps -- 29 fps in the window on the ASUS, measured  *(Desktop visual polish)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
@@ -690,7 +689,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~A tween/easing helper, once a second real caller exists~~ DONE 2026-09-18 -- `lib/utween.c`, for smooth scrolling
 - [x] ~~A CRT screen effect for the Terminal~~ DONE 2026-10-02 -- `ui/ucrt.c`, Options > Screen effect, Ctrl+Shift+E
 - [x] ~~The CRT effect in DOOM~~ DONE 2026-10-03 -- Alt+C cycles the presets, a scanline per DOOM row, `/etc/doom.conf`
-- [ ] **NEXT** A cheaper `ucrt`: glow and the curve's warp cost DOOM its 35 fps -- 29 fps in the window on the ASUS, measured
+- [x] ~~A cheaper `ucrt`~~ DONE 2026-10-03 -- SSE2 lanes, ~3x: DOOM's window holds 57-70 fps on the ASUS with any preset
+- [ ] The CRT effect fullscreen at 1080p: Classic 55 ms a frame on the ASUS (16 fps) -- measured, cause not established
 
 ### GUI clipboard + drag-and-drop
 

@@ -17,7 +17,8 @@
 #include <string.h>
 
 #define UCRT_BEZEL 0xFFFFFFFFu
-#define FIX 16            // the map's sub-pixel steps (12.4 fixed)
+#define FIX 16            // the map's sub-pixel steps: 4 bits a weight
+#define MAP(idx, ax, ay) ((uint32_t)(idx) << 8 | (uint32_t)(ax) << 4 | (uint32_t)(ay))
 #define MAP_MAX 4095      // 12 integer bits; a wider rect is drawn flat
 
 const struct ucrt_look ucrt_presets[UCRT_PRESET_COUNT] = {
@@ -63,7 +64,11 @@ void ucrt_free(struct ucrt *c) {
     free(c->buf);
     free(c->half);
     free(c->half2);
+    free(c->col_sums);
+    free(c->lanes);
     c->map = c->buf = c->half = c->half2 = 0;
+    c->col_sums = 0;
+    c->lanes = 0;
     c->w = c->h = 0;
 }
 
@@ -116,7 +121,8 @@ static int build_map(struct ucrt *c) {
                 *m = UCRT_BEZEL;
                 continue;
             }
-            *m = ((uint32_t)(sx * FIX) << 16) | (uint32_t)(sy * FIX);
+            int fx = (int)(sx * FIX), fy = (int)(sy * FIX);
+            *m = MAP((fy / FIX) * c->w + fx / FIX, fx % FIX, fy % FIX);
         }
     c->map_curve = c->look.curve;
     return 0;
@@ -140,8 +146,8 @@ int ucrt_source_point(const struct ucrt *c, int px, int py, int *sx, int *sy) {
     }
     uint32_t m = c->map[py * c->w + px];
     if (m == UCRT_BEZEL) return 0;
-    *sx = (int)((m >> 16) / FIX);
-    *sy = (int)((m & 0xFFFF) / FIX);
+    *sx = (int)((m >> 8) % (uint32_t)c->w);
+    *sy = (int)((m >> 8) / (uint32_t)c->w);
     return on;
 }
 
@@ -153,13 +159,20 @@ static int ensure(struct ucrt *c, int w, int h) {
         return 0;
     }
     ucrt_free(c);
-    c->hw = (w + 1) / 2;
-    c->hh = (h + 1) / 2;
-    c->buf = malloc((size_t)w * h * 4);
+    c->hw = ((w + 1) / 2 + 1) & ~1;   // even: the glow's blur works in pairs
+    c->hh = ((h + 1) / 2 + 1) & ~1;
+    // w + 1 more: the warp reads the right and lower neighbours of the
+    // last column and row, at weight 0.
+    c->buf = calloc((size_t)w * h + w + 1, 4);
     c->map = malloc((size_t)w * h * 4);
     c->half = malloc((size_t)c->hw * c->hh * 4);
     c->half2 = malloc((size_t)c->hw * c->hh * 4);
-    if (!c->buf || !c->map || !c->half || !c->half2) { ucrt_free(c); return -1; }
+    c->col_sums = malloc((size_t)c->hw * 8);
+    c->lanes = malloc((size_t)w * 5 * sizeof *c->lanes);
+    if (!c->buf || !c->map || !c->half || !c->half2 || !c->col_sums || !c->lanes) {
+        ucrt_free(c);
+        return -1;
+    }
     c->w = w;
     c->h = h;
     c->map_curve = -1;
@@ -167,52 +180,117 @@ static int ensure(struct ucrt *c, int w, int h) {
 }
 
 // --- glow --------------------------------------------------------------
+//
+// A box blur by running sums, so the radius costs nothing per pixel: two
+// pixels at a time as eight 16-bit lanes (a lane holds at most
+// 255 * (2r+1)), and the divide is SSE2's multiply-high by 65536/(2r+1)
+// -- the same floor((sum * inv) >> 16) the scalar version took. The
+// window is 2r+1 wide everywhere, the ends repeating the edge pixel.
+//
+// THE HALF IMAGE IS PADDED TO EVEN SIZES, for the pairs. The row blur
+// clamps at the real width, so the padding column is only ever an output;
+// the column blur clamps at the PADDED height, so the padding row must be
+// a copy of the last real one before every column pass, or the bottom
+// edge blurs toward garbage.
+typedef uint8_t v8u8 __attribute__((vector_size(8)));
+typedef uint16_t v8u16 __attribute__((vector_size(16)));
+typedef int16_t v8s16 __attribute__((vector_size(16)));
 
-// One box-blur pass of radius r along rows (step 1) or columns (step
-// hw), from `in` to `out`, by running sums -- r costs nothing per pixel.
-static void box(const uint32_t *in, uint32_t *out, int n, int lines, int step, int line_step, int r) {
-    for (int l = 0; l < lines; l++) {
-        const uint32_t *src = in + l * line_step;
-        uint32_t *dst = out + l * line_step;
-        int sr = 0, sg = 0, sb = 0;
-        // A reciprocal, not a division per channel per pixel: the window
-        // is 2r+1 wide everywhere (the ends repeat the edge pixel).
-        uint32_t inv = (1u << 16) / (uint32_t)(2 * r + 1);
-        for (int i = -r; i <= r; i++) {
-            int j = i < 0 ? 0 : i >= n ? n - 1 : i;
-            uint32_t p = src[j * step];
-            sr += (p >> 16) & 0xFF; sg += (p >> 8) & 0xFF; sb += p & 0xFF;
-        }
+static inline v8u16 wide2(uint32_t a, uint32_t b) {
+    uint64_t t = a | (uint64_t)b << 32;
+    v8u8 v;
+    __builtin_memcpy(&v, &t, sizeof v);
+    return __builtin_convertvector(v, v8u16);
+}
+
+static inline uint64_t unsum2(v8u16 sum, v8u16 inv) {
+    v8u8 o = __builtin_convertvector((v8u16)__builtin_ia32_pmulhuw128((v8s16)sum, (v8s16)inv), v8u8);
+    uint64_t t;
+    __builtin_memcpy(&t, &o, sizeof t);
+    return t;
+}
+
+static inline int clampi(int i, int n) { return i < 0 ? 0 : i >= n ? n - 1 : i; }
+
+// Along rows of n pixels (stride `stride`), two rows at once; `lines` even.
+static void box_rows(const uint32_t *in, uint32_t *out, int stride, int n, int lines, int r) {
+    v8u16 inv = (v8u16){ 0 } + (uint16_t)((1u << 16) / (uint32_t)(2 * r + 1));
+    for (int l = 0; l < lines; l += 2) {
+        const uint32_t *a = in + (long)l * stride, *b = a + stride;
+        uint32_t *oa = out + (long)l * stride, *ob = oa + stride;
+        v8u16 sum = { 0 };
+        for (int i = -r; i <= r; i++) sum += wide2(a[clampi(i, n)], b[clampi(i, n)]);
         for (int i = 0; i < n; i++) {
-            dst[i * step] = (((uint32_t)sr * inv >> 16) << 16) | (((uint32_t)sg * inv >> 16) << 8) |
-                            ((uint32_t)sb * inv >> 16);
-            int a = i - r < 0 ? 0 : i - r, b = i + r + 1 >= n ? n - 1 : i + r + 1;
-            uint32_t pa = src[a * step], pb = src[b * step];
-            sr += (int)((pb >> 16) & 0xFF) - (int)((pa >> 16) & 0xFF);
-            sg += (int)((pb >> 8) & 0xFF) - (int)((pa >> 8) & 0xFF);
-            sb += (int)(pb & 0xFF) - (int)(pa & 0xFF);
+            uint64_t t = unsum2(sum, inv);
+            oa[i] = (uint32_t)t;
+            ob[i] = (uint32_t)(t >> 32);
+            int lo = clampi(i - r, n), hi = clampi(i + r + 1, n);
+            sum += wide2(a[hi], b[hi]) - wide2(a[lo], b[lo]);
         }
     }
 }
 
-static void build_glow(struct ucrt *c) {
+// Down columns of `lines` pixels, two columns at once, a row at a time
+// with a running sum per column pair so memory is walked in order;
+// `stride` even. `sums` holds stride / 2 lane vectors.
+static void box_cols(const uint32_t *in, uint32_t *out, int stride, int lines, int r, v8u16 *sums) {
+    v8u16 inv = (v8u16){ 0 } + (uint16_t)((1u << 16) / (uint32_t)(2 * r + 1));
+    int pairs = stride / 2;
+    for (int x = 0; x < pairs; x++) sums[x] = (v8u16){ 0 };
+    for (int i = -r; i <= r; i++) {
+        const uint32_t *row = in + (long)clampi(i, lines) * stride;
+        for (int x = 0; x < pairs; x++) sums[x] += wide2(row[2 * x], row[2 * x + 1]);
+    }
+    for (int l = 0; l < lines; l++) {
+        uint64_t *dst = (uint64_t *)(void *)(out + (long)l * stride);
+        for (int x = 0; x < pairs; x++) dst[x] = unsum2(sums[x], inv);
+        const uint32_t *ra = in + (long)clampi(l - r, lines) * stride;
+        const uint32_t *rb = in + (long)clampi(l + r + 1, lines) * stride;
+        for (int x = 0; x < pairs; x++)
+            sums[x] += wide2(rb[2 * x], rb[2 * x + 1]) - wide2(ra[2 * x], ra[2 * x + 1]);
+    }
+}
+
+static void pad_col(uint32_t *b, int stride, int n, int lines) {
+    if (n < stride)
+        for (int y = 0; y < lines; y++) b[(long)y * stride + n] = b[(long)y * stride + n - 1];
+}
+
+static void pad_row(uint32_t *b, int stride, int n, int lines) {
+    if (n < lines) __builtin_memcpy(&b[(long)n * stride], &b[(long)(n - 1) * stride], (size_t)stride * 4);
+}
+
+// The glow, at half resolution, already scaled by its strength.
+static void build_glow(struct ucrt *c, const uint32_t *src, long stride) {
     int w = c->w, h = c->h, hw = c->hw, hh = c->hh;
-    for (int y = 0; y < hh; y++)
-        for (int x = 0; x < hw; x++) {
-            int x0 = 2 * x, y0 = 2 * y, x1 = x0 + 1 < w ? x0 + 1 : x0, y1 = y0 + 1 < h ? y0 + 1 : y0;
-            uint32_t a = c->buf[y0 * w + x0], b = c->buf[y0 * w + x1];
-            uint32_t d = c->buf[y1 * w + x0], e = c->buf[y1 * w + x1];
-            uint32_t r = (((a >> 16) & 0xFF) + ((b >> 16) & 0xFF) + ((d >> 16) & 0xFF) + ((e >> 16) & 0xFF)) / 4;
-            uint32_t g = (((a >> 8) & 0xFF) + ((b >> 8) & 0xFF) + ((d >> 8) & 0xFF) + ((e >> 8) & 0xFF)) / 4;
-            uint32_t bl = ((a & 0xFF) + (b & 0xFF) + (d & 0xFF) + (e & 0xFF)) / 4;
-            c->half[y * hw + x] = (r << 16) | (g << 8) | bl;
+    int nw = (w + 1) / 2, nh = (h + 1) / 2;   // the real half image; hw/hh pad it
+    // The 2x2 average, red and blue in one word: four lanes of 255 fit.
+    for (int y = 0; y < nh; y++) {
+        const uint32_t *r0 = &src[2 * y * stride], *r1 = 2 * y + 1 < h ? r0 + stride : r0;
+        for (int x = 0; x < nw; x++) {
+            int x0 = 2 * x, x1 = x0 + 1 < w ? x0 + 1 : x0;
+            uint32_t a = r0[x0], b = r0[x1], d = r1[x0], e = r1[x1];
+            uint32_t rb = (a & 0xFF00FF) + (b & 0xFF00FF) + (d & 0xFF00FF) + (e & 0xFF00FF);
+            uint32_t g = (a & 0xFF00) + (b & 0xFF00) + (d & 0xFF00) + (e & 0xFF00);
+            c->half[y * hw + x] = (rb >> 2 & 0xFF00FF) | (g >> 2 & 0xFF00);
         }
+    }
+    pad_col(c->half, hw, nw, nh);
+    pad_row(c->half, hw, nh, hh);
     // Radius in half-resolution pixels, from the scanline pitch -- which
     // the app derives from its font, so the bloom scales with the text.
+    // Capped so a 16-bit lane cannot overflow: 255 * 201 < 65536.
     int r = c->period / 2 + c->look.glow;
+    if (r > 100) r = 100;
     for (int pass = 0; pass < 2; pass++) {
-        box(c->half, c->half2, hw, hh, 1, hw, r);
-        box(c->half2, c->half, hh, hw, hw, 1, r);
+        box_rows(c->half, c->half2, hw, nw, hh, r);
+        box_cols(c->half2, c->half, hw, hh, r, c->col_sums);
+        pad_row(c->half, hw, nh, hh);
+    }
+    uint32_t k = (uint32_t)GLOW[c->look.glow];   // < 256, so a lane stays in 16 bits
+    for (long i = 0; i < (long)hw * hh; i++) {
+        uint32_t q = c->half[i];
+        c->half[i] = ((q & 0xFF00FF) * k >> 8 & 0xFF00FF) | ((q & 0xFF00) * k >> 8 & 0xFF00);
     }
 }
 
@@ -232,6 +310,62 @@ static int vig_gain(int i, int n, int v) {
     float u = (2.0f * i + 1) / n - 1;
     float f = u * u;
     return 256 - (int)(v * f * f);
+}
+
+// --- the compose, two pixels at a time ----------------------------------
+//
+// The glow's vector types, so SSE2 with no intrinsics header: two pixels
+// widen to eight 16-bit lanes, where every product here fits -- a channel
+// is at most 255 (256 after the screen, clamped back) and every gain at
+// most 256. The glow, the mask and the row's gain are spread to the same
+// lanes once per row (c->lanes), so the loop only multiplies. A pixel's
+// fourth lane has a gain of 0, which keeps the top byte 0.
+
+// One row with no noise: the glow screened in, the mask, the gain.
+static void compose_row(const uint32_t *in, uint32_t *out, int w, const uint64_t *glow,
+                        const uint64_t *mask, const uint64_t *gain) {
+    int i = 0;
+    for (; i + 2 <= w; i += 2) {
+        v8u8 b;
+        v8u16 g;
+        __builtin_memcpy(&b, &in[i], sizeof b);
+        __builtin_memcpy(&g, &gain[i], sizeof g);
+        v8u16 a = __builtin_convertvector(b, v8u16);
+        if (glow) {
+            v8u16 q;
+            __builtin_memcpy(&q, &glow[i], sizeof q);
+            a = a + q - (a * q >> 8);   // screen: 1-(1-a)(1-b)
+            a -= a >> 8;                // 256 back to 255
+        }
+        if (mask) {
+            v8u16 m;
+            __builtin_memcpy(&m, &mask[i], sizeof m);
+            a = a * m >> 8;
+        }
+        a = a * g >> 8;
+        v8u8 o = __builtin_convertvector(a, v8u8);
+        __builtin_memcpy(&out[i], &o, sizeof o);
+    }
+    for (; i < w; i++) {   // an odd width's last pixel
+        uint32_t v = 0;
+        for (int k = 0; k < 3; k++) {
+            uint32_t ch = in[i] >> (8 * k) & 0xFF;
+            if (glow) {
+                uint32_t q = (uint32_t)(glow[i] >> (16 * k)) & 0xFFFF;
+                ch = ch + q - (ch * q >> 8);
+                ch -= ch >> 8;
+            }
+            if (mask) ch = ch * ((uint32_t)(mask[i] >> (16 * k)) & 0xFFFF) >> 8;
+            ch = ch * ((uint32_t)(gain[i] >> (16 * k)) & 0xFFFF) >> 8;
+            v |= ch << (8 * k);
+        }
+        out[i] = v;
+    }
+}
+
+// A pixel's three channels as 16-bit lanes, alpha 0: 0x00RRGGBB -> lanes.
+static inline uint64_t lanes(uint32_t p) {
+    return (uint64_t)(p >> 16 & 0xFF) << 32 | (uint64_t)(p >> 8 & 0xFF) << 16 | (p & 0xFF);
 }
 
 int ucrt_apply(struct ucrt *c, struct ugfx_surface *s, int x, int y, int w, int h) {
@@ -254,15 +388,14 @@ int ucrt_apply_from(struct ucrt *c, const uint32_t *src, int stride,
     if (plain || ensure(c, w, h) != 0) {
         for (int r = 0; r < h; r++)
             if (&s->pixels[(y + r) * s->w + x] != &src[(long)r * stride])
-                memcpy(&s->pixels[(y + r) * s->w + x], &src[(long)r * stride], (size_t)w * 4);
+                __builtin_memcpy(&s->pixels[(y + r) * s->w + x], &src[(long)r * stride], (size_t)w * 4);
         return plain ? 0 : -1;
     }
     if (c->period < 2) c->period = 2;
     c->frame++;
 
-    for (int r = 0; r < h; r++) memcpy(&c->buf[r * w], &src[(long)r * stride], (size_t)w * 4);
     const struct ucrt_look *l = &c->look;
-    if (l->glow) build_glow(c);
+    if (l->glow) build_glow(c, src, stride);
 
     // The tables: per column the vignette's gain, per row the scanline x
     // vignette x flicker gain. Rebuilt per frame because flicker moves
@@ -288,21 +421,46 @@ int ucrt_apply_from(struct ucrt *c, const uint32_t *src, int stride,
         int v = vig ? vig_gain(r, h, vig) : 256;
         row_gain[r] = g * v / 256 * flick / 256;
     }
-    int glow = GLOW[l->glow];
+
+    if (l->mask && !l->noise)
+        for (int shift = 0; shift < 2; shift++)
+            for (int i = 0; i < w; i++) {
+                int t = (i + shift) % 3;
+                uint64_t m = 256 - MASK_DIM;
+                c->lanes[(3 + shift) * w + i] = (t == 0 ? 256 : m) << 32 | (t == 1 ? 256 : m) << 16 |
+                                                (t == 2 ? 256 : m);
+            }
+
+    // Composed from the caller's picture straight to the surface, or to
+    // c->buf for the curve to warp from.
     for (int r = 0; r < h; r++) {
-        uint32_t *row = &c->buf[r * w];
+        const uint32_t *in = &src[(long)r * stride];
+        uint32_t *out = l->curve ? &c->buf[r * w] : &s->pixels[(y + r) * s->w + x];
         const uint32_t *gl = l->glow ? &c->half[(r / 2) * c->hw] : 0;
         int rg = row_gain[r];
+        if (!l->noise) {
+            uint64_t *glw = l->glow ? c->lanes : 0, *gain = c->lanes + 2 * w;
+            const uint64_t *mask = 0;
+            if (l->mask) {
+                int shift = l->mask == UCRT_MASK_SLOT && (r / c->period) % 2 ? 1 : 0;
+                mask = c->lanes + (3 + shift) * w;
+            }
+            if (glw && (r == 0 || r / 2 != (r - 1) / 2))
+                for (int i = 0; i < w; i++) glw[i] = lanes(gl[i / 2]);
+            for (int i = 0; i < w; i++)
+                gain[i] = (uint64_t)(uint32_t)(col_gain[i] * rg >> 8) * 0x100010001ull;
+            compose_row(in, out, w, glw, mask, gain);
+            continue;
+        }
         // The slot mask is the aperture grille shifted half a triad on
         // alternate scanline periods -- staggered, as on a shadow-mask tube.
         int shift = l->mask == UCRT_MASK_SLOT && (r / c->period) % 2 ? 1 : 0;
         for (int i = 0; i < w; i++) {
-            uint32_t p = row[i];
+            uint32_t p = in[i];
             int R = chan(p, 16), G = chan(p, 8), B = chan(p, 0);
             if (gl) {
                 uint32_t q = gl[i / 2];
-                int gr = (int)chan(q, 16) * glow >> 8, gg = (int)chan(q, 8) * glow >> 8,
-                    gb = (int)chan(q, 0) * glow >> 8;
+                int gr = (int)chan(q, 16), gg = (int)chan(q, 8), gb = (int)chan(q, 0);
                 R = R + gr - (R * gr >> 8);   // screen: 1-(1-a)(1-b)
                 G = G + gg - (G * gg >> 8);
                 B = B + gb - (B * gb >> 8);
@@ -324,31 +482,32 @@ int ucrt_apply_from(struct ucrt *c, const uint32_t *src, int stride,
             R = R < 0 ? 0 : R > 255 ? 255 : R;
             G = G < 0 ? 0 : G > 255 ? 255 : G;
             B = B < 0 ? 0 : B > 255 ? 255 : B;
-            row[i] = ((uint32_t)R << 16) | ((uint32_t)G << 8) | (uint32_t)B;
+            out[i] = ((uint32_t)R << 16) | ((uint32_t)G << 8) | (uint32_t)B;
         }
     }
+    if (!l->curve) return 0;
 
-    if (!l->curve) {
-        for (int r = 0; r < h; r++) memcpy(&s->pixels[(y + r) * s->w + x], &c->buf[r * w], (size_t)w * 4);
-        return 0;
-    }
+    // Bilinear in 16-bit lanes, a source pixel and its right neighbour in
+    // one vector: with 4-bit weights a lane peaks at 255 * 16 * 16, which
+    // still fits.
+    _Static_assert(FIX == 16, "the lanes are sized for 4-bit weights");
     for (int r = 0; r < h; r++) {
         uint32_t *out = &s->pixels[(y + r) * s->w + x];
         const uint32_t *m = &c->map[r * w];
         for (int i = 0; i < w; i++) {
-            if (m[i] == UCRT_BEZEL) { out[i] = c->bezel; continue; }
-            int fx = (int)(m[i] >> 16), fy = (int)(m[i] & 0xFFFF);
-            int x0 = fx / FIX, y0 = fy / FIX, ax = fx % FIX, ay = fy % FIX;
-            int x1 = x0 + 1 < w ? x0 + 1 : x0, y1 = y0 + 1 < h ? y0 + 1 : y0;
-            uint32_t p00 = c->buf[y0 * w + x0], p01 = c->buf[y0 * w + x1];
-            uint32_t p10 = c->buf[y1 * w + x0], p11 = c->buf[y1 * w + x1];
-            uint32_t v = 0;
-            for (int sh = 0; sh <= 16; sh += 8) {
-                int top = (int)chan(p00, sh) * (FIX - ax) + (int)chan(p01, sh) * ax;
-                int bot = (int)chan(p10, sh) * (FIX - ax) + (int)chan(p11, sh) * ax;
-                v |= (uint32_t)((top * (FIX - ay) + bot * ay) / (FIX * FIX)) << sh;
-            }
-            out[i] = v;
+            uint32_t e = m[i];
+            if (e == UCRT_BEZEL) { out[i] = c->bezel; continue; }
+            const uint32_t *p = &c->buf[e >> 8];
+            uint16_t ax = (e >> 4) & 15, ay = e & 15, nx = 16 - ax, ny = 16 - ay;
+            v8u8 top, bot;
+            __builtin_memcpy(&top, p, sizeof top);
+            __builtin_memcpy(&bot, p + w, sizeof bot);
+            v8u16 wx = { nx, nx, nx, nx, ax, ax, ax, ax };
+            v8u16 v = __builtin_convertvector(top, v8u16) * wx * ny +
+                      __builtin_convertvector(bot, v8u16) * wx * ay;
+            v += __builtin_shufflevector(v, v, 4, 5, 6, 7, 0, 1, 2, 3);
+            v8u8 o = __builtin_convertvector(v >> 8, v8u8);
+            __builtin_memcpy(&out[i], &o, 4);
         }
     }
     return 0;
