@@ -210,6 +210,8 @@ struct xhci_slot {
 
 static struct xhci_hc g_hc;
 
+_Static_assert(XHCI_MAX_PORTS <= 32, "a port's pending bit must fit its uint32_t mask");
+
 static inline void pend_set(volatile uint32_t *mask, uint32_t bit) {
     __atomic_fetch_or(mask, 1u << bit, __ATOMIC_SEQ_CST);
 }
@@ -3210,6 +3212,10 @@ static void usb_probe(const struct pci_device *d) {
                 g_hc.max_slots, slots, g_hc.max_intrs, g_hc.max_ports,
                 g_hc.csz64 ? 64u : 32u, g_hc.page_size,
                 g_hc.ppc ? "software-controlled (PPC)" : "always on (no PPC)");
+    // SAID, never silently cut: a port past the cap is one nothing scans.
+    if (g_hc.max_ports > XHCI_MAX_PORTS)
+        klog_printf(KLOG_WARN "usb: only ports 1..%u are driven; %u..%u are ignored\n",
+                    XHCI_MAX_PORTS, XHCI_MAX_PORTS + 1, g_hc.max_ports);
 
     // --- publish first ------------------------------------------------
     //

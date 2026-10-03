@@ -315,8 +315,15 @@ def cmd_start(args):
     wants_usb_audio = audio in ("usb", "both")
     host_devs = getattr(args, "usb_host", None) or []
     if usb != "none" or wants_usb_audio or host_devs:
-        cmd += ["-device", "qemu-xhci,id=xhci"]
-        if usb == "xhci+hub":
+        # xhci+wide: QEMU numbers the USB3 ports first, so with fifteen of
+        # each the USB2 ports are 16..30 and the keyboard on QEMU's port
+        # 5 lands on the guest's port 20 -- past a cap of 16, which hid
+        # every SuperSpeed port of a Kaby Lake desktop.
+        wide = usb == "xhci+wide"
+        cmd += ["-device", "qemu-xhci,id=xhci" + (",p2=15,p3=15" if wide else "")]
+        if wide:
+            cmd += ["-device", "usb-kbd,id=usbkbd,bus=xhci.0,port=5"]
+        elif usb == "xhci+hub":
             # The keyboard AND mouse both sit BEHIND a usb-hub (QEMU's
             # is a USB 1.1 full-speed hub), which is the only headless
             # way to exercise route strings and the hub class driver.
@@ -952,12 +959,14 @@ def main():
     ap.add_argument("--reboot", action="store_true",
                     help="let the guest reboot instead of QEMU exiting "
                          "(-no-reboot is the default; see the launch)")
-    ap.add_argument("--usb", choices=("none", "xhci", "xhci+mouse", "xhci+hub"),
+    ap.add_argument("--usb", choices=("none", "xhci", "xhci+mouse", "xhci+hub", "xhci+wide"),
                     default="none",
                     help="attach an xHCI controller and USB HID devices. Off by "
                          "default; `xhci` adds a usb-kbd, `xhci+mouse` adds a "
                          "usb-mouse too, `xhci+hub` puts a keyboard AND mouse "
-                         "behind a usb-hub (the route-string path). A named "
+                         "behind a usb-hub (the route-string path), `xhci+wide` "
+                         "a 30-port controller with the keyboard on a port "
+                         "above 16 (a 200-series Intel PCH has 22). A named "
                          "value rather than a boolean because the mouse changes "
                          "QMP pointer routing once the guest driver polls it.")
     ap.add_argument("--usb-host", action="append", metavar="VID:PID",

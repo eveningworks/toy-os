@@ -3839,14 +3839,17 @@ window without going through it will find its layout polls timing out.
 
 - **`usb_test.py`** -- an xHCI controller and a HID boot keyboard and
   mouse (`vm.py --usb xhci` / `--usb xhci+mouse` / `--usb xhci+hub`, or
-  `make run USB=xhci+mouse`). Five phases: keyboard, ring wrap, mouse,
+  `make run USB=xhci+mouse`). Six phases: keyboard, ring wrap, mouse,
   HOT-PLUG (QMP `device_add`/`device_del` on the running guest -- the
   only headless stand-in for a human plugging a mouse in, and the
   detach check must scope its lsdev assertion to the Input sources
   section, because the capture also carries the kernel's own
   `usb-mouse unregistered` log line), and HUB (both HID devices behind
   a `usb-hub`, which is what exercises route strings; QEMU's hub is
-  full-speed, so the TT path stays hardware-only).
+  full-speed, so the TT path stays hardware-only), and WIDE (`--usb
+  xhci+wide`: a 30-port controller with the keyboard on port 20, since
+  `XHCI_MAX_PORTS` was 16 and a Kaby Lake PCH's SuperSpeed ports are
+  17..22 -- QEMU numbers USB3 first, so its USB2 ports land at 16..30).
 
   **It is self-controlling, and that was measured before a line of the
   driver was written.** QEMU activates a keyboard handler the moment

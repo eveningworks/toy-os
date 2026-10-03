@@ -16,7 +16,10 @@
 // Below this line: rings, doorbells, contexts, completion codes.
 // Above it: descriptors, standard requests, HID reports.
 
-#define XHCI_MAX_PORTS   16
+// The root ports driven. A 200-series Intel PCH has 22, its USB3 half at
+// 17..22 -- at 16 the driver never saw a SuperSpeed port on that machine
+// at all. 32 is the ceiling: the per-port pending masks are uint32_t.
+#define XHCI_MAX_PORTS   32
 #define XHCI_MAX_SLOTS   8
 
 // Every wait in this driver is bounded by a POLL COUNT, never by a

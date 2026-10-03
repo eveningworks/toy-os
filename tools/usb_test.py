@@ -473,12 +473,43 @@ def phase_hub(instance, kvm=False):
         g.cleanup()
 
 
+def phase_wide(instance, kvm=False):
+    """A controller with more than 16 ports, the keyboard on port 20.
+
+    A Kaby Lake desktop's xHCI has 22 ports with its SuperSpeed half at
+    17..22, and XHCI_MAX_PORTS was 16: nothing above it was ever scanned,
+    so a USB 3 device there could never be seen. QEMU numbers the USB3
+    ports first, so `--usb xhci+wide` (fifteen of each) puts its USB2
+    ports at 16..30 and the keyboard on 20.
+    """
+    import re
+    print("\nphase 6: a port above 16")
+    g = Guest(instance, "xhci+wide", kvm)
+    try:
+        if not g.start():
+            return check("guest boots with a 30-port xHCI", False)
+        d = g.console()
+        log = ""
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and "bound as usb-keyboard" not in log:
+            time.sleep(0.5)
+            log = d.send("sh dmesg") or ""
+        m = re.search(r"usb: port (\d+): connected", log)
+        check("the keyboard is seen on a port above 16",
+              bool(m) and int(m.group(1)) > 16, m.group(0) if m else "no port connected")
+        check("...and bound", "bound as usb-keyboard" in log)
+        check("no port was left undriven", "are ignored" not in log)
+        return True
+    finally:
+        g.cleanup()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--instance", default="auto")
     ap.add_argument("--phase", choices=("all", "keyboard", "wrap", "mouse",
-                                        "hotplug", "hub"),
+                                        "hotplug", "hub", "wide"),
                     default="all")
     # The INTx storm class this driver's acknowledge path guards against
     # is INVISIBLE under TCG -- virtio-input's version of it hung 3 boots
@@ -512,6 +543,8 @@ def main():
         phase_hotplug(inst, args.kvm)
     if args.phase in ("all", "hub"):
         phase_hub(inst, args.kvm)
+    if args.phase in ("all", "wide"):
+        phase_wide(inst, args.kvm)
 
     failed = [n for n, ok, _ in results if not ok]
     print(f"\nusb_test: {len(results) - len(failed)}/{len(results)} checks passed")
