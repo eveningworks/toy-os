@@ -11,6 +11,7 @@
 #include "wm_overlay.h"
 #include "lib/icon_cache.h"
 #include "wm_internal.h"
+#include "wm_glass.h"
 #include "wm_taskbar.h"   // taskbar_start_rect()
 #include "confirm_dialog.h"
 #include "context_menu.h"
@@ -1203,7 +1204,8 @@ void start_menu_draw(int mx, int my) {
     int r = uui_popup_radius();
     int pr = sm_pill_inset();
     int ch = ugfx_char_h();
-    wm_shadow_draw(L.x, L.y, L.w, L.h, r, WM_SHADOW_POPUP);
+    (wm_glass_on(WM_GLASS_START) ? wm_shadow_draw_hollow : wm_shadow_draw)(
+        L.x, L.y, L.w, L.h, r, WM_SHADOW_POPUP);
 
     // THE TOOLKIT'S CARD (ui/uui_popup.h): the header, the rail and the
     // footer on a step of chrome, the app column on the card's lighter
@@ -1227,9 +1229,19 @@ void start_menu_draw(int mx, int my) {
     // the signature matches the other overlays.
     (void)mx; (void)my;
 
-    uui_fill_round_rect(s, L.x, L.y, L.w, L.h, r, edge);
-    uui_fill_round_rect(s, L.x + 1, L.y + 1, L.w - 2, L.h - 2, r - 1, bg);
-    ugfx_fill_rect(s, L.pane_x, L.main_y, L.x + L.w - 1 - L.pane_x, L.main_h, pane_bg);
+    // ON GLASS (wm_glass.h) the card is one pane of it, the app column a
+    // lighter wash over the same glass, and resting text blends into it.
+    int glass = wm_glass_on(WM_GLASS_START);
+    if (glass) {
+        struct wm_glass_band pane = { L.pane_x, L.main_y, L.x + L.w - 1 - L.pane_x, L.main_h,
+                                      pane_bg, 128 };
+        wm_glass_paint_band(WM_GLASS_START, L.x, L.y, L.w, L.h, r, bg, &pane);
+        uui_glass_round_rect(s, L.x, L.y, L.w, L.h, r, edge, 0, 255);
+    } else {
+        uui_fill_round_rect(s, L.x, L.y, L.w, L.h, r, edge);
+        uui_fill_round_rect(s, L.x + 1, L.y + 1, L.w - 2, L.h - 2, r - 1, bg);
+        ugfx_fill_rect(s, L.pane_x, L.main_y, L.x + L.w - 1 - L.pane_x, L.main_h, pane_bg);
+    }
     ugfx_fill_rect(s, L.x + 1, L.main_y, L.w - 2, 1, rule);
     ugfx_fill_rect(s, L.x + 1, L.main_y + L.main_h - 1, L.w - 2, 1, rule);
     ugfx_fill_rect(s, L.x + L.side_w, L.main_y, 1, L.main_h, rule);
@@ -1237,7 +1249,7 @@ void start_menu_draw(int mx, int my) {
         // The version, quiet, where Kickoff puts the user's name.
         int fy = L.main_y + L.main_h;
         ugfx_draw_string_clipped(s, L.x + ch, fy + (L.foot_h - ch) / 2, L.w / 3,
-                                 "toy-os " TOYOS_VERSION, dim, bg);
+                                 "toy-os " TOYOS_VERSION, dim, glass ? UGFX_TRANSPARENT : bg);
     }
 
     int apps = pane_visible(&L, 0);
@@ -1292,6 +1304,7 @@ void start_menu_draw(int mx, int my) {
             row_bg = on_pane ? pane_hover : side_hover;
             uui_fill_round_rect(s, px, y, pw, h, pr, row_bg);
         }
+        uint32_t ink_bg = glass && (row_bg == bg || row_bg == pane_bg) ? UGFX_TRANSPARENT : row_bg;
 
         if (kind == START_ROW_SETTINGS) {
             const struct uimg *ico = icon_get("tb-gear", ch + 3);
@@ -1308,7 +1321,7 @@ void start_menu_draw(int mx, int my) {
                 if (ico) ugfx_blit_alpha(s, tx, y + (h - ico->h) / 2, ico->w, ico->h, ico->px, ico->w);
                 tx += ch + 9;
             }
-            ugfx_draw_string_clipped(s, tx, y + (h - ch) / 2, x + w - tx, label, row_fg, row_bg);
+            ugfx_draw_string_clipped(s, tx, y + (h - ch) / 2, x + w - tx, label, row_fg, ink_bg);
             if (!k_strcmp(label, "Restart") && g_boot_menu)
                 sm_chevron(x + w - ch, y + h / 2, row_fg);
             continue;
@@ -1329,7 +1342,7 @@ void start_menu_draw(int mx, int my) {
                 if (ico) ugfx_blit_alpha(s, x + (w - ico->w) / 2, iy, ico->w, ico->h, ico->px, ico->w);
                 int avail = pw - 8, lw = ugfx_text_width(label);
                 int lx = px + 4 + (lw < avail ? (avail - lw) / 2 : 0);
-                ugfx_draw_string_elided(s, lx, iy + icon_sz + 6, avail, label, row_fg, row_bg);
+                ugfx_draw_string_elided(s, lx, iy + icon_sz + 6, avail, label, row_fg, ink_bg);
                 continue;
             }
             int text_x = ix + icon_sz + 12;
@@ -1340,12 +1353,12 @@ void start_menu_draw(int mx, int my) {
             const char *note = a && a->comment && g_cfg.list == SM_LIST_DETAILED ? a->comment : "";
             if (note[0]) {
                 int top = y + (h - 2 * ch - 4) / 2;
-                ugfx_draw_string_elided(s, text_x, top, right - text_x, label, row_fg, row_bg);
+                ugfx_draw_string_elided(s, text_x, top, right - text_x, label, row_fg, ink_bg);
                 ugfx_draw_string_elided(s, text_x, top + ch + 4, right - text_x, note,
-                                        i == flash_row ? row_fg : ugfx_blend(row_fg, row_bg, 110), row_bg);
+                                        i == flash_row ? row_fg : ugfx_blend(row_fg, row_bg, 110), ink_bg);
             } else {
                 ugfx_draw_string_elided(s, text_x, y + (h - ch) / 2, right - text_x, label,
-                                        row_fg, row_bg);
+                                        row_fg, ink_bg);
             }
             continue;
         }
@@ -1362,7 +1375,7 @@ void start_menu_draw(int mx, int my) {
         // that ran past its column used to be drawn through the border
         // before it was even clipped.
         ugfx_draw_string_elided(s, text_x, y + (h - ch) / 2, px + pw - 8 - text_x,
-                                label, row_fg, row_bg);
+                                label, row_fg, ink_bg);
     }
 
     // THE SCROLLBAR, an overlay over the rows' right end: a thin thumb

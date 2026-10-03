@@ -5229,3 +5229,39 @@ Manager sets its minimum from the font in `on_size()` (so the minimum is
 font-derived), which is why its `uapp_desc` is a static rather than
 main()'s local.
 
+## TRANSPARENCY IS GLASS THE COMPOSITOR PAINTS: A SURFACE'S GROUND GOES THROUGH `wm_glass_paint()`, FROSTED GLASS IS PART OF ITS RECT'S DAMAGE, AND A CLIENT ONLY MARKS WHERE ITS GLASS IS
+
+`userland/wm/wm_glass.h` is the model; `docs/decisions/gui.md`
+("Transparency is glass the compositor paints") has why.
+
+- **A glass surface paints its ground with `wm_glass_paint(surface, ...)`,
+  never a fill** -- it IS the fill when transparency is off -- and text
+  resting straight on that ground passes `wm_glass_ink_bg()`'s answer as
+  its `bg`, which is `UGFX_TRANSPARENT` on glass. A flat `bg` there
+  blends each glyph's edge against a colour that is not on screen and
+  leaves a halo. A lit row (hover, selection) is opaque and keeps its
+  own colour.
+- **FROSTED GLASS IS PART OF ITS RECT'S DAMAGE.** The blur of a pixel
+  reads its neighbours, so `wm_render_frame()` grows the damage box over
+  every rect `wm_glass_frosted_rects()` lists before the frame is drawn.
+  A NEW frosted surface must be listed there, or a frame that repaints
+  part of it blurs a previous frame's pixels; the damage verifier
+  reports it, and `tools/glass_test.py` runs under it. Clear and
+  Wallpaper glass are per-pixel and need nothing.
+- **A CLIENT MARKS ITS GROUND AND NOTHING ELSE.** A popup opened with
+  `UUI_POPUP_GLASS` (`WIN_POPUP_GLASS`) fills its ground with
+  `colour | UUI_POPUP_GLASS_PX`; the compositor decides kind and opacity,
+  and with transparency off shows the colour. Nothing else in such a
+  surface may set a pixel's top byte -- every ugfx primitive writes it as
+  zero, which is why the mark is free. Text on a marked ground is
+  opaque, its edges blended against the tint, so a very low menu opacity
+  shows a faint fringe around glyphs.
+- **A GLASS SURFACE CASTS `wm_shadow_draw_hollow()`, never the plain
+  shadow**, which shades under the body's own edges and shows through
+  Clear glass as a dark outline. `glass_test.py` checks the floating
+  taskbar's edges against its middle.
+- **The blur cache is keyed by WHAT IS UNDER THE RECT, not by a guess
+  at whether it changed** -- the scene is still repainted beneath a
+  frosted rect every time, and a hash of it decides whether the last
+  blur can be reused. Do not skip that repaint to save time; it is what
+  makes the hash a measurement.

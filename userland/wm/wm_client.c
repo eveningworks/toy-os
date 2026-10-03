@@ -324,6 +324,7 @@ static int on_popup_created(int pid, uint32_t id, uint32_t parent_id, int w, int
     k_memset(win, 0, sizeof(*win));
     win->popup = 1;
     win->popup_grab = (pos->flags & WIN_POPUP_GRAB) != 0;
+    win->popup_glass = (pos->flags & WIN_POPUP_GLASS) != 0;
     win->popup_parent = parent_id;
     win->x = sx;
     win->y = sy;

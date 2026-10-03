@@ -19,6 +19,7 @@
 #include "wm_taskbar.h"     // taskbar_h
 #include "lib/icon_cache.h"
 #include "kapi.h"
+#include "wm_glass.h"
 #include "ui/uui_primitives.h" // uui_state_bg(), uui_fill_round_rect()
 
 // Eight: the clock, the on-screen keyboard, volume, brightness, the
@@ -391,7 +392,8 @@ static void tray_draw_item(int id, int x, int w, void *vctx) {
     int ch = ugfx_char_h();
     // `bg`, not the strip's: the glyph cells are painted opaque, so a
     // lit item would otherwise punch the strip's colour back through
-    // its own ground.
+    // its own ground. On glass, an unlit item's text blends against it.
+    bg = wm_glass_ink_bg(WM_GLASS_TASKBAR, bg, p->bar);
     if (id == clock_tray_id && clock_two_lines()) {
         int y = g->btn_y + (g->btn_h - 2 * ch) / 2;
         const char *t = tray_items[id].text;

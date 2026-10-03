@@ -289,7 +289,14 @@ void open_group(int g) {
     int hidden_advanced = 0, page_advanced = 0;
     // A selection sort over the group's settings: the registry's own
     // order has to survive as the tie-break.
-    int taken[MAX_SETTINGS];
+    static int *taken;
+    static int taken_cap;
+    if (taken_cap < g_cap) {
+        int *t = realloc(taken, (size_t)g_cap * sizeof *t);
+        if (!t) return;
+        taken = t;
+        taken_cap = g_cap;
+    }
     for (int i = 0; i < g_setting_count; i++) taken[i] = 0;
     for (;;) {
         int best = -1;

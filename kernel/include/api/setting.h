@@ -35,26 +35,16 @@
 // stack local leaves the registry holding a dangling pointer that reads
 // as plausible garbage rather than crashing.
 
-// Raising this means raising SETTING_ABI_MAX with it: a ring-3 client
-// has no allocator, so it sizes its list from that constant, and the
-// two disagreeing means a client silently showing only part of the
-// registry. The assert below is what stops that being silent.
-// 28 since `audio_device` landed, and the way it announced itself is
-// the reason this comment exists: the KTESTs register scratch settings
-// ON TOP of whatever the kernel already has, so ONE new kernel setting
-// reddened two tests about something else entirely
-// (`setting_register(&g_scratch2)` refused, registry full). If this is
-// hit again, raise it -- the cost is a few KB of bss in System
-// Settings, which sizes its arrays from the ABI twin below. Raised
-// to 32 when `brightness` made 25, to 40 when `scaling` made 29 (the
-// KTESTs' four scratch settings had filled the rest), to 48 when the
-// three network-time settings made 32, and to 56 when the two
-// `desktop.tray_*` visibility settings made 45.
-#define SETTING_MAX        96 // registered settings
-_Static_assert(SETTING_MAX == SETTING_ABI_MAX,
-               "SETTING_MAX and SETTING_ABI_MAX must agree -- a client sizes "
-               "its array from the ABI one and would truncate the list");
-#define SETTING_NAME_MAX   24 // the /etc key, e.g. "font_size"
+// THE KERNEL'S OWN SETTINGS ONLY -- ring 3 sizes its tables from
+// SETTING_OP_COUNT, so this bounds nothing a client sees. Fixed because
+// settings register from early boot. The KTESTs register scratch
+// settings ON TOP of whatever the kernel already has, so a full registry
+// first shows as two unrelated tests failing (`setting_register(&g_scratch2)`
+// refused); raise it then. 45 registered on 2026-10-03.
+#define SETTING_MAX        96 // registered kernel settings
+// 48, not the 24 it was: a family of settings shares a prefix
+// (`transparency_window_opacity`), and 23 bytes left no room for one.
+#define SETTING_NAME_MAX   48 // the /etc key, e.g. "font_size"
 
 // What a setting with no `category` is filed under. Named rather than
 // spelled in three places -- a UI, the ABI default and a test would

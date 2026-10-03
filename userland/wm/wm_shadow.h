@@ -38,6 +38,9 @@ int wm_shadow_margin(void);
 // Blend the shadow of a (x, y, w, h) rect whose corners are rounded by
 // `corner_r` (0 for square) into the scene. Honours the active clip.
 void wm_shadow_draw(int x, int y, int w, int h, int corner_r, enum wm_shadow_kind kind);
+// The same for a SEE-THROUGH body (wm_glass.h): nothing is shaded under
+// the rect but the parts of its corner boxes outside the rounded arc.
+void wm_shadow_draw_hollow(int x, int y, int w, int h, int corner_r, enum wm_shadow_kind kind);
 
 // OVERLAPPING SHADOWS COMBINE BY THE DARKEST, NOT THE PRODUCT: a pixel
 // already shadowed by alpha `s` since the last opaque paint over it is

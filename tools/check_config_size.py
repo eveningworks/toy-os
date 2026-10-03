@@ -151,6 +151,35 @@ def descriptor_text_problems(caps):
     return out
 
 
+def descriptor_name_problems():
+    """A settings.d FILE NAME whose `<namespace>.<name>` overflows the ABI.
+
+    The name crosses the setting ABI in fixed fields too
+    (SETTING_ABI_NS_MAX, SETTING_ABI_NAME_MAX), and an over-long one fails
+    quietly: the declaration still shows, but its text never matches it,
+    so its page row arrives with no label, choices or Widget= -- as
+    `desktop.transparency_window_opacity` did under the old 24-byte cap,
+    a bare dropdown of raw numbers sorted first on its page.
+    """
+    src = open(SETTING_ABI).read()
+    caps = {}
+    for key in ("SETTING_ABI_NS_MAX", "SETTING_ABI_NAME_MAX"):
+        m = re.search(r"#define\s+" + key + r"\s+(\d+)", src)
+        if m:
+            caps[key] = int(m.group(1)) - 1
+    if len(caps) != 2:
+        return []
+    out = []
+    for rel in tracked("data/etc/settings.d"):
+        base = os.path.basename(rel)
+        if base.endswith(".md") or base.startswith(("group.", "category.")) or "." not in base:
+            continue
+        ns, _, name = base.partition(".")
+        if len(ns) > caps["SETTING_ABI_NS_MAX"] or len(name) > caps["SETTING_ABI_NAME_MAX"]:
+            out.append((rel, ns, name, caps["SETTING_ABI_NS_MAX"], caps["SETTING_ABI_NAME_MAX"]))
+    return out
+
+
 def limit():
     src = open(HEADER).read()
     m = re.search(r"#define\s+ETC_CONFIG_BUF_MAX\s+(\d+)", src)
@@ -191,11 +220,20 @@ def main():
               f"-- it would be TRUNCATED MID-WORD in System Settings, at "
               f"...{value[:lim][-14:]!r}")
 
+    long_names = descriptor_name_problems()
+    for rel, ns, name, ns_cap, name_cap in long_names:
+        print(f"  {rel}: '{ns}' / '{name}' is {len(ns)} / {len(name)} bytes, over the "
+              f"{ns_cap} / {name_cap}-byte ABI fields -- its text would never reach "
+              f"the setting")
+
     for rel, n in bad:
         print(f"  {rel} is {n} bytes, over the {cap}-byte config limit "
               f"-- its last keys would be IGNORED, and the machine would "
               f"report the missing key rather than the size")
-    if bad or long_text:
+    if bad or long_text or long_names:
+        if long_names:
+            print(f"check_config_size: FAIL -- {len(long_names)} setting name(s) "
+                  f"over the ABI cap. Shorten the file's name.")
         if bad:
             print(f"check_config_size: FAIL -- {len(bad)} of {seen} file(s) "
                   f"too large. Move the prose to docs/commands/; the "

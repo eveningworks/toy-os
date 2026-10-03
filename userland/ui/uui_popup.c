@@ -5,6 +5,10 @@
 
 static const struct uui_popup_ops *g_ops;
 static void *g_ctx;
+static uui_glass_painter g_glass;
+
+void uui_popup_set_glass(uui_glass_painter fn) { g_glass = fn; }
+uui_glass_painter uui_popup_glass(void) { return g_glass; }
 
 void uui_popup_set_provider(const struct uui_popup_ops *ops, void *ctx) {
     g_ops = ops;

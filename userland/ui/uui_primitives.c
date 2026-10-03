@@ -149,6 +149,50 @@ void uui_glass_round_rect(struct ugfx_surface *s, int x, int y, int w, int h,
     }
 }
 
+static inline uint32_t mix(uint32_t under, uint32_t over, unsigned a) {
+    unsigned r = (((under >> 16) & 0xFF) * (255 - a) + ((over >> 16) & 0xFF) * a + 127) / 255;
+    unsigned g = (((under >> 8) & 0xFF) * (255 - a) + ((over >> 8) & 0xFF) * a + 127) / 255;
+    unsigned b = ((under & 0xFF) * (255 - a) + (over & 0xFF) * a + 127) / 255;
+    return r << 16 | g << 8 | b;
+}
+
+void uui_backdrop_round_rect(struct ugfx_surface *s, int x, int y, int w, int h,
+                             int radius, const uint32_t *backdrop, uint32_t c,
+                             uint8_t tint_a) {
+    if (!s || !s->pixels || w <= 0 || h <= 0) return;
+    int r = clamp_radius(radius, w, h);
+    int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > s->w) x1 = s->w;
+    if (y1 > s->h) y1 = s->h;
+    if (s->clip_active) {
+        if (x0 < s->clip_x0) x0 = s->clip_x0;
+        if (y0 < s->clip_y0) y0 = s->clip_y0;
+        if (x1 > s->clip_x1) x1 = s->clip_x1;
+        if (y1 > s->clip_y1) y1 = s->clip_y1;
+    }
+    if (x1 <= x0 || y1 <= y0) return;
+    uint32_t stride = (uint32_t)s->w;
+    for (int py = y0; py < y1; py++) {
+        int j = py - y;
+        int cy = j < r ? j : (j >= h - r ? h - 1 - j : -1);
+        uint32_t *row = s->pixels + (uint32_t)py * stride;
+        const uint32_t *brow = backdrop ? backdrop + (uint32_t)py * stride : row;
+        for (int px = x0; px < x1; px++) {
+            int i = px - x;
+            uint32_t v = mix(brow[px], c, tint_a);
+            int cx = i < r ? i : (i >= w - r ? w - 1 - i : -1);
+            if (cx >= 0 && cy >= 0) {
+                uint8_t cov = arc_coverage(r, cx, cy);
+                if (cov < 255) v = mix(row[px], v, cov);
+            }
+            row[px] = v;
+        }
+    }
+    ugfx_mark_dirty_rect(s, x0, y0, x1 - x0, y1 - y0);
+}
+
 void uui_fill_round_rect(struct ugfx_surface *s, int x, int y, int w, int h,
                          int radius, uint32_t c) {
     if (w <= 0 || h <= 0) return;

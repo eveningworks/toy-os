@@ -1,0 +1,11 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Transparency effects
+Category=Appearance
+Group=Transparency
+Default=off
+Choices=on,off
+Description=See the desktop through the taskbar, Start, menus and windows
+Order=10
+Choice.on=On
+Choice.off=Off

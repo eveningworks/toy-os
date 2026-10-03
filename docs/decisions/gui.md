@@ -8918,7 +8918,9 @@ all off.
 **Why no blur.** Mutter renders one blurred rounded rect per size class
 and 9-slices it; Plasma ships a tile set. Neither blurs per frame, and a
 software compositor with a 7 ms full frame on the laptop cannot afford
-to either. Here the falloff past an edge is a quadratic table and each
+to either. (Frosted glass does blur live now, but only its own rects, at
+half resolution and cached -- "Transparency is glass the compositor
+paints" below.) Here the falloff past an edge is a quadratic table and each
 corner a tile of `(radius + corner radius)^2` alphas computed once per
 kind from the signed distance to the arc, mirrored to the four corners.
 A shadow costs a perimeter band of blends and no square roots per
@@ -8969,6 +8971,91 @@ shadow.
 title bar tall at the default font; a fixed pixel radius would be right
 at exactly one font size (`docs/gui-guidelines.md`, "Size everything
 from the font").
+
+## Transparency is glass the compositor paints: three kinds, a client marks its region, and the blur is cached by what is under it
+
+Settings > Appearance > Transparency (`desktop.transparency*`) makes the taskbar, Start, every menu and --
+by choice -- windows see-through. `userland/wm/wm_glass.c` paints it;
+`userland/ui/ugfx_blur.c` blurs.
+
+**What real systems do.** Windows 11 has two materials: **Acrylic**, a
+live blur of whatever is behind plus a tint, on Start, the taskbar,
+menus and flyouts; and **Mica**, the WALLPAPER blurred once and sampled,
+on window backgrounds -- cheap because nothing behind a window is ever
+read. Its whole UI is one switch, "Transparency effects". Windows 7's
+Aero blurred live, with a "colour intensity" slider. KDE splits it in
+two: the **Blur** effect blurs behind a surface that asks
+(`org_kde_kwin_blur`; Wayland's newer `ext-background-effect-v1`), and
+**Translucency** sets whole-window opacity per category (inactive,
+moving, menus). picom on X11 reads `_NET_WM_WINDOW_OPACITY`, has
+`inactive-opacity` and a blur. In every one the CLIENT names the region
+and the COMPOSITOR owns the effect.
+
+**toy-os follows that split, and offers all three looks (Clear,
+Frosted, Wallpaper), chosen PER SURFACE -- taskbar, Start, menus,
+windows -- ** because each is a different trade:
+Clear is a straight blend, nearly free, and text behind it stays sharp
+enough to compete; Frosted is Acrylic; Wallpaper is Mica, and shows no
+window that is under the glass. Whole-window opacity (none, title bars
+only, inactive windows, all, and while dragging) is KWin's Translucency,
+applied by the compositor: it keeps what was beneath the window, draws
+the window, and lays the saved pixels back over it -- blurred first when
+the window glass is Frosted, the wallpaper instead when it is Wallpaper.
+One kind for everything was the first cut; a per-surface choice was asked
+for once it could be seen, and costs one setting each.
+
+**Why a client MARKS its glass rather than drawing with alpha.** Client
+buffers are XRGB, and every ugfx primitive writes the top byte as zero.
+A real alpha channel would make every widget's fill and every glyph
+premultiply against an unknown backdrop, in every app. Instead a popup
+opened with `WIN_POPUP_GLASS` fills its ground with `colour | 0xFF000000`
+and the compositor shows glass tinted that colour there; a compositor
+with transparency off -- or one that has never heard of the flag --
+shows the colour, so the client marks whether or not glass is on. The
+cost is that text on a marked ground is opaque, its edges blended
+against the tint, which shows as a faint fringe at a low opacity.
+
+**Why the blur is affordable after "Why no blur" (the shadows entry).**
+That entry is about the SHADOWS, which still cost no blur per frame; it
+held because a full blur per frame on a 7 ms software frame was out of
+reach. Three things made a live blur fit: it covers only glass rects; a
+wide one runs at HALF RESOLUTION and is upsampled bilinearly (KWin's
+dual-Kawase blur leans on the same fact: a blurred picture has no detail
+to keep), with the column passes walking rows so they do not miss the
+cache; and **each rect's blur is cached, keyed by a hash of the scene
+under it**. Most frames that repaint a frosted rect change nothing
+beneath it -- the Start menu's caret blinks, a row lights, the clock
+ticks -- so the copy is reused, and a WM surface keeps its FINISHED
+ground beside it (tint and Start's lighter column included), so an
+unchanged frame is one copy. The scene is still repainted under the rect
+every time; that is what makes the hash a measurement rather than a
+guess. Measured under KVM at 1280x720, a damage-limited frame with Start
+open: 1.9 ms off, 3.2 ms Clear, 3.3 ms Wallpaper, 3.4 ms Frosted -- the
+first Frosted cut was 11.8 ms (46 ms worst), half resolution brought it
+to 10.9, the blur cache to 5.1 and the ground cache to 3.4. On the ASUS
+at 1080p, before the ground cache: 4.4 ms off, 7.4 Clear and Wallpaper,
+14.6 Frosted.
+
+**Why a glass surface casts a HOLLOW shadow.** `wm_shadow_draw()` shades
+under the edges of its own casting rect -- a band a corner radius deep --
+because an opaque body painted over it. Through Clear glass at 40% that
+band read as a dark outline round the floating taskbar and along the top
+of a glass title bar (Frosted smeared it, Wallpaper never shows it);
+`wm_shadow_draw_hollow()` leaves the body alone but for its corner
+boxes, which the rounded cut reveals.
+
+**Why frosted glass is part of its rect's damage.** A blurred pixel reads
+its neighbours, so a damage box touching part of a frosted rect would
+blur pixels this frame never repainted -- a previous frame's, perhaps
+already glass. `wm_render_frame()` grows the box over every frosted rect
+it touches first. Clear and Wallpaper are per-pixel and need nothing.
+`tools/glass_test.py` runs under the damage verifier, and dropping the
+growth turns it red.
+
+**Why it is off by default.** Every GUI tool probes colours on an opaque
+desktop, and the cost on the laptop's 1080p panel is unmeasured.
+Windows ships it on; flipping the default is one line in
+`data/etc/settings.d/desktop.transparency` once that number exists.
 
 ## Window animations are ghosts: one snapshot, scaled and faded, in place of the window
 

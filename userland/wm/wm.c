@@ -27,6 +27,7 @@
 #include <stdlib.h>   // free: the client widget map
 #include "wm_internal.h"
 #include "wm_shadow.h"
+#include "wm_glass.h"
 #include "wm_anim.h"   // wm_damage_window_rect(): a window's rect plus its shadow
 #include "wm_idle.h"
 #include "wm_dnd.h"
@@ -1105,6 +1106,7 @@ void wm_run(void) {
         taskbar_poll_config();
         calendar_poll_config(); // the locale's first weekday
         wm_shadow_poll_config(); // `desktop.shadows`, same poll
+        wm_glass_poll_config();  // `desktop.transparency*`, same poll
         wm_anim_poll_config();   // `desktop.animations`, same poll
         volume_poll_config();   // the level and the device list, and the debounced write
         brightness_poll_config();

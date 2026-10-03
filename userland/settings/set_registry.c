@@ -3,44 +3,44 @@
 
 // --- what the registry says ------------------------------------------
 
-char     g_label[MAX_SETTINGS][SETTING_ABI_LABEL_MAX];
-char     g_desc[MAX_SETTINGS][SETTING_ABI_DESC_MAX];
+char     (*g_label)[SETTING_ABI_LABEL_MAX];
+char     (*g_desc)[SETTING_ABI_DESC_MAX];
 // The QUALIFIED name ("system.font_size"): a setting's identity is
 // (namespace, name), so the bare key is not necessarily usable alone.
-char     g_name[MAX_SETTINGS][SETTING_ABI_QUALIFIED_MAX];
-char     g_ns[MAX_SETTINGS][SETTING_ABI_NS_MAX];
-char     g_file[MAX_SETTINGS][SETTING_ABI_FILE_MAX];
-char     g_value[MAX_SETTINGS][SETTING_ABI_VALUE_MAX];
-char     g_cat_of[MAX_SETTINGS][SETTING_ABI_CATEGORY_MAX];
-char     g_group_of[MAX_SETTINGS][SETTING_ABI_CATEGORY_MAX];
-uint32_t g_type[MAX_SETTINGS];
-uint32_t g_widget[MAX_SETTINGS];
+char     (*g_name)[SETTING_ABI_QUALIFIED_MAX];
+char     (*g_ns)[SETTING_ABI_NS_MAX];
+char     (*g_file)[SETTING_ABI_FILE_MAX];
+char     (*g_value)[SETTING_ABI_VALUE_MAX];
+char     (*g_cat_of)[SETTING_ABI_CATEGORY_MAX];
+char     (*g_group_of)[SETTING_ABI_CATEGORY_MAX];
+uint32_t *g_type;
+uint32_t *g_widget;
 // INT settings only: the range the REGISTRY enforces, reported so a
 // control can bound itself to it. Cached with everything else rather
 // than re-read per draw -- SETTING_OP_INFO is a syscall.
-int32_t  g_imin[MAX_SETTINGS], g_imax[MAX_SETTINGS], g_istep[MAX_SETTINGS];
-char     g_unit[MAX_SETTINGS][SETTING_ABI_UNIT_MAX];
-uint32_t g_sflags[MAX_SETTINGS];
-int      g_order[MAX_SETTINGS];
+int32_t  *g_imin, *g_imax, *g_istep;
+char     (*g_unit)[SETTING_ABI_UNIT_MAX];
+uint32_t *g_sflags;
+int      *g_order;
 // Why this setting cannot be changed on this machine, or empty. From
 // the registry (abi/setting_abi.h) -- the app never decides this, and
 // never invents the sentence, because a control the UI disabled on a
 // rule of its own is one the registry would still let `config set`
 // change.
-char     g_unavail[MAX_SETTINGS][SETTING_ABI_DESC_MAX];
+char     (*g_unavail)[SETTING_ABI_DESC_MAX];
 int      g_setting_count;
 uint32_t g_generation;
 
 // The sidebar: categories, and the pages under them.
-char g_cat[MAX_CATEGORIES][SETTING_ABI_CATEGORY_MAX];
+char (*g_cat)[SETTING_ABI_CATEGORY_MAX];
 int  g_cat_count;
-char g_group_cat[MAX_GROUPS][SETTING_ABI_CATEGORY_MAX];
-char g_group_key[MAX_GROUPS][SETTING_ABI_CATEGORY_MAX];
-char g_group_label[MAX_GROUPS][SETTING_ABI_LABEL_MAX];
+char (*g_group_cat)[SETTING_ABI_CATEGORY_MAX];
+char (*g_group_key)[SETTING_ABI_CATEGORY_MAX];
+char (*g_group_label)[SETTING_ABI_LABEL_MAX];
 // Where each category and page sits, from /etc/settings.d (lib/
 // usetting.h). Parallel to the tables above and sorted with them.
-int g_cat_order[MAX_CATEGORIES];
-int g_group_order[MAX_GROUPS];
+int *g_cat_order;
+int *g_group_order;
 // **THE SIDEBAR LABEL, WHICH IS THE PAGE'S OWN UNLESS IT COLLIDES.**
 // A flat list has no category captions to disambiguate by position, and
 // several names genuinely repeat: the Kernel category's pages are
@@ -50,10 +50,10 @@ int g_group_order[MAX_GROUPS];
 // the common row stays short. DERIVED per rebuild rather than a list
 // somebody maintains -- a hardcoded "prefix the Kernel ones" is wrong
 // the day two other categories collide.
-char g_group_display[MAX_GROUPS][GROUP_DISPLAY_MAX];
+char (*g_group_display)[GROUP_DISPLAY_MAX];
 int  g_group_count;
 
-struct uui_sidebar_row g_nodes[MAX_CATEGORIES + MAX_GROUPS + 1];
+struct uui_sidebar_row *g_nodes;   // 2 * g_cap + 1 rows
 int g_node_count;
 
 
@@ -147,7 +147,7 @@ int group_matches(int g) {
 // lib/usetting.h) -- and the open page stays listed, or a page opened by
 // name would leave the sidebar highlighting nothing.
 int g_show_debug;
-static int g_group_debug[MAX_GROUPS];
+static int *g_group_debug;
 
 int group_shown(int g) {
     return g_show_debug || !g_group_debug[g] || (g == g_page_group && !g_show_sysinfo);
@@ -265,7 +265,7 @@ void rebuild_sidebar(void) {
     // never ambiguous (the flat list with rules this replaced named no
     // category at all). A search filter keeps only matching pages and
     // the headings over them.
-    int rows_max = (int)(sizeof g_nodes / sizeof g_nodes[0]);
+    int rows_max = 2 * g_cap + 1;
     int shown = 0;
     for (int c = 0; c < g_cat_count; c++) {
         int heading = 0;
@@ -311,6 +311,29 @@ void rebuild_sidebar(void) {
     if (keep >= 0) uui_sidebar_select_id(&g_tree, keep);
 }
 
+int g_cap;
+
+// Every table to `need` rows, growing only: a reload that shrinks keeps
+// what it has. A failed grow leaves g_cap where it was, so the caller
+// lists what fits rather than writing past it.
+#define GROW(p, n) do { void *q_ = realloc((p), (size_t)(n) * sizeof *(p)); \
+                        if (!q_) return 0; (p) = q_; } while (0)
+static int grow_tables(int need) {
+    if (need <= g_cap) return 1;
+    int cap = need + 16;
+    GROW(g_label, cap); GROW(g_desc, cap); GROW(g_name, cap); GROW(g_ns, cap);
+    GROW(g_file, cap); GROW(g_value, cap); GROW(g_cat_of, cap); GROW(g_group_of, cap);
+    GROW(g_type, cap); GROW(g_widget, cap); GROW(g_imin, cap); GROW(g_imax, cap);
+    GROW(g_istep, cap); GROW(g_unit, cap); GROW(g_sflags, cap); GROW(g_order, cap);
+    GROW(g_unavail, cap);
+    GROW(g_cat, cap); GROW(g_group_cat, cap); GROW(g_group_key, cap); GROW(g_group_label, cap);
+    GROW(g_cat_order, cap); GROW(g_group_order, cap); GROW(g_group_display, cap);
+    GROW(g_group_debug, cap);
+    GROW(g_nodes, 2 * cap + 1);
+    g_cap = cap;
+    return 1;
+}
+
 int reload_settings(void) {
     struct setting_msg m;
     memset(&m, 0, sizeof m);
@@ -318,7 +341,10 @@ int reload_settings(void) {
     if (usetting_dispatch(&m) != 0) { g_setting_count = 0; return 0; }
 
     int n = m.count;
-    if (n > MAX_SETTINGS) n = MAX_SETTINGS;
+    // Room for the registry AND a screensaver's options after it.
+    grow_tables(n + USAVER_OPT_MAX);
+    if (n > g_cap - USAVER_OPT_MAX) n = g_cap - USAVER_OPT_MAX;
+    if (n < 0) n = 0;
     g_setting_count = 0;
 
     for (int i = 0; i < n; i++) {
@@ -358,13 +384,18 @@ int reload_settings(void) {
     //
     // TWO PASSES, because appending while still comparing would suffix
     // only the FIRST of a clashing pair.
-    int clash[MAX_SETTINGS];
-    for (int i = 0; i < g_setting_count; i++) {
+    static int *clash;
+    static int clash_cap;
+    if (clash_cap < g_cap) {
+        int *c = realloc(clash, (size_t)g_cap * sizeof *c);
+        if (c) { clash = c; clash_cap = g_cap; }
+    }
+    for (int i = 0; i < g_setting_count && i < clash_cap; i++) {
         clash[i] = 0;
         for (int j = 0; j < g_setting_count && !clash[i]; j++)
             if (j != i && strcmp(g_label[i], g_label[j]) == 0) clash[i] = 1;
     }
-    for (int i = 0; i < g_setting_count; i++) {
+    for (int i = 0; i < g_setting_count && i < clash_cap; i++) {
         if (!clash[i] || !g_ns[i][0]) continue;
         char q[SETTING_ABI_LABEL_MAX];
         snprintf(q, sizeof q, "%s  (%s)", g_label[i], g_ns[i]);

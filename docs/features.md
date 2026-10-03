@@ -175,6 +175,15 @@ same 101-glyph set the baked one carries, so its other few thousand
 glyphs are parsed and unreachable until UTF-8 lands, and kerning comes
 from the legacy `kern` table only.
 
+**Transparency.** The taskbar, Start, every menu (the desktop's and
+each app's) and, by choice, windows can be glass: clear, frosted (a live
+blur of whatever is behind, Windows 11's Acrylic) or the blurred
+wallpaper alone (Mica), each surface at its own opacity, with windows
+see-through by title bar, when inactive, always, or while dragged --
+each surface choosing its own kind. A client only marks where its glass is; the compositor owns the effect,
+as KDE's blur protocol has it. Off by default; Settings > Appearance >
+Transparency.
+
 **Images are decoded in ring 3, and the kernel never sees one.** A
 baseline JPEG decoder sits behind a codec table keyed on magic bytes,
 so a second format is a row and a file rather than a branch. All fixed

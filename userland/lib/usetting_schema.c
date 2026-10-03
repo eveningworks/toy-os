@@ -17,7 +17,10 @@
 
 #define SCHEMA_PATH_MAX 192
 
-static char g_names[USCHEMA_MAX][SETTING_ABI_QUALIFIED_MAX];
+// GROWN AS THE DIRECTORY IS READ: one machine's declarations, however
+// many. A fixed table silently stopped listing at its size.
+static char (*g_names)[SETTING_ABI_QUALIFIED_MAX];
+static int  g_names_cap;
 static int  g_name_count = -1; // -1 = never listed
 static struct uschema g_cached;
 static char g_cached_name[SETTING_ABI_QUALIFIED_MAX];
@@ -46,10 +49,17 @@ static void list_names(void) {
     DIR *d = opendir(SETTING_TEXT_DIR);
     if (!d) return; // no directory is a machine with no declarations
     struct dirent *e;
-    while ((e = readdir(d)) && g_name_count < USCHEMA_MAX) {
+    while ((e = readdir(d))) {
         if (e->d_type == DT_DIR) continue;
         if (!strchr(e->d_name, '.')) continue; // not "<ns>.<name>"
         if (!declares(e->d_name)) continue;
+        if (g_name_count == g_names_cap) {
+            int cap = g_names_cap ? 2 * g_names_cap : 64;
+            void *p = realloc(g_names, (size_t)cap * sizeof *g_names);
+            if (!p) break;   // what fits, rather than nothing
+            g_names = p;
+            g_names_cap = cap;
+        }
         strlcpy(g_names[g_name_count], e->d_name, sizeof g_names[0]);
         g_name_count++;
     }

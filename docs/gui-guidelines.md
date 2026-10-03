@@ -540,6 +540,24 @@ taskbar's are all `uui_menubar`, so they are one design -- Windows 11's
 Esc one level at a time, and a letter jumping to its row -- the
 widget's keymap, through the overlay registry's `key` op.
 
+## Transparency: the shell's surfaces can be glass, and the default is opaque
+
+Settings > Appearance > Transparency turns the taskbar, Start, every
+menu and (by choice) windows into glass -- Windows 11's Acrylic and
+Mica, KDE's Blur and Translucency (`docs/decisions/gui.md` has the
+comparison). Three rules for anything drawn on it:
+
+- **The ground is the compositor's** (`wm_glass_paint()`; a client menu
+  marks its ground, `UUI_POPUP_GLASS`). Design every surface OPAQUE
+  first -- that is what most people see -- and let glass be a variation.
+- **Resting text blends against the glass** (`UGFX_TRANSPARENT` as its
+  `bg`), so it carries no halo; a lit row -- hover, selection, a pressed
+  button -- stays an opaque pill, which is what keeps it readable over a
+  busy backdrop.
+- **Contents never go see-through on their own.** A window is translucent
+  only by the window setting, whole, never because an app drew a lighter
+  ground.
+
 ## The desktop: icons are glass over the wallpaper
 
 The desktop shows a photograph, so nothing on it is a solid fill:

@@ -50,25 +50,20 @@ _Static_assert(UUI_TEXTBOX_MAX >= SETTING_ABI_VALUE_MAX,
                "a text field must hold a whole setting value, or editing one "
                "silently truncates it");
 
-// THE REGISTRY'S SETTINGS, PLUS THE SELECTED SCREENSAVER'S OPTIONS.
-// The options are not registered anywhere (see g_saver_base below);
-// they are synthesised into these arrays at indices past the registry's
-// so that one code path draws both.
-#define MAX_SETTINGS   (SETTING_ABI_MAX + USAVER_OPT_MAX)
+// THE TABLES ARE SIZED FROM THE REGISTRY'S OWN COUNT, at every reload
+// (reload_settings()), so there is no cap here for the registry to
+// outgrow -- one fixed size ran out three times, each time dropping the
+// LAST settings without a word. `g_cap` rows: the registry's settings,
+// then room for the selected screensaver's options, which are not
+// registered anywhere (see g_saver_base) and are synthesised at indices
+// past the registry's so that one code path draws both. A category and a
+// page are both keyed off settings, so neither can outnumber them.
+extern int g_cap;
+#define MAX_SETTINGS   g_cap
 // Room for every timezone the kernel ships plus hand-added rows.
 #define MAX_CHOICES    128
-// **DERIVED, NEVER HAND-PICKED.** A category and a page are both keyed
-// off settings, so neither can outnumber them: a setting with no group
-// becomes a page of its own, which is the worst case and is exactly
-// MAX_SETTINGS. Both of these were hand-picked numbers before, and both
-// failed the same way twice -- 16 pages when Network Time made 17, then
-// 24 when this commit's category split refilled it -- each time cutting
-// the LAST category (Storage, then Kernel) down to a heading with no
-// children: a top-level row that cannot be clicked and has no page
-// behind it. The overflow was logged, and the log had rotated by the
-// time anyone looked, so it presented as "Storage does nothing".
-#define MAX_CATEGORIES MAX_SETTINGS
-#define MAX_GROUPS     MAX_SETTINGS
+#define MAX_CATEGORIES g_cap
+#define MAX_GROUPS     g_cap
 // Controls on one page. A group larger than this would be a page nobody
 // can take in anyway; the overflow is REPORTED rather than silently cut.
 //
@@ -186,33 +181,33 @@ void focus_ring_open(void);
 void focus_ring_close(void);
 
 // set_registry.c
-extern char     g_label[MAX_SETTINGS][SETTING_ABI_LABEL_MAX];
-extern char     g_desc[MAX_SETTINGS][SETTING_ABI_DESC_MAX];
-extern char     g_name[MAX_SETTINGS][SETTING_ABI_QUALIFIED_MAX];
-extern char     g_ns[MAX_SETTINGS][SETTING_ABI_NS_MAX];
-extern char     g_file[MAX_SETTINGS][SETTING_ABI_FILE_MAX];
-extern char     g_value[MAX_SETTINGS][SETTING_ABI_VALUE_MAX];
-extern char     g_cat_of[MAX_SETTINGS][SETTING_ABI_CATEGORY_MAX];
-extern char     g_group_of[MAX_SETTINGS][SETTING_ABI_CATEGORY_MAX];
-extern uint32_t g_type[MAX_SETTINGS];
-extern uint32_t g_widget[MAX_SETTINGS];
-extern int32_t  g_imin[MAX_SETTINGS], g_imax[MAX_SETTINGS], g_istep[MAX_SETTINGS];
-extern char     g_unit[MAX_SETTINGS][SETTING_ABI_UNIT_MAX];
-extern uint32_t g_sflags[MAX_SETTINGS];
-extern int      g_order[MAX_SETTINGS];
-extern char     g_unavail[MAX_SETTINGS][SETTING_ABI_DESC_MAX];
+extern char     (*g_label)[SETTING_ABI_LABEL_MAX];
+extern char     (*g_desc)[SETTING_ABI_DESC_MAX];
+extern char     (*g_name)[SETTING_ABI_QUALIFIED_MAX];
+extern char     (*g_ns)[SETTING_ABI_NS_MAX];
+extern char     (*g_file)[SETTING_ABI_FILE_MAX];
+extern char     (*g_value)[SETTING_ABI_VALUE_MAX];
+extern char     (*g_cat_of)[SETTING_ABI_CATEGORY_MAX];
+extern char     (*g_group_of)[SETTING_ABI_CATEGORY_MAX];
+extern uint32_t *g_type;
+extern uint32_t *g_widget;
+extern int32_t  *g_imin, *g_imax, *g_istep;
+extern char     (*g_unit)[SETTING_ABI_UNIT_MAX];
+extern uint32_t *g_sflags;
+extern int      *g_order;
+extern char     (*g_unavail)[SETTING_ABI_DESC_MAX];
 extern int      g_setting_count;
 extern uint32_t g_generation;
-extern char g_cat[MAX_CATEGORIES][SETTING_ABI_CATEGORY_MAX];
+extern char (*g_cat)[SETTING_ABI_CATEGORY_MAX];
 extern int  g_cat_count;
-extern char g_group_cat[MAX_GROUPS][SETTING_ABI_CATEGORY_MAX];
-extern char g_group_key[MAX_GROUPS][SETTING_ABI_CATEGORY_MAX];
-extern char g_group_label[MAX_GROUPS][SETTING_ABI_LABEL_MAX];
-extern int g_cat_order[MAX_CATEGORIES];
-extern int g_group_order[MAX_GROUPS];
-extern char g_group_display[MAX_GROUPS][GROUP_DISPLAY_MAX];
+extern char (*g_group_cat)[SETTING_ABI_CATEGORY_MAX];
+extern char (*g_group_key)[SETTING_ABI_CATEGORY_MAX];
+extern char (*g_group_label)[SETTING_ABI_LABEL_MAX];
+extern int *g_cat_order;
+extern int *g_group_order;
+extern char (*g_group_display)[GROUP_DISPLAY_MAX];
 extern int  g_group_count;
-extern struct uui_sidebar_row g_nodes[MAX_CATEGORIES + MAX_GROUPS + 1];
+extern struct uui_sidebar_row *g_nodes;   // 2 * g_cap + 1 rows
 extern int g_node_count;
 const char *group_key_of(int i);
 const char *category_icon(const char *cat);

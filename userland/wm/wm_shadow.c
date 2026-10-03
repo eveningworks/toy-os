@@ -178,6 +178,28 @@ static void blend_max(struct ugfx_surface *s, int x0, int py, int n,
 // One row of a LEFT or RIGHT band, where the coverage varies along the
 // run: built into `cov` and emitted as a single span. The run is at
 // most the shadow's reach plus a corner radius wide.
+// A HOLLOW shadow's body: the rect and its corner radius. A pixel inside
+// it is shaded only by how far it lies OUTSIDE the body's arc.
+static int g_hollow;
+static int g_bx, g_by, g_bw, g_bh, g_br;
+
+// How much of pixel (px, py) the rounded body covers, 0..255 -- sixteen
+// samples, as wm_render.c's window corners count it.
+static int body_cover(int px, int py) {
+    if (px < g_bx || py < g_by || px >= g_bx + g_bw || py >= g_by + g_bh) return 0;
+    int ix = px - g_bx < g_bx + g_bw - 1 - px ? px - g_bx : g_bx + g_bw - 1 - px;
+    int iy = py - g_by < g_by + g_bh - 1 - py ? py - g_by : g_by + g_bh - 1 - py;
+    int r = g_br;
+    if (ix >= r || iy >= r) return 255;
+    int in = 0;
+    for (int sy = 0; sy < 4; sy++)
+        for (int sx = 0; sx < 4; sx++) {
+            int cx = 8 * ix + 2 * sx + 1 - 8 * r, cy = 8 * iy + 2 * sy + 1 - 8 * r;
+            if (cx * cx + cy * cy <= 64 * r * r) in++;
+        }
+    return in * 255 / 16;
+}
+
 static void outer_span(struct ugfx_surface *s, const struct tile *t,
                        int x0, int x1, int py,
                        int cx0, int cx1, int cy0, int cy1, unsigned char *cov) {
@@ -187,10 +209,18 @@ static void outer_span(struct ugfx_surface *s, const struct tile *t,
     int any = 0;
     for (int i = 0; i < n; i++) {
         int al = shadow_alpha(t, x0 + i, py, cx0, cx1, cy0, cy1);
+        if (g_hollow && al) al = al * (255 - body_cover(x0 + i, py)) / 255;
         cov[i] = (unsigned char)al;
         any |= al;
     }
     if (any) blend_max(s, x0, py, n, cov, 0);
+}
+
+void wm_shadow_draw_hollow(int x, int y, int w, int h, int corner_r, enum wm_shadow_kind kind) {
+    g_hollow = 1;
+    g_bx = x; g_by = y; g_bw = w; g_bh = h; g_br = corner_r > 0 ? corner_r : 0;
+    wm_shadow_draw(x, y, w, h, corner_r, kind);
+    g_hollow = 0;
 }
 
 void wm_shadow_draw(int x, int y, int w, int h, int corner_r, enum wm_shadow_kind kind) {
@@ -229,6 +259,10 @@ void wm_shadow_draw(int x, int y, int w, int h, int corner_r, enum wm_shadow_kin
     // boxes: skipped, since the rounded cut is the only place a
     // covered pixel shows through.
     int iy0 = y + cr, iy1 = y + h - cr;
+    // HOLLOW: a see-through body would show every shaded pixel under it,
+    // so the whole rect is skipped bar its corner boxes, and those are
+    // shaded only outside the arc (body_cover()).
+    if (g_hollow) { iy0 = y; iy1 = y + h; }
 
     // EACH ROW IS THREE SEGMENTS, and the long one is flat. Left and
     // right of the arc centres the coverage varies, so those are built
@@ -243,6 +277,14 @@ void wm_shadow_draw(int x, int y, int w, int h, int corner_r, enum wm_shadow_kin
     int right0 = cx1 + 1 > bx0 ? cx1 + 1 : bx0;
 
     for (int py = by0; py < by1; py++) {
+        // The body's own columns of a side band, on a hollow row that is
+        // not a corner's: under the glass, so not shaded.
+        int side_in = g_hollow && py >= y + cr && py < y + h - cr;
+        if (side_in) {
+            outer_span(s, t, bx0, left1 < x ? left1 : x, py, cx0, cx1, cy0, cy1, cov);
+            outer_span(s, t, right0 > x + w ? right0 : x + w, bx1, py, cx0, cx1, cy0, cy1, cov);
+            continue;
+        }
         outer_span(s, t, bx0, left1, py, cx0, cx1, cy0, cy1, cov);
         if (!(py >= iy0 && py < iy1) && mid1 > mid0) {
             int dy = py < cy0 ? cy0 - py : (py > cy1 ? py - cy1 : 0);

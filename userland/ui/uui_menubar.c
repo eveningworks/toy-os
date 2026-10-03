@@ -238,7 +238,7 @@ static void open_level(struct uui_menubar *m, int l,
     // which is the whole reason it is a surface and not a rectangle.
     int surf = uui_popup_open(ax, side ? ay - 1 - air() : ay, aw, ah, w, h,
                               side ? UUI_POPUP_RIGHT : UUI_POPUP_BELOW,
-                              UUI_POPUP_GRAB, level_done, m, &px, &py);
+                              UUI_POPUP_GRAB | UUI_POPUP_GLASS, level_done, m, &px, &py);
     if (!surf) place(m, ax, ay, aw, ah, w, h, side, &px, &py);
 
     struct uui_menu_level *lv = &m->level[l];
@@ -542,11 +542,22 @@ static void draw_level_at(struct ugfx_surface *s, const struct uui_menubar *m,
                            int on_surface) {
     int lx = lv->x - ox, ly = lv->y - oy;
     uint32_t bg = m_popup_bg(m), edge = uui_popup_border();
+    // What a resting row's text blends against: the ground, or -- over
+    // the compositor's glass -- whatever it painted there.
+    uint32_t ground = bg;
+    uui_glass_painter glass = on_surface ? 0 : uui_popup_glass();
     if (on_surface) {
         // SQUARE: the compositor rounds a popup surface's corners against
         // what is really behind it, and carries this edge round the arc.
-        ugfx_fill_rect(s, lx, ly, lv->w, lv->h, bg);
+        // The ground is MARKED as glass (UUI_POPUP_GLASS_PX); the text on
+        // it stays opaque, its edges blended against the tint.
+        ugfx_fill_rect(s, lx, ly, lv->w, lv->h, bg | UUI_POPUP_GLASS_PX);
         ugfx_draw_rect(s, lx, ly, lv->w, lv->h, edge);
+    } else if (glass) {
+        int r = uui_popup_radius();
+        glass(s, lx, ly, lv->w, lv->h, r, bg);
+        uui_glass_round_rect(s, lx, ly, lv->w, lv->h, r, edge, 0, 255);
+        ground = UGFX_TRANSPARENT;
     } else {
         int r = uui_popup_radius();
         uui_fill_round_rect(s, lx, ly, lv->w, lv->h, r, edge);
@@ -578,7 +589,7 @@ static void draw_level_at(struct ugfx_surface *s, const struct uui_menubar *m,
 
         unsigned f = flags_of(m, it);
         int off = (f & UUI_MI_DISABLED) != 0;
-        uint32_t rb = bg;
+        uint32_t rb = ground;
         if (i == lv->hot && !off) {
             rb = m_hot_bg(m);
             uui_fill_round_rect(s, px, y, pw, h, pill_r(), rb);

@@ -668,6 +668,9 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Per-icon context menus (Rename/Properties)~~ DONE 2026-10-01 -- Rename in place (F2), Properties (Alt+Enter)
 - [x] ~~The Start menu's app column does not scroll~~ it does, past `SM_MAX_ROWS` -- the entry was stale (2026-10-01)
 - [x] ~~Modern menus and desktop~~ DONE 2026-10-01 -- Windows 11's card for every menu, glass selection and hover, Open > by category
+- [x] ~~Transparency for the taskbar, Start, menus and windows~~ DONE 2026-10-03 -- clear/frosted/wallpaper glass, Appearance > Transparency
+- [ ] Glass on the tray flyouts, the calendar, taskbar peek and dropdown lists -- they still draw their own opaque card
+- [ ] Measure transparency on the laptop, then decide whether it ships ON (Windows 11's default) -- off until `gui compositor` says
 - [ ] Full dirty-rect compositor
 - [x] ~~Taskbar notification area (tray)~~ done
 - [x] ~~A modern taskbar~~ DONE 2026-09-29 -- labelled or centred, floating or not, dark or light (`desktop.taskbar_*`)

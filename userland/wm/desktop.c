@@ -408,6 +408,7 @@ static struct uui_image wallpaper_view;  // placement, and the scaled cache
 static char wallpaper_name[SETTING_ABI_VALUE_MAX];
 static char wallpaper_mode[16];
 static int wallpaper_loaded;
+static uint32_t g_background_gen;   // desktop_background_gen()
 
 // Reads the two settings and reloads only when something actually
 // changed -- so this is safe to call on a generation bump, which fires
@@ -440,6 +441,7 @@ static void wallpaper_reload(void) {
 
     k_strlcpy(wallpaper_name, name, sizeof wallpaper_name);
     k_strlcpy(wallpaper_mode, mode, sizeof wallpaper_mode);
+    g_background_gen++;
 
     // THE WHOLE DESKTOP IS NOW WRONG, so declare it rather than waiting
     // to be noticed. Honest scope: this makes the change PROMPT, not
@@ -554,6 +556,15 @@ static void draw_background(void) {
     }
     ugfx_fill(wm_surface(), DESKTOP_BG);
 }
+
+void desktop_draw_background_into(struct ugfx_surface *dst) {
+    g_wm_surface_override = dst;
+    ugfx_clear_clip_rect(dst);
+    draw_background();
+    g_wm_surface_override = 0;
+}
+
+uint32_t desktop_background_gen(void) { return g_background_gen; }
 
 // The rect a press or a band tests against: the centred icon box plus
 // its label lines. One function, so drawing, hit-testing and the debug

@@ -1,0 +1,25 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Menu opacity
+Category=Appearance
+Group=Transparency
+Default=85
+Choices=40,45,50,55,60,65,70,75,80,85,90,95,100
+Widget=slider
+Description=Context menus and app menus
+Order=50
+Choice.40=40%
+Choice.45=45%
+Choice.50=50%
+Choice.55=55%
+Choice.60=60%
+Choice.65=65%
+Choice.70=70%
+Choice.75=75%
+Choice.80=80%
+Choice.85=85%
+Choice.90=90%
+Choice.95=95%
+Choice.100=100%
+Requires=desktop.transparency=on
+RequiresReason=Turn on Transparency effects first

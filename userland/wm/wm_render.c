@@ -23,6 +23,7 @@
 #include "wm_taskbar.h"
 #include "wm_peek.h"
 #include "wm_shadow.h"
+#include "wm_glass.h"
 #include "wm_anim.h"
 #include "lib/icon_cache.h"
 #include "cursor_theme.h"
@@ -1003,7 +1004,17 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     uint32_t winbg = UTHEME_WINDOW_BG;
     int can_resize = win->resizable;
 
-    ugfx_fill_rect(wm_surface(), win->x, win->y, win->w, win->h, winbg);
+    // GLASS TITLE BARS paint the bar over what is beneath FIRST, so the
+    // body's fill must leave that band alone (wm_glass.h).
+    int glass = wm_glass_titlebars() && idx >= 0;
+    if (glass) {
+        wm_glass_paint(WM_GLASS_WINDOW, win->x + 1, win->y + 1, win->w - 2, WM_TITLEBAR_H,
+                       0, titlebar);
+        ugfx_fill_rect(wm_surface(), win->x, win->y + 1 + WM_TITLEBAR_H, win->w,
+                       win->h - 1 - WM_TITLEBAR_H, winbg);
+    } else {
+        ugfx_fill_rect(wm_surface(), win->x, win->y, win->w, win->h, winbg);
+    }
 
     // A 1px hairline in one colour, which the rounded corners continue.
     uint32_t outline = FRAME_OUTLINE;
@@ -1012,7 +1023,8 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     ugfx_fill_rect(wm_surface(), win->x, win->y + win->h - 1, win->w, 1, outline);   // bottom
     ugfx_fill_rect(wm_surface(), win->x + win->w - 1, win->y, 1, win->h, outline);   // right
 
-    ugfx_fill_rect(wm_surface(), win->x + 1, win->y + 1, win->w - 2, WM_TITLEBAR_H, titlebar);
+    if (!glass)
+        ugfx_fill_rect(wm_surface(), win->x + 1, win->y + 1, win->w - 2, WM_TITLEBAR_H, titlebar);
 
     struct btn_rects r = title_buttons(win);
 
@@ -1060,7 +1072,8 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     int i = 0;
     for (; shown[i] && i < max_chars && i < (int)sizeof title_buf - 1; i++) title_buf[i] = shown[i];
     title_buf[i] = '\0';
-    ugfx_draw_string(wm_surface(), text_x, win->y + (WM_TITLEBAR_H - ugfx_char_h()) / 2, title_buf, titletext, titlebar);
+    ugfx_draw_string(wm_surface(), text_x, win->y + (WM_TITLEBAR_H - ugfx_char_h()) / 2, title_buf,
+                     titletext, glass ? UGFX_TRANSPARENT : titlebar);
 
     uint32_t btnbg = ugfx_rgb(230, 230, 235);
     uint32_t btnfg = UTHEME_TEXT;
@@ -1234,10 +1247,16 @@ static void draw_taskbar(void) {
     // this same pass, which is also what the round corners blend over.
     if (g.radius > 0) {
         if (wm_shadow_enabled())
-            wm_shadow_draw(g.px, g.py, g.pw, g.ph, g.radius, WM_SHADOW_POPUP);
-        tb_ground(g.px, g.py, g.pw, g.ph, g.radius, p->bar, 1, p->edge);
+            (wm_glass_on(WM_GLASS_TASKBAR) ? wm_shadow_draw_hollow : wm_shadow_draw)(
+                g.px, g.py, g.pw, g.ph, g.radius, WM_SHADOW_POPUP);
+        if (wm_glass_on(WM_GLASS_TASKBAR)) {
+            wm_glass_paint(WM_GLASS_TASKBAR, g.px, g.py, g.pw, g.ph, g.radius, p->bar);
+            uui_glass_round_rect(s, g.px, g.py, g.pw, g.ph, g.radius, p->edge, 0, 255);
+        } else {
+            tb_ground(g.px, g.py, g.pw, g.ph, g.radius, p->bar, 1, p->edge);
+        }
     } else {
-        ugfx_fill_rect(s, g.px, g.py, g.pw, g.ph, p->bar);
+        wm_glass_paint(WM_GLASS_TASKBAR, g.px, g.py, g.pw, g.ph, 0, p->bar);
         wm_shadow_cover(g.px, g.py, g.pw, g.ph);
         ugfx_fill_rect(s, g.px, g.py, g.pw, 1, p->edge);
     }
@@ -1259,12 +1278,13 @@ static void draw_taskbar(void) {
             ugfx_blit_tinted(s, mx, my, m->w, m->h, m->px, m->w, p->text);
             if (taskbar_start_mode() == START_BUTTON_BOTH) {
                 int lx = mx + msz + TB_ICON_GAP;
-                ugfx_draw_string_clipped(s, lx, ty, sx + sw - TB_PAD - lx,
-                                         START_LABEL, p->text, bg);
+                ugfx_draw_string_clipped(s, lx, ty, sx + sw - TB_PAD - lx, START_LABEL, p->text,
+                                         wm_glass_ink_bg(WM_GLASS_TASKBAR, bg, p->bar));
             }
         } else {
             int lw = ugfx_text_width(START_LABEL);
-            ugfx_draw_string_clipped(s, sx + (sw - lw) / 2, ty, sw, START_LABEL, p->text, bg);
+            ugfx_draw_string_clipped(s, sx + (sw - lw) / 2, ty, sw, START_LABEL, p->text,
+                                     wm_glass_ink_bg(WM_GLASS_TASKBAR, bg, p->bar));
         }
     }
 
@@ -1323,7 +1343,8 @@ static void draw_taskbar(void) {
             } else {
                 char two[3] = { tb->label[0], tb->label[1], 0 };
                 int lw = ugfx_text_width(two);
-                ugfx_draw_string_clipped(s, x + (w - lw) / 2, ty, w, two, p->text, bg);
+                ugfx_draw_string_clipped(s, x + (w - lw) / 2, ty, w, two, p->text,
+                                         wm_glass_ink_bg(WM_GLASS_TASKBAR, bg, p->bar));
             }
             // THE PILL: short and grey for an open window, long and in
             // the accent for the focused one, doubled for a group --
@@ -1350,7 +1371,8 @@ static void draw_taskbar(void) {
             lx += ico->w + TB_ICON_GAP;
         }
         ugfx_draw_string_clipped(s, lx, ty, x + w - TB_PAD - lx, tb->label,
-                                 minimized ? p->dim : p->text, bg);
+                                 minimized ? p->dim : p->text,
+                                 wm_glass_ink_bg(WM_GLASS_TASKBAR, bg, p->bar));
         // Windows 10's underline, inset from the corners; a floating
         // panel's focused button has its tinted frame instead.
         if (focused && !taskbar_float_on())
@@ -1433,6 +1455,26 @@ void wm_damage_rect(int x, int y, int w, int h) {
 
 static void damage_reset(void) {
     damage_x0 = damage_y0 = damage_x1 = damage_y1 = 0;
+}
+
+// FROSTED GLASS IS PART OF ITS RECT'S DAMAGE (wm_glass.h): a box that
+// touches one must cover ALL of it, or the blur reads pixels this frame
+// does not repaint. Growing may reach another rect, hence the loop.
+static void grow_damage_for_glass(void) {
+    struct wm_glass_rect r[64];
+    int n = wm_glass_frosted_rects(r, 64);
+    for (int grown = 1; grown; ) {
+        grown = 0;
+        for (int k = 0; k < n; k++) {
+            int x1 = r[k].x + r[k].w, y1 = r[k].y + r[k].h;
+            if (r[k].x >= damage_x1 || x1 <= damage_x0 || r[k].y >= damage_y1 || y1 <= damage_y0)
+                continue;
+            if (r[k].x >= damage_x0 && x1 <= damage_x1 && r[k].y >= damage_y0 && y1 <= damage_y1)
+                continue;
+            wm_damage_rect(r[k].x, r[k].y, r[k].w, r[k].h);
+            grown = 1;
+        }
+    }
 }
 
 // Compares every window's rect/visibility against what it was as of
@@ -1636,13 +1678,22 @@ static void draw_one_window(int i, int focus, int covered, int has_damage, int l
         // A menu's small shadow, under it (wm_shadow.h); a fullscreen
         // window has nothing beside it to shadow.
         if (windows[i].popup) {
-            wm_shadow_draw(windows[i].x, windows[i].y, windows[i].w, windows[i].h,
-                           corner_radius(&windows[i]), WM_SHADOW_POPUP);
+            // Under GLASS the body is see-through: nothing shaded beneath it.
+            (windows[i].popup_glass && wm_glass_on(WM_GLASS_MENU) ? wm_shadow_draw_hollow
+                                                                    : wm_shadow_draw)(
+                windows[i].x, windows[i].y, windows[i].w, windows[i].h,
+                corner_radius(&windows[i]), WM_SHADOW_POPUP);
             corners_save(&windows[i]);
         }
-        clip_to_window_content(&windows[i], has_damage);
-        wm_client_draw(&windows[i]);
-        apply_scene_clip(has_damage);
+        if (windows[i].popup_glass) {
+            // Glass is the SCENE's pixels under it, so it is composited
+            // under the scene clip, not the content clip.
+            wm_glass_draw_client(&windows[i]);
+        } else {
+            clip_to_window_content(&windows[i], has_damage);
+            wm_client_draw(&windows[i]);
+            apply_scene_clip(has_damage);
+        }
         if (windows[i].popup) corners_round(&windows[i]);
         wm_shadow_cover(windows[i].x, windows[i].y, windows[i].w, windows[i].h);
         return;
@@ -1661,8 +1712,15 @@ static void draw_one_window(int i, int focus, int covered, int has_damage, int l
     // The shadow FIRST, so corners_save() below sees it beneath the
     // corners and the rounded cut reveals shadow, not desktop. None
     // for a maximized window: nothing beside it to fall on.
+    // A SEE-THROUGH WINDOW keeps what was beneath it -- before its own
+    // shadow, so the shadow does not darken its body -- and lays that
+    // back over itself once drawn, before the corners are cut.
+    uint8_t alpha = wm_glass_window_alpha(i, focus);
+    if (alpha < 255)
+        wm_glass_window_begin(windows[i].x, windows[i].y, windows[i].w, windows[i].h);
     if (windows[i].state != WIN_MAXIMIZED)
-        wm_shadow_draw(windows[i].x, windows[i].y, windows[i].w, windows[i].h,
+        (wm_glass_titlebars() ? wm_shadow_draw_hollow : wm_shadow_draw)(
+                       windows[i].x, windows[i].y, windows[i].w, windows[i].h,
                        corner_radius(&windows[i]),
                        i == focus ? WM_SHADOW_FOCUSED : WM_SHADOW_INACTIVE);
     corners_save(&windows[i]);   // what is beneath, before this window covers it
@@ -1685,6 +1743,8 @@ static void draw_one_window(int i, int focus, int covered, int has_damage, int l
         apply_scene_clip(has_damage);
     }
     draw_resize_grip(&windows[i]); // after on_draw() -- see its own comment
+    if (alpha < 255)
+        wm_glass_window_end(windows[i].x, windows[i].y, windows[i].w, windows[i].h, alpha);
     corners_round(&windows[i]);    // last: the arc cuts chrome, content and grip alike
     // A maximized window cast no shadow, so nothing cleared the record
     // under it (wm_shadow.h).
@@ -2005,6 +2065,7 @@ void wm_render_frame(int mx, int my) {
     // Clip this pass to the accumulated damage region, if any was
     // reported. No damage this frame (menus, dialogs, the clock tick,
     // the first frame) means "unknown, be safe" -- full screen.
+    if (damage_x1 > damage_x0) grow_damage_for_glass();
     int has_damage = damage_x1 > damage_x0;
 
     render_scene(mx, my, has_damage);

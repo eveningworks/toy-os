@@ -205,6 +205,21 @@ this the obvious way), not from how much history it accumulated.
   **Do not add a persist-only `struct setting`** (an `apply` of 0): that
   is the shape this replaced, and twelve files of them were deleted at
   once.
+- **A SETTING'S NAME FITS THE ABI: `<namespace>.<name>`, under
+  `SETTING_ABI_NS_MAX` (23 bytes) and `SETTING_ABI_NAME_MAX` (47).** The
+  descriptor's FILE NAME is that identity, and an over-long one fails
+  quietly -- the declaration still shows, but its text never matches it,
+  so the row arrives without its label, choices or `Widget=`, sorted
+  first on its page. `tools/check_config_size.py` refuses it.
+  `desktop.transparency_window_opacity` did exactly that under the old
+  24-byte cap, which is why the cap is 48 now.
+- **A CLIENT SIZES ITS SETTINGS TABLES FROM `SETTING_OP_COUNT`, AT EVERY
+  READ -- THERE IS NO CAP TO MIRROR.** System Settings grows its tables
+  in `reload_settings()` and the declared-settings list grows as the
+  directory is read. A fixed `SETTING_ABI_MAX` ran out three times, each
+  time dropping the LAST settings without a word (a category reduced to a
+  heading, a page to nothing); it was removed on 2026-10-03. The
+  kernel's `SETTING_MAX` bounds only the kernel's own registrations.
 - **A RING-3 WRITE TO A SETTING'S FILE MUST ANNOUNCE ITSELF**, with
   `SETTING_OP_TOUCH`. The generation counter every consumer polls lives
   in the kernel and is bumped by `setting_set()`; a library writing

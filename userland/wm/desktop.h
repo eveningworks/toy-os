@@ -44,6 +44,13 @@
 // wm_render_frame() in place of its old bare gfx_clear() fill.
 void desktop_draw(void);
 
+// The BACKGROUND alone -- wallpaper or plain colour, no icons -- into a
+// screen-sized `dst`, for wm_glass.c's blurred-wallpaper cache; and a
+// counter that moves whenever that picture would change.
+struct ugfx_surface;
+void desktop_draw_background_into(struct ugfx_surface *dst);
+uint32_t desktop_background_gen(void);
+
 // Re-reads /etc/desktop.conf when the filesystem generation moves, which
 // is how the wallpaper Image Viewer just set appears without either
 // program knowing about the other. One integer compare when nothing has

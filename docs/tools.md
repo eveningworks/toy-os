@@ -2645,6 +2645,25 @@ window without going through it will find its layout polls timing out.
   60 px out, and that control itself has not moved. Puts the setting
   back to `on` in a `finally`.
 
+- **`glass_test.py`** -- transparency (`userland/wm/wm_glass.c`) and
+  every `desktop.transparency*` setting, by PIXEL VALUE against a
+  control taken with the setting off or the scene changed: the Clear
+  taskbar at 50% sits twice as far from its own colour as at 75%,
+  whatever is beneath, and floating at 40% shows no shadow band inside
+  its edges; under the Start menu, a window's edge is a sharp
+  step through Clear and spread out through Frosted, Start's own glass
+  setting holds while every other surface is Frosted, and moving the
+  window away changes nothing through Wallpaper (but does through
+  Frosted, the control); the desktop's menu and Notepad's File menu (a
+  `WIN_POPUP_GLASS` client, opened upward over the wallpaper) darken
+  toward it when on; window bodies stay white or not by mode, and
+  "moving windows" is checked mid-drag with a REAL button held over QMP,
+  because an injected `gui drag` releases at once. Runs under the
+  damage verifier throughout -- frosted glass is part of its rect's
+  damage -- and puts every setting back in a `finally`. Its positive
+  controls (dropping the damage growth, the menu painter, or the
+  popup flag) each redden exactly the matching check.
+
 - **`smooth_scroll_test.py`** -- smooth scrolling (`ui/uui_scrollanim.h`)
   in the File Manager's icon grid, and the `desktop.smooth_scroll`
   setting. One wheel notch with the setting ON must draw SEVERAL frames
@@ -5300,6 +5319,11 @@ window without going through it will find its layout polls timing out.
   into arrives TRUNCATED MID-WORD with the file itself far under every
   size limit here. The saver caps come from `userland/lib/usaver.h` and
   the settings ones from the ABI, each read from its own header.
+
+  **And a settings descriptor's NAME**: the file name is the setting's
+  `<namespace>.<name>`, and either half over `SETTING_ABI_NS_MAX` or
+  `SETTING_ABI_NAME_MAX` never matches its text -- the row shows with no
+  label, choices or `Widget=`.
 
   **Everything here walks `git ls-files`**, so a file that has not been
   `git add`ed is invisible to it -- which is how a positive control on

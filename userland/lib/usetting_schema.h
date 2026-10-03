@@ -123,12 +123,6 @@ void uschema_effective(const struct uschema *s, char *out, uint32_t cap);
 #define USCHEMA_KEY_REQUIRES_REASON "RequiresReason"
 #define USCHEMA_KEY_OTHERWISE   "Otherwise"
 
-// How many declarations one machine may have. The cache below is a list
-// of NAMES, not of parsed schemas, so this costs ~2 KB rather than the
-// ~12 KB a table of `struct uschema` would -- and it is per PROCESS,
-// since libuapp is a shared object with private bss.
-#define USCHEMA_MAX 64
-
 // Parses the declaration for `qualified` ("desktop.icon_size"). Returns
 // 1, or 0 when there is no such file, when it carries no `Type=` (it is
 // a text-only file describing a KERNEL setting), or when it is

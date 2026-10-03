@@ -596,6 +596,30 @@ void ugfx_blit_genie(struct ugfx_surface *s, int y0, int h,
                       const uint32_t *src, int sw, int sh, int src_pitch_px,
                       uint8_t alpha);
 
+// --- glass (ugfx_blur.c) ----------------------------------------------
+//
+// A BACKDROP is a buffer the size of the surface, in the surface's own
+// coordinates, holding what a glass rect shows through it -- the scene
+// blurred, or a cached blurred wallpaper. Same coordinates so a caller
+// never offsets a pointer into it for a rect that is half off-screen.
+
+// The surface's pixels in the rect, BLURRED into `out` (a backdrop) --
+// three box passes each way, about a Gaussian of sigma `radius`. READS
+// ONLY THE RECT INSIDE THE CLIP and clamps at its edge: a pixel outside
+// the clip holds a previous frame, perhaps already glass, and blurring it
+// again would drift a little every frame. So the caller damages the
+// WHOLE rect whenever any of it changes (wm_glass.c does).
+void ugfx_blur_rect(const struct ugfx_surface *s, int x, int y, int w, int h,
+                    int radius, uint32_t *out);
+
+// A GLASS CLIENT's pixels at (x, y), each one either copied or, when its
+// top byte is set, shown as GLASS: its low 24 bits blended at `alpha`
+// over `backdrop` (NULL: over what the surface already holds). abi/
+// win_proto.h's WIN_POPUP_GLASS is the contract; honours the clip.
+void ugfx_blit_glass(struct ugfx_surface *s, int x, int y, int w, int h,
+                     const uint32_t *src, int src_pitch_px,
+                     const uint32_t *backdrop, uint8_t alpha);
+
 // --- the screen -------------------------------------------------------
 //
 // A ring-3 COMPOSITOR's view of the real display: an ordinary

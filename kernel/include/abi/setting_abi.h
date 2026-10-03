@@ -49,11 +49,6 @@ enum setting_result {
     SETTING_UNSAVED = 2, // applied in memory, but the write FAILED
 };
 
-// How many settings the registry can hold, so a client can size a
-// fixed array for the whole list -- there is no allocator in ring 3.
-// Mirrors the kernel's SETTING_MAX (api/setting.h); a client should
-// still read the real count from SETTING_OP_COUNT rather than assume
-// this many exist.
 #define SETTING_ABI_UNIT_MAX 8 // "%", "px", "ms" -- see struct setting_msg
 #define SETTING_ABI_CATEGORY_MAX 24 // a UI section name, e.g. "Appearance"
 // What a setting with no category is filed under. In the ABI because
@@ -85,32 +80,12 @@ enum setting_result {
 // telling the same kind of lie SETTING_UNSAVED exists to prevent.
 #define SETTING_ABI_SF_REBOOT   (1u << 0) // takes effect at the next boot
 #define SETTING_ABI_SF_ADVANCED (1u << 1) // a UI may keep it behind a disclosure
-// **IT BOUNDS THE MERGED LIST, NOT THE KERNEL REGISTRY.** Since the
-// desktop's settings became declarations in /etc/settings.d, a client
-// sizes its array for the kernel's settings PLUS the declared ones
-// (lib/usetting.h), so this must cover both halves -- raising the
-// kernel's SETTING_MAX alone does not buy a declared setting any room,
-// and the two are separate ceilings now with only this one facing a
-// client.
-//
-// **RAISED TO 72 WHEN THE SHORTCUTS LANDED, AND THE OLD VALUE WAS
-// EXACTLY FULL.** 56 settings against a cap of 56 is not a system with
-// room; it is one where the next registration disappears. The symptom is
-// not an error either -- System Settings' own comment records this
-// happening twice, each time leaving the LAST category as a heading with
-// no children, which reads as "that category does nothing". Four
-// shortcut settings put it back on the line, so this moves.
-// **RAISED TO 96 AT 68 REGISTERED (2026-09-20).** Four spare is the
-// state this comment keeps describing as the one where the next
-// registration disappears, and it disappears SILENTLY -- the symptom
-// twice was the last category rendering as a heading with no children.
-// The cost of headroom is bss in System Settings, which sizes its
-// arrays from this; the cost of running out is a setting nobody can
-// find. Raised in the same change that added the two shatter knobs
-// rather than after they vanished.
-#define SETTING_ABI_MAX       96
+// THERE IS NO CAP ON THE MERGED LIST. A client sizes its tables from
+// SETTING_OP_COUNT at every read (System Settings, lib/usetting_schema.c):
+// a fixed SETTING_ABI_MAX ran out three times, each time dropping the last
+// settings without a word, and was removed on 2026-10-03.
 
-#define SETTING_ABI_NAME_MAX  24 // the /etc key, e.g. "font_size"
+#define SETTING_ABI_NAME_MAX  48 // the /etc key, e.g. "font_size"; = SETTING_NAME_MAX
 #define SETTING_ABI_LABEL_MAX 40 // human-facing, e.g. "Font size"
 #define SETTING_ABI_VALUE_MAX 64 // a value, as stored
 #define SETTING_ABI_FILE_MAX  40 // e.g. "/etc/toyos.conf"

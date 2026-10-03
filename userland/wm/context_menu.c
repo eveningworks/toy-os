@@ -211,7 +211,8 @@ void context_menu_draw(int mx, int my) {
     for (int l = 0; l < uui_menubar_depth(&g_menu); l++) {
         int x, y, w, h;
         if (uui_menubar_popup_rect(&g_menu, l, &x, &y, &w, &h))
-            wm_shadow_draw(x, y, w, h, uui_popup_radius(), WM_SHADOW_POPUP);
+            (uui_popup_glass() ? wm_shadow_draw_hollow : wm_shadow_draw)(
+                x, y, w, h, uui_popup_radius(), WM_SHADOW_POPUP);
     }
     uui_menubar_draw_popup(wm_surface(), &g_menu);
 }

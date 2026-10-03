@@ -84,6 +84,14 @@ void uui_fill_round_rect(struct ugfx_surface *s, int x, int y, int w, int h,
 void uui_glass_round_rect(struct ugfx_surface *s, int x, int y, int w, int h,
                           int radius, uint32_t c, uint8_t fill_a, uint8_t edge_a);
 
+// A PANE OF GLASS: inside the rounded rect, `c` laid at `tint_a` over
+// `backdrop` (ugfx.h's: a surface-sized buffer in surface coordinates --
+// a blur of the scene, a blurred wallpaper) or, when NULL, over what the
+// surface holds. The arcs blend against the surface, as above.
+void uui_backdrop_round_rect(struct ugfx_surface *s, int x, int y, int w, int h,
+                             int radius, const uint32_t *backdrop, uint32_t c,
+                             uint8_t tint_a);
+
 // --- natural size ------------------------------------------------------
 //
 // The ring-3 half of apps/ui/ui_primitives.h's contract, same rule and

@@ -40,6 +40,13 @@
 // if it were not there. A menu WANTS it; a tooltip that took it would
 // eat the click meant for the button under the pointer.
 #define UUI_POPUP_GRAB  0x01u
+// GLASS: the compositor shows its translucent glass through every pixel
+// of this surface whose top byte is set (UUI_POPUP_GLASS_PX | colour), the
+// colour being that pixel's tint -- abi/win_proto.h's WIN_POPUP_GLASS. A
+// compositor with transparency off just shows the colour, so a widget
+// marks its ground whether or not glass is on.
+#define UUI_POPUP_GLASS 0x02u
+#define UUI_POPUP_GLASS_PX 0xFF000000u
 
 struct uui_popup_ops {
     // 0 on refusal; else an id > 0 and where it landed in *out_x/*out_y.
@@ -72,5 +79,15 @@ struct ugfx_surface *uui_popup_surface(int id);
 int uui_popup_radius(void);
 uint32_t uui_popup_bg(void);      // a step lighter than the chrome
 uint32_t uui_popup_border(void);  // the card's hairline
+
+// THE COMPOSITOR'S GLASS, for a popup drawn IN its own scene rather than
+// on a surface -- the WM's menus. When a painter is installed a menu's
+// ground is handed to it (rect, radius, tint) instead of being filled,
+// and the menu's text blends against whatever it painted. One per
+// process; NULL (the default) fills as always.
+typedef void (*uui_glass_painter)(struct ugfx_surface *s, int x, int y, int w, int h,
+                                  int radius, uint32_t tint);
+void uui_popup_set_glass(uui_glass_painter fn);
+uui_glass_painter uui_popup_glass(void);
 
 #endif

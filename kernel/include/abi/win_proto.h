@@ -1016,11 +1016,20 @@ struct win_event {
 struct win_popup_pos {
     int32_t  ax, ay, aw, ah;  // the anchor rect, in the PARENT's content coords
     uint32_t gravity;         // WIN_POPUP_*
-    uint32_t flags;           // WIN_POPUP_GRAB; every other bit must be 0
+    uint32_t flags;           // WIN_POPUP_GRAB | WIN_POPUP_GLASS; every other bit must be 0
 };
 #define WIN_POPUP_BELOW 0 // left edges aligned, below the anchor; flips above
 #define WIN_POPUP_RIGHT 1 // top edges aligned, right of the anchor; flips left
 #define WIN_POPUP_GRAB  0x01u // this popup takes the pointer (a menu, not a tooltip)
+// GLASS: a pixel of this popup with any top-byte bit set (WIN_GLASS_PX)
+// is not drawn as itself -- the compositor shows its translucent glass
+// there, tinted the pixel's low 24 bits, at the opacity and in the style
+// the desktop's transparency settings say. With them off it shows the
+// tint, so a client marks its ground without asking whether glass is on.
+// KDE's blur protocol and Wayland's background-effect are the shape: the
+// client names the region, the compositor owns the effect.
+#define WIN_POPUP_GLASS 0x02u
+#define WIN_GLASS_PX    0xFF000000u
 
 // --- dialog windows (WIN_REQ_DIALOG) -----------------------------------
 //

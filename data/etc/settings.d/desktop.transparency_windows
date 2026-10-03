@@ -1,0 +1,15 @@
+Type=enum
+File=/etc/desktop.conf
+Label=See-through windows
+Category=Appearance
+Group=Transparency
+Default=titlebars
+Choices=none,titlebars,inactive,all
+Description=Which windows let the desktop show through
+Order=60
+Choice.none=None
+Choice.titlebars=Title bars
+Choice.inactive=Inactive
+Choice.all=All
+Requires=desktop.transparency=on
+RequiresReason=Turn on Transparency effects first

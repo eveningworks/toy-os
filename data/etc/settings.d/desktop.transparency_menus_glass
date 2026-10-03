@@ -1,0 +1,14 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Menu glass
+Category=Appearance
+Group=Transparency
+Default=frosted
+Choices=clear,frosted,wallpaper
+Description=What shows through context menus and app menus
+Order=45
+Choice.clear=Clear
+Choice.frosted=Frosted
+Choice.wallpaper=Wallpaper
+Requires=desktop.transparency=on
+RequiresReason=Turn on Transparency effects first

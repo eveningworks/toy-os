@@ -1,0 +1,13 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Moving windows
+Category=Appearance
+Group=Transparency
+Default=off
+Choices=on,off
+Description=A window is see-through while you drag it
+Order=80
+Choice.on=On
+Choice.off=Off
+Requires=desktop.transparency=on
+RequiresReason=Turn on Transparency effects first
