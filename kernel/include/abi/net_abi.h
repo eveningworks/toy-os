@@ -89,7 +89,7 @@ struct net_msg {
 };
 
 // SYS_NET_CONFIG's argument. A zero field is LEFT ALONE rather than
-// cleared, so `ifconfig net0 10.0.2.20` can change an address without
+// cleared, so `netctl address net0 10.0.2.20` can change an address without
 // restating the netmask -- and clearing one is therefore impossible,
 // which is the honest cost of that convenience.
 struct net_ifconfig {
@@ -97,7 +97,15 @@ struct net_ifconfig {
     uint32_t ip;
     uint32_t netmask;
     uint32_t gateway;
+    uint32_t flags;   // NET_IFC_*, applied BEFORE the fields above
 };
+// CLEAR zeroes the address, netmask and gateway (`netctl` releasing a
+// card) -- the one way to undo the zero-is-left-alone rule. DOWN and UP
+// set the administrative state (Linux's `ip link set ... down`); both
+// at once is -EINVAL.
+#define NET_IFC_CLEAR 0x01u
+#define NET_IFC_DOWN  0x02u
+#define NET_IFC_UP    0x04u
 
 // SYS_NET_RENAME. `name` is the interface as it is called now, `to` is
 // what it should be called instead.

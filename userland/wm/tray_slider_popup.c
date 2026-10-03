@@ -4,6 +4,7 @@
 #include "wm_overlay.h"
 #include "tray_slider_popup.h"
 #include "wm_shadow.h"
+#include "wm_flyout.h"
 #include "wm_tray.h"
 #include "wm_log.h"   // the anchor-lookup probe below
 #include "ui/uui.h"
@@ -43,17 +44,19 @@ void tray_slider_init(struct tray_slider_popup *p, const char *icon) {
 // --- geometry ---------------------------------------------------------
 
 void tray_slider_geometry(struct tray_slider_popup *p, int want_w, int extra_h,
-                          struct tray_slider_geom *g) {
+                          int foot_h, struct tray_slider_geom *g) {
     k_memset(g, 0, sizeof *g);
 
+    struct wm_flyout_metrics m;
+    wm_flyout_metrics(&m);
     int ch = ugfx_char_h();
-    int pad = ch / 2 + 2;
-    int row_h = ch + 8;
+    int pad = m.pad;
+    int row_h = ch + 16;
     int caption_w = ugfx_text_width("100%");
 
-    int w = ugfx_char_w() * 22 + pad * 2;
+    int w = ch * 20;
     if (want_w > w) w = want_w;
-    int h = pad + row_h + pad + extra_h;
+    int h = m.hero_h + 1 + m.vpad + row_h + m.vpad + extra_h + foot_h;
 
     int tx = 0, ty = 0, tw = 0, th = 0;
     if (!tray_item_rect(p->tray_id, &tx, &ty, &tw, &th)) {
@@ -69,18 +72,22 @@ void tray_slider_geometry(struct tray_slider_popup *p, int want_w, int extra_h,
     wm_popup_place(tx + tw - w, screen_h - taskbar_h - h, w, h, &x, &y);
 
     g->x = x; g->y = y; g->w = w; g->h = h;
+    g->hero_h = m.hero_h;
+    g->foot_h = foot_h;
+    g->foot_y = y + h - foot_h;
     g->tray_x = tx; g->tray_y = ty; g->tray_w = tw; g->tray_h = th;
     g->pad = pad; g->row_h = row_h;
-    g->icon_x = x + pad;
-    g->icon_y = y + pad;
+    int row_y = y + m.hero_h + 1 + m.vpad;
+    g->icon_x = x + pad - 6;
+    g->icon_y = row_y;
     g->icon_w = row_h;
     g->icon_h = row_h;
-    g->slider_x = g->icon_x + g->icon_w + pad;
-    g->slider_y = y + pad + (row_h - ch) / 2;
+    g->slider_x = g->icon_x + g->icon_w + pad / 2;
+    g->slider_y = row_y + (row_h - ch) / 2;
     g->slider_h = ch;
     // The caption sits at the right end, so the track stops short of it.
-    g->slider_w = x + w - pad - caption_w - pad - g->slider_x;
-    g->below_y = y + pad + row_h;
+    g->slider_w = x + w - pad - caption_w - pad / 2 - g->slider_x;
+    g->below_y = row_y + row_h + m.vpad;
 
     uui_scale_set_geometry(&p->scale, g->slider_x, g->slider_y, g->slider_w, g->slider_h);
 }
@@ -90,7 +97,7 @@ void tray_slider_geometry(struct tray_slider_popup *p, int want_w, int extra_h,
 // SAME band -- a highlight somewhere a click would not land is worse
 // than none.
 static int over_track(const struct tray_slider_geom *g, int mx, int my) {
-    return uui_hit(g->slider_x - 4, g->y, g->slider_w + 8, g->pad + g->row_h, mx, my);
+    return uui_hit(g->slider_x - 4, g->icon_y, g->slider_w + 8, g->row_h, mx, my);
 }
 
 // --- state ------------------------------------------------------------
@@ -243,23 +250,25 @@ int tray_slider_wheel(struct tray_slider_popup *p, const struct tray_slider_geom
 
 void tray_slider_draw(const struct tray_slider_popup *p, const struct tray_slider_geom *g,
                       const char *icon, int icon_hot) {
-    uint32_t bg = UTHEME_PANEL_BG, border = UTHEME_BORDER, fg = UTHEME_TEXT;
     int available = p->unavailable[0] == 0;
 
-    wm_shadow_draw(g->x, g->y, g->w, g->h, 0, WM_SHADOW_POPUP);
+    wm_flyout_card(g->x, g->y, g->w, g->h, g->foot_h);
+    char title[64] = "", sub[96] = "";
+    if (p->hero) p->hero(title, sizeof title, sub, sizeof sub);
+    wm_flyout_hero(g->x, g->y, g->w - g->pad, p->hero_badge ? p->hero_badge : UTHEME_ACCENT,
+                   p->hero_icon ? p->hero_icon : icon, title, sub);
+    wm_flyout_rule(g->x, g->y + g->hero_h, g->w);
 
-    ugfx_fill_rect(wm_surface(), g->x, g->y, g->w, g->h, bg);
-
-    // Derived from the panel's own colour, never hand-picked: on this
+    // Derived from the card's own colour, never hand-picked: on this
     // near-white theme "hover" has to DARKEN (docs/gui-guidelines.md).
     if (icon_hot)
-        ugfx_fill_rect(wm_surface(), g->icon_x, g->icon_y, g->icon_w, g->icon_h,
-                       uui_state_bg(bg, UUI_STATE_HOVER));
-    const struct uimg *ico = icon_get(icon, g->icon_w - 6);
+        uui_fill_round_rect(wm_surface(), g->icon_x, g->icon_y, g->icon_w, g->icon_h, 6,
+                            uui_state_bg(wm_flyout_ground(), UUI_STATE_HOVER));
+    const struct uimg *ico = icon_get(icon, g->icon_w - 14);
     if (ico)
-        ugfx_blit_alpha(wm_surface(), g->icon_x + (g->icon_w - ico->w) / 2,
-                        g->icon_y + (g->icon_h - ico->h) / 2,
-                        ico->w, ico->h, ico->px, ico->w);
+        ugfx_blit_tinted(wm_surface(), g->icon_x + (g->icon_w - ico->w) / 2,
+                         g->icon_y + (g->icon_h - ico->h) / 2,
+                         ico->w, ico->h, ico->px, ico->w, ugfx_blend(UTHEME_TEXT, wm_flyout_ground(), 40));
 
     uui_scale_draw(wm_surface(), &p->scale);
 
@@ -268,7 +277,5 @@ void tray_slider_draw(const struct tray_slider_popup *p, const struct tray_slide
     int caption_w = ugfx_text_width("100%");
     ugfx_draw_string_clipped(wm_surface(), g->x + g->w - g->pad - caption_w,
                              g->slider_y, caption_w + 4, pct,
-                             available ? fg : border, bg);
-
-    ugfx_draw_rect(wm_surface(), g->x, g->y, g->w, g->h, border);
+                             available ? UTHEME_TEXT : wm_flyout_dim(), wm_flyout_ink());
 }

@@ -59,7 +59,7 @@ it. `lspci -k` makes the same choice, naming a driver only where one is
 in use.
 
 **It answers a question none of the other listings can.** `lsblk` says
-which disks are present, `lsusb` which devices are attached, `ifconfig`
+which disks are present, `lsusb` which devices are attached, `netctl`
 which cards are configured — all of them list *devices*. A driver that
 is compiled in and bound nothing appears in none of them, so nothing
 else can say whether virtio-blk is in this build — which is what `-a`
@@ -134,5 +134,5 @@ this exists to fix.
 ## See also
 
 [`lsblk`](lsblk.md), [`lsusb`](lsusb.md), [`lspci`](lspci.md) and
-[`ifconfig`](ifconfig.md) for the devices; [`dmesg`](dmesg.md) for what
+[`netctl`](netctl.md) for the devices; [`dmesg`](dmesg.md) for what
 each driver said as it bound.

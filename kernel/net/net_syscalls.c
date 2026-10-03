@@ -438,6 +438,14 @@ int sys_net_config(struct syscall_ctx *c) {
 
     struct net_device *d = net_device_by_name(req.name);
     if (!d) { c->regs[14] = (uint64_t)(int64_t)-ENODEV; return 0; }
+    if ((req.flags & ~(NET_IFC_CLEAR | NET_IFC_DOWN | NET_IFC_UP)) ||
+        ((req.flags & NET_IFC_DOWN) && (req.flags & NET_IFC_UP))) {
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
+    if (req.flags & NET_IFC_DOWN) d->admin_down = 1;
+    if (req.flags & NET_IFC_UP)   d->admin_down = 0;
+    if (req.flags & NET_IFC_CLEAR) d->ip = d->netmask = d->gateway = 0;
 
     if (req.ip) d->ip = req.ip;
     if (req.netmask) d->netmask = req.netmask;

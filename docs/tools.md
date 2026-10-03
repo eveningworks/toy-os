@@ -3093,10 +3093,15 @@ window without going through it will find its layout polls timing out.
   laptop by hand: `config set brightness 40` reads the PWM back. In
   `gui_regress.py`.
 - **`network_tray_test.py`** -- the taskbar's network item: the icon's
-  state, the read-only panel behind it, and the visibility setting.
+  state, the card behind it, its adapter switch, `/bin/netctl`'s
+  `down`/`up`/`renew` through netd, and the visibility setting. The
+  switch is checked by its OUTCOME -- the kernel's `admin_down` and the
+  address through `gui network`, and "switched off" in `netctl`'s own
+  listing -- so a netd that answered "accepted" and did nothing (the
+  positive control) reddens exactly those two checks.
   **Its strongest check is the one that does not ask the compositor**:
   the interface name and address the panel reports must also appear in
-  `/bin/ifconfig`'s output, which walks the same `QUERY_NETDEV` class
+  `/bin/netctl`'s output, which walks the same `QUERY_NETDEV` class
   through a completely different program -- a compositor reporting its
   own view back to a test proves only that it is self-consistent.
   It also pins the rule the widget exists for: `link_known` is
@@ -3554,7 +3559,9 @@ window without going through it will find its layout polls timing out.
   live media vm.py reports ready before the debug console takes
   commands. Its `--positive-control` zeroes the installed boot sector
   and must redden the six boot checks.
-- **`osk_test.py`** -- the on-screen keyboard (`userland/wm/osk.c`).
+- **`osk_test.py`** -- the on-screen keyboard (`userland/wm/osk.c`): it
+  opens floating, its bar drags it (and a moved keyboard still types),
+  Dock and Float switch it, and its close button closes it.
   **Its load-bearing check is a ROUND TRIP THROUGH THE FILESYSTEM**: it
   types `mkdir /<name>` into the Terminal with keycap clicks and then
   asks the shell whether the directory exists, which covers the

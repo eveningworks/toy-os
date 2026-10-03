@@ -180,7 +180,7 @@ is. Other failures:
 ## See also
 
 `host` for resolution on its own, `netd` for where the nameserver comes
-from, `ifconfig` for the counters and whether the card is configured,
+from, `netctl` for the counters and whether the card is configured,
 `random` for the entropy source, and
 `docs/conventions/kernel.md`'s networking entry for what the stack under
 this does and does not do.

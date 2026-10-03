@@ -49,23 +49,29 @@ struct net_device {
     char name[NET_NAME_MAX];
 
     // WHERE THE DEVICE IS, filled by the driver BEFORE net_register():
-    // "pci3.0", "usb13". REPORTED, never part of the name -- `ifconfig`
+    // "pci3.0", "usb13". REPORTED, never part of the name -- `netctl`
     // prints it so a card can still be found physically, and it changes
     // freely when one is moved. Empty when the driver does not know.
     char location[NET_LOC_MAX];
 
-    const char *driver;       // "e1000", "virtio-net" -- for lsdev/ifconfig
+    const char *driver;       // "e1000", "virtio-net" -- for lsdev/netctl
     uint8_t mac[NET_MAC_LEN];
     uint32_t mtu;             // 0 at registration means NET_MTU
 
     // LINK STATE, when the driver can know it. `link_known` is the
     // third answer: a card with no way to ask is not a card whose cable
-    // is unplugged, and `ifconfig` must not claim otherwise. Bits per
+    // is unplugged, and `netctl` must not claim otherwise. Bits per
     // second because that is what the wire negotiated, not what the bus
     // could carry -- a gigabit adapter on USB 2 still says 1000000000.
     uint8_t  link_known;
     uint8_t  link_up;
     uint32_t link_bps;
+
+    // ADMINISTRATIVELY DOWN -- Linux's IFF_UP, inverted so a driver's
+    // zeroed struct is up. Set from ring 3 (SYS_NET_CONFIG's
+    // NET_IFC_DOWN), never by a driver: carrier is `link_up`, this is
+    // somebody's decision. Down, net_tx() refuses and net_rx() drops.
+    uint8_t  admin_down;
 
     // --- driver ops ---------------------------------------------------
 
@@ -94,7 +100,7 @@ struct net_device {
     // Zero means unconfigured, and an unconfigured device still
     // receives: ARP replies to nothing and IP drops, but the counters
     // move, which is what makes "the cable is live, the address is
-    // wrong" diagnosable from `ifconfig` alone.
+    // wrong" diagnosable from `netctl` alone.
     uint32_t ip;
     uint32_t netmask;
     uint32_t gateway;
@@ -114,7 +120,7 @@ int net_register(struct net_device *dev);
 
 // Fill in `location` from where the device actually is. A driver calls
 // the one for its bus before net_register(); anything else leaves the
-// field empty and `ifconfig` says nothing about where the card sits.
+// field empty and `netctl` says nothing about where the card sits.
 void net_location_pci(struct net_device *dev, uint8_t bus, uint8_t device,
                       uint8_t function);
 void net_location_usb(struct net_device *dev, uint8_t root_port, uint8_t port);
@@ -180,7 +186,7 @@ void net_poll(void);
 void net_init(void);      // the core: the table and the queue
 
 
-// QUERY_NETDEV's provider (`ifconfig` reads the table through it).
+// QUERY_NETDEV's provider (`netctl` reads the table through it).
 void net_query_init(void);
 
 #endif

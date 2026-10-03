@@ -46,6 +46,7 @@
 | `uinitctl.h` | The control protocol between `/bin/service` and init, over uchan. |
 | `uline.h` | uline -- the PAINTING half of a ring-3 line-editing front end. |
 | `umd.h` | umd -- rendering Markdown as text for a terminal. |
+| `unetctl.h` | The control protocol between /bin/netctl (and the desktop's network flyout) and /bin/netd, over uchan -- the initctl shape (lib/uinitctl.h). |
 | `unum.h` | A number written the way the LC_NUMERIC locale writes it: format it the C way ("1234567.89", "12.5%", "1.2 MiB") and pass the string through unum_localize(), which swaps in the decimal mark and, wi... |
 | `uopen.h` | uopen -- which program opens this file? |
 | `upager.h` | The pager: show a block of text one screenful at a time, on whichever of fd 0 and fd 1 is a terminal. |

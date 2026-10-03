@@ -137,6 +137,7 @@ static const struct { int code; const char *msg; } g_errmsg[] = {
     { ECONNRESET,   "connection reset by peer" },
     { ECONNREFUSED, "connection refused" },
     { ENOTCONN,     "not connected" },
+    { ENETDOWN,     "network is down" },
 };
 
 const char *sys_strerror(int e) {
@@ -672,6 +673,16 @@ int sys_net_config(const char *dev, uint32_t ip, uint32_t netmask, uint32_t gate
     req.ip = ip;
     req.netmask = netmask;
     req.gateway = gateway;
+    req.flags = 0;
+    return (int)err(syscall1(SYS_NET_CONFIG, (uint64_t)(uintptr_t)&req));
+}
+
+int sys_net_admin(const char *dev, unsigned flags) {
+    struct net_ifconfig req;
+    for (unsigned i = 0; i < sizeof req.name; i++) req.name[i] = 0;
+    for (unsigned i = 0; dev && dev[i] && i < sizeof req.name - 1; i++) req.name[i] = dev[i];
+    req.ip = req.netmask = req.gateway = 0;
+    req.flags = flags;
     return (int)err(syscall1(SYS_NET_CONFIG, (uint64_t)(uintptr_t)&req));
 }
 

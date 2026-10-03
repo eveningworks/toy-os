@@ -80,5 +80,5 @@ random bytes.
 
 ## See also
 
-`wget` for one fetch, `ping` for latency to a single host, `ifconfig`
+`wget` for one fetch, `ping` for latency to a single host, `netctl`
 for the counters that say whether frames were dropped.

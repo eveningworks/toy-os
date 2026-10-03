@@ -3632,7 +3632,9 @@ Listed with the honest reason each is or isn't attractive.
 
   **`ifconfig` folds into it**, which is the part with a precedent worth copying: Linux replaced `ifconfig` with `ip` because a tool that predates the thing it configures accretes flags rather than structure, and systemd added `networkctl` for the daemon's own state and control -- `netctl` is the second of those, and takes the first's job because this system is small enough not to want both. (The name collides with Arch's retired profile manager, which is unrelated and gone; `networkctl` is the shape being copied.) Note the standing rule that a command with a READ half and a WRITE half moves as one piece or not at all: `ifconfig` both shows addresses and sets them, so it cannot be half-migrated, and its `docs/commands/` page has to go the same day the binary does.
 
-  The honest question to settle first is whether `netd` gains a control channel or `netctl` writes config and restarts it. A channel means a socket or a doorbell file plus a protocol; a restart is free and loses every lease. Neither is obviously right at this size, and the answer decides how much of this is a tool at all.
+  **SETTLED 2026-10-03: a channel.** netd serves `lib/unetctl.h` over uchan (init's `service` shape) and answers "accepted" at once, because one DHCP exchange can block 4-12 s; the kernel gained an admin-down flag for `down`/`up` (`NET_IFC_DOWN`, Linux's IFF_UP). Naming rules are still the file.
+
+  The honest question to settle first was whether `netd` gains a control channel or `netctl` writes config and restarts it. A channel means a socket or a doorbell file plus a protocol; a restart is free and loses every lease. Neither is obviously right at this size, and the answer decides how much of this is a tool at all.
 
 - [ ] An `arp` command -- `arp_cache_at()` exists for the KTESTs and nothing exposes it to ring 3, so a resolution failure is diagnosable only by inference from `ifconfig`'s counters.
 

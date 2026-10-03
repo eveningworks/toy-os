@@ -57,4 +57,4 @@ the real internet, and it fails on a machine that is offline.
 ## See also
 
 `dhcp` for where the nameserver comes from, `ping`, which resolves names
-through the same library, and `ifconfig`.
+through the same library, and `netctl`.

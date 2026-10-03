@@ -150,6 +150,8 @@
                    // useful message a network stack produces, and the
                    // reason it is separate from ECONNRESET: one means
                    // "try a different port", the other "try again".
+#define ENETDOWN 100 // the interface is administratively DOWN (`netctl down`):
+                   // switched off on purpose, unlike a cable that is out
 #define ENOTCONN 107 // the socket is not connected, so there is no
                    // stream to read or write. Distinct from EBADF for
                    // the same reason EPIPE is.

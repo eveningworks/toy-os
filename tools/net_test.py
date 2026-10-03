@@ -447,12 +447,12 @@ def launch(disk, tmp, tag, kind, pcap=None, netdev_extra="", quiet_port=None,
 # boot any more -- init's `dhcp` one-shot does, and a DISCOVER/OFFER/
 # REQUEST/ACK exchange lands about a second after the debug console is
 # up. So poll for exactly what the caller is about to assert on rather
-# than reading ifconfig once and calling a race a bug.
+# than reading netctl once and calling a race a bug.
 def wait_for_addr(sh, needle, timeout=40.0):
     deadline = time.time() + timeout
     out = ""
     while time.time() < deadline:
-        out = sh.run("ifconfig")
+        out = sh.run("netctl")
         if needle in out:
             return out
         time.sleep(0.5)
@@ -488,7 +488,7 @@ def wait_service_settled(sh, name, timeout=40.0):
     A one-shot is still a running process while it works, and the
     link-local path works for nine seconds -- four waiting for an offer
     that never comes, three probing, two announcing -- with the address
-    applied before the last of that. So `ifconfig` answering is not the
+    applied before the last of that. So `netctl` answering is not the
     client having finished, and a status read then says `running`,
     which is true and not what the check is about."""
     deadline = time.time() + timeout
@@ -508,7 +508,7 @@ def wait_configured(sh, timeout=40.0):
     deadline = time.time() + timeout
     out = ""
     while time.time() < deadline:
-        out = sh.run("ifconfig")
+        out = sh.run("netctl")
         if "netmask" in out and "(unconfigured)" not in out:
             return out
         time.sleep(0.5)
@@ -608,7 +608,7 @@ def kill(pidfile):
 
 
 def tx_of(text, name):
-    """The tx packet count `ifconfig` reported for one device."""
+    """The tx packet count `netctl` reported for one device."""
     lines = text.splitlines()
     for i, line in enumerate(lines):
         if line.strip().startswith(name + ":"):
@@ -620,7 +620,7 @@ def tx_of(text, name):
 
 
 def iface_names(cfg):
-    """The interface names in an `ifconfig` dump, in listed order.
+    """The interface names in an `netctl` dump, in listed order.
 
     ASKED, NOT ASSUMED. A name is derived from the card's MAC, and can
     be overridden per machine, so hardcoding one here would bake this
@@ -665,7 +665,7 @@ def phase_one_nic(r, disk, tmp, kind, driver):
         r.check(f"[{kind}] every reply came from the gateway",
                 out.count(f"bytes from {GATEWAY}") >= 3, out.strip()[-400:])
 
-        moved = sh.run("ifconfig")
+        moved = sh.run("netctl")
         r.check(f"[{kind}] the device counters moved",
                 (tx_of(moved, dev) or 0) >= 3, moved.strip()[-300:])
     finally:
@@ -725,11 +725,11 @@ def phase_two_nics(r, disk, tmp):
         # user-network address on the virtio card instead. A stack that
         # routes by "the first device" rather than by SUBNET now sends
         # everything into the void.
-        sh.run(f"ifconfig {dev0} 192.168.5.15 255.255.255.0 192.168.5.1")
-        sh.run(f"ifconfig {dev1} {GUEST_IP} 255.255.255.0 {GATEWAY}")
-        before = sh.run("ifconfig")
+        sh.run(f"netctl address {dev0} 192.168.5.15 255.255.255.0 192.168.5.1")
+        sh.run(f"netctl address {dev1} {GUEST_IP} 255.255.255.0 {GATEWAY}")
+        before = sh.run("netctl")
         out = sh.run(f"ping -c 2 {GATEWAY}", timeout=40.0)
-        after = sh.run("ifconfig")
+        after = sh.run("netctl")
 
         r.check("[both] the ping still answers once the address moved",
                 "0% packet loss" in out, out.strip()[-400:])
@@ -748,7 +748,7 @@ def phase_two_nics(r, disk, tmp):
 def phase_no_nic(r, disk, tmp):
     sh, pidfile = launch(disk, tmp, "none", "none")
     try:
-        cfg = sh.run("ifconfig")
+        cfg = sh.run("netctl")
         r.check("[none] a machine with no card says so rather than printing nothing",
                 "no network devices" in cfg, cfg.strip()[-300:])
         # Must REPORT, not hang: the timeout here is the assertion.
@@ -779,10 +779,10 @@ def phase_arp_rate(r, disk, tmp):
     of a few frames."""
     sh, pidfile = launch(disk, tmp, "rate", "e1000")
     try:
-        before = sh.run("ifconfig")
+        before = sh.run("netctl")
         dev = (iface_names(before) + ["en?"])[0]
         out = sh.run(f"ping -c 2 {UNANSWERED}", timeout=40.0)
-        after = sh.run("ifconfig")
+        after = sh.run("netctl")
         r.check("[arp] an unanswered address is reported as such",
                 "no ARP reply" in out, out.strip()[-300:])
         sent = (tx_of(after, dev) or 0) - (tx_of(before, dev) or 0)
@@ -922,14 +922,14 @@ def phase_port_unreachable(r, disk, tmp):
     extra = f",hostfwd=udp::{UDP_ECHO_PORT + 1}-:{UDP_ECHO_PORT + 1}"
     sh, pidfile = launch(disk, tmp, "unreach", "e1000", pcap, netdev_extra=extra)
     try:
-        sh.run("ifconfig")   # settle; nothing is bound to that port
+        sh.run("netctl")   # settle; nothing is bound to that port
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         for _ in range(3):
             sock.sendto(b"nobody-is-listening", ("127.0.0.1", UDP_ECHO_PORT + 1))
             time.sleep(0.3)
         sock.close()
         time.sleep(1.5)
-        sh.run("ifconfig")   # a command, so the guest's idle loop runs
+        sh.run("netctl")   # a command, so the guest's idle loop runs
     finally:
         kill(pidfile)
         sh.close()
@@ -984,7 +984,7 @@ def phase_dhcp(r, disk, tmp):
         # spellings are the difference between "configure this machine"
         # and "configure this card", and only the second can be a
         # re-lease.
-        dev = (iface_names(sh.run("ifconfig")) + ["en?"])[0]
+        dev = (iface_names(sh.run("netctl")) + ["en?"])[0]
         out = sh.run(f"dhcp {dev}", timeout=40.0)
         r.check("[dhcp] a named device is re-leased on demand",
                 "192.168.76." in out, out.strip()[-400:])
@@ -1006,7 +1006,7 @@ def phase_dhcp(r, disk, tmp):
         r.check("[dhcp] a bare run leaves an already-addressed card alone",
                 "already has an address" in out, out.strip()[-400:])
 
-        after = sh.run("ifconfig")
+        after = sh.run("netctl")
         r.check("[dhcp] the address is applied to the device",
                 "192.168.76." in after and "10.0.2.15" not in after, after.strip()[-400:])
 
@@ -1039,7 +1039,7 @@ LINKLOCAL_PORT = 14877
 
 
 def ll_address(cfg):
-    """The 169.254 address `ifconfig` reports, or None."""
+    """The 169.254 address `netctl` reports, or None."""
     for word in cfg.replace("\n", " ").split():
         if word.startswith("169.254."):
             parts = word.split(".")
@@ -1078,7 +1078,7 @@ def phase_linklocal(r, disk, tmp):
                 "netd" in status and "running" in status, status.strip()[-400:])
 
         # THE SECOND ANNOUNCEMENT LANDS TWO SECONDS AFTER THE ADDRESS
-        # DOES, so reading the wire the moment ifconfig answers sees
+        # DOES, so reading the wire the moment netctl answers sees
         # one of them -- a poll whose exit condition is weaker than
         # what follows it, which is this repo's own flake shape.
         want = bytes(int(x) for x in claimed.split(".")) if claimed else None
@@ -1156,7 +1156,7 @@ def phase_dns(r, disk, tmp):
 
         # NAMED, because the boot-time one-shot has already addressed
         # this card and a bare run would leave it alone.
-        dev = (iface_names(sh.run("ifconfig")) + ["en?"])[0]
+        dev = (iface_names(sh.run("netctl")) + ["en?"])[0]
         out = sh.run(f"dhcp {dev}", timeout=40.0)
         r.check("[dns] dhcp writes the resolver it was given",
                 "/etc/resolv.conf" in out, out.strip()[-300:])
@@ -1772,7 +1772,7 @@ def seed_net_conf(base_disk, tmp, tag, text):
 
 
 def iface_block(cfg, name):
-    """The `ifconfig` lines belonging to one interface, that one only."""
+    """The `netctl` lines belonging to one interface, that one only."""
     out, taking = [], False
     for ln in cfg.splitlines():
         if ln and not ln[0].isspace() and " mtu " in ln:
@@ -1795,7 +1795,7 @@ def phase_naming(r, disk, tmp):
 
         # netd settling FIRST, so "no address" cannot mean "not yet".
         status = wait_service_settled(sh, "netd")
-        cfg = sh.run("ifconfig")
+        cfg = sh.run("netctl")
         block = iface_block(cfg, "lan")
         r.check("[naming] `dhcp = no` in a card's section overrules the global `all`",
                 "(unconfigured)" in block,

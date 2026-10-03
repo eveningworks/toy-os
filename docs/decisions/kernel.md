@@ -6223,10 +6223,10 @@ broadcast first — which is not something to run with the whole address
 space mapped.
 
 The concrete evidence that the line is in the right place: `/bin/dhcp`
-applies its result through `SYS_NET_CONFIG`, the same call `ifconfig`
+applies its result through `SYS_NET_CONFIG`, the same call `netctl`
 uses. There is no privileged path in the DHCP client that a person could
 not take by hand, which means the client cannot do anything wrong that
-`ifconfig` could not also do.
+`netctl` could not also do.
 
 **Why bind takes a device.** `SYS_BIND`'s `struct net_msg` carries a
 device name, which looks like over-generality until you write a DHCP
@@ -7012,7 +7012,7 @@ link-speed renegotiation. That was not the reason the MAC was chosen,
 and it is a better one than the reason that was.
 
 **Location did not go away, it stopped being the name.** `dev->location`
-carries `pci3.0` or `usb13` and `ifconfig` prints it as `at pci3.0`, so
+carries `pci3.0` or `usb13` and `netctl` prints it as `at pci3.0`, so
 a card is still findable physically. Splitting them is the whole point:
 one answers "which card is this" and never changes, the other answers
 "where is it right now" and changes freely. A single string cannot do
@@ -8893,3 +8893,33 @@ crash is flagged rather than trusted. DWARF line numbers stay on the
 host for now: the binaries carry `.debug_line`, and reading it is a
 line-program interpreter, a project of its own.
 
+## A card can be switched off, and netd answers on a channel
+
+`netctl down|up|renew` (2026-10-03) needed two things that did not
+exist: a way to switch a card off, and a way to ASK netd anything.
+
+**Switched off is a kernel flag, Linux's IFF_UP.** `admin_down` on the
+device, set from ring 3 through `SYS_NET_CONFIG`'s `NET_IFC_DOWN`/`UP`
+flags; down, `net_tx()` refuses with `-ENETDOWN` and `net_rx()` drops
+before counting, and the default route skips it. It is separate from
+`link_up` for Linux's reason: one is somebody's decision, the other a
+fact about a cable. A netd-only "stop leasing" was the alternative and
+was rejected because the card would keep answering on its old address.
+`NET_IFC_CLEAR` came with it -- the zero-is-left-alone rule had made
+clearing an address impossible, and `down` takes the address away so
+nothing routes to a card that will not answer.
+
+**netd answers on a uchan channel, "accepted" at once.** The shape is
+init's `service` channel (`lib/uinitctl.h`) and systemd's
+`networkctl` asking networkd. A DHCP exchange blocks netd's one loop for
+4-12 s, so a reply carrying the OUTCOME would hold every caller that
+long; netd replies when it has the request and acts on its next pass,
+and `netctl` (or the tray card's once-a-second read) watches the card
+for the result. Restarting netd with new config was the other option
+and loses every card's lease. The lease FILE survives `down`, so `up`
+asks for the same address first (INIT-REBOOT).
+
+**`netctl` replaced `ifconfig` in the same change.** A command with a
+read half and a write half moves as one piece, so `ifconfig`'s listing
+became `netctl status` and its address-setting `netctl address`, and its
+page went the same day.

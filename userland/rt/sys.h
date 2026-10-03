@@ -396,6 +396,9 @@ int sys_accept(int fd, uint32_t *out_ip, uint16_t *out_port, unsigned timeout_ms
 int sys_bind(int fd, uint32_t addr, uint16_t port, const char *dev);
 // A zero field is left alone, so one address can be changed on its own.
 int sys_net_config(const char *dev, uint32_t ip, uint32_t netmask, uint32_t gateway);
+// SYS_NET_CONFIG's NET_IFC_* flags alone: clear the address, set the card
+// administratively down or up (abi/net_abi.h). netd and netctl's half.
+int sys_net_admin(const char *dev, unsigned flags);
 
 // Give an interface a different name. 0, or -ENODEV / -EINVAL.
 // Naming POLICY is /bin/netd's -- see /etc/net.conf.

@@ -6,6 +6,9 @@
 #include "wm_shadow.h"
 #include "desktop.h"
 #include "start_menu.h"
+#include "network_popup.h"
+#include "volume_popup.h"
+#include "brightness_popup.h"
 #include "wm_taskbar.h"
 #include "wm/wm_conf.h"
 #include "lib/usetting.h"
@@ -409,6 +412,12 @@ int wm_glass_frosted_rects(struct wm_glass_rect *out, int max) {
     int x, y, w, h;
     if (frosted_on(WM_GLASS_START) && start_menu_open && start_menu_rect(&x, &y, &w, &h))
         n = add(out, n, max, x, y, w, h);
+    // THE TRAY FLYOUTS are cards on the menus' glass (wm_flyout.h).
+    if (frosted_on(WM_GLASS_MENU)) {
+        if (network_open && network_rect(&x, &y, &w, &h)) n = add(out, n, max, x, y, w, h);
+        if (volume_open && volume_rect(&x, &y, &w, &h)) n = add(out, n, max, x, y, w, h);
+        if (brightness_open && brightness_rect(&x, &y, &w, &h)) n = add(out, n, max, x, y, w, h);
+    }
     for (int i = 0; i < window_count; i++) {
         const struct window *win = &windows[i];
         if (win->state == WIN_MINIMIZED) continue;

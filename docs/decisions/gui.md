@@ -6328,11 +6328,15 @@ Option-click); none of them spend panel width on an IP. The taskbar
 wants that width, and the address is not the thing that changes -- the
 state is. An always-visible IP is the conky/ops shape, not a desktop's.
 
-**Why it writes nothing.** `sys_net_config()` exists, so a Renew or an
-enable/disable is reachable in principle -- but the lease lives in
-`/bin/netd` and there is no control path into it, so "renew" would
-either be a lie or a second project. A button that half works is worse
-than no button.
+**Its actions are `/bin/netctl`'s, run as a child (2026-10-03).** It
+wrote nothing until netd gained a control channel: the lease lives in
+`/bin/netd`, so a Renew without one would have been a lie. With the
+channel (`lib/unetctl.h`, "netd answers on a channel" in kernel.md) the
+card's switch runs `netctl down|up` and Renew `netctl renew`, as child
+processes -- netd answers "accepted" and works for seconds, and a
+compositor that waited on a reply would freeze. The once-a-second read
+shows the outcome, and the switch shows what was asked for a few
+seconds so it does not flick back while netd catches up.
 
 **"Connected" is decided by the ADDRESS, never by the link flag.**
 `link_known` is three-valued in `abi/query_abi.h`: 0 means the driver
@@ -6344,7 +6348,7 @@ address is evidence; a flag that may not exist is not.
 **It does not say "DHCP".** `/bin/netd` holds `enum udhcp_state` in its
 own process memory and publishes none of it, and a lease file on disk
 records a REMEMBERED address with no expiry -- present after a release.
-A static address set by `ifconfig` is also indistinguishable from a
+A static address set by `netctl` is also indistinguishable from a
 leased one at the query layer. So the panel distinguishes only what the
 ABI supports: an address, a self-assigned 169.254/16 one, or none.
 Naming the source would need netd to publish its state, which is the
@@ -6363,6 +6367,36 @@ panel's own ink (`wm_tray.c`), so "red for disconnected" is not
 available at all -- there is one icon file per state, and the glyph is
 a three-node graph rather than a globe because a globe is Windows'
 "connected but no internet", a claim nothing here can check.
+
+## Every tray flyout is one card, drawn by a shared kit, and the keyboard floats
+
+The network, volume and brightness flyouts each drew their own square
+panel; the 2026-10-03 redesign (mockups N1, V1, B1 on the desktop
+canvas) put them on ONE card: a rounded card on the menus' ground, a
+header with a round badge saying what the flyout is about, captioned
+sections between hairlines, and a footer band with buttons --
+`userland/wm/wm_flyout.c`.
+
+**Why a drawing kit and not a widget.** The flyouts are WM overlays,
+drawn into the compositor's own scene and hit-tested by the overlay
+table; Toykit widgets live in clients. What they share is how a card
+LOOKS, so that is what is shared: each flyout keeps its own
+`*_geometry()` as the one answer drawing, hit-testing and `gui <name>
+--json` ask, built from `wm_flyout_metrics()` so the rhythm matches.
+Plasma's applet popups and Windows 11's flyouts are the same shape: one
+card language, each applet laying out its own content.
+
+**Why the cards are glass when menus are.** A flyout is a menu-shaped
+surface over the desktop; giving it the menus' transparency setting
+rather than a fifth one keeps the Transparency page to what people
+distinguish. A card casts the hollow shadow on glass and joins the
+frosted damage list while open.
+
+**Why the keyboard floats by default.** Windows 11's touch keyboard and
+GNOME's both float a panel that can be moved off what is being typed
+into; docked full width (as before) covers the bottom of every window
+on a small screen. Dock is one click on its bar, both ways. Its
+position is not remembered across a restart yet.
 
 ## Which tray items are shown is a setting, and `auto` asks the hardware
 

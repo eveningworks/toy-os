@@ -47,6 +47,11 @@ struct tray_slider_popup {
     void (*on_level)(void);
     void (*on_reload)(void);
     void (*damage)(void);
+    // THE CARD'S HEADER (wm_flyout.h): what the slider controls, said in
+    // a title and a subtitle, and the badge's colour and icon.
+    void (*hero)(char *title, unsigned title_cap, char *sub, unsigned sub_cap);
+    const char *hero_icon;
+    uint32_t hero_badge;
 
     // Owned here. `level` is clamped into [min, max] from the INFO
     // record; `unavailable` is empty when the setting can be written.
@@ -64,6 +69,8 @@ struct tray_slider_popup {
 // and the debug console use. Valid whether or not the popup is open.
 struct tray_slider_geom {
     int x, y, w, h;                     // the panel
+    int hero_h;                         // the header, from y
+    int foot_y, foot_h;                 // the owner's footer band; foot_h 0 for none
     int icon_x, icon_y, icon_w, icon_h; // the square left of the track
     int slider_x, slider_y, slider_w, slider_h;   // the scale's rect
     int tray_x, tray_y, tray_w, tray_h; // the item that opens this
@@ -75,11 +82,12 @@ struct tray_slider_geom {
 void tray_slider_init(struct tray_slider_popup *p, const char *icon);
 
 // Computes the panel: at least `want_w` wide (the owner's widest
-// content), `extra_h` taller than the slider row, right-aligned to the
-// tray item and placed by wm_popup_place(). Sets the scale's rect as
-// a side effect, which is what lets every other call take `g`.
+// content), the header, the slider row, then `extra_h` for the owner's
+// sections and `foot_h` for its footer; right-aligned to the tray item
+// and placed by wm_popup_place(). Sets the scale's rect as a side
+// effect, which is what lets every other call take `g`.
 void tray_slider_geometry(struct tray_slider_popup *p, int want_w, int extra_h,
-                          struct tray_slider_geom *g);
+                          int foot_h, struct tray_slider_geom *g);
 
 // The overlay-table verbs. Open closes every other dismissable overlay.
 void tray_slider_open(struct tray_slider_popup *p);
@@ -128,9 +136,9 @@ int tray_slider_wheel(struct tray_slider_popup *p, const struct tray_slider_geom
 // the debounce (mute, release). Clamped; a no-op when unavailable.
 void tray_slider_set_level(struct tray_slider_popup *p, int level, int commit_now);
 
-// The panel background, the icon cell (hover-washed when `icon_hot`),
-// the scale, the caption and the border. The owner draws its rows
-// after, inside the panel.
+// The card (wm_flyout.h) with its footer band, the header, the icon
+// cell (hover-washed when `icon_hot`), the scale and its caption. The
+// owner draws its sections and its footer's buttons after.
 void tray_slider_draw(const struct tray_slider_popup *p, const struct tray_slider_geom *g,
                       const char *icon, int icon_hot);
 

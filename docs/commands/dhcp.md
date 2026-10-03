@@ -36,7 +36,7 @@ hold several cards without one blocking the others.
 **Nothing else here hands out an address.** The kernel brings a card up
 unconfigured and this program is where an address comes from, as on
 Linux. It applies its result through `SYS_NET_CONFIG`, the same call
-`ifconfig` uses, so there is no privileged path here that a person could
+`netctl` uses, so there is no privileged path here that a person could
 not take by hand.
 
 **With no argument it configures every device that has no address**,
@@ -187,7 +187,7 @@ claim, so neither is the end of the run.
 
 ## See also
 
-`ifconfig` for what it changed, `service` for whether the boot-time run
+`netctl` for what it changed, `service` for whether the boot-time run
 worked, `host` for what the nameserver is for, and
 `docs/conventions/kernel.md`'s networking entry for the layering.
 

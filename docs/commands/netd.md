@@ -74,7 +74,20 @@ named by a line below it.
 default because moving a USB adapter to another port must not rename it;
 `location` is offered for anyone who wants the opposite, which is what
 systemd's `enp3s0` does. Where a card currently sits is reported by
-`ifconfig` as `at pci3.0` either way, so it is still findable.
+`netctl` as `at pci3.0` either way, so it is still findable.
+
+## Being asked: `netctl renew|down|up`
+
+netd answers on a control channel (`lib/unetctl.h`, uchan -- the shape
+init's `service` channel has), the way networkd answers `networkctl`.
+**`renew`** starts the card's lease over, asking for the remembered
+address first; **`down`** switches the card off in the kernel (nothing
+sent or received) and clears its address, and netd then leaves it
+alone; **`up`** switches it back on and leases at once. Each is
+answered "accepted" immediately and carried out on the next pass,
+because a DHCP exchange can block for seconds and every card shares one
+loop -- `netctl` watches the card for the outcome. A card renewed by
+hand also stops counting as "addressed by hand" until its lease binds.
 
 ## What it deliberately does not do
 
@@ -90,10 +103,11 @@ a driver that reports no location leaves the kernel's name alone rather
 than inventing one that says nothing.
 
 **It does not take over a card that already has an address.** One
-configured by hand with `ifconfig` is left alone, which is `dhcp`'s rule
-too. The cost is real and worth knowing: if netd itself is restarted
-while a card it leased is up, it sees an addressed card and leaves it —
-so that lease is not renewed until the next boot. `Restart=always` makes
+configured by hand with `netctl address` is left alone, which is
+`dhcp`'s rule too. The cost is real and worth knowing: if netd itself is
+restarted while a card it leased is up, it sees an addressed card and
+leaves it — so that lease is not renewed until the next boot, or until
+`netctl renew` asks. `Restart=always` makes
 that reachable, and telling the two apart needs the lease file to record
 when it was granted, which it does not.
 
@@ -104,5 +118,5 @@ one port, and the second will fail to bind.
 ## See also
 
 - `dhcp` — the same DHCP client, as a command
-- `ifconfig` — what the cards are called and where they are
+- `netctl` — what the cards are called and where they are, and renew/down/up
 - `docs/decisions.md`, "An interface name is the card's identity"

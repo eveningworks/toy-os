@@ -1463,7 +1463,7 @@ under MSI-X, which is not what the spec would lead you to expect.
 - **LINK STATE COMES FROM THE DEVICE**, over the control interface's
   interrupt endpoint, and `net_device.link_known` is a THIRD value: a
   card with no way to ask is not a card whose cable is unplugged, so
-  `ifconfig` prints no link line at all rather than guessing "down".
+  `netctl` prints no link line at all rather than guessing "down".
 
 ## A VENDOR CONFIGURATION NEEDS A DRIVER THAT NAMES THE DEVICE, AND AN RTL8153 IS FRAMED RATHER THAN RAW
 
@@ -2505,7 +2505,7 @@ A USB3 socket appears to an xHCI twice: once in its USB2 port range and
 once in its USB3 range. Which number a device shows up on depends on
 whether its SuperSpeed link trained -- so **the same adapter reports a
 different port across reboots**, which read as the adapter having moved
-(`ifconfig` printed one UE300 as `usb3` or `usb14`).
+(`netctl` printed one UE300 as `usb3` or `usb14`).
 
 **The Supported Protocol capability gives two RANGES and no pairing.**
 Compatible Port Offset and Count say "USB 2.0 is ports 1..11" and "USB
@@ -3153,7 +3153,7 @@ with the answer).
   and it is why the DNS and DHCP clients are as short as they are.
 - **DHCP AND DNS ARE `/bin` PROGRAMS, AND THE RESOLVER IS A LIBRARY.**
   `/bin/dhcp` applies its lease through `SYS_NET_CONFIG` -- the same
-  call `ifconfig` uses, so there is no privileged path a person could
+  call `netctl` uses, so there is no privileged path a person could
   not take by hand. Resolution is `userland/lib/uresolv.c`, shared by
   `/bin/host` and `/bin/ping`, so a name means the same thing in both.
 - **`/etc/resolv.conf` HAS UNIX'S NAME AND THIS REPO'S FORMAT**
@@ -4055,7 +4055,7 @@ name is an identity the card carries with it. Move a USB adapter to a
 different port and it is still `net-718ebf`.
 
 **WHERE IT IS PLUGGED IN IS A SEPARATE FIELD** -- `dev->location`,
-`"pci3.0"` or `"usb13"`, filled by the driver and printed by `ifconfig`
+`"pci3.0"` or `"usb13"`, filled by the driver and printed by `netctl`
 as `at pci3.0`. It is never part of the name, because it changes when
 somebody moves the card and a name that changes is not an identity.
 
@@ -4094,7 +4094,7 @@ one -- `sound_unregister()` and `input_unregister_source()` had had one
 since USB hot-plug landed. Until it did, `usb_r8153_unbind()` set a flag
 and left the interface listed, with a comment saying netdev.h gave it
 nothing to call; an adapter unplugged and plugged back in registered a
-SECOND time and `ifconfig` showed one card twice.
+SECOND time and `netctl` showed one card twice.
 
 Three things hold a `struct net_device *` and all three must be dealt
 with, in this order, before the table forgets it:
@@ -4648,3 +4648,13 @@ number on purpose: it identifies one machine and nothing here needs it.
 An EFI boot would need Multiboot2's EFI system-table tag, which nothing
 reads yet, and reports `found` 0.
 
+## A CARD CAN BE SWITCHED OFF (`admin_down`), AND NETD IS ASKED OVER ITS CHANNEL
+
+- **`admin_down` is a decision, `link_up` a fact** -- Linux's IFF_UP
+  beside carrier. Only `SYS_NET_CONFIG`'s `NET_IFC_DOWN`/`UP` set it,
+  never a driver. Down, `net_tx()` returns `-ENETDOWN`, `net_rx()` drops
+  WITHOUT counting, and the default route skips the card. A new path
+  that picks a device must skip it too.
+- **Ask netd through `lib/unetctl.h`** (`netctl` does), never by
+  restarting it: a restart loses every card's lease. The reply is
+  "accepted"; the outcome is read off the card.

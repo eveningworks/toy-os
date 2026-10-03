@@ -22,7 +22,7 @@
 oldest first, with the time, the direction, the protocol, the program
 that asked, and the address at the other end.
 
-`ifconfig` reports what a card did in packets and bytes, which cannot
+`netctl` reports what a card did in packets and bytes, which cannot
 answer *what did this machine connect to, and which program did it*.
 The kernel keeps a ring of connection records (`QUERY_CONNLOG`) and this
 prints them.
@@ -104,7 +104,7 @@ item, not something this command does behind your back.
 
 **It does not report bytes.** A connection record is made at the open
 and never touched again; per-connection traffic counters are a
-different structure, and `ifconfig`'s per-device ones already answer the
+different structure, and `netctl`'s per-device ones already answer the
 question people usually mean.
 
 ## Turning it off
@@ -125,6 +125,6 @@ Records already in the ring are kept.
 
 ## See also
 
-`ifconfig` for the per-device counters, `ping` and `wget` for things
+`netctl` for the per-device counters, `ping` and `wget` for things
 that make entries, `config` for the setting, and
 `docs/conventions/kernel.md`'s connection-log entry for the layering.

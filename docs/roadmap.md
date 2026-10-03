@@ -669,7 +669,9 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~The Start menu's app column does not scroll~~ it does, past `SM_MAX_ROWS` -- the entry was stale (2026-10-01)
 - [x] ~~Modern menus and desktop~~ DONE 2026-10-01 -- Windows 11's card for every menu, glass selection and hover, Open > by category
 - [x] ~~Transparency for the taskbar, Start, menus and windows~~ DONE 2026-10-03 -- clear/frosted/wallpaper glass, Appearance > Transparency
-- [ ] Glass on the tray flyouts, the calendar, taskbar peek and dropdown lists -- they still draw their own opaque card
+- [x] ~~Tray flyouts on one card~~ DONE 2026-10-03 -- network, volume, brightness (`wm_flyout.c`), glass with the menus
+- [ ] The calendar, the remote-activity flyout, taskbar peek and dropdown lists on the flyout card / glass
+- [ ] Remember where the floating on-screen keyboard was put, and whether it was docked
 - [ ] Measure transparency on the laptop, then decide whether it ships ON (Windows 11's default) -- off until `gui compositor` says
 - [ ] Full dirty-rect compositor
 - [x] ~~Taskbar notification area (tray)~~ done
@@ -944,7 +946,8 @@ run on, not by order.
 - [ ] Download over a USB NIC -- ~230 Mbit/s where the onboard r8169 does ~660 and Linux ~810, same line
 - [x] ~~A log of what this machine connects to~~ DONE 2026-09-05 -- a kernel ring, `QUERY_CONNLOG`, `/bin/netlog`
 - [ ] Draining the connection log to a file, so it survives a reboot -- the ring is memory today
-- [ ] `/bin/netctl`: one tool for the network -- addresses, naming rules, and per-card control of `netd`, subsuming `ifconfig`
+- [x] ~~`/bin/netctl`: one tool for the network, subsuming `ifconfig`~~ DONE 2026-10-03 -- renew/down/up through netd
+- [ ] `netctl` editing naming rules live -- `/etc/net.conf` is still a file netd re-reads, not something netctl writes
 - [ ] An `arp` command -- the cache is diagnosable only from inside the kernel today
 - [ ] A routing table -- routing is "my subnet, or the gateway", per device
 - [ ] `/etc/hosts`, and a resolver cache -- every lookup goes to the wire

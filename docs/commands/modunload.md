@@ -25,7 +25,7 @@ every registry, and its memory is freed.
 /$ lsmod
 lsmod: no module is loaded
 /$ modload e1000
-/$ ifconfig
+/$ netctl
 ```
 
 **Refused with `Device or resource busy` when a driver in the module

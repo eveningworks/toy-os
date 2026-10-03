@@ -83,7 +83,7 @@ rather than a timeout, because those are different problems:
 
 ## See also
 
-`ifconfig` for the addresses this uses and the counters that say whether
+`netctl` for the addresses this uses and the counters that say whether
 frames moved at all, `host` for resolution on its own, `netd` for where
 the nameserver comes from, and `docs/conventions/kernel.md`'s networking
 entry for how the layers below fit together.

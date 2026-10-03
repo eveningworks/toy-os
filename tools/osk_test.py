@@ -199,6 +199,34 @@ def main():
               "ctrlok/" in after,
               "a literal 'c' would have made the command xyzcmkdir")
 
+        # --- FLOATING: dragged by its bar, docked, closed by its x ---
+        k = dbg.json("gui osk --json")
+        check("it opens floating, narrower than the screen", not k["docked"] and k["w"] < 1280,
+              f"w={k['w']} docked={k['docked']}")
+        sx, sy = k["x"] + 60, k["y"] + k["bar_h"] // 2
+        dbg.send(f"gui drag {sx} {sy} {sx - 80} {sy - 120} 8")
+        dbg.settle()
+        time.sleep(0.4)
+        m = dbg.json("gui osk --json")
+        check("dragging its bar moves it", (m["x"], m["y"]) == (k["x"] - 80, k["y"] - 120),
+              f"{(k['x'], k['y'])} -> {(m['x'], m['y'])}")
+        kb.type_caps(spell("moved"))
+        time.sleep(1.2)
+        check("...and a moved keyboard still types", "moved/" in listing(dbg))
+        kb.click(m["dock"]["cx"], m["dock"]["cy"], settle=0.4)
+        m = dbg.json("gui osk --json")
+        check("Dock makes it full width above the taskbar", m["docked"] and m["w"] >= 1280,
+              f"w={m['w']} docked={m['docked']}")
+        kb.click(m["dock"]["cx"], m["dock"]["cy"], settle=0.4)
+        check("...and the same button floats it again", not dbg.json("gui osk --json")["docked"])
+        m = dbg.json("gui osk --json")
+        kb.click(m["close"]["cx"], m["close"]["cy"], settle=0.4)
+        check("its close button closes it", not kb.is_open())
+        tray = kb.tray()
+        if tray:
+            kb.click(*tray, settle=0.4)
+        check("...and the tray item opens it again", kb.is_open())
+
         # --- the toggle closes it again ------------------------------
         tray = kb.tray()
         if tray:

@@ -29,6 +29,8 @@
 #include "lib/cmd.h"
 #include "lib/uconf.h"
 #include "lib/udhcp.h"
+#include "lib/uchan.h"
+#include "lib/unetctl.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -41,6 +43,10 @@ struct card {
     char name[NET_ABI_NAME_MAX];   // as the kernel calls it NOW
     uint64_t mac;
     int known;
+    // ASKED FOR (`netctl renew`/`up`): lease even though the card holds
+    // an address and no lease, which the loop otherwise reads as an
+    // address set by hand. Cleared once a lease is bound.
+    int forced;
     struct udhcp dhcp;
 };
 
@@ -140,6 +146,73 @@ static struct card *card_for(uint64_t mac) {
 //
 // A per-card answer needs a per-card SECTION: before sections the card
 // WAS the key, so a card could carry exactly one fact -- its name.
+// --- the control channel (lib/unetctl.h) --------------------------------
+
+static struct uchan_server g_chan;
+static int g_chan_open;
+
+static struct card *card_named(const char *name) {
+    for (int i = 0; i < g_count; i++)
+        if (g_cards[i].known && !strcmp(g_cards[i].name, name)) return &g_cards[i];
+    return 0;
+}
+
+static void restart_lease(struct card *c) {
+    uint8_t mac[6];
+    for (int b = 0; b < 6; b++) mac[b] = (uint8_t)(c->mac >> (b * 8));
+    udhcp_init(&c->dhcp, c->name, mac);   // INIT-REBOOT for the remembered address first
+    c->forced = 1;
+}
+
+// Every verb is a syscall or two, so it is applied HERE and answered at
+// once; the lease it starts is the next pass's (lib/unetctl.h).
+static int control(const struct netctl_msg *m) {
+    struct card *c = card_named(m->dev);
+    if (!c) return NETCTL_NO_SUCH;
+    struct query_netdev d;
+    int down = 0;
+    QUERY_FOREACH(QUERY_NETDEV, d, i)
+        if (!strcmp(d.name, c->name)) down = (int)d.admin_down;
+    switch (m->verb) {
+    case NETCTL_RENEW:
+        if (down) return NETCTL_REFUSED;
+        printf("netd: %s: renewing, as asked\n", c->name);
+        restart_lease(c);
+        return NETCTL_OK;
+    case NETCTL_DOWN:
+        // The address goes with it, so nothing routes to a card that
+        // will not answer; the lease FILE stays, so `up` asks for the
+        // same address again.
+        if (sys_net_admin(c->name, NET_IFC_DOWN | NET_IFC_CLEAR) < 0) return NETCTL_REFUSED;
+        printf("netd: %s: down, as asked\n", c->name);
+        restart_lease(c);
+        c->forced = 0;
+        return NETCTL_OK;
+    case NETCTL_UP:
+        if (sys_net_admin(c->name, NET_IFC_UP) < 0) return NETCTL_REFUSED;
+        printf("netd: %s: up, as asked\n", c->name);
+        restart_lease(c);
+        return NETCTL_OK;
+    }
+    return NETCTL_REFUSED;
+}
+
+static void serve_channel(void) {
+    if (!g_chan_open) return;
+    uchan_server_scan(&g_chan, 0, 0);
+    int from;
+    struct netctl_msg m;
+    while ((from = uchan_server_recv(&g_chan, &m, sizeof m)) != 0) {
+        m.dev[sizeof m.dev - 1] = '\0';
+        struct netctl_msg reply;
+        memset(&reply, 0, sizeof reply);
+        reply.verb = m.verb;
+        reply.result = (uint32_t)control(&m);
+        memcpy(reply.dev, m.dev, sizeof reply.dev);
+        uchan_server_reply(&g_chan, from, &reply, sizeof reply);
+    }
+}
+
 static int wants_dhcp(const struct etc_config_buf *buf,
                       const struct query_netdev *d, const char *global) {
     char key[24], v[8];
@@ -163,7 +236,13 @@ int main(int argc, char **argv) {
     // this daemon has one thread and one loop.
     static struct etc_config_buf conf;
 
+    // THE CHANNEL, if it can be had. Without it netd still leases every
+    // card; only `netctl renew|down|up` has nobody to ask.
+    if (uchan_server_open(&g_chan, NETCTL_SERVICE) == 0) g_chan_open = 1;
+    else printf("netd: no control channel -- netctl cannot reach this daemon\n");
+
     for (;;) {
+        serve_channel();
         int have_conf = uconf_load(NET_CONF, &conf);
 
         char want_dhcp[8] = "all";
@@ -205,6 +284,7 @@ int main(int argc, char **argv) {
             }
 
             if (!wants_dhcp(&conf, &d, want_dhcp)) continue;
+            if (d.admin_down) continue;   // `netctl down`: switched off on purpose
 
             // A card holding a lease whose kernel-side address is gone
             // is a card that LEFT AND CAME BACK -- its driver was
@@ -221,10 +301,11 @@ int main(int argc, char **argv) {
             // stall every other card behind a port with no cable in it.
             // A driver that cannot report carrier is not "down".
             if (d.link_known && !d.link_up) continue;
-            if (d.ip && c->dhcp.state == UDHCP_INIT && !c->dhcp.lease.seconds)
+            if (d.ip && c->dhcp.state == UDHCP_INIT && !c->dhcp.lease.seconds && !c->forced)
                 continue;   // addressed by hand: leave it alone
 
             uint64_t due = udhcp_step(&c->dhcp, sys_monotonic_ns());
+            if (c->dhcp.state == UDHCP_BOUND) c->forced = 0;
             if (due < next) next = due;
         }
 
@@ -234,7 +315,8 @@ int main(int argc, char **argv) {
         uint64_t now = sys_monotonic_ns();
         uint64_t ms = next > now ? (next - now) / 1000000ull : 0;
         if (ms > 10000) ms = 10000;
-        sys_sleep_ms((int)(ms ? ms : 100));
+        if (g_chan_open) uchan_server_wait(&g_chan, (int)(ms ? ms : 100));
+        else sys_sleep_ms((int)(ms ? ms : 100));
     }
     return 0;
 }

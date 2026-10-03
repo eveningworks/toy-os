@@ -211,7 +211,7 @@ def wait_configured(disk, timeout_s=30.0):
     wait_configured() exists for the same reason."""
     end = time.time() + timeout_s
     while time.time() < end:
-        out = vm("exec", "ifconfig", disk=disk)
+        out = vm("exec", "netctl", disk=disk)
         if re.search(r"inet \d+\.\d+\.\d+\.\d+", out):
             return True
         time.sleep(1.0)

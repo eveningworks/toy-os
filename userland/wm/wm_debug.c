@@ -944,6 +944,9 @@ static void cmd_osk(struct dbg_out *o, const char *arg, int json) {
     if (json) {
         dbg_out_printf(o, "{\"open\":%s,\"mods\":%u,", osk_open ? "true" : "false", r.mods);
         dbg_out_printf(o, "\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,", r.x, r.y, r.w, r.h);
+        dbg_out_printf(o, "\"docked\":%s,\"bar_h\":%d,\"dock\":{\"cx\":%d,\"cy\":%d},"
+                     "\"close\":{\"cx\":%d,\"cy\":%d},", r.docked ? "true" : "false", r.bar_h,
+                     r.dock_cx, r.dock_cy, r.close_cx, r.close_cy);
         dbg_out_printf(o, "\"tray\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"cx\":%d,\"cy\":%d}}\r\n",
                      r.tray_x, r.tray_y, r.tray_w, r.tray_h,
                      r.tray_x + r.tray_w / 2, r.tray_y + r.tray_h / 2);
@@ -1663,6 +1666,19 @@ static void cmd_network(struct dbg_out *o, int json) {
         dbg_out_printf(o, "\"ip\":\"%s\",\"netmask\":\"%s\",\"gateway\":\"%s\",",
                      v.ip, v.mask, v.gw);
         dbg_out_printf(o, "\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,", g.x, g.y, g.w, g.h);
+        dbg_out_printf(o, "\"admin_down\":%s,\"rx_rate\":%llu,\"tx_rate\":%llu,",
+                     v.admin_down ? "true" : "false", v.rx_rate, v.tx_rate);
+        // Each control's centre, from the same geometry the click tests.
+        dbg_out_printf(o, "\"switch\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"cx\":%d,\"cy\":%d},",
+                     g.sw_x, g.sw_y, g.sw_w, g.sw_h, g.sw_x + g.sw_w / 2, g.sw_y + g.sw_h / 2);
+        dbg_out_printf(o, "\"copy\":{\"cx\":%d,\"cy\":%d},\"renew\":{\"cx\":%d,\"cy\":%d},",
+                     g.copy_x + g.copy_w / 2, g.btn_y + g.btn_h / 2,
+                     g.renew_x + g.renew_w / 2, g.btn_y + g.btn_h / 2);
+        dbg_out_printf(o, "\"details\":{\"cx\":%d,\"cy\":%d},\"gear\":{\"cx\":%d,\"cy\":%d},",
+                     g.details_x + g.details_w / 2, g.btn_y + g.btn_h / 2,
+                     g.gear_x + g.gear_w / 2, g.btn_y + g.btn_h / 2);
+        dbg_out_printf(o, "\"graph\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},",
+                     g.graph_x, g.graph_y, g.graph_w, g.graph_h);
         dbg_out_printf(o, "\"tray\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"cx\":%d,\"cy\":%d}}\r\n",
                      g.tray_x, g.tray_y, g.tray_w, g.tray_h,
                      g.tray_x + g.tray_w / 2, g.tray_y + g.tray_h / 2);
@@ -1836,9 +1852,12 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
         // `gui osk key <cap>`. The positional word is taken BEFORE
         // wants_json() consumes the rest, per the note above.
         char *arg = next_tok(&p);
+        // The first token was already taken, so a bare `gui osk --json`
+        // has its flag HERE and nowhere in the tail wants_json() reads.
+        int json = 0;
         if (arg && k_strcmp(arg, "key") == 0) arg = next_tok(&p);
-        else if (arg && arg[0] == '-') arg = 0;   // a flag, not a cap
-        cmd_osk(o, arg, wants_json(p));
+        else if (arg && arg[0] == '-') { json = k_strcmp(arg, "--json") == 0; arg = 0; }
+        cmd_osk(o, arg, json || wants_json(p));
         return 1;
     }
     if (k_strcmp(sub, "brightness") == 0)   { cmd_brightness(o, wants_json(p)); return 1; }

@@ -8,6 +8,8 @@
 #include "keyboard.h"
 #include "ui/utheme.h"
 #include "ui/uui_primitives.h"
+#include "ui/uui_popup.h"
+#include "wm_shadow.h"
 
 int osk_open = 0;
 
@@ -92,23 +94,55 @@ static const int g_row_len[OSK_ROWS] = {
 
 // --- geometry ---------------------------------------------------------
 //
-// Font-derived, never fixed pixels (docs/gui-guidelines.md): the panel
-// is as wide as the screen and each half-span is a fifteenth of it, so
-// a bigger default font makes taller keys rather than a clipped grid.
+// Font-derived, never fixed pixels (docs/gui-guidelines.md). FLOATING by
+// default -- Windows 11's touch keyboard: a card above the taskbar with a
+// bar to drag it by, Dock and close -- or DOCKED, full width as it was.
+// The bar is part of both, so Dock is always one click back.
 
 struct osk_geom {
     int x, y, w, h;
     int pad, row_h, half_w;
+    int kx, ky;                       // the keys' origin
+    int bar_h;
+    int dock_x, dock_w, close_x, close_w, btn_y, btn_h;
+    int docked;
 };
 
+static int g_docked;
+static int g_float_x = -1, g_float_y = -1;   // -1: centred above the taskbar
+static int g_drag, g_drag_dx, g_drag_dy;
+
+#define OSK_DOCK_LABEL  (g_docked ? "Float" : "Dock")
+
 static void osk_geometry(struct osk_geom *g) {
-    g->pad = ugfx_char_h() / 2;
-    g->row_h = ugfx_char_h() * 2;
-    g->w = screen_w;
+    int ch = ugfx_char_h();
+    g->docked = g_docked;
+    g->pad = ch / 2 + 2;
+    g->row_h = ch * 2 + 6;
+    g->bar_h = ch + 14;
+    g->w = g_docked ? screen_w : (ch * 56 < screen_w - 24 ? ch * 56 : screen_w - 24);
     g->half_w = (g->w - 2 * g->pad) / OSK_ROW_SPAN;
-    g->h = OSK_ROWS * g->row_h + 2 * g->pad;
-    g->x = 0;
-    g->y = screen_h - taskbar_h - g->h;
+    g->h = g->bar_h + OSK_ROWS * g->row_h + g->pad;
+    if (g_docked) {
+        g->x = 0;
+        g->y = screen_h - taskbar_h - g->h;
+    } else {
+        int x = g_float_x, y = g_float_y;
+        if (x < 0) { x = (screen_w - g->w) / 2; y = screen_h - taskbar_h - 12 - g->h; }
+        if (x > screen_w - g->w) x = screen_w - g->w;
+        if (y > screen_h - taskbar_h - g->h) y = screen_h - taskbar_h - g->h;
+        if (x < 0) x = 0;
+        if (y < 0) y = 0;
+        g->x = x; g->y = y;
+    }
+    g->kx = g->x + (g->w - OSK_ROW_SPAN * g->half_w) / 2;   // the rounding, split
+    g->ky = g->y + g->bar_h;
+    g->btn_h = g->bar_h - 8;
+    g->btn_y = g->y + 4;
+    g->close_w = g->btn_h + 6;
+    g->close_x = g->x + g->w - g->pad / 2 - g->close_w;
+    g->dock_w = ugfx_text_width(OSK_DOCK_LABEL) + ch;
+    g->dock_x = g->close_x - 4 - g->dock_w;
 }
 
 // The keycap's box. Walks the row's spans, which is the SAME walk that
@@ -118,8 +152,8 @@ static void key_rect(const struct osk_geom *g, int row, int col,
                      int *x, int *y, int *w, int *h) {
     int span = 0;
     for (int i = 0; i < col; i++) span += g_rows[row][i].span;
-    *x = g->x + g->pad + span * g->half_w;
-    *y = g->y + g->pad + row * g->row_h;
+    *x = g->kx + span * g->half_w;
+    *y = g->ky + row * g->row_h;
     *w = g_rows[row][col].span * g->half_w;
     *h = g->row_h;
 }
@@ -189,6 +223,10 @@ void osk_report(struct osk_report *r) {
     osk_geometry(&g);
     r->x = g.x; r->y = g.y; r->w = g.w; r->h = g.h;
     r->mods = g_mods;
+    r->docked = g.docked;
+    r->bar_h = g.bar_h;
+    r->dock_cx = g.dock_x + g.dock_w / 2;  r->dock_cy = g.btn_y + g.btn_h / 2;
+    r->close_cx = g.close_x + g.close_w / 2; r->close_cy = g.btn_y + g.btn_h / 2;
     r->tray_x = r->tray_y = r->tray_w = r->tray_h = 0;
     if (g_tray_id >= 0)
         tray_item_rect(g_tray_id, &r->tray_x, &r->tray_y, &r->tray_w, &r->tray_h);
@@ -223,6 +261,7 @@ static void osk_close_panel(void) {
     osk_damage();          // while it is still up, so its rect repaints
     osk_open = 0;
     g_mods = 0;
+    g_drag = 0;
     g_pressed_row = g_pressed_col = -1;
 }
 
@@ -244,6 +283,8 @@ void osk_init(void) {
 int osk_hover_at(int mx, int my) {
     struct osk_geom g;
     osk_geometry(&g);
+    if (osk_open && uui_hit(g.dock_x, g.btn_y, g.dock_w, g.btn_h, mx, my)) return 10000;
+    if (osk_open && uui_hit(g.close_x, g.btn_y, g.close_w, g.btn_h, mx, my)) return 10001;
     int r, c;
     if (!key_at(&g, mx, my, &r, &c)) return 0;
     return r * OSK_MAX_COLS + c + 1;   // 0 means none, so bias by one
@@ -251,9 +292,18 @@ int osk_hover_at(int mx, int my) {
 
 void osk_update_press(int mx, int my, uint8_t buttons) {
     if (!osk_open) return;
-    if (!(buttons & 0x1)) { g_pressed_row = g_pressed_col = -1; return; }
     struct osk_geom g;
     osk_geometry(&g);
+    if (g_drag) {
+        // MOVED BY ITS BAR, the core damaging the rect it left
+        // (wm_overlay.h); released, it stays where it was put.
+        if (!(buttons & 0x1)) { g_drag = 0; return; }
+        g_float_x = mx - g_drag_dx;
+        g_float_y = my - g_drag_dy;
+        osk_damage();
+        return;
+    }
+    if (!(buttons & 0x1)) { g_pressed_row = g_pressed_col = -1; return; }
     int r, c;
     if (key_at(&g, mx, my, &r, &c)) {
         if (r == g_pressed_row && c == g_pressed_col) return;
@@ -281,6 +331,22 @@ int osk_handle_click(int mx, int my) {
 
     struct osk_geom g;
     osk_geometry(&g);
+    if (uui_hit(g.close_x, g.btn_y, g.close_w, g.btn_h, mx, my)) {
+        osk_close_panel();
+        return 1;
+    }
+    if (uui_hit(g.dock_x, g.btn_y, g.dock_w, g.btn_h, mx, my)) {
+        osk_damage();
+        g_docked = !g_docked;
+        osk_damage();
+        return 1;
+    }
+    if (!g_docked && uui_hit(g.x, g.y, g.w, g.bar_h, mx, my)) {
+        g_drag = 1;
+        g_drag_dx = mx - g.x;
+        g_drag_dy = my - g.y;
+        return 1;
+    }
     int r, c;
     if (!key_at(&g, mx, my, &r, &c)) {
         // A click outside the panel is NOT ours: it belongs to whatever
@@ -300,49 +366,90 @@ int osk_handle_click(int mx, int my) {
     return 1;
 }
 
+// A function key: the modifiers, the editing and navigation keys. Drawn
+// a step darker than a letter, as every touch keyboard does.
+static int is_fn(const struct osk_key *k) {
+    if (k->mod) return 1;
+    int c = k->code;
+    return c == '\b' || c == '\t' || c == 27 || c == KEY_DELETE || c == KEY_ARROW_LEFT ||
+           c == KEY_ARROW_RIGHT || c == KEY_ARROW_UP || c == KEY_ARROW_DOWN;
+}
+
 void osk_draw(int mx, int my) {
     if (!osk_open) return;
 
     struct osk_geom g;
     osk_geometry(&g);
+    struct ugfx_surface *s = wm_surface();
+    int ch = ugfx_char_h();
 
-    uint32_t bg = UTHEME_PANEL_BG, border = UTHEME_BORDER, fg = UTHEME_TEXT;
-    ugfx_fill_rect(wm_surface(), g.x, g.y, g.w, g.h, bg);
-    ugfx_fill_rect(wm_surface(), g.x, g.y, g.w, 1, border);
+    uint32_t ground = ugfx_blend(uui_popup_bg(), UTHEME_CHROME, 64);
+    uint32_t edge = uui_popup_border(), fg = UTHEME_TEXT;
+    uint32_t face = UTHEME_WHITE, fn_face = ugfx_blend(ground, UTHEME_CHROME, 200);
+    if (g.docked) {
+        ugfx_fill_rect(s, g.x, g.y, g.w, g.h, ground);
+        ugfx_fill_rect(s, g.x, g.y, g.w, 1, edge);
+    } else {
+        int r = uui_popup_radius() + 2;
+        wm_shadow_draw(g.x, g.y, g.w, g.h, r, WM_SHADOW_POPUP);
+        uui_fill_round_rect(s, g.x, g.y, g.w, g.h, r, edge);
+        uui_fill_round_rect(s, g.x + 1, g.y + 1, g.w - 2, g.h - 2, r - 1, ground);
+    }
+
+    // THE BAR: what the keys type, a grip to drag by, Dock and close.
+    int by = g.y + (g.bar_h - ch) / 2;
+    ugfx_draw_string_clipped(s, g.x + g.pad + 4, by, g.w / 3, "English (US)",
+                             ugfx_blend(fg, ground, 60), ground);
+    if (!g.docked)
+        uui_fill_round_rect(s, g.x + (g.w - 44) / 2, g.y + g.bar_h / 2 - 2, 44, 5, UUI_CAPSULE,
+                            ugfx_blend(edge, UTHEME_TEXT, 80));
+    int hot_dock = uui_hit(g.dock_x, g.btn_y, g.dock_w, g.btn_h, mx, my);
+    int hot_close = uui_hit(g.close_x, g.btn_y, g.close_w, g.btn_h, mx, my);
+    if (hot_dock) uui_fill_round_rect(s, g.dock_x, g.btn_y, g.dock_w, g.btn_h, 5,
+                                      uui_state_bg(ground, UUI_STATE_HOVER));
+    if (hot_close) uui_fill_round_rect(s, g.close_x, g.btn_y, g.close_w, g.btn_h, 5,
+                                       uui_state_bg(ground, UUI_STATE_HOVER));
+    ugfx_draw_string_clipped(s, g.dock_x + ch / 2, by, g.dock_w - ch / 2, OSK_DOCK_LABEL, fg,
+                             hot_dock ? uui_state_bg(ground, UUI_STATE_HOVER) : ground);
+    int cx = g.close_x + g.close_w / 2, cy = g.btn_y + g.btn_h / 2, k = ch / 3;
+    ugfx_draw_line(s, cx - k, cy - k, cx + k, cy + k, fg, GEOM_AA);
+    ugfx_draw_line(s, cx - k, cy + k, cx + k, cy - k, fg, GEOM_AA);
 
     int shifted = (g_mods & KEY_MOD_SHIFT) != 0;
-
     for (int r = 0; r < OSK_ROWS; r++) {
         for (int c = 0; c < g_row_len[r]; c++) {
-            const struct osk_key *k = &g_rows[r][c];
+            const struct osk_key *key = &g_rows[r][c];
             int x, y, w, h;
             key_rect(&g, r, c, &x, &y, &w, &h);
 
             // An armed modifier reads as SELECTED, not as hovered --
             // selection outranks hover, so the accent says "this is
-            // held" while the pointer is elsewhere.
-            int armed = k->mod && (g_mods & k->mod);
+            // held" while the pointer is elsewhere. Enter is the accent
+            // too: the key that commits, as on every touch keyboard.
+            int armed = key->mod && (g_mods & key->mod);
             int down = (r == g_pressed_row && c == g_pressed_col);
-            uint32_t cap_bg = bg, cap_fg = fg;
-            if (armed) {
+            uint32_t cap_bg = is_fn(key) ? fn_face : face, cap_fg = fg;
+            if (armed || key->code == '\n') {
                 cap_bg = UTHEME_ACCENT;
                 cap_fg = UTHEME_ACCENT_TEXT;
+                if (down) cap_bg = uui_state_bg(cap_bg, UUI_STATE_PRESSED);
             } else if (down) {
-                cap_bg = uui_state_bg(bg, UUI_STATE_PRESSED);
+                cap_bg = uui_state_bg(cap_bg, UUI_STATE_PRESSED);
             } else if (uui_hit(x, y, w - 1, h - 1, mx, my)) {
-                cap_bg = uui_state_bg(bg, UUI_STATE_HOVER);
+                cap_bg = uui_state_bg(cap_bg, UUI_STATE_HOVER);
             }
 
-            ugfx_fill_rect(wm_surface(), x + 1, y + 1, w - 2, h - 2, cap_bg);
-            ugfx_draw_rect(wm_surface(), x + 1, y + 1, w - 2, h - 2, border);
+            int ix = x + 3, iy = y + 3, iw = w - 6, ih = h - 6;
+            // A cap is lifted by a hairline under it, not outlined.
+            uui_fill_round_rect(s, ix, iy + 1, iw, ih, 6, ugfx_blend(ground, UTHEME_TEXT, 40));
+            uui_fill_round_rect(s, ix, iy, iw, ih, 6, cap_bg);
 
-            const char *cap = (shifted && k->cap_sh) ? k->cap_sh : k->cap;
+            const char *cap = (shifted && key->cap_sh) ? key->cap_sh : key->cap;
             int tw = ugfx_text_width(cap);
-            int cap_x = x + (w - tw) / 2;
-            if (cap_x < x + 1) cap_x = x + 1;
-            ugfx_draw_string_clipped(wm_surface(), cap_x,
-                                     y + (h - ugfx_char_h()) / 2,
-                                     x + w - 1 - cap_x, cap, cap_fg, cap_bg);
+            int cap_x = ix + (iw - tw) / 2;
+            if (cap_x < ix + 2) cap_x = ix + 2;
+            ugfx_draw_string_clipped(s, cap_x, iy + (ih - ch) / 2, ix + iw - 2 - cap_x, cap,
+                                     cap_fg, cap_bg);
         }
     }
 }

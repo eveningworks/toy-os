@@ -7,6 +7,7 @@
 #include "volume_popup.h"
 #include "tray_slider_popup.h"
 #include "wm_shadow.h"   // the damage a shadowed panel actually needs
+#include "wm_flyout.h"
 #include "wm_tray.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"
@@ -44,6 +45,8 @@ static int  g_dev_selected;            // which row carries the tick
 // draw -- see wm_overlay.h.
 #define HOVER_APP(i) (TRAY_SLIDER_HOVER_OWNER + (i))
 #define HOVER_DEV(i) (TRAY_SLIDER_HOVER_OWNER + SND_ROSTER_MAX + (i))
+#define HOVER_MUTEALL (TRAY_SLIDER_HOVER_OWNER + SND_ROSTER_MAX + VOLUME_MAX_DEVICES)
+#define HOVER_GEAR    (HOVER_MUTEALL + 1)
 static int g_hover;
 
 // --- the per-application sliders ---------------------------------------
@@ -228,8 +231,40 @@ static void on_level(void) {
     volume_tray_update();
 }
 
+// THE HEADER NAMES WHAT IS PLAYING THROUGH: the card "Automatic"
+// resolved to, else the one chosen. Its label is the choice list's, so
+// nothing here knows what a sound card is.
+static void hero(char *title, unsigned tcap, char *sub, unsigned scap) {
+    int real = 0;
+    for (int i = 0; i < g_dev_count; i++) if (k_strcmp(g_dev_value[i], "auto")) real++;
+    if (!real) {
+        k_strlcpy(title, "No sound device", tcap);
+        k_strlcpy(sub, "Nothing plays until one is plugged in", scap);
+        return;
+    }
+    const char *chosen = g_dev_value[g_dev_selected];
+    if (k_strcmp(chosen, "auto")) {
+        k_strlcpy(title, g_dev_label[g_dev_selected], tcap);
+        k_snprintf(sub, scap, "Chosen output, %s", chosen);
+        return;
+    }
+    // "Automatic (hda1)": the value in the brackets names the row.
+    char want[SETTING_ABI_VALUE_MAX] = "";
+    const char *open = g_dev_label[g_dev_selected];
+    while (*open && *open != '(') open++;
+    if (*open) {
+        k_strlcpy(want, open + 1, sizeof want);
+        for (char *c = want; *c; c++) if (*c == ')') { *c = 0; break; }
+    }
+    k_strlcpy(title, g_dev_label[g_dev_selected], tcap);
+    for (int i = 0; i < g_dev_count; i++)
+        if (want[0] && !k_strcmp(g_dev_value[i], want)) k_strlcpy(title, g_dev_label[i], tcap);
+    k_snprintf(sub, scap, "Automatic%s%s", want[0] ? ", " : "", want);
+}
+
 void volume_tray_init(void) {
     g_popup.name = "volume";
+    g_popup.hero = hero;
     g_popup.setting = VOLUME_SETTING;
     g_popup.step = VOLUME_STEP;
     g_popup.on_level = on_level;
@@ -247,25 +282,23 @@ void volume_tray_init(void) {
 // for the device rows below it, and the rows themselves. `g` may be
 // NULL when only the row is wanted.
 static void geometry(struct tray_slider_geom *s, struct volume_geom *g) {
+    struct wm_flyout_metrics m;
+    wm_flyout_metrics(&m);
     int ch = ugfx_char_h();
-    int pad = ch / 2 + 2;
-    int row_h = ch + 8;
     int rows = g_dev_count;
     int apps = g_app_count;
     int app_row_h = ch + 12;   // taller than a device row: it holds a track
-    // Wide enough for the widest device label rather than a constant:
-    // "Automatic (usb-audio)" is longer than anything else here, and a
-    // panel sized for the shorter case clips it.
-    int want_w = ugfx_text_width("Automatic (usb-audio)") + pad * 4;
-    int extra_h = pad / 2 + 1 + pad / 2     // the rule
-                  + ch + pad / 2            // "Output device"
-                  + rows * row_h;
-    // The apps section only exists when something is playing, heading
-    // and rule included -- an empty "Applications" box would be a
-    // control that draws and says nothing.
-    if (apps)
-        extra_h += pad / 2 + 1 + pad / 2 + ch + pad / 2 + apps * app_row_h;
-    tray_slider_geometry(&g_popup, want_w, extra_h, s);
+    int dev_row_h = ch + 12;
+    // Wide enough for the widest device label and its note rather than
+    // a constant: "Automatic (usb-audio)" is longer than anything else
+    // here, and a panel sized for the shorter case clips it.
+    int want_w = ugfx_text_width("Automatic (usb-audio)") + ugfx_text_width("usb-audio") + 4 * m.pad;
+    // The apps section only exists when something is playing, rule and
+    // caption included -- an empty "Applications" box would be a control
+    // that draws and says nothing.
+    int extra_h = 1 + m.vpad + m.cap_h + rows * dev_row_h + m.vpad;
+    if (apps) extra_h += 1 + m.vpad + m.cap_h + apps * app_row_h + m.vpad;
+    tray_slider_geometry(&g_popup, want_w, extra_h, m.foot_h, s);
     if (!g) return;
 
     k_memset(g, 0, sizeof *g);
@@ -274,33 +307,47 @@ static void geometry(struct tray_slider_geom *s, struct volume_geom *g) {
     g->mute_x = s->icon_x; g->mute_y = s->icon_y; g->mute_w = s->icon_w; g->mute_h = s->icon_h;
     g->slider_x = s->slider_x; g->slider_y = s->slider_y;
     g->slider_w = s->slider_w; g->slider_h = s->slider_h;
-    g->list_x = s->x + pad;
-    g->app_x = s->x + pad;
+    g->app_x = s->x + m.pad;
+    g->list_x = s->x + m.pad - 6;
     g->apps = apps;
     g->app_row_h = app_row_h;
 
     int y = s->below_y;
     if (apps) {
-        g->app_y = y + pad / 2 + 1 + pad / 2 + ch + pad / 2;
-        y = g->app_y + apps * app_row_h;
+        g->app_rule_y = y;
+        g->app_cap_y = y + 1 + m.vpad;
+        g->app_y = g->app_cap_y + m.cap_h;
+        y = g->app_y + apps * app_row_h + m.vpad;
     }
-    g->list_y = y + pad / 2 + 1 + pad / 2 + ch + pad / 2;
-    g->row_h = row_h;
+    g->list_rule_y = y;
+    g->list_cap_y = y + 1 + m.vpad;
+    g->list_y = g->list_cap_y + m.cap_h;
+    g->row_h = dev_row_h;
     g->rows = rows;
 
     // The track sits right of the widest label this panel will draw, so
     // every row's slider starts at the same x -- a ragged left edge on
     // a column of sliders reads as a layout fault.
-    int label_w = ugfx_text_width("MMMMMMMM") + pad;
+    int label_w = ugfx_text_width("MMMMMMMM") + m.pad / 2;
     g->app_slider_x = g->app_x + label_w;
-    g->app_slider_w = (s->x + s->w - pad) - g->app_slider_x
-                      - ugfx_text_width("100%") - pad;
+    g->app_slider_w = (s->x + s->w - m.pad) - g->app_slider_x
+                      - ugfx_text_width("100%") - m.pad / 2;
     for (int i = 0; i < apps; i++) {
         if (g->app_slider_w > 0)
             uui_scale_set_geometry(&g_app_scale[i], g->app_slider_x,
                                    g->app_y + i * app_row_h + (app_row_h - ch) / 2,
                                    g->app_slider_w, ch);
     }
+
+    g->foot_y = s->foot_y;
+    g->foot_h = s->foot_h;
+    g->btn_h = m.btn_h;
+    g->btn_y = g->foot_y + (g->foot_h - m.btn_h) / 2;
+    g->muteall_x = s->x + m.pad - 6;
+    g->muteall_w = wm_flyout_button_w("Mute all", "tray-volume-muted");
+    g->gear_w = m.btn_h;
+    g->gear_x = s->x + s->w - (m.pad - 6) - g->gear_w;
+
     g->level = g_popup.level;
     g->muted = (g_popup.level == 0);
     g->selected_row = g_dev_selected;
@@ -339,7 +386,7 @@ void volume_damage(void) { wm_overlay_damage("volume"); }
 static int row_at(const struct volume_geom *g, int mx, int my) {
     for (int i = 0; i < g->rows; i++)
         if (uui_hit(g->list_x, g->list_y + i * g->row_h,
-                    g->w - (g->list_x - g->x) * 2, g->row_h, mx, my))
+                    g->w - (g->list_x - g->x) * 2, g->row_h - 2, mx, my))
             return i;
     return -1;
 }
@@ -359,6 +406,8 @@ int volume_hover_at(int mx, int my) {
                 return (g_hover = HOVER_APP(i));
         int row = row_at(&g, mx, my);
         if (row >= 0) g_hover = HOVER_DEV(row);
+        if (uui_hit(g.muteall_x, g.btn_y, g.muteall_w, g.btn_h, mx, my)) g_hover = HOVER_MUTEALL;
+        if (uui_hit(g.gear_x, g.btn_y, g.gear_w, g.btn_h, mx, my)) g_hover = HOVER_GEAR;
     }
     return g_hover;
 }
@@ -420,6 +469,17 @@ int volume_handle_click(int mx, int my) {
     case TRAY_SLIDER_CLICK_INSIDE: {
         struct volume_geom g;
         volume_geometry(&g);
+        if (uui_hit(g.muteall_x, g.btn_y, g.muteall_w, g.btn_h, mx, my)) {
+            tray_slider_set_level(&g_popup,
+                                  g_popup.level == 0 ? (g_premute_level ? g_premute_level : VOLUME_STEP)
+                                                     : 0, 1);
+            return 1;
+        }
+        if (uui_hit(g.gear_x, g.btn_y, g.gear_w, g.btn_h, mx, my)) {
+            volume_close();
+            sys_spawn("/bin/wm/system/settings", VOLUME_SETTING, -1);
+            return 1;
+        }
         // A PRESS ARMS THE DRAG, and the value follows the pointer from
         // volume_update_press() -- on_click fires on button-DOWN, so a
         // control that committed here could never be cancelled
@@ -502,66 +562,49 @@ void volume_draw(int mx, int my) {
     struct tray_slider_geom s;
     struct volume_geom g;
     geometry(&s, &g);
-
-    uint32_t bg = UTHEME_PANEL_BG, border = UTHEME_BORDER, fg = UTHEME_TEXT;
-    uint32_t accent = UTHEME_ACCENT;
-    uint32_t hover_bg = uui_state_bg(bg, UUI_STATE_HOVER);
+    int ch = ugfx_char_h();
+    uint32_t ink = wm_flyout_ink();
+    uint32_t hover_bg = uui_state_bg(wm_flyout_ground(), UUI_STATE_HOVER);
 
     tray_slider_draw(&g_popup, &s, icon_for(g.level), g_hover == TRAY_SLIDER_HOVER_ICON);
 
-    int ch = ugfx_char_h();
-
     // --- the applications, when any are playing ------------------------
     if (g.apps) {
-        int arule = g.mute_y + g.mute_h + 4;
-        ugfx_fill_rect(wm_surface(), g.x + 8, arule, g.w - 16, 1, border);
-        ugfx_draw_string_clipped(wm_surface(), g.app_x, arule + 6,
-                                 g.w - 16, "Applications", border, bg);
+        wm_flyout_rule(g.x, g.app_rule_y, g.w);
+        wm_flyout_caption(g.app_x, g.app_cap_y, g.w - 2 * (g.app_x - g.x), "APPLICATIONS");
         for (int i = 0; i < g.apps; i++) {
             int ry = g.app_y + i * g.app_row_h;
-            int rw = g.w - (g.app_x - g.x) * 2;
-            if (g_hover == HOVER_APP(i))
-                ugfx_fill_rect(wm_surface(), g.app_x, ry, rw, g.app_row_h, hover_bg);
-            uint32_t row_bg = (g_hover == HOVER_APP(i)) ? hover_bg : bg;
-
+            int hot = g_hover == HOVER_APP(i);
+            if (hot) uui_fill_round_rect(wm_surface(), g.app_x - 6, ry, g.w - 2 * (g.app_x - 6 - g.x),
+                                         g.app_row_h, 5, hover_bg);
+            uint32_t row_bg = hot ? hover_bg : ink;
             char pidbuf[16];
             const char *label = app_label(i, pidbuf, sizeof pidbuf);
-            // CLIPPED to where the track begins, never drawn over it:
-            // gfx_draw_string() does not clip and a long app name would
-            // otherwise paint across its own slider.
-            ugfx_draw_string_clipped(wm_surface(), g.app_x + 2,
-                                     ry + (g.app_row_h - ch) / 2,
-                                     g.app_slider_x - g.app_x - 6,
-                                     label, fg, row_bg);
+            // CLIPPED to where the track begins, never drawn over it.
+            ugfx_draw_string_elided(wm_surface(), g.app_x, ry + (g.app_row_h - ch) / 2,
+                                    g.app_slider_x - g.app_x - 6, label, UTHEME_TEXT, row_bg);
             if (g.app_slider_w > 0) uui_scale_draw(wm_surface(), &g_app_scale[i]);
-
             char pct[8];
             k_snprintf(pct, sizeof pct, "%ld%%", uui_scale_value(&g_app_scale[i]));
-            ugfx_draw_string_clipped(wm_surface(),
-                                     g.app_slider_x + g.app_slider_w + 6,
+            ugfx_draw_string_clipped(wm_surface(), g.app_slider_x + g.app_slider_w + 6,
                                      ry + (g.app_row_h - ch) / 2,
-                                     ugfx_text_width("100%") + 2, pct, fg, row_bg);
+                                     ugfx_text_width("100%") + 2, pct, UTHEME_TEXT, row_bg);
         }
     }
 
-    // --- the rule and the heading -------------------------------------
-    int rule_y = g.list_y - ugfx_char_h() - 6 - 6;
-    ugfx_fill_rect(wm_surface(), g.x + 8, rule_y, g.w - 16, 1, border);
-    ugfx_draw_string_clipped(wm_surface(), g.list_x, rule_y + 6,
-                             g.w - 16, "Output device", border, bg);
-
-    // --- the devices ---------------------------------------------------
+    // --- the outputs ---------------------------------------------------
+    wm_flyout_rule(g.x, g.list_rule_y, g.w);
+    wm_flyout_caption(g.app_x, g.list_cap_y, g.w - 2 * (g.app_x - g.x), "OUTPUT");
     for (int i = 0; i < g.rows; i++) {
         int ry = g.list_y + i * g.row_h;
-        int rw = g.w - (g.list_x - g.x) * 2;
-        int over = (g_hover == HOVER_DEV(i));
-        uint32_t row_bg = bg, row_fg = fg;
-        if (i == g.selected_row) { row_bg = accent; row_fg = UTHEME_ACCENT_TEXT; }
-        else if (over)           { row_bg = hover_bg; }
-        ugfx_fill_rect(wm_surface(), g.list_x, ry, rw, g.row_h, row_bg);
-        ugfx_draw_string_clipped(wm_surface(), g.list_x + 6,
-                                 ry + (g.row_h - ugfx_char_h()) / 2,
-                                 rw - 12, g_dev_label[i], row_fg, row_bg);
+        const char *note = k_strcmp(g_dev_value[i], "auto") ? g_dev_value[i] : "";
+        wm_flyout_radio_row(g.list_x, ry, g.w - 2 * (g.list_x - g.x), g.row_h - 2,
+                            i == g.selected_row, g_hover == HOVER_DEV(i), g_dev_label[i], note);
     }
 
+    // --- the footer ----------------------------------------------------
+    wm_flyout_button(g.muteall_x, g.btn_y, g.muted ? "Unmute" : "Mute all",
+                     g.muted ? "tray-volume-high" : "tray-volume-muted", 1,
+                     g_hover == HOVER_MUTEALL, 0);
+    wm_flyout_icon_button(g.gear_x, g.btn_y, g.gear_w, "tb-gear", g_hover == HOVER_GEAR);
 }

@@ -11,9 +11,12 @@
 #include "net.h"
 #include "ktest.h"
 #include "string.h"
+#include "errno.h"
 
+static int g_tx_calls;
 static int fake_tx(struct net_device *dev, const void *frame, uint32_t len) {
     (void)dev; (void)frame; (void)len;
+    g_tx_calls++;
     return 0;
 }
 
@@ -162,5 +165,31 @@ KTEST("net-registry", "a name another device already holds is refused") {
     // clash with itself.
     KTEST_ASSERT(net_rename(&other, "net-000002"));
     net_unregister(&other);
+    net_unregister(&g_fixture);
+}
+
+// ADMINISTRATIVELY DOWN (NET_IFC_DOWN): nothing reaches the driver and
+// nothing received is delivered or counted; up again, both work. The
+// frame is an unused EtherType, so the stack discards it when it drains.
+KTEST("net-registry", "a card set down neither sends nor receives") {
+    static uint8_t frame[60];
+    fixture_init(0x09, 0x09, 0x04);
+    frame[12] = 0x88; frame[13] = 0xb5;   // IEEE "local experimental"
+    KTEST_ASSERT(net_register(&g_fixture));
+
+    g_fixture.admin_down = 1;
+    int calls = g_tx_calls;
+    uint64_t rx = g_fixture.rx_packets;
+    KTEST_ASSERT_EQ(net_tx(&g_fixture, frame, sizeof frame), -ENETDOWN);
+    KTEST_ASSERT_EQ(g_tx_calls, calls);
+    net_rx(&g_fixture, frame, sizeof frame);
+    KTEST_ASSERT_EQ(g_fixture.rx_packets, rx);
+
+    g_fixture.admin_down = 0;
+    KTEST_ASSERT_EQ(net_tx(&g_fixture, frame, sizeof frame), 0);
+    KTEST_ASSERT_EQ(g_tx_calls, calls + 1);
+    net_rx(&g_fixture, frame, sizeof frame);
+    KTEST_ASSERT_EQ(g_fixture.rx_packets, rx + 1);
+    net_poll();   // drain it while the device is still registered
     net_unregister(&g_fixture);
 }

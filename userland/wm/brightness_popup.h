@@ -39,6 +39,12 @@ struct brightness_geom {
     int level;                        // what the slider draws
     int available;                    // 0 when the setting is unavailable
     int tray_x, tray_y, tray_w, tray_h;
+    // The card's SCALING section (system.scaling), absent where the
+    // display cannot scale, and its footer (wm_flyout.h).
+    int seg_count, seg_x, seg_y, seg_w, seg_h;   // seg_w is ONE segment
+    int seg_selected;
+    int rule_y, cap_y, note_y;
+    int foot_y, foot_h, btn_x, btn_y, btn_w, btn_h;
 };
 void brightness_geometry(struct brightness_geom *out);
 // The `unavailable` sentence, empty when the backlight is controllable.

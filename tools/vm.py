@@ -684,7 +684,7 @@ def cmd_put(args):
 
     if not _ensure_tftpd(args.timeout):
         print("vm: could not start tftpd in the guest -- is networking up? "
-              "(`vm.py exec ifconfig`)", file=sys.stderr)
+              "(`vm.py exec netctl`)", file=sys.stderr)
         return 1
 
     dst = args.dst or ("/tmp/" + os.path.basename(args.src))

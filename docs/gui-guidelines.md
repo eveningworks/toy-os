@@ -512,6 +512,15 @@ when Alt stopped being an ESC prefix for windows (`api/keyboard.h`,
 "Ctrl and Alt"): Alt-F is now 'f' with `KEY_MOD_ALT`, distinct from
 Esc. `KEY_F10` focuses the bar -- Windows' own second binding.
 
+**A TRAY FLYOUT IS THE SAME CARD, laid out as an applet** (2026-10-03,
+mockups N1/V1/B1; `wm/wm_flyout.h`): a header with a round badge -- the
+state in a word, then how (Connected / Wired, net-718ebf, 1 Gb/s) -- a
+switch at its right when the thing can be turned off, captioned sections
+(TRAFFIC, DETAILS, APPLICATIONS, OUTPUT) between hairlines, and a footer
+band: the primary actions outlined on the left, the way to Settings on
+the right. Text at rest blends against the card (`wm_flyout_ink()`),
+never a guessed colour. A disabled action stays visible, greyed.
+
 **How a menu LOOKS: one card, for every menu.** An app's menu bar
 dropdown, its right-click menu, the desktop's, the window menu and the
 taskbar's are all `uui_menubar`, so they are one design -- Windows 11's

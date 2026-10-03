@@ -11,7 +11,7 @@ QUERY_NETDEV once a second and writes nothing at all.
 
 WHAT IT ASSERTS
 ---------------
-1. THE PANEL AGREES WITH `ifconfig`, which reads the same class through
+1. THE PANEL AGREES WITH `netctl`, which reads the same class through
    a completely different program. That is the check that matters most:
    the compositor reporting its own view back to a test proves only
    that it is self-consistent, and an independent reader is what turns
@@ -61,11 +61,11 @@ def net(dbg):
     return dbg.json("gui network --json")
 
 
-def ifconfig(dbg):
-    """The same facts through a DIFFERENT program -- /bin/ifconfig walks
+def netctl(dbg):
+    """The same facts through a DIFFERENT program -- /bin/netctl walks
     QUERY_NETDEV itself. Run through the console's own `sh`: a second
     tool on .vm.serial would steal this one's replies."""
-    return dbg.send("sh ifconfig") or ""
+    return dbg.send("sh netctl") or ""
 
 
 def tray_mode(dbg, mode, want_hidden, tries=25):
@@ -93,7 +93,7 @@ def main():
     if not args.in_gui:
         enter_gui(qmp, args.sock)
     dbg = DebugConsole(args.sock)
-    print("network tray item (icon -> read-only panel)")
+    print("network tray item (icon -> card, its switch, and netctl)")
 
     if net(dbg)["open"]:
         dbg.send("gui click 640 300")
@@ -114,7 +114,7 @@ def main():
     # parallel suite it can still be unfinished when this runs -- which
     # failed here as "the address does not match" on a guest that was
     # simply not addressed YET. Wait for one, then assert against
-    # whichever state we actually got; the cross-check against ifconfig
+    # whichever state we actually got; the cross-check against netctl
     # is real in both.
     for _ in range(30):
         n = net(dbg)
@@ -122,16 +122,16 @@ def main():
             break
         time.sleep(1)
 
-    ifc = ifconfig(dbg)
-    check("the interface name matches /bin/ifconfig", n["name"] and n["name"] in ifc,
-          f"{n['name']!r} in ifconfig output")
+    ifc = netctl(dbg)
+    check("the interface name matches /bin/netctl", n["name"] and n["name"] in ifc,
+          f"{n['name']!r} in netctl output")
     if n["ip"] != "none":
         check("...and so does the address", n["ip"] in ifc,
-              f"{n['ip']!r} in ifconfig output")
+              f"{n['ip']!r} in netctl output")
     else:
-        # ifconfig prints exactly this when query_netdev's ip is 0, so
+        # netctl prints exactly this when query_netdev's ip is 0, so
         # the two still have to agree -- this is not a skip.
-        check("...and with no address yet, ifconfig says so too",
+        check("...and with no address yet, netctl says so too",
               "(unconfigured)" in ifc, "both report no address")
 
     # --- 2. the link the driver cannot answer for ---------------------
@@ -199,6 +199,54 @@ def main():
         dbg.send("gui key 0xa6")
         dbg.send("gui key 0xa6 up")
         dbg.settle(); time.sleep(0.3)
+
+    # --- 8. the card's actions: the switch, and netctl behind it -------
+    #
+    # The switch runs `netctl down|up` as a child; netd answers at once
+    # and the kernel flag and the address are the outcome. Read back
+    # through QUERY_NETDEV (`gui network`) AND /bin/netctl's listing.
+    def wait_for(pred, secs=15):
+        for _ in range(int(secs * 4)):
+            m = net(dbg)
+            if pred(m):
+                return m
+            time.sleep(0.25)
+        return net(dbg)
+
+    dev = n["name"]
+    dbg.send(f"gui click {n['tray']['cx']} {n['tray']['cy']}")
+    dbg.settle(); time.sleep(0.4)
+    c = net(dbg)
+    check("the card shows a traffic graph while the card is on", c["graph"]["h"] > 0,
+          str(c["graph"]))
+    check("...and has a switch for the adapter", c["switch"]["w"] > 0, str(c["switch"]))
+    dbg.send(f"gui click {c['switch']['cx']} {c['switch']['cy']}")
+    dbg.settle()
+    off = wait_for(lambda m: m["admin_down"] and m["ip"] == "none")
+    check("the switch takes the card down, its address with it",
+          off["admin_down"] and off["ip"] == "none", f"admin_down={off['admin_down']} ip={off['ip']}")
+    check("...and /bin/netctl says it is switched off", "switched off" in netctl(dbg))
+    qmp.screenshot(shot("net_switched_off.png"))
+    c = net(dbg)
+    dbg.send(f"gui click {c['switch']['cx']} {c['switch']['cy']}")
+    dbg.settle()
+    on = wait_for(lambda m: not m["admin_down"] and m["ip"] != "none", 20)
+    check("on again, netd leases it back", not on["admin_down"] and on["ip"] != "none",
+          f"admin_down={on['admin_down']} ip={on['ip']}")
+    dbg.send("gui click 400 300")
+    dbg.settle(); time.sleep(0.3)
+
+    # `up` and `renew` wait up to 15 s for the address (netctl.c's
+    # WAIT_MS), longer than the console's default reply timeout.
+    dbg.timeout = 25
+    out = dbg.send(f"sh netctl down {dev}") or ""
+    check("`netctl down` answers through netd", f"{dev}: down" in out, out.strip()[:120])
+    out = dbg.send(f"sh netctl up {dev}") or ""
+    check("`netctl up` waits for and prints the address",
+          on["ip"] in out, out.strip()[:120])
+    out = dbg.send(f"sh netctl renew {dev}") or ""
+    check("`netctl renew` gets the address again", on["ip"] in out, out.strip()[:120])
+    dbg.timeout = 6.0
 
     # --- 7. the visibility setting, and the strip reflowing -----------
     tray_x_shown = dbg.json("gui taskbar --json")["tray_x"]

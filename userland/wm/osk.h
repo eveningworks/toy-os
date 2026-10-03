@@ -37,6 +37,9 @@ struct osk_report {
     int x, y, w, h;                      // the panel
     int tray_x, tray_y, tray_w, tray_h;  // the item that toggles it
     unsigned mods;                       // armed sticky modifiers
+    int docked;                          // full width, or floating
+    int bar_h;                           // the top bar it is dragged by
+    int dock_cx, dock_cy, close_cx, close_cy;   // the bar's two buttons
 };
 void osk_report(struct osk_report *r);
 

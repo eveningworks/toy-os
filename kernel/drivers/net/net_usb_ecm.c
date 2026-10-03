@@ -243,7 +243,7 @@ static void ecm_poll(struct net_device *dev) {
         // notification many times a second, and a line each was ~15 a
         // second into a ring that holds a few hundred -- the probe
         // destroying the evidence it gathers, in CLAUDE.md's words. The
-        // STATE is what a reader wants, and `ifconfig` has it.
+        // STATE is what a reader wants, and `netctl` has it.
         if (buf[1] == CDC_NOTIFY_NETWORK_CONNECTION) {
             uint8_t up = buf[2];
             if (!dev->link_known || dev->link_up != up)

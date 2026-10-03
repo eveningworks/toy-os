@@ -1,4 +1,4 @@
-// The network device table, as queryable facts -- what `/bin/ifconfig`
+// The network device table, as queryable facts -- what `/bin/netctl`
 // reads. A LIST and nothing else, the same shape (and for the same
 // reason) as block_query.c: zero records means one thing only, that no
 // card was found.
@@ -42,6 +42,7 @@ static int netdev_fill(int index, void *out) {
     q->link_up    = d->link_up;
     q->link_bps   = d->link_bps;
     k_strlcpy(q->location, d->location, sizeof q->location);
+    q->admin_down = d->admin_down;
     return 1;
 }
 

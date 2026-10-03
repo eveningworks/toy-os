@@ -100,7 +100,7 @@ land a second late.
 
 The programs on top: `ping`, `host`, `wget` (HTTP only — there is no
 TLS, and a URL naming `https` is refused by name rather than attempted),
-`ifconfig`, `httpd` serving this machine's own filesystem to a browser,
+`netctl`, `httpd` serving this machine's own filesystem to a browser,
 and `netlog`, which says what this machine has connected to and which
 program opened it. **`telnetd` and `tftpd` ship disabled**, because
 neither authenticates and there is no privilege model here to
@@ -183,6 +183,13 @@ see-through by title bar, when inactive, always, or while dragged --
 each surface choosing its own kind. A client only marks where its glass is; the compositor owns the effect,
 as KDE's blur protocol has it. Off by default; Settings > Appearance >
 Transparency.
+
+**The tray's flyouts are one card**, drawn by one kit: network (the
+adapter's state, a switch that takes it down, live traffic, its
+address, Copy / Renew / Details), volume (each application, the output
+device as a choice, Mute all) and brightness (the panel, its mode,
+Scaling). The **on-screen keyboard** floats over the desktop, dragged by
+its bar, and docks full width with one button.
 
 **Images are decoded in ring 3, and the kernel never sees one.** A
 baseline JPEG decoder sits behind a codec table keyed on magic bytes,
@@ -272,7 +279,7 @@ dispatch cannot disagree about which syscalls exist.
 registry rather than a `/proc` filesystem: a subsystem registers a
 provider for a fact, and a command formats it — `ps`, `df`, `lsblk`,
 `lspci`, `lsusb`, `lscpu`, `lsdrv`, `lsdisplay`, `lsshm`, `acpi`,
-`meminfo`, `pmap`, `kstack`, `tty`, `kbd`, `ifconfig`, `netlog`,
+`meminfo`, `pmap`, `kstack`, `tty`, `kbd`, `netctl`, `netlog`,
 `crashlog`, `service`. Answering *"what did the
 machine actually do?"* is treated as a first-class job, distinct from a
 test asserting it did the right thing: `strace` decodes a syscall per

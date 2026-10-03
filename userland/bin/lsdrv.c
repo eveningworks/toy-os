@@ -1,7 +1,7 @@
 // lsdrv -- which drivers this build has, and what each one is driving.
 //
 // The per-class listings answer a different question. `lsblk` says which
-// disks are present, `lsusb` which devices are attached, `ifconfig`
+// disks are present, `lsusb` which devices are attached, `netctl`
 // which cards are configured -- none of them says whether a driver is in
 // this build at all, and a driver that bound nothing appears in none of
 // them. "Is virtio-blk compiled in?" had no answer short of reading the

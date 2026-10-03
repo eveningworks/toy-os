@@ -5265,3 +5265,23 @@ main()'s local.
   frosted rect every time, and a hash of it decides whether the last
   blur can be reused. Do not skip that repaint to save time; it is what
   makes the hash a measurement.
+
+## A TRAY FLYOUT IS A `wm_flyout` CARD, AND ITS ACTIONS RUN AS CHILD PROCESSES
+
+- **Draw a flyout with `userland/wm/wm_flyout.h`**: `wm_flyout_card()`,
+  `_hero()`, `_rule()`, `_caption()`, `_kv()`, the footer `_button()`s,
+  `_switch()`, `_radio_row()`. Lay it out from `wm_flyout_metrics()` in
+  the flyout's OWN `*_geometry()`, which stays the one answer drawing,
+  hit-testing and `gui <name> --json` ask. Text at rest passes
+  `wm_flyout_ink()` (`UGFX_TRANSPARENT`) as its `bg` -- a flat colour
+  there is wrong on the footer band and on glass, and a placeholder 0
+  blends every glyph edge toward black (it shipped that way for one
+  build and read as smeared text).
+- **An open flyout is on glass**: its rect goes in
+  `wm_glass_frosted_rects()`, and `wm_flyout_card()` already casts the
+  hollow shadow.
+- **An action that waits on a daemon runs as a CHILD** (`sys_spawn`),
+  never a blocking call from the compositor: the network card runs
+  `/bin/netctl`, and its once-a-second read shows the outcome. A control
+  whose effect lags shows what was asked for a few seconds rather than
+  flicking back.

@@ -117,7 +117,7 @@ def main():
     deadline = time.time() + 40
     inet = ""
     while time.time() < deadline:
-        inet = run("ifconfig")
+        inet = run("netctl")
         if "inet 10." in inet:
             break
         time.sleep(2)

@@ -88,6 +88,6 @@ or, headless, `python3 tools/vm.py --hostfwd tcp::8080-:80 start`. Then
 ## See also
 
 `inetd` for running it once per connection, `wget` for the client side,
-`ifconfig` for the address it is serving on,
+`netctl` for the address it is serving on,
 and `docs/conventions/kernel.md`'s TCP entry for what the stack under it
 does and does not do.

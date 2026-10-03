@@ -108,6 +108,11 @@ struct volume_geom {
     int muted;                       // 1 while the level is held at 0
     int selected_row;                // which row carries the tick
     int tray_x, tray_y, tray_w, tray_h;   // the item that opens this
+    // The card's sections and footer (wm_flyout.h).
+    int app_rule_y, app_cap_y, list_rule_y, list_cap_y;
+    int foot_y, foot_h, btn_y, btn_h;
+    int muteall_x, muteall_w;        // "Mute all" / "Unmute"
+    int gear_x, gear_w;              // opens Settings on the sound page
 };
 void volume_geometry(struct volume_geom *out);
 

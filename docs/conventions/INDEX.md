@@ -284,6 +284,9 @@ whenever a headline here tells you something you did not already know.
 - **THE MACHINE'S NAME IS `QUERY_SMBIOS`, AND SERIAL NUMBERS ARE NEVER
   READ**
 
+- **A CARD CAN BE SWITCHED OFF (`admin_down`), AND NETD IS ASKED OVER
+  ITS CHANNEL**
+
 ### GUI, Toykit and the desktop
 
 `docs/conventions/gui.md`
@@ -610,6 +613,8 @@ whenever a headline here tells you something you did not already know.
   `lib/unum.h`, never a hand-written `%04u-%02u` or `%u.%u`**
 - **A SYSTEM SETTINGS PAGE'S EXTRAS ARE FOUND BY THE SETTING IT CARRIES**
 - **THE TRAY CLOCK OPENS A CALENDAR, AND THE PANEL OWNS IT**
+- **A TRAY FLYOUT IS A `wm_flyout` CARD, AND ITS ACTIONS RUN AS CHILD
+  PROCESSES**
 - **TRANSPARENCY IS GLASS THE COMPOSITOR PAINTS: A SURFACE'S GROUND GOES
   THROUGH `wm_glass_paint()`, FROSTED GLASS IS PART OF ITS RECT'S DAMAGE,
   AND A CLIENT ONLY MARKS WHERE ITS GLASS IS**

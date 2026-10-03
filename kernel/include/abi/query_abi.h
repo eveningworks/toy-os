@@ -327,7 +327,7 @@ _Static_assert(sizeof(struct query_fontglyph) <= 256,
 #define QUERY_CPUS 25
 
 // The network devices: one record per registered NIC, with its
-// addresses and counters. LIST. What `/bin/ifconfig` reads.
+// addresses and counters. LIST. What `/bin/netctl` reads.
 #define QUERY_NETDEV 22
 
 // THE RAW CONFIGURATION DESCRIPTOR of each enumerated USB device, in
@@ -1033,7 +1033,7 @@ struct query_netdev {
     uint64_t rx_packets, rx_bytes, rx_dropped;
     uint64_t tx_packets, tx_bytes, tx_dropped;
     // LINK STATE, three-valued. `link_known` 0 means the driver has no
-    // way to ask -- which is not the same as "down", and `ifconfig` says
+    // way to ask -- which is not the same as "down", and `netctl` says
     // nothing rather than guessing. `link_bps` is what the WIRE
     // negotiated, so a gigabit adapter on a USB 2 port still says
     // 1000000000.
@@ -1045,8 +1045,12 @@ struct query_netdev {
     // driver does not know. REPORTED, never part of the name: a name is
     // an identity and this changes when somebody moves the card, which
     // is exactly why the two are separate fields. Empty-string rather
-    // than absent so `ifconfig` needs no second query to find out.
+    // than absent so `netctl` needs no second query to find out.
     char location[12];
+    // ADMINISTRATIVELY DOWN (`netctl down`): nothing is sent or delivered,
+    // whatever the cable says. Separate from link_up for the reason Linux
+    // keeps IFF_UP apart from carrier: one is a decision, one is a fact.
+    uint64_t admin_down;
 };
 
 // QUERY_PARTTABLE's record -- the table, not its entries.

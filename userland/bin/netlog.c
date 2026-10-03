@@ -1,6 +1,6 @@
 // netlog -- who this machine has talked to: one line per connection.
 //
-// WHAT IT IS FOR. `ifconfig` reports what a card did in packets and
+// WHAT IT IS FOR. `netctl` reports what a card did in packets and
 // bytes, which cannot answer "what did this machine connect to, and
 // which program did it". The kernel keeps a ring of connection records
 // (QUERY_CONNLOG); this prints them.

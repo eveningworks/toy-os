@@ -219,12 +219,13 @@ struct net_device *net_device_by_name(const char *name) {
 
 struct net_device *net_default_device(void) {
     for (int i = 0; i < g_count; i++)
-        if (g_devs[i]->ip) return g_devs[i];
+        if (g_devs[i]->ip && !g_devs[i]->admin_down) return g_devs[i];
     return 0;
 }
 
 void net_rx(struct net_device *dev, const void *frame, uint32_t len) {
     if (!dev || !frame) return;
+    if (dev->admin_down) return;   // switched off: not ours to count, as Linux
     if (len < ETH_HDR_LEN || len > NET_FRAME_MAX) { dev->rx_dropped++; return; }
 
     uint32_t tail = g_rx_tail;
@@ -263,6 +264,7 @@ void net_rx(struct net_device *dev, const void *frame, uint32_t len) {
 
 int net_tx(struct net_device *dev, const void *frame, uint32_t len) {
     if (!dev || !frame) return -EINVAL;
+    if (dev->admin_down) return -ENETDOWN;
     if (len < ETH_HDR_LEN || len > dev->mtu + ETH_HDR_LEN) return -EINVAL;
 
     int rc = dev->transmit(dev, frame, len);
