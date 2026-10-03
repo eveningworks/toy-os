@@ -50,6 +50,11 @@ class Layout:
         for line in dbg.logs("properties:", clear=True):
             m = re.search(r"properties: layout (\S+) (-?\d+) (-?\d+) (\d+) (\d+)$", line)
             if m:
+                # Each frame reports what is shown; `info` comes first, so
+                # it starts a fresh picture -- a hidden control or a header
+                # scrolled away must not linger at its old place.
+                if m.group(1) == "info":
+                    self.rect, self.sec = {}, {}
                 self.rect[m.group(1)] = tuple(int(v) for v in m.groups()[1:])
             m = re.search(r"properties: section (.+?) (\d+) (\d+) (\d+) (\d+) (\d)$", line)
             if m:
@@ -161,16 +166,39 @@ def main():
           before and after and int(b, 8) & 0o4 and not int(a, 8) & 0o4 and (int(b, 8) & ~0o4) == int(a, 8),
           f"{b} -> {a}")
 
-    # The checksum, against sum.
+    # The checksum, against sum. Opened where it sits -- at the window's
+    # foot, Image and Opens with open above it -- because a slot partly
+    # out of view once hid its controls entirely until a scroll.
     lay = toggle(dbg, win, lay, "Permissions", 0)
+    lay = toggle(dbg, win, lay, "Image", 1)
+    lay = toggle(dbg, win, lay, "Opens with", 1)
+    if "Checksum" not in lay.sec:      # below the fold: the wheel, with the real pointer
+        dbg.warp_cursor(qmp, c["x"] + c["w"] // 2, c["y"] + c["h"] // 2)
+        qmp.wheel("down", notches=10, delay=0.02)
+        lay = wait(dbg, lay, lambda l: "Checksum" in l.sec)
     lay = toggle(dbg, win, lay, "Checksum", 1)
-    lay = wait(dbg, lay, lambda l: "sum" in l.rect)
+    lay = wait(dbg, lay, lambda l: "sum" in l.rect and "compare" in l.rect)
+    check("opening Checksum at the foot shows its button and compare field at once",
+          "sum" in lay.rect and "compare" in lay.rect, f"rects={sorted(lay.rect)}")
+    want = (dbg.send(f"sh sum -a sha256 {PIC}").split() or ["?"])[0]
+    # The expected sum typed BEFORE computing, as one pastes it from a site.
+    if "compare" in lay.rect:
+        click(dbg, win, lay.rect["compare"])
+        for ch in want:
+            dbg.send("gui key 0x%02x" % ord(ch))
+        dbg.settle(0.5)
     if "sum" in lay.rect:
         click(dbg, win, lay.rect["sum"])
-    lay = wait(dbg, lay, lambda l: "SHA-256" in l.rows, 8.0)
-    want = (dbg.send(f"sh sum -a sha256 {PIC}").split() or ["?"])[0]
+    lay = wait(dbg, lay, lambda l: "SHA-256" in l.rows and l.rows.get("Compare") == "match", 8.0)
     check("Compute SHA-256 gives the digest `sum -a sha256` prints",
           lay.rows.get("SHA-256") == want and len(want) == 64, f"got {lay.rows.get('SHA-256')} want {want}")
+    check("...and a sum typed before computing is compared: match",
+          lay.rows.get("Compare") == "match", f"Compare={lay.rows.get('Compare')}")
+    # Still on screen once computed, with no scroll: a slot that grew on
+    # Compute once took its whole contents out of view.
+    lay = wait(dbg, lay, lambda l: "compare" in l.rect, 3.0)
+    check("...with the compare field still shown after Compute, no scroll needed",
+          "compare" in lay.rect, f"rects={sorted(lay.rect)}")
 
     # Opens with: the next app in the list, into /etc/mimeapps.conf.
     lay = toggle(dbg, win, lay, "Checksum", 0)

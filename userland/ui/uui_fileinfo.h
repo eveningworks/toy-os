@@ -14,7 +14,8 @@
 // SLOTS are how an app puts its own controls inside: a section reserves
 // a height for them (above its rows), the widget lays it out, and
 // uui_fileinfo_slot_rect() says where to place the controls -- 0 while
-// that section is closed or scrolled out of view, when they must be hidden.
+// that section is closed or wholly scrolled away. A slot partly in view
+// is reported; the app hides each control that is not inside the widget.
 
 #include <stdint.h>
 #include "ui/ugfx.h"

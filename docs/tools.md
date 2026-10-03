@@ -505,8 +505,10 @@ manual steps to be worth automating:
   hero is checked BY PIXEL (the stage is not the page grey, the picture
   area is not flat) since a window that logs its rows can still paint a
   blank hero; a section header opens its section; clearing Others > Read
-  changes the mode as `stat` sees it; Compute SHA-256 equals `sum -a
-  sha256`; another app under Opens with lands in `/etc/mimeapps.conf`;
+  changes the mode as `stat` sees it; Checksum opened at the window's
+  foot shows its button and compare field at once, a sum typed BEFORE
+  computing compares as a match, the field is still shown after Compute,
+  and Compute SHA-256 equals `sum -a sha256`; another app under Opens with lands in `/etc/mimeapps.conf`;
   a typed name renames the file (`ls`) and retitles the window; a
   folder's Contains settles on the true recursive count. In
   `gui_regress.py`. Positive control: with `ufileinfo_chmod()`'s

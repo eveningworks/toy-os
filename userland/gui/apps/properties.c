@@ -126,10 +126,13 @@ static int key_w(void)  { return per() * 11; }   // uui_fileinfo's label column
 static int ctl_h(void)  { return utheme_control_h(); }
 static int line_h(void) { return ugfx_char_h() + utheme_gap(); }
 
+// ONE height, computed or not: the button, the compare field (there from
+// the start, so a sum can be typed or pasted first), the digest's two
+// lines and the verdict. A slot that grew on Compute pushed its own
+// contents past the window's foot.
 static int sum_slot_h(void) {
     int p = utheme_pad();
-    if (!g_sum_hex[0]) return ctl_h() + p;
-    return 2 * line_h() + p + ctl_h() + p + line_h();   // the sum, compare, the verdict
+    return ctl_h() + p + ctl_h() + p + 2 * line_h() + line_h();
 }
 
 static void slots(void) {
@@ -204,9 +207,12 @@ static void lay_sum(int x, int y, int w, int h) {
     int bw, bh;
     uui_button_natural_size(&g_sum, &bw, &bh);
     uui_button_set_geometry(&g_sum, x, y, bw, ctl_h());
-    if (g_sum_hex[0])
-        uui_textbox_set_geometry(&g_cmp, x, y + 2 * line_h() + utheme_pad(), w, ctl_h());
+    uui_textbox_set_geometry(&g_cmp, x, y + ctl_h() + utheme_pad(), w, ctl_h());
 }
+
+// A control is shown only when wholly inside the facts widget: a slot
+// partly scrolled away keeps the part that is in view.
+static int inside(int y, int h) { return y >= g_info.y && y + h <= g_info.y + g_info.h; }
 
 static void layout(int cw, int ch) {
     g_name_on = g_opens_on = g_perm_on = g_sum_on = 0;
@@ -216,11 +222,11 @@ static void layout(int cw, int ch) {
     place(SLOT_OPENS, is_file(), lay_opens);
     place(SLOT_PERM, g_fi.ok, lay_perm);
     place(SLOT_SUM, is_file(), lay_sum);
-    item(ID_NAME)->hidden = !g_name_on;
-    item(ID_OPENS)->hidden = !g_opens_on;
-    for (int i = 0; i < 9; i++) item(ID_PERM + i)->hidden = !g_perm_on;
-    item(ID_SUM)->hidden = !g_sum_on || g_sum_hex[0];
-    item(ID_CMP)->hidden = !g_sum_on || !g_sum_hex[0];
+    item(ID_NAME)->hidden = !g_name_on || !inside(g_name.y, g_name.h);
+    item(ID_OPENS)->hidden = !g_opens_on || !inside(g_opens.y, g_opens.h);
+    for (int i = 0; i < 9; i++) item(ID_PERM + i)->hidden = !g_perm_on || !inside(g_perm[i].y, g_perm[i].h);
+    item(ID_SUM)->hidden = !g_sum_on || !inside(g_sum.y, g_sum.h);
+    item(ID_CMP)->hidden = !g_sum_on || !inside(g_cmp.y, g_cmp.h);
 
     int p = utheme_pad(), by = ch - bar_h() + p, bw, bh, x = p;
     uui_button_natural_size(&g_open, &bw, &bh);
@@ -336,6 +342,8 @@ static void commit_opens(void) {
     ulogf("properties: row Opens with=%s\n", g_fi.opens);
 }
 
+static void log_verdict(void);
+
 static void start_sum(void) {
     g_sum_fd = open(g_fi.path, O_RDONLY);
     if (g_sum_fd < 0) { status("Cannot read the file to sum it"); return; }
@@ -359,8 +367,7 @@ static int sum_step(void) {
         for (int k = 0; k < KSHA256_LEN; k++) snprintf(g_sum_hex + 2 * k, 3, "%02x", d[k]);
         status("SHA-256 of %llu bytes", g_sum_done);
         ulogf("properties: row SHA-256=%s\n", g_sum_hex);
-        slots();
-        resize();
+        log_verdict();
         return 1;
     }
     status("Computing SHA-256... %llu KB", g_sum_done / 1024);
@@ -405,19 +412,26 @@ static void draw_slots(struct ugfx_surface *s) {
         ugfx_draw_string_clipped(s, x + key_w(), y + 3 * (ctl_h() + p / 2), w - key_w(), m, dim, bg);
         ugfx_set_font(was);
     }
-    if (is_file() && g_sum_hex[0] && uui_fileinfo_slot_rect(&g_info, SLOT_SUM, &x, &y, &w, &h)) {
-        const struct ugfx_font *was = ugfx_set_font(ugfx_font_mono(UGFX_FONT_REGULAR));
-        char half[KSHA256_LEN + 1];
-        memcpy(half, g_sum_hex, KSHA256_LEN);
-        half[KSHA256_LEN] = 0;
-        ugfx_draw_string_clipped(s, x, y, w, half, t->text, bg);
-        ugfx_draw_string_clipped(s, x, y + line_h(), w, g_sum_hex + KSHA256_LEN, t->text, bg);
-        ugfx_set_font(was);
-        int v = sum_verdict();
+    if (is_file() && uui_fileinfo_slot_rect(&g_info, SLOT_SUM, &x, &y, &w, &h)) {
+        int dy = y + 2 * (ctl_h() + p);   // under the button and the compare field
+        if (g_sum_hex[0]) {
+            const struct ugfx_font *was = ugfx_set_font(ugfx_font_mono(UGFX_FONT_REGULAR));
+            char half[KSHA256_LEN + 1];
+            memcpy(half, g_sum_hex, KSHA256_LEN);
+            half[KSHA256_LEN] = 0;
+            ugfx_draw_string_clipped(s, x, dy, w, half, t->text, bg);
+            ugfx_draw_string_clipped(s, x, dy + line_h(), w, g_sum_hex + KSHA256_LEN, t->text, bg);
+            ugfx_set_font(was);
+        } else {
+            ugfx_draw_string_clipped(s, x, dy, w, g_sum_fd >= 0 ? "Computing..." : "Not computed yet",
+                                     dim, bg);
+        }
+        int v = g_sum_hex[0] ? sum_verdict() : 0;
+        int typed = uui_textbox_text(&g_cmp)[0] != 0;
         const char *msg = v > 0 ? "Matches the sum given" : v < 0 ? "Does NOT match the sum given"
-                                                                   : "Paste a sum above to compare";
+                        : typed ? "Compute the sum to compare it" : "Type or paste a sum above to compare";
         uint32_t c = v > 0 ? utheme_action(UTHEME_ACT_CREATE) : v < 0 ? utheme_action(UTHEME_ACT_DANGER) : dim;
-        ugfx_draw_string_clipped(s, x, y + 2 * line_h() + p + ctl_h() + p / 2, w, msg, c, bg);
+        ugfx_draw_string_clipped(s, x, dy + 2 * line_h(), w, msg, c, bg);
     }
 }
 
@@ -444,7 +458,11 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 
 static void labels_draw(struct ugfx_surface *s, const struct uui_custom *c) {
     (void)c;
+    // Clipped to the facts widget, or a slot partly scrolled away would
+    // draw its labels over the button bar.
+    ugfx_set_clip_rect(s, g_info.x, g_info.y, g_info.w, g_info.h);
     draw_slots(s);
+    ugfx_clear_clip_rect(s);
 }
 
 // --- input -------------------------------------------------------------------
@@ -479,8 +497,18 @@ static void on_action(struct uapp *a, int code) {
     uapp_redraw(a);
 }
 
+// The verdict, logged when it changes -- what a test reads.
+static void log_verdict(void) {
+    static int was = -9;
+    int v = g_sum_hex[0] ? sum_verdict() : 0;
+    if (v == was) return;
+    was = v;
+    ulogf("properties: row Compare=%s\n", v > 0 ? "match" : v < 0 ? "mismatch" : "none");
+}
+
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
+    log_verdict();
     if ((key == '\n' || key == '\r') && g_focus.current >= 0 && g_ring[g_focus.current].widget == &g_name)
         commit_name();
     uapp_redraw(a);

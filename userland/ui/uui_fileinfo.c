@@ -123,13 +123,14 @@ void uui_fileinfo_set(struct uui_fileinfo *w, const struct ufileinfo *fi) {
         if (fi->album[0]) row(s, "Album", "%s", fi->album);
         if (fi->length_ms) row(s, "Length", "%u:%02u", fi->length_ms / 60000, (fi->length_ms / 1000) % 60);
     }
-    struct uui_fi_section *d = add(w, "Details", UTHEME_ACT_NONE, 0, old, nold);
-    row(d, "Inode", "%llu%s", (unsigned long long)fi->st.ino, (fi->st.flags & SYS_STAT_INODES) ? "" : " (synthetic)");
-    row(d, "Links", "%u", fi->st.nlink);
-    // Slot-only sections an app added before stay where they were.
+    // Slot-only sections an app added before stay where they were...
     for (int i = 0; i < nold; i++)
         if (old[i].slot_id && !find(w, old[i].title))
             add(w, old[i].title, old[i].role, old[i].open, old, nold);
+    // ...and Details, the advanced facts, comes last.
+    struct uui_fi_section *d = add(w, "Details", UTHEME_ACT_NONE, 0, old, nold);
+    row(d, "Inode", "%llu%s", (unsigned long long)fi->st.ino, (fi->st.flags & SYS_STAT_INODES) ? "" : " (synthetic)");
+    row(d, "Links", "%u", fi->st.nlink);
 }
 
 int uui_fileinfo_slot(struct uui_fileinfo *w, const char *title, int role, int id, int h, int open) {
@@ -212,7 +213,9 @@ int uui_fileinfo_slot_rect(const struct uui_fileinfo *w, int id, int *x, int *y,
         if (s->slot_id != id) continue;
         if (!s->open || !s->slot_h) return 0;
         int sy = section_y(w, i) + hdr_h();
-        if (sy < w->y || sy + s->slot_h > w->y + w->h) return 0;   // scrolled out of view
+        // Any part in view counts: the app hides each control that is not
+        // (a whole-slot test hid a tall slot entirely at the window's foot).
+        if (sy >= w->y + w->h || sy + s->slot_h <= w->y) return 0;
         *x = w->x + 3 * pad();
         *y = sy;
         *ww = w->w - 4 * pad();
