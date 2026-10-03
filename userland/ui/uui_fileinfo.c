@@ -175,8 +175,12 @@ static int stage_pic_h(const struct uui_fileinfo *w, int width) {
     return h > cap ? cap : h;
 }
 
+// A picture's stage is there before its thumbnail arrives, so the
+// window's first size already holds it.
+static int staged(const struct uui_fileinfo *w) { return w->preview || (w->fi && w->fi->img_w); }
+
 static int hero_h(const struct uui_fileinfo *w, int width) {
-    if (w->preview) return pad() + stage_pic_h(w, width) + pad() + 2 * lh() + pad();
+    if (staged(w)) return pad() + stage_pic_h(w, width) + pad() + 2 * lh() + pad();
     int text = 2 * lh() + ((w->fi && w->fi->st.is_dir && w->fi->vol_point[0]) ? lh() + pad() : 0);
     int ic = icon_px(w);
     return 2 * pad() + (ic > text ? ic : text);
@@ -283,16 +287,18 @@ static void draw_hero(struct ugfx_surface *s, const struct uui_fileinfo *w) {
     const struct utheme *t = utheme_current();
     int p = pad(), hh = hero_h(w, w->w);
     const char *name = fi ? fi->name : "";
-    if (w->preview) {
+    if (staged(w)) {
         struct uui_fileinfo *mw = (struct uui_fileinfo *)w;   // the cached tint only
         if (mw->amb_for != w->preview) { uambient_from(&mw->amb, w->preview); mw->amb_for = w->preview; }
         uambient_paint(w->stage, &w->amb, s, w->x, Y, w->w, hh);
         int ah = stage_pic_h(w, w->w), aw = w->w - 2 * p;
         const struct uimg *im = w->preview;
-        int iw = im->w < aw ? im->w : aw, ih = im->h < ah ? im->h : ah;
-        int ix = w->x + (w->w - iw) / 2, iy = Y + p + (ah - ih) / 2;
-        if (im->has_alpha) ugfx_blit_alpha(s, ix, iy, iw, ih, im->px, im->w);
-        else ugfx_blit(s, ix, iy, iw, ih, im->px, im->w);
+        if (im) {
+            int iw = im->w < aw ? im->w : aw, ih = im->h < ah ? im->h : ah;
+            int ix = w->x + (w->w - iw) / 2, iy = Y + p + (ah - ih) / 2;
+            if (im->has_alpha) ugfx_blit_alpha(s, ix, iy, iw, ih, im->px, im->w);
+            else ugfx_blit(s, ix, iy, iw, ih, im->px, im->w);
+        }
         int ty = Y + p + ah + p;
         const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
         int nw = ugfx_text_width(name);

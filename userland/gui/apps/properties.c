@@ -152,12 +152,19 @@ static void rebuild(void) {
 // No taller than the screen leaves room for: its height less the taskbar,
 // a title bar and the window's offset, about twelve lines. Past that the
 // widget scrolls.
+// THE WINDOW NEVER GROWS PAST THE HEIGHT IT OPENED AT: the WM placed it
+// at that size, and nothing moves a window back on screen, so growing
+// as a section opened ran it under the taskbar on a 1080p panel. It may
+// shrink as sections close; past it, the widget scrolls.
+static int g_open_h;
+
 static int content_h(void) {
     int h = uui_fileinfo_height(&g_info, win_w()) + bar_h();
     struct query_display q;
     int cap = ugfx_char_h() * 46;
     if (sys_query_record(QUERY_DISPLAY, 0, &q, sizeof q) >= (int)sizeof q && q.height)
         cap = (int)q.height - 12 * ugfx_char_h();
+    if (g_open_h && cap > g_open_h) cap = g_open_h;
     return h > cap ? cap : h;
 }
 
@@ -516,8 +523,7 @@ static int on_tick(struct uapp *a) {
         int px = uui_fileinfo_preview_px(&g_info, win_w());
         g_preview = uthumb_get(g_fi.path, &g_fi.st.modified, (uint32_t)g_fi.st.size, px);
         if (g_preview) {
-            g_info.preview = g_preview;
-            resize();
+            g_info.preview = g_preview;   // its stage was reserved: no resize
             changed = 1;
         }
     }
@@ -536,6 +542,7 @@ static void on_size(int *w, int *h) {
     rebuild();
     *w = win_w();
     *h = content_h();
+    if (!g_open_h) g_open_h = *h;
 }
 
 int main(int argc, char **argv) {
