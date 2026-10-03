@@ -64,4 +64,19 @@ static inline void cmd_usage(const char *text) {
     sys_print("\n");
 }
 
+// A line or byte COUNT as head and tail take it: plain decimal, with
+// nothing after it. Returns 1 and *out, or 0 for anything else -- "10k"
+// and "-3" are refused rather than read as 10 and 3.
+static inline int cmd_parse_count(const char *s, unsigned long long *out) {
+    if (!s || !*s) return 0;
+    unsigned long long v = 0;
+    for (; *s; s++) {
+        if (*s < '0' || *s > '9') return 0;
+        if (v > (~0ull - 9) / 10) return 0;
+        v = v * 10 + (unsigned long long)(*s - '0');
+    }
+    *out = v;
+    return 1;
+}
+
 #endif // ULIB_CMD_H

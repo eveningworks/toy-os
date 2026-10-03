@@ -243,6 +243,9 @@ a command), and the `gui3`/`nano` aliases.
 ### Text processing
 
 - [`grep`](grep.md)
+- [`head`](head.md)
+- [`tail`](tail.md)
+- [`wc`](wc.md)
 
 ### The shell and the console
 

@@ -194,6 +194,9 @@ TESTS = [
     # end: never short, operands summed, junk refused. SPAWNED, since it
     # spawns /bin/sleep and waits for it.
     ("duration_test", None, None, None),
+    # /bin/head, tail and wc on pipes, against a hand-worked fixture.
+    # SPAWNED: it spawns them and waits.
+    ("textcmd_test", None, None, None),
     # The message channel two ring-3 processes talk over, which is shm
     # plus a futex plus a wakeword and no kernel support of its own.
     # SPAWNED (exit code None) because the server half PARKS -- and a
