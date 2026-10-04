@@ -91,6 +91,10 @@ static void remove_at(int i) {
     q.count--;
 }
 
+// Said, but not once per event: the first, then every 64th.
+static int log_due(unsigned *n) { return ((*n)++ % 64) == 0; }
+static unsigned g_lost_releases, g_over_reserve;
+
 // `edge`: 0 for no button edge, EDGE_DOWN or EDGE_UP for one.
 #define EDGE_DOWN 1
 #define EDGE_UP   2
@@ -111,21 +115,29 @@ static int enqueue(const struct win_event *ev, int edge) {
                 return 1;
             }
         }
-        if (q.ninput == WIN_INPUT_MAX) {
-            // Full: the OLDEST unmarked input goes (the old end, for
-            // win_proto.h's reason); with none, the NEW input is refused.
-            int victim = -1;
+        // Full: the OLDEST unmarked input goes (the old end, for
+        // kernel/win_input.h's reason); with none -- or, never expected, a
+        // ring full of notices -- the NEW input is refused, never written
+        // over anything. win_input_poll() takes from a source only with
+        // room, so for its events neither happens; a refused RELEASE can
+        // only be a direct push, and is said.
+        int victim = -1;
+        if (q.ninput == WIN_INPUT_MAX)
             for (int i = 0; i < q.count && victim < 0; i++) {
                 int slot = (q.head + i) % WIN_EVENT_QUEUE_MAX;
                 if (is_input(q.ring[slot].type) && !q.keep[slot]) victim = i;
             }
+        if ((q.ninput == WIN_INPUT_MAX && victim < 0) || q.count == WIN_EVENT_QUEUE_MAX) {
             q.dropped++;
-            if (victim < 0) return 0;
+            if ((is_release(ev) || edge == EDGE_UP) && log_due(&g_lost_releases))
+                klog_printf(KLOG_ERR "win_input: a release (type %u) found no room -- %u so far\n",
+                            ev->type, g_lost_releases);
+            return 0;
+        }
+        if (victim >= 0) {
+            q.dropped++;
             remove_at(victim);
         }
-        // Never overwrite: unreachable while notices stay within their
-        // reserve, refused rather than trusted.
-        if (q.count == WIN_EVENT_QUEUE_MAX) { q.dropped++; return 0; }
         q.ninput++;
     } else {
         for (int i = 0; i < q.count; i++)
@@ -133,9 +145,10 @@ static int enqueue(const struct win_event *ev, int edge) {
         // The reserve covers the kernel's four notice types; more notices
         // than that means a new kind that does not coalesce -- said
         // loudly, and refused rather than written past the ring.
-        if (q.count - q.ninput >= WIN_INPUT_NOTICE_RESERVE)
-            klog_printf(KLOG_ERR "win_input: %d notices queued, past the reserve of %d (type %u)\n",
-                        q.count - q.ninput + 1, WIN_INPUT_NOTICE_RESERVE, ev->type);
+        if (q.count - q.ninput >= WIN_INPUT_NOTICE_RESERVE && log_due(&g_over_reserve))
+            klog_printf(KLOG_ERR "win_input: %d notices queued, past the reserve of %d "
+                        "(type %u) -- %u times so far\n", q.count - q.ninput + 1,
+                        WIN_INPUT_NOTICE_RESERVE, ev->type, g_over_reserve);
         if (q.count == WIN_EVENT_QUEUE_MAX) { q.dropped++; return 0; }
     }
     int slot = (q.head + q.count) % WIN_EVENT_QUEUE_MAX;

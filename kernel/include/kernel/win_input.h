@@ -21,13 +21,16 @@
 // compositor -- WIN_EV_FONT, WIN_EV_SCREEN, WIN_EV_SETTING, one
 // WIN_EV_FSWATCH per watch -- all in ARRIVAL ORDER with the input. Each
 // notice is idempotent and coalesces, so at most WIN_INPUT_NOTICE_RESERVE
-// are ever queued; input never holds more than the rest, so a notice is
-// never refused, and a release is never shed (win_input.c says how).
+// are ever queued, and input never holds more than WIN_INPUT_MAX: A
+// NOTICE IS NEVER REFUSED.
 //
-// Full, input drops its OLDEST event that is not a release -- the old end
-// because for input the most recent state is the one that matters -- and
-// with only releases queued refuses the new one: a release is never shed,
-// or a client would hold the key or button forever.
+// INPUT AT WIN_INPUT_MAX evicts its OLDEST event that is not a release --
+// the old end, because for input the most recent state is what matters
+// -- and with only releases queued refuses the NEW event. A QUEUED
+// RELEASE IS NEVER EVICTED. win_input_poll() takes an event from its
+// source only when there is room, so none of ITS events -- releases
+// included -- is ever refused; only a direct win_input_push() can be,
+// and a refused release is logged.
 #define WIN_INPUT_MAX 32                             // raw input's share
 #define WIN_INPUT_NOTICE_RESERVE (3 + FSWATCH_MAX)   // FONT, SCREEN, SETTING, the watches
 #define WIN_EVENT_QUEUE_MAX (WIN_INPUT_MAX + WIN_INPUT_NOTICE_RESERVE)

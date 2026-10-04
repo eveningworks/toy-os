@@ -8,6 +8,7 @@
 // nobody runs most days; expanding one record at read time costs a
 // function that runs once per line printed. The packed form is private
 // to this file, so it can change without touching the ABI.
+#include "irqflags.h"   // irq_save(): the ring is shared with key_event()
 #include "keyboard_tap.h"
 #include "query.h"
 #include "timer.h"
@@ -70,10 +71,15 @@ void kbdtap_set_enabled(int on) {
     // whatever the previous one caught. `g_seq` deliberately survives --
     // it is a counter, not data, and restarting it would let a reader
     // see a sequence number it had already seen.
+    //
+    // With interrupts off: this runs from a syscall, and key_event() --
+    // IRQ or polled -- writes the same ring and `g_open`.
+    uint64_t f = irq_save();
     k_memset(g_ring, 0, sizeof g_ring);
     g_written = 0;
     g_open = 0;
     g_enabled = on;
+    irq_restore(f);
 }
 
 void kbdtap_key(uint16_t wire, int extended, uint16_t keycode, int down,

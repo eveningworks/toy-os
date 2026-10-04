@@ -30,14 +30,26 @@ static int g_led_state = LED_IDLE;
 static uint8_t g_led_bits;
 static int g_led_resends;
 
+// NO CONTROLLER ANSWERS: the status port floats at 0xFF (no 8042 on the
+// board, or none the firmware left enabled), or a write found the input
+// buffer never draining. Set once and kept, so an LED change on such a
+// machine -- made with interrupts off, from key_event() -- costs nothing
+// rather than a bounded busy-wait on every Caps Lock.
+static int g_absent;
+
 static void kbd_write(uint8_t b) {
+    if (g_absent) return;
     // Bounded: a controller that never drains its input buffer must not
-    // wedge an interrupt handler.
-    for (int i = 0; i < 10000 && (inb(STATUS_PORT) & STATUS_INPUT_FULL); i++) { }
+    // wedge an interrupt handler -- and after one that never does, there
+    // is taken to be none.
+    int i = 0;
+    while (i < 10000 && (inb(STATUS_PORT) & STATUS_INPUT_FULL)) i++;
+    if (i == 10000) { g_absent = 1; return; }
     outb(DATA_PORT, b);
 }
 
 static void i8042_set_leds(uint8_t leds) {
+    if (g_absent) return;
     g_led_bits = leds & (INPUT_LED_SCROLL | INPUT_LED_NUM | INPUT_LED_CAPS);
     g_led_resends = 0;
     g_led_state = LED_WANT_ACK1;
@@ -106,6 +118,7 @@ static const struct input_source ps2_mouse = {
 };
 
 void i8042_register_sources(void) {
+    if (inb(STATUS_PORT) == 0xFF) g_absent = 1;   // an undecoded port reads all ones
     input_register_source(&ps2_keyboard);
     input_register_source(&ps2_mouse);
 }
