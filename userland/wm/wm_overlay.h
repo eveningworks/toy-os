@@ -186,7 +186,23 @@ struct wm_overlay {
     // and the desktop takes no keys. The confirm dialog and the Leave
     // page. Asked through wm_overlay_modal_open(), never by name.
     int modal;
+
+    // WHEN IT COSTS A FULL-SCREEN FRAME -- every overlay says, so a new
+    // one has to decide. 0: never; it damages its own rects. ON_CLOSE:
+    // one full frame after it closes, for whatever its action changed
+    // without declaring damage. WHILE_OPEN: every frame while it is up,
+    // being the whole screen, and one after. Read through
+    // wm_overlay_full_repaint().
+    int repaint;
 };
+
+#define WM_OVERLAY_REPAINT_ON_CLOSE  1
+#define WM_OVERLAY_REPAINT_WHILE_OPEN 2
+
+// Does this frame have to be a full repaint for an overlay's sake (see
+// `repaint`)? Called ONCE a frame, before the damage is final: it is
+// what notices a close, and a second call in the same frame would not.
+int wm_overlay_full_repaint(void);
 
 // Draws every open overlay, least modal first. Called once per frame
 // from wm_render.c, in place of six named calls. ALSO records where

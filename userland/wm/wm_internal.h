@@ -515,6 +515,9 @@ uint32_t wm_scene_frames(void);
 // reset`, over `frames` frames. A window outside the damage is neither.
 struct wm_cull_stats { unsigned drawn, culled, drawn_total, culled_total, frames; };
 void wm_cull_stats(struct wm_cull_stats *out);
+// Client presents whose damage list named nothing on screen, since boot
+// (wm_client.c): each drew NO frame.
+unsigned wm_client_presents_unchanged(void);
 
 // Damage verification (debug): render every frame twice and report any
 // pixel the damage-limited pass got wrong. See wm_render.c's own

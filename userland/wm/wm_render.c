@@ -996,16 +996,18 @@ static void corners_round(const struct window *win) {
     // has, read off the middle of its top edge.
     uint32_t outline = win->popup
         ? ugfx_get_pixel(wm_surface(), win->x + win->w / 2, win->y) : FRAME_OUTLINE;
-    // The arc's coverage, once per radius rather than per pixel per pass.
-    static uint8_t cov_r[CORNER_MAX_R * CORNER_MAX_R], cov_in[CORNER_MAX_R * CORNER_MAX_R];
-    static int cov_for;
-    if (cov_for != r) {
+    // The arc's coverage, computed once per RADIUS -- windows and popups
+    // have different ones and alternate every frame -- not per pixel.
+    static uint8_t cov_tab[CORNER_MAX_R + 1][2][CORNER_MAX_R * CORNER_MAX_R];
+    static uint8_t cov_ready[CORNER_MAX_R + 1];
+    uint8_t *cov_r = cov_tab[r][0], *cov_in = cov_tab[r][1];
+    if (!cov_ready[r]) {
         for (int py = 0; py < r; py++)
             for (int px = 0; px < r; px++) {
                 cov_r[py * r + px]  = corner_coverage(r, r, px, py);
                 cov_in[py * r + px] = corner_coverage(r, r - 1, px, py);
             }
-        cov_for = r;
+        cov_ready[r] = 1;
     }
     for (int c = 0; c < 4; c++)
         if (corner_square_in_clip(win, c, r))
@@ -1636,14 +1638,18 @@ void wm_debug_damage(int *out_x, int *out_y, int *out_w, int *out_h) {
 static struct urect g_pass;
 static int g_pass_on;
 
+// The frame's damage box, or the screen when the frame is a full one.
+static void scene_box(int has_damage, struct urect *out) {
+    if (has_damage) *out = (struct urect){ damage_x0, damage_y0, damage_x1 - damage_x0,
+                                           damage_y1 - damage_y0 };
+    else *out = (struct urect){ 0, 0, screen_w, screen_h };
+}
+
 static void apply_scene_clip(int has_damage) {
-    if (g_pass_on) {
-        ugfx_set_clip_rect(wm_surface(), g_pass.x, g_pass.y, g_pass.w, g_pass.h);
-    } else if (has_damage) {
-        ugfx_set_clip_rect(wm_surface(), damage_x0, damage_y0, damage_x1 - damage_x0, damage_y1 - damage_y0);
-    } else {
-        ugfx_clear_clip_rect(wm_surface());
-    }
+    struct urect r = g_pass;
+    if (!g_pass_on) scene_box(has_damage, &r);
+    if (g_pass_on || has_damage) ugfx_set_clip_rect(wm_surface(), r.x, r.y, r.w, r.h);
+    else ugfx_clear_clip_rect(wm_surface());
 }
 
 // Narrows the clip to a window's CONTENT area for the duration of its
@@ -1658,35 +1664,15 @@ static void apply_scene_clip(int has_damage) {
 // row budget, so the horizontal edge was clipped correctly while the
 // bottom had nothing stopping it at all.
 //
-// Intersects with the scene clip by hand because gfx_set_clip_rect()
-// REPLACES the active rect rather than intersecting -- setting the
-// content rect naively would have widened the damage clip back out and
-// quietly undone the compositor's whole point.
+// INTERSECTED with the scene clip (the damage box, or the pass a visible
+// region is drawn in), never set over it: replacing it would widen the
+// clip back out and undo the compositor's whole point. An empty
+// intersection is an EMPTY clip -- nothing draws -- which is right for a
+// window with no visible content this frame.
 static void clip_to_window_content(const struct window *w, int has_damage) {
-    int x0 = window_content_x(w), y0 = window_content_y(w);
-    int x1 = x0 + window_content_w(w), y1 = y0 + window_content_h(w);
-
-    if (g_pass_on) {
-        if (g_pass.x > x0) x0 = g_pass.x;
-        if (g_pass.y > y0) y0 = g_pass.y;
-        if (g_pass.x + g_pass.w < x1) x1 = g_pass.x + g_pass.w;
-        if (g_pass.y + g_pass.h < y1) y1 = g_pass.y + g_pass.h;
-    } else if (has_damage) {
-        if (damage_x0 > x0) x0 = damage_x0;
-        if (damage_y0 > y0) y0 = damage_y0;
-        if (damage_x1 < x1) x1 = damage_x1;
-        if (damage_y1 < y1) y1 = damage_y1;
-    }
-    // A non-positive w/h is gfx_set_clip_rect()'s "nothing draws", which
-    // is exactly right for a window with no visible content this frame.
-    // (This sentence used to be a lie -- gfx_set_clip_rect() CLEARED the
-    // clip on non-positive sizes, so exactly this case handed the app an
-    // unclipped full-screen on_draw(). That was the damage sweep's
-    // standing 20px violation: a tick frame's damage strip grazing only
-    // a window's bottom border row emptied this intersection, the
-    // content repaint escaped, and the resize grip under it was buried.
-    // The contract in gfx.c matches the words now.)
-    ugfx_set_clip_rect(wm_surface(), x0, y0, x1 - x0, y1 - y0);
+    apply_scene_clip(has_damage);
+    ugfx_clip_intersect(wm_surface(), window_content_x(w), window_content_y(w),
+                        window_content_w(w), window_content_h(w));
 }
 
 // Does this window's current rect overlap the accumulated damage box at
@@ -1750,9 +1736,7 @@ static int window_shown(int i, int focus, int covered, int lifted) {
 // cut to the frame's damage, minus the OPAQUE part of every window above
 // it -- wlroots' scene graph and Mutter clip the same way, and DWM skips
 // a covered window outright. A window whose region is empty is not drawn
-// at all, which is what a stack of equal windows needs: fifteen Notepads
-// cost fifteen windows a frame before this, and the fourteen under the
-// top one showed nothing but the edge of their shadows.
+// at all.
 //
 // OPAQUE IS CONSERVATIVE (window_opaque_rects()): the rect less its
 // rounded corner squares, which the window above blends over what is
@@ -1796,13 +1780,6 @@ static void subtract_occluders(struct uregion *g, int below, int focus, int cove
         int n = window_opaque_rects(j, focus, o);
         for (int k = 0; k < n; k++) uregion_subtract_rect(g, o[k].x, o[k].y, o[k].w, o[k].h);
     }
-}
-
-// The frame's damage box, or the screen when the frame is a full one.
-static void scene_box(int has_damage, struct urect *out) {
-    if (has_damage) *out = (struct urect){ damage_x0, damage_y0, damage_x1 - damage_x0,
-                                           damage_y1 - damage_y0 };
-    else *out = (struct urect){ 0, 0, screen_w, screen_h };
 }
 
 // THE WINDOW'S PIXELS, under whatever clip is set: shadow, chrome,
@@ -2033,7 +2010,6 @@ static void render_scene(int mx, int my, int has_damage) {
 // twice and costs a full-screen buffer); `gui damage verify on` enables
 // it -- see apps/wm/wm_debug.c.
 static int first_frame = 1;
-static unsigned overlay_was_open;  // which overlays were up last frame -- see wm_render_frame()
 static int prev_cursor_x = -1, prev_cursor_y = -1;
 // The box the cursor was last DRAWN in, recorded beside the position
 // because a themed shape's extent is not derivable from a position
@@ -2048,7 +2024,6 @@ static int verify_reported; // report each distinct failure once, not per frame
 // full repaint even if the previous session left state behind.
 void wm_render_reset(void) {
     first_frame = 1;
-    overlay_was_open = 0;
     prev_cursor_x = prev_cursor_y = -1;
     prev_cursor_box_w = prev_cursor_box_h = 0;
 }
@@ -2214,19 +2189,9 @@ void wm_render_frame(int mx, int my) {
     // narrow it -- the same trap tray_init() hit (see wm_tray.c).
     if (damage_x1 > damage_x0) damage_cursor(mx, my);
 
-    // OVERLAYS DAMAGE THEIR OWN RECTS -- Start, the context menu (a rect
-    // per open level), the calendar, the confirm dialog -- on open, close,
-    // hover and click (wm_overlay.h). Two cases still repaint everything:
-    //  - while the LEAVE PAGE is up, which is the whole screen;
-    //  - for ONE frame after one of these CLOSES. What it ran -- a desktop
-    //    sort, a Force Quit -- may change the scene without declaring
-    //    damage, and the full repaint they all used to take every frame
-    //    covered for that. One frame per close is cheap; every frame
-    //    while open cost 100 ms with fifteen windows on the laptop.
-    unsigned overlay_now = (context_menu_open ? 1u : 0u) | (calendar_open ? 2u : 0u) |
-                           (confirm_dialog_open ? 4u : 0u) | (leave_page_open ? 8u : 0u);
-    if ((overlay_now & 8u) || (overlay_was_open & ~overlay_now)) damage_reset();
-    overlay_was_open = overlay_now;
+    // OVERLAYS DAMAGE THEIR OWN RECTS; the registry says which of them
+    // still cost a full frame, and when (wm_overlay.h's `repaint`).
+    if (wm_overlay_full_repaint()) damage_reset();
 
     // Clip this pass to the accumulated damage region, if any was
     // reported. No damage this frame (menus, dialogs, the clock tick,

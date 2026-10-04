@@ -248,7 +248,7 @@ int context_menu_hover_at(int mx, int my) {
         int x, y, w, h;
         if (uui_menubar_popup_rect(&g_menu, l, &x, &y, &w, &h) &&
             x == ox[l] && y == oy[l] && w == ow[l] && h == oh[l]) continue;
-        wm_damage_rect(ox[l], oy[l], ow[l], oh[l]);
+        wm_damage_window_rect(ox[l], oy[l], ow[l], oh[l]);   // and the shadow it cast
         redraw_pending = 1;
     }
 

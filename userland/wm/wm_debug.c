@@ -1642,8 +1642,9 @@ static void cmd_compositor(struct dbg_out *o, int json) {
                           "\"us_avg\":%llu,\"cyc_avg\":%llu},",
                     fp_n, fp_last, fp_max, fp_avg, fp_cyc);
         dbg_out_printf(o, "\"windows\":{\"drawn\":%u,\"culled\":%u,\"drawn_total\":%u,"
-                          "\"culled_total\":%u,\"frames\":%u}}\r\n",
-                    cs.drawn, cs.culled, cs.drawn_total, cs.culled_total, cs.frames);
+                          "\"culled_total\":%u,\"frames\":%u,\"presents_unchanged\":%u}}\r\n",
+                    cs.drawn, cs.culled, cs.drawn_total, cs.culled_total, cs.frames,
+                    wm_client_presents_unchanged());
     } else if (!pid) {
         dbg_out_write(o, "compositor: none registered\r\n");
     } else {

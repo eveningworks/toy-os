@@ -514,6 +514,11 @@ static void send_release(struct window *win, int b) {
     else win->ev_release |= 1u << b;
 }
 
+// Presents whose damage named nothing on screen, so drew no frame --
+// `gui compositor` reports it (tools/occlusion_test.py reads it).
+static unsigned g_presents_unchanged;
+unsigned wm_client_presents_unchanged(void) { return g_presents_unchanged; }
+
 static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
                               int w, int h, uint32_t seq, const struct win_damage *dmg) {
     int idx = find_client_window(pid, id);
@@ -527,7 +532,12 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     int first = 1;
     for (int b = 0; b < WIN_CLIENT_BUFS; b++)
         if (win->client_gen[b]) first = 0;
-    if (front < 0 || front >= WIN_CLIENT_BUFS) return;
+    // EVERY PRESENT DROPPED BELOW arms client_damage_all: the client has
+    // already taken the dropped frame as the one on screen, so the next
+    // one's damage list is relative to pixels this compositor never showed.
+    // (A window not found above has no frame on screen at all; its first
+    // known present is a `first` one, which repaints it whole.)
+    if (front < 0 || front >= WIN_CLIENT_BUFS) { win->client_damage_all = 1; return; }
 
     // **THE GENERATION IS WHAT SAYS "RE-OPEN THE NAME".** The name is
     // the slot and never changes; the object under it does, on every
@@ -556,6 +566,7 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
         wm_damage_window_rect(win->x, win->y, win->w, win->h);   // the rect being left
         adopt_content_size(win, w, h);
         wm_damage_window_rect(win->x, win->y, win->w, win->h);
+        win->client_damage_all = 0;   // the whole window, just now
         if (first) wm_anim_open(idx);
         redraw_pending = 1;
         // An interactive resize sends its next proposal now: one FRAME
@@ -580,12 +591,21 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     } else if (dmg && (dmg->flags & WIN_DAMAGE_LIST) && !win->client_damage_all) {
         int cx = window_content_x(win), cy = window_content_y(win);
         int cw = window_content_w(win), ch = window_content_h(win);
+        int added = 0;
         for (int k = 0; k < dmg->n && k < WIN_DAMAGE_MAX; k++) {
             int x0 = dmg->r[k].x, y0 = dmg->r[k].y;
             int x1 = x0 + dmg->r[k].w, y1 = y0 + dmg->r[k].h;
             if (x1 > cw) x1 = cw;
             if (y1 > ch) y1 = ch;
-            if (x1 > x0 && y1 > y0) wm_damage_rect(cx + x0, cy + y0, x1 - x0, y1 - y0);
+            if (x1 > x0 && y1 > y0) { wm_damage_rect(cx + x0, cy + y0, x1 - x0, y1 - y0); added = 1; }
+        }
+        // NOTHING ON SCREEN CHANGED, SO NO FRAME: redraw_pending with no
+        // damage box is a FULL repaint, which would make the cheapest
+        // present -- an unchanged re-present -- the most expensive frame.
+        if (!added) {
+            g_presents_unchanged++;
+            wm_resize_shown(idx, 0);
+            return;
         }
     } else {
         wm_damage_rect(window_content_x(win), window_content_y(win),

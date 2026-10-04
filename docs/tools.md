@@ -2735,7 +2735,12 @@ window without going through it will find its layout polls timing out.
   wrongly left out is a reported miss. Positive controls (`mutate.py`):
   disabling the cull reddens the counters; counting a see-through
   window as opaque reddens the verifier -- NOT the pixel, which the
-  previous frame's pixels in the back buffer can still satisfy.
+  previous frame's pixels in the back buffer can still satisfy. Also two
+  damage checks: a desktop-menu submenu closed by hover leaves no shadow
+  band past its far edge (darker while open is the control), and
+  re-setting `system.timezone` to its own value -- every client
+  re-presents an identical frame -- counts as `presents_unchanged` and
+  costs no full-screen frame.
 
 - **`smooth_scroll_test.py`** -- smooth scrolling (`ui/uui_scrollanim.h`)
   in the File Manager's icon grid, and the `desktop.smooth_scroll`

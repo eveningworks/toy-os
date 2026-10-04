@@ -344,8 +344,8 @@ static void layout_log_flush(int src);
 static void wmap_sync(struct uapp *a);
 static int wmchan_send(uint32_t type, uint32_t window,
                        int aa, int bb, int cc, const char *text);
-static int wmchan_send_present(uint32_t window, int aa, int bb, int cc,
-                               const struct win_damage *dmg);
+static int wmchan_send_damage(uint32_t type, uint32_t window, int aa, int bb, int cc,
+                              const char *text, const struct win_damage *dmg);
 
 // WHAT THIS FRAME CHANGED, against the frame the compositor shows now --
 // the buffer last presented, which nothing draws into. The toolkit
@@ -394,9 +394,10 @@ static int surf_present(struct uapp_surf *s) {
     if ((uint32_t)seq == 0) seq++;   // 0 means "no sequence" on the wire
     struct win_damage dmg;
     present_damage(s, shown, &dmg);
-    if (!wmchan_send_present((uint32_t)slot_of(s), WIN_PRESENT_B(shown, s->px_gen[shown]),
-                             (int)WIN_PRESENT_SIZE(s->w, s->h), (int)(uint32_t)seq,
-                             &dmg)) return 0;
+    if (!wmchan_send_damage(WIN_REQ_PRESENT, (uint32_t)slot_of(s),
+                            WIN_PRESENT_B(shown, s->px_gen[shown]),
+                            (int)WIN_PRESENT_SIZE(s->w, s->h), (int)(uint32_t)seq,
+                            0, &dmg)) return 0;
 
     g_present_seq = seq;
     s->front = shown;
@@ -889,8 +890,9 @@ static int comp_pid(void) {
 
 // Sends one request over the channel. Returns 1 if it went, 0 if there
 // is no compositor channel or its ring is full.
-static int wmchan_send(uint32_t type, uint32_t window,
-                       int aa, int bb, int cc, const char *text) {
+// The payload rides the text union: a string, or a present's damage.
+static int wmchan_send_damage(uint32_t type, uint32_t window, int aa, int bb, int cc,
+                              const char *text, const struct win_damage *dmg) {
     if (!wmchan()) return 0;
     struct wmchan_msg m;
     memset(&m, 0, sizeof m);
@@ -898,19 +900,13 @@ static int wmchan_send(uint32_t type, uint32_t window,
     m.window = window;
     m.a = aa; m.b = bb; m.c = cc;
     if (text) snprintf(m.text, sizeof m.text, "%s", text);
+    else if (dmg) m.damage = *dmg;
     return uchan_send(&g_wmchan, &m, sizeof m) == 0;
 }
 
-static int wmchan_send_present(uint32_t window, int aa, int bb, int cc,
-                               const struct win_damage *dmg) {
-    if (!wmchan()) return 0;
-    struct wmchan_msg m;
-    memset(&m, 0, sizeof m);
-    m.type = WIN_REQ_PRESENT;
-    m.window = window;
-    m.a = aa; m.b = bb; m.c = cc;
-    m.damage = *dmg;
-    return uchan_send(&g_wmchan, &m, sizeof m) == 0;
+static int wmchan_send(uint32_t type, uint32_t window,
+                       int aa, int bb, int cc, const char *text) {
+    return wmchan_send_damage(type, window, aa, bb, cc, text, 0);
 }
 
 int uapp_notice(struct uapp *a, int kind, unsigned flags, const char *path) {

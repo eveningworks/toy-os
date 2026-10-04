@@ -2494,9 +2494,11 @@ real scanout hardware does. Do not write a pixel assertion for one.
   (`uregion_diff()`) rather than trusting a declaration, because the
   toolkit repaints the whole buffer and keeps no invalidation record.
   **A client that sets `WIN_DAMAGE_LIST` promises nothing outside the
-  rects changed** -- the compositor keeps its last composite there. A
-  present whose buffer would not map sets `client_damage_all`, so the
-  next one repaints the whole content.
+  rects changed** -- the compositor keeps its last composite there, and a
+  list naming nothing on screen draws NO frame (`redraw_pending` with no
+  damage would be a full repaint). **EVERY PRESENT THE COMPOSITOR DROPS
+  sets `client_damage_all`**, so the next one repaints the whole content:
+  the client already took the dropped frame as the one on screen.
 
 - **A WINDOW'S DAMAGE IS ITS OUTER RECT -- THE FRAME PLUS ITS SHADOW --
   AND `wm_damage_window_rect()` IS HOW IT IS DAMAGED.** The compositor
@@ -5221,9 +5223,12 @@ open submenu and passes `rect = 0` (and lists each open level in
 LONGER BUYS A FULL REPAINT**: one that appears without damaging its
 rect simply does not appear. The modal confirm dialog has a `rect` and
 a `contains` that answers yes everywhere -- modal for INPUT, one rect
-for DAMAGE. Only the Leave page repaints everything, being the screen,
-plus one full frame after the context menu, calendar or confirm dialog
-CLOSES (`wm_render_frame()`, for what the menu ran).
+for DAMAGE. **EVERY ROW SAYS WHEN IT COSTS A FULL FRAME** (`repaint`,
+the last column): `WM_OVERLAY_REPAINT_ON_CLOSE` for one whose action
+may change the scene undeclared (the context menu, the confirm dialog),
+`WHILE_OPEN` for one that IS the screen (the Leave page), 0 for the
+rest. A submenu or panel that closes damages its WINDOW rect, shadow
+included -- `wm_damage_window_rect()`, never `wm_damage_rect()`.
 
 **The core records the rect after it DRAWS each overlay**, so "where
 was it" is bookkeeping nobody has to remember. `wm_render.c` already

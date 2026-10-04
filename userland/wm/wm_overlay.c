@@ -47,6 +47,11 @@ static int tooltip_click(int mx, int my) { (void)mx; (void)my; return 0; }
 static int open_peek(void) { return wm_peek_open; }
 static int confirm_covers(int mx, int my) { (void)mx; (void)my; return confirm_dialog_open; }
 
+// `repaint` (the last column): only the context menu and the confirm
+// dialog run actions on close that may change the scene undeclared; the
+// Leave page IS the screen. Start launches windows, which damage
+// themselves, and the tray flyouts act through settings and child
+// processes, whose own polls repaint.
 static const struct wm_overlay g_overlays[] = {
     // FIRST, so it is PAINTED LAST and lands on top of everything --
     // including the menu whose row it describes. Its click op always
@@ -54,47 +59,48 @@ static const struct wm_overlay g_overlays[] = {
     // about to make, which is the one thing every toolkit gets wrong
     // about them. No hover op either; it is not a control.
     { "tooltip",  open_tooltip,  wm_tooltip_draw,  tooltip_click,
-      0, wm_tooltip_damage, wm_tooltip_rect, 0, 0, 0, wm_tooltip_cancel, 0, 0, 0, 0 },
+      0, wm_tooltip_damage, wm_tooltip_rect, 0, 0, 0, wm_tooltip_cancel, 0, 0, 0, 0, 0 },
     // The taskbar's window preview (wm_peek.h): above every menu, since
     // it only opens while none is up, and its click falls through when
     // it lands outside the card.
     { "peek",     open_peek,     wm_peek_draw,     wm_peek_click,
-      wm_peek_hover_at,          wm_peek_damage,          wm_peek_rect, 0, 0, 0, wm_peek_close, 0, 0, 0, 0 },
+      wm_peek_hover_at,          wm_peek_damage,          wm_peek_rect, 0, 0, 0, wm_peek_close, 0, 0, 0, 0, 0 },
     // MODAL, so it covers the whole screen for input (confirm_covers)
     // while it damages only its own rect.
     { "confirm",  open_confirm,  draw_confirm,     confirm_dialog_handle_click,
       confirm_dialog_hover_at,   confirm_dialog_damage,   confirm_dialog_rect, confirm_dialog_update_press, 0, 0, 0, 0,
-      confirm_covers, 0, 1 },
+      confirm_covers, 0, 1, WM_OVERLAY_REPAINT_ON_CLOSE },
     { "context",  open_context,  context_menu_draw, context_menu_handle_click,
       context_menu_hover_at,     context_menu_damage,     0 /* a rect per submenu level */, 0, 0, context_menu_key, context_menu_close, 0,
-      context_menu_contains, 0, 0 },
+      context_menu_contains, 0, 0, WM_OVERLAY_REPAINT_ON_CLOSE },
     // The Leave page (leave_page.h): full-screen and modal (no `close`,
     // so a menu opening cannot shut it), BELOW "context" so its "Restart
     // into" menu draws over it and is clicked first, and below "confirm"
     // so a Force Quit raised while apps close lands on top.
     { "leave",    open_leave,    leave_page_draw,  leave_page_handle_click,
-      leave_page_hover_at,       leave_page_damage,       0 /* the whole screen */, leave_page_update_press, 0, leave_page_key, 0, 0, 0, 0, 1 },
+      leave_page_hover_at,       leave_page_damage,       0 /* the whole screen */, leave_page_update_press, 0, leave_page_key, 0, 0, 0, 0, 1,
+      WM_OVERLAY_REPAINT_WHILE_OPEN },
     { "start",    open_start,    start_menu_draw,  start_menu_handle_click,
-      start_menu_hover_at,       start_menu_damage,       start_menu_rect, start_menu_update_press, start_menu_wheel, start_menu_key, start_menu_close, 0, 0, 0, 0 },
+      start_menu_hover_at,       start_menu_damage,       start_menu_rect, start_menu_update_press, start_menu_wheel, start_menu_key, start_menu_close, 0, 0, 0, 0, 0 },
     { "calendar", open_calendar, calendar_draw,    calendar_handle_click,
-      calendar_hover_at,         calendar_damage,         calendar_rect, 0, 0, 0, calendar_close, 0, 0, 0, 0 },
+      calendar_hover_at,         calendar_damage,         calendar_rect, 0, 0, 0, calendar_close, 0, 0, 0, 0, 0 },
     { "volume",   open_volume,   volume_draw,      volume_handle_click,
-      volume_hover_at,           volume_damage,           volume_rect, volume_update_press, 0, 0, volume_close, volume_opened, 0, 0, 0 },
+      volume_hover_at,           volume_damage,           volume_rect, volume_update_press, 0, 0, volume_close, volume_opened, 0, 0, 0, 0 },
     { "brightness", open_brightness, brightness_draw, brightness_handle_click,
-      brightness_hover_at,       brightness_damage,       brightness_rect, brightness_update_press, 0, 0, brightness_close, 0, 0, 0, 0 },
+      brightness_hover_at,       brightness_damage,       brightness_rect, brightness_update_press, 0, 0, brightness_close, 0, 0, 0, 0, 0 },
     { "network",  open_network,  network_draw,     network_handle_click,
-      network_hover_at,          network_damage,          network_rect, 0, 0, 0, network_close, 0, 0, 0, 0 },
+      network_hover_at,          network_damage,          network_rect, 0, 0, 0, network_close, 0, 0, 0, 0, 0 },
     { "remote",   open_remote,   remote_draw,      remote_handle_click,
-      remote_hover_at,           remote_damage,           remote_rect, 0, 0, 0, remote_close, 0, 0, 0, 0 },
+      remote_hover_at,           remote_damage,           remote_rect, 0, 0, 0, remote_close, 0, 0, 0, 0, 0 },
     // Under every menu (drawn before them), above the windows: a crash
     // notice in the corner. Passive -- see wm_overlay.h.
     { "notice",   open_notice,   crash_notice_draw, crash_notice_handle_click,
-      crash_notice_hover_at,     crash_notice_damage,     crash_notice_rect, 0, 0, 0, 0, 0, 0, 1, 0 },
+      crash_notice_hover_at,     crash_notice_damage,     crash_notice_rect, 0, 0, 0, 0, 0, 0, 1, 0, 0 },
     // LAST, so it is the least modal: a menu overlapping the keyboard
     // takes the click and paints on top. No `close` op -- a keyboard
     // must survive the click that puts the caret where it is typing.
     { "osk",      open_osk,      osk_draw,         osk_handle_click,
-      osk_hover_at,              osk_damage,              osk_rect, osk_update_press, 0, 0, 0, 0, 0, 0, 0 },
+      osk_hover_at,              osk_damage,              osk_rect, osk_update_press, 0, 0, 0, 0, 0, 0, 0, 0 },
 };
 #define OVERLAY_COUNT ((int)(sizeof g_overlays / sizeof g_overlays[0]))
 
@@ -111,6 +117,18 @@ int wm_overlay_modal_open(void) {
     for (int i = 0; i < OVERLAY_COUNT; i++)
         if (g_overlays[i].modal && g_overlays[i].is_open()) return 1;
     return 0;
+}
+
+int wm_overlay_full_repaint(void) {
+    static int was[OVERLAY_COUNT];
+    int full = 0;
+    for (int i = 0; i < OVERLAY_COUNT; i++) {
+        int now = g_overlays[i].is_open();
+        int r = g_overlays[i].repaint;
+        if ((r == WM_OVERLAY_REPAINT_WHILE_OPEN && now) || (r && was[i] && !now)) full = 1;
+        was[i] = now;
+    }
+    return full;
 }
 
 int wm_overlay_any_open(void) {

@@ -18,12 +18,23 @@ Two Notepads, A under B, and three checks, each with its control:
   - the damage verifier stays quiet throughout: its reference render
     culls NOTHING, so a window wrongly left out is reported as a miss.
 
+And two about what is damaged rather than drawn:
+
+  - SUBMENU SHADOW: the desktop menu's Icon size submenu, opened and then
+    closed by hover, leaves no shadow band beyond its far edge (the
+    control: the band IS darker while it is open).
+  - UNCHANGED PRESENT: re-setting `system.timezone` to its own value makes
+    every client re-present an identical frame; each must be counted as
+    unchanged and none may cost a full-screen frame.
+
     python3 tools/vm.py start
     python3 tools/occlusion_test.py
     python3 tools/vm.py stop
 
 Positive controls (tools/mutate.py): disabling the cull reddens COVERED;
-counting a see-through window as opaque reddens the verifier.
+counting a see-through window as opaque reddens the verifier; damaging a
+closed submenu without its shadow margin reddens SUBMENU SHADOW; turning
+an empty damage list back into a frame reddens UNCHANGED PRESENT.
 """
 
 import argparse
@@ -72,7 +83,89 @@ def pixel(qmp, tmp, name, x, y):
     return Image.open(p).convert("RGB").getpixel((x, y))
 
 
+def shot(qmp, tmp, name):
+    from PIL import Image
+    p = os.path.join(tmp, f"occlusion_{name}.png")
+    qmp.screenshot(p)
+    return Image.open(p).convert("RGB")
+
+
+def submenu_shadow(dbg, qmp, tmp, res):
+    """A submenu that closes takes its SHADOW with it: the desktop's menu,
+    Icon size > opened by hovering, closed by hovering Refresh. The pixel
+    just outside the submenu's far edge must be darker while it is open
+    (the control: there is a shadow to leave behind) and the wallpaper's
+    own again once it closes."""
+    st = dbg.state()["screen"]
+    x, y = st["w"] // 3, st["h"] // 4
+    dbg.warp_cursor(qmp, x, y)
+    dbg.settle()
+    before = shot(qmp, tmp, "sub_before")
+    dbg.damage_verify(True)
+    dbg.damage_bugs()   # drop anything older
+    dbg.rclick(x, y)
+    dbg.settle()
+    row = dbg.ctxmenu_row("Icon size")
+    if not res.check("the desktop menu offers Icon size", row is not None):
+        dbg.key("0x1b")
+        return
+    dbg.warp_cursor(qmp, *row)
+    dbg.settle(1.0)
+    m = dbg.ctxmenu()
+    sub = m.get("sub")
+    if not res.check("hovering Icon size opens its submenu", sub is not None, str(m)[:200]):
+        dbg.key("0x1b")
+        return
+    right = sub["x"] > m["x"]
+    q = (sub["x"] + sub["w"] + 4 if right else sub["x"] - 5, sub["y"] + 12)
+    opened = shot(qmp, tmp, "sub_open").getpixel(q)
+    dbg.warp_cursor(qmp, *dbg.ctxmenu_row("Refresh"))
+    dbg.settle(1.0)
+    closed_ok = dbg.ctxmenu().get("sub") is None
+    after = shot(qmp, tmp, "sub_closed").getpixel(q)
+    was = before.getpixel(q)
+    res.check("the open submenu casts a shadow at the probe (the control)",
+              sum(was) - sum(opened) >= 12, f"before {was}, open {opened} at {q}")
+    res.check("...and once it closes the shadow is gone",
+              closed_ok and max(abs(p - r) for p, r in zip(after, was)) <= 1,
+              f"before {was}, after {after}, submenu closed={closed_ok}")
+    dbg.key("0x1b")
+    dbg.settle()
+    # THE PIXEL CAN BE HEALED by any later full frame (a debug command
+    # asks for some), so the verifier -- which judges the frame the
+    # submenu closed in -- is the check that cannot be.
+    bugs = dbg.damage_bugs()
+    res.check("...and the verifier saw no stale shadow while it closed", bugs == [],
+              "; ".join(bugs)[:400])
+
+
+def unchanged_present(dbg, res):
+    """A present that changed nothing draws NO frame. Every client re-presents
+    on a setting notice (uapp redraws on WIN_EV_SETTING), almost always an
+    identical frame; with the damage list empty, the compositor must not
+    turn it into a full-screen repaint."""
+    def counts():
+        c = dbg.json("gui compositor --json")
+        return c["frame_full"]["n"], c["windows"]["presents_unchanged"]
+    tz = (dbg.send("sh config get system.timezone") or "").strip().splitlines()
+    tz = tz[-1].split()[-1] if tz else "UTC"
+    dbg.settle(1.0)
+    full0, same0 = counts()
+    for _ in range(3):
+        dbg.send(f"sh config set system.timezone {tz}")
+        dbg.settle(1.0)
+    full1, same1 = counts()
+    res.check("an unchanged re-present is recognised as unchanged",
+              same1 - same0 >= 2, f"presents_unchanged {same0} -> {same1}")
+    res.check("...and costs no full-screen frame",
+              full1 == full0, f"full frames {full0} -> {full1}")
+
+
 def run(dbg, qmp, tmp, res):
+    try:
+        submenu_shadow(dbg, qmp, tmp, res)
+    finally:
+        dbg.damage_verify(False)
     for _ in range(2):
         dbg.send("gui spawn /bin/wm/apps/notepad")
         deadline = time.time() + 20
@@ -86,6 +179,7 @@ def run(dbg, qmp, tmp, res):
         return
     a_pid, b_pid = ws[-2]["client_pid"], ws[-1]["client_pid"]
     sw = dbg.state()["screen"]["w"]
+    unchanged_present(dbg, res)   # before the verifier: it hides frame counts
     dbg.damage_verify(True)
     try:
         # --- COVERED ------------------------------------------------------
