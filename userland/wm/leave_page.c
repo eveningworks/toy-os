@@ -133,9 +133,16 @@ static void begin(int action) {
     }
     for (int i = 0; i < window_count; i++)
         if (listed(&windows[i])) close_batch_add(&g_apps, i);
-    wm_logf("leave: %s chosen, asking %d app(s) to close\n", NAME[action], g_apps.n);
-    if (!g_apps.n) { perform(); return; }
-    close_batch_ask(&g_apps);
+    if (!g_apps.n) {
+        wm_logf("leave: %s chosen, asking 0 app(s) to close\n", NAME[action]);
+        perform();
+        return;
+    }
+    // The count close_batch ASKED, not the windows recorded: the two
+    // differ exactly when something went wrong. Its first ask always
+    // starts the wait, so the closing phase always ends.
+    int asked = close_batch_ask(&g_apps);
+    wm_logf("leave: %s chosen, asking %d app(s) to close\n", NAME[action], asked);
     g_phase = PH_CLOSING;
     g_focus = 0;
     redraw_pending = 1;
@@ -381,7 +388,12 @@ static void draw_closing(struct ugfx_surface *s) {
         int gone = g_apps.e[i].gone;
         uui_glass_round_rect(s, r->x, r->y, r->w, r->h, u() / 2, WHITE,
                              gone ? 12 : g_hot == C_ROW0 + i ? 40 : 26, gone ? 40 : 90);
-        const char *st = gone ? "closed" : g_phase == PH_STUCK ? "still open" : "closing...";
+        // An app whose modal dialog is up waits on THAT answer: said so.
+        int w = gone ? -1 : close_batch_window(&g_apps, i);
+        const char *st = gone ? "closed"
+                       : g_phase == PH_STUCK ? (w >= 0 && wm_dialog_blocker(w) >= 0
+                                                ? "a dialog is open" : "still open")
+                       : "closing...";
         uint32_t sc = gone ? SOFT : g_phase == PH_STUCK ? ugfx_rgb(255, 179, 173) : SOFT;
         int sw = ugfx_text_width(st);
         int ty = r->y + (r->h - u()) / 2;

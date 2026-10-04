@@ -11,6 +11,7 @@
 #include "ui/uui_popup.h"   // the popup-surface provider, installed at open
 #include "ui/uui_focus.h"   // desc.focus -- keyboard focus ring
 #include "ui/uui_button.h"  // a lone button commits through on_action
+#include "ui/uui_dialog.h"  // uapp_question_open()
 #include "ui/ulog.h"        // uapp_log_layout()
 #include "setting_abi.h" // desktop.layout_log -- the gate below
 #include "lib/usetting.h" // ...and the MERGED registry that can see it
@@ -1157,6 +1158,17 @@ static int buttons_heard(const struct uui_router *r, int has_on_action, const ch
     return 0;
 }
 
+int uapp_question_open(struct uapp *a) {
+    for (int i = 1; i < WIN_CLIENT_MAX; i++)
+        if (g_dlg[i].slot && (g_dlg[i].desc.flags & UAPP_WIN_MODAL)) return 1;
+    const struct uapp_desc *d = a ? a->desc : 0;
+    for (int i = 0; d && i < d->widget_count; i++)
+        if (d->widgets[i].ops == &uui_dialog_ops &&
+            uui_dialog_is_open((const struct uui_dialog *)d->widgets[i].widget))
+            return 1;
+    return 0;
+}
+
 static void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
     const struct uapp_window_desc *d = &w->desc;
     switch (ev->type) {
@@ -1722,8 +1734,10 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
 
     case WIN_EV_CLOSE:
         // The default ACCEPTS. An app that wants to refuse says so;
-        // an app that has never heard of closing still closes.
-        if (!d->on_close || d->on_close(a)) uapp_quit(a, 0);
+        // an app that has never heard of closing still closes -- unless
+        // it is asking something, which the answer decides.
+        if (d->on_close ? d->on_close(a) : !uapp_question_open(a)) uapp_quit(a, 0);
+        else ulogf("uapp: close refused%s\n", uapp_question_open(a) ? " -- a question is open" : "");
         break;
 
     case WIN_EV_RESIZE:

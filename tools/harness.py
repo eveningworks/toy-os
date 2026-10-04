@@ -19,7 +19,8 @@ differences become callbacks). A tool with a genuinely different table
 `Results` is a superset of the shapes the tools used, so adopting it is
 a one-line change: `.check()`/`.ok()` (returns the verdict), `.passes`
 and `.fails` (names), `.rows` ((name, ok, detail)), `.failed()`, and
-`.skip()` for a check that could not be judged this run (`.skips`). The
+`.skip()` for a check that could not be judged this run (`.skips`), and
+`poll(fn, timeout)`, a bounded wait on an observable. The
 summary line `finish()` prints is the one `gui_regress.py` reads:
 `<tool>: N passed, M failed`, with `, K skipped` after it when any were.
 """
@@ -63,9 +64,23 @@ class Results:
         return [r for r in self.rows if not r[1]]
 
     def finish(self, tool):
-        """Print the summary line; 0 when something ran and all of it passed."""
+        """Print the summary line; 0 when something was judged or skipped
+        and nothing failed -- a skip is neither a pass nor a fail."""
         print("\n" + self.summary(tool))
-        return 0 if self.rows and not self.fails else 1
+        return 0 if (self.rows or self.skips) and not self.fails else 1
+
+
+def poll(fn, timeout, step=0.2):
+    """fn() until it answers truthy or `timeout` seconds pass; its last
+    answer either way. Poll on what the caller then ASSERTS, never on
+    something weaker (CLAUDE.md: a weaker exit condition is a flake)."""
+    import time
+    deadline = time.time() + timeout
+    while True:
+        v = fn()
+        if v or time.time() >= deadline:
+            return v
+        time.sleep(step)
 
 
 def copy_disk(src, dst, cwd=None):

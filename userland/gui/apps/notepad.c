@@ -2021,13 +2021,17 @@ static void on_open_cb(struct uapp *a) {
 // The X, Alt+F4 and the window menu. Refusing is not returning 1 -- the
 // asks answer frames later and quit through run_pending().
 //
-// **A CLOSE WHILE A QUESTION IS UP CHANGES NOTHING.** close_all_step()
-// would switch_to() the first dirty tab before ask_discard()'s guard,
-// and the open prompt's Don't Save would then discard THAT tab, never
-// asked about. The WM may send this twice (a second Close all, Alt+F4
-// twice); the answer to the question already showing decides.
+// **A CLOSE WHILE A QUESTION IS UP STARTS NOTHING** (uapp_desc.on_close):
+// close_all_step() would switch_to() the first dirty tab under the open
+// prompt -- or the Save As chooser -- and its answer would then discard
+// or save THAT tab. It is not thrown away either: a tab's close becomes
+// the window's, so the answer goes on into close_all_step().
 static int on_close_cb(struct uapp *a) {
-    if (uui_dialog_is_open(&g_ask)) return 0;
+    if (uapp_question_open(a)) {
+        if (g_pending == PEND_CLOSE_TAB) g_pending = PEND_CLOSE;
+        ulogf("notepad: close while asking -- pending %d\n", g_pending);
+        return 0;
+    }
     session_save();
     if (must_confirm_close()) { ask_close_all(a); return 0; }
     if (!any_dirty()) return 1;

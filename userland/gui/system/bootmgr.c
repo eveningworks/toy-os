@@ -888,8 +888,8 @@ static int on_tick(struct uapp *a) {
 }
 
 static int on_close(struct uapp *a) {
-    (void)a;
-    if (!dirty() || uui_dialog_is_open(&g_ask)) return 1;
+    if (uapp_question_open(a)) return 0;   // its answer decides
+    if (!dirty()) return 1;
     note("Unsaved changes -- Save, or Revert, then close");
     return 0;
 }

@@ -2552,9 +2552,11 @@ window without going through it will find its layout polls timing out.
   entry-shaped regex rather than `split()[-1]`; and a reference
   screenshot must park the caret first, since `load_file()` resets the
   cursor to 0 and a caret bar is a real pixel difference. Last (or
-  alone, `--only second-close`): a window close while a TAB's save
-  prompt is up must not re-aim it -- two dirty tabs, Ctrl-W on the
-  second, Alt+F4, Don't Save, and the FILE's tab must be the one left.
+  alone, `--only second-close`): a window close while Notepad is asking
+  is HELD -- two dirty tabs, Ctrl-W on the second, Alt+F4, Don't Save:
+  that tab goes and the close goes on to ask about the FILE's tab; and a
+  window close under a tab's Save As chooser switches no tab and asks
+  nothing new.
 - **`clipboard_test.py`** -- drives the system TEXT clipboard across two
   apps, which is the claim that makes it a system clipboard rather than
   a feature of one: text copied in Notepad pastes into the GUI Terminal,

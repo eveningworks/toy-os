@@ -81,7 +81,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole, enter_gui          # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 import port_guard  # noqa: E402
-from harness import Results  # noqa: E402
+from harness import Results, poll  # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 NOTEPAD = "/bin/wm/apps/notepad"
@@ -597,17 +597,6 @@ def check_drag_hidden(dbg, qmp, res):
               f"keys {before} -> {after}, hidden {hidden} -> {tb['hidden']}")
 
 
-def poll(fn, timeout, step=0.2):
-    """fn() until it is truthy or `timeout` passes; its last answer. The
-    condition is the one the caller then asserts, never a weaker one."""
-    deadline = time.time() + timeout
-    while True:
-        v = fn()
-        if v or time.time() >= deadline:
-            return v
-        time.sleep(step)
-
-
 def asks(dbg):
     return [line for line in dbg.logs("closeall:", clear=False) if "asking" in line]
 
@@ -698,22 +687,21 @@ LONG_NAMES = ["/tmp/n%d-close-all-notice-check-a-long-name.txt" % k for k in ran
 
 def close_wait_s():
     """CLOSE_BATCH_WAIT_NS, read from userland/wm/close_batch.h -- the WM's
-    wait, never a copy of it that could drift."""
+    wait, never a copy of it that could drift. Read when needed."""
     hdr = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
                        "userland", "wm", "close_batch.h")
-    m = re.search(r"#define\s+CLOSE_BATCH_WAIT_NS\s+(\d+)", open(hdr).read())
+    with open(hdr) as f:
+        m = re.search(r"#define\s+CLOSE_BATCH_WAIT_NS\s+(\d+)", f.read())
     if not m:
         raise SystemExit("taskbar_test: no CLOSE_BATCH_WAIT_NS in " + hdr)
     return int(m.group(1)) / 1e9
-
-
-CLOSE_WAIT_S = close_wait_s()
 
 
 def check_stayed_sentence(dbg, qmp, res):
     """Three long-titled windows stay open: the card's sentence elides the
     TITLES, never its end -- "and 1 more did not close. The other 1
     closed." -- where a fixed buffer used to cut it mid-word."""
+    wait_s = close_wait_s()
     close_everything(dbg)
     for path in LONG_NAMES:
         dbg.send(f"sh write {path} hello")
@@ -735,14 +723,14 @@ def check_stayed_sentence(dbg, qmp, res):
     if tb["buttons"]:
         window_menu_for_button(dbg, tb["buttons"][0])
     row = dbg.ctxmenu_row("Close all 4 windows")
-    t_ask = time.time()   # the WM's deadline is no earlier than this + CLOSE_WAIT_S
+    t_ask = time.time()   # the WM's deadline is no earlier than this + wait_s
     if row:
         dbg.click(*row)
         dbg.settle()
     # A REPEATED Close all that asks nobody must not push the card back:
     # early in the wait, ask the three that are still open again.
     poll(lambda: not notepads(dbg), 4)   # the clean one, "untitled", has closed
-    time.sleep(CLOSE_WAIT_S / 4)   # the gap under test, not a wait for state
+    time.sleep(wait_s / 4)   # the gap under test, not a wait for state
     tb = strip(dbg)
     if tb["buttons"]:
         window_menu_for_button(dbg, tb["buttons"][0])
@@ -755,8 +743,8 @@ def check_stayed_sentence(dbg, qmp, res):
     t_card = time.time()
     again = asks(dbg)
     detail = (f"asks {again}; repeat at +{t_rep - t_ask:.1f}..{t_rep_done - t_ask:.1f}s, "
-              f"card seen at +{t_card - t_ask:.1f}s, wait {CLOSE_WAIT_S}s")
-    if t_rep_done >= t_ask + CLOSE_WAIT_S:
+              f"card seen at +{t_card - t_ask:.1f}s, wait {wait_s}s")
+    if t_rep_done >= t_ask + wait_s:
         # A slow guest: the repeat may have landed after the wait, where
         # it starts a batch of its own and proves nothing either way.
         res.skip("a repeated Close all does not restart the wait", detail)
@@ -764,7 +752,7 @@ def check_stayed_sentence(dbg, qmp, res):
         # Restarted, the card could not come before t_rep + the wait.
         res.check("a repeated Close all asks nobody and does not restart the wait",
                   len(again) == 2 and "asking 0 " in again[1] and bool(said) and
-                  t_card < t_rep + CLOSE_WAIT_S, detail)
+                  t_card < t_rep + wait_s, detail)
     nt = poll(lambda: dbg.state().get("notice"), 3) or {}
     sub = nt.get("sub", "")
     res.check("three long titles stayed: the sentence keeps its count and its end",
@@ -826,9 +814,7 @@ def main():
         if "overflow" in only:
             run(dbg, qmp, res, args.pixels)
 
-    n_bad = len(res.fails)
-    print("\n" + res.summary("taskbar_test"))
-    return 1 if n_bad else 0
+    return res.finish("taskbar_test")
 
 
 if __name__ == "__main__":

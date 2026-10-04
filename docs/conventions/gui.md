@@ -1667,16 +1667,25 @@ this the obvious way), not from how much history it accumulated.
   against a 5 s deadline. **Each window is asked ONCE**
   (`close_batch_ask()` skips an entry already asked): a second Close all
   joining a waiting batch must not re-send WIN_EV_CLOSE to a window
-  already asking to save, and only an ask of someone restarts the wait;
-  once it is over the batch resets, so a later Close all asks again,
-  a window whose prompt is still open included. **A repeated close is
-  the CLIENT's to absorb** -- the WM cannot see a prompt drawn inside a
-  window -- so an app whose close asks a question returns 0 at once
-  from `on_close` while that question is up (Notepad does).
-  What is still open then is the CALLER's to
-  present: the Leave page lists it, Close all puts a notice card up
-  (`crash_notice_stayed()`: Show it, Force Quit) that leaves by itself
-  once those windows close. A third batch close uses the same tracker.
+  already asking to save. The first ask always starts the wait; after
+  that only an ask of someone restarts it. Once it is over the batch
+  resets, so a later Close all asks again, a window whose prompt is
+  still open included. A window with a MODAL dialog is asked too, its
+  dialog raised first, since that answer is what the close waits on.
+  What is still open then is the CALLER's to present: the Leave page
+  lists it ("a dialog is open" when that is why), Close all puts a
+  notice card up (`crash_notice_stayed()`: Show it, Force Quit) that
+  leaves by itself once those windows close. A third batch close uses
+  the same tracker.
+- **A CLOSE WHILE THE APP IS ASKING SOMETHING CHANGES NOTHING, AND THE
+  CLIENT ENFORCES IT** -- the WM cannot see a prompt drawn inside a
+  window. An `on_close` starts with `if (uapp_question_open(a)) return
+  0;` (a modal window of the app's own, or an open `uui_dialog` in
+  `desc.widgets`); without an `on_close`, uapp refuses for the app. The
+  close is HELD, not lost, where the app can carry it on: Notepad turns
+  a tab's pending close into the window's, so the answer continues the
+  close. Wayland's `xdg_toplevel.close` is the same contract: a request,
+  idempotent, the client's to answer.
 - **AN APP'S OPTIONS WINDOW IS `ui/uui_prefs.h`.** A sidebar of pages,
   "Caption: control" rows, Defaults / OK / Cancel, modal, nothing applied
   until OK. The app declares its controls (ids below

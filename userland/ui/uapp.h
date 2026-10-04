@@ -315,6 +315,12 @@ struct uapp_desc {
     // Return 0 to REFUSE the close; the default accepts. Refusing
     // politely is not the same problem as a client that never answers,
     // which is TWS's to solve (see docs/roadmap.md's M41).
+    //
+    // **A CLOSE WHILE THE APP IS ASKING SOMETHING CHANGES NOTHING**: the
+    // compositor may send it twice (Alt+F4 twice, a second Close all, the
+    // Leave page). Start with `if (uapp_question_open(a)) return 0;` --
+    // the answer already showing decides. Without an on_close, uapp
+    // refuses for the app.
     int (*on_close)(struct uapp *a);
 
     // Called on a cadence; repaints if it returns 1. WITH `tick_ms`
@@ -488,6 +494,11 @@ void uapp_logf_layout(const char *fmt, ...) __attribute__((format(printf, 1, 2))
 // Reach for this only when something long is about to happen inside a
 // callback.
 void uapp_flush(struct uapp *a);
+
+// Is the app asking something: a MODAL window of its own up (a chooser,
+// an Options dialog), or a uui_dialog in desc.widgets open? What an
+// on_close checks first (see uapp_desc.on_close).
+int uapp_question_open(struct uapp *a);
 
 void uapp_quit(struct uapp *a, int status);
 

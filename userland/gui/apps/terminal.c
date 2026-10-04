@@ -2944,7 +2944,8 @@ static int on_close_cb(struct uapp *a) {
     static const char *rows[1];
     static char line[64];
 
-    if (g_conf.confirm_close && g_ntabs > 1 && !uui_dialog_is_open(&g_quit_ask)) {
+    if (uapp_question_open(a)) return 0;   // "Close them all?" -- or another -- decides
+    if (g_conf.confirm_close && g_ntabs > 1) {
         snprintf(line, sizeof line, "%d tabs are open. Close them all?", g_ntabs);
         rows[0] = line;
         uui_menubar_close(&g_menu);
