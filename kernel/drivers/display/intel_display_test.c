@@ -107,6 +107,16 @@ KTEST("intel-display", "a firmware plane matches only in its own generation's en
 
 #include "edid.h"
 
+// The desktop's DPLL1 as the firmware left it for 2560x1440 over HDMI:
+// DCO 402.5 x 24 MHz = 9660 MHz, P2 Q2 K2, / 5 = 241.5 MHz (CVT-RB).
+KTEST("intel-display", "a gen9 HDMI DPLL decodes to its pixel clock") {
+    KTEST_ASSERT_EQ(intel_display_gen9_hdmi_khz(0x80800192u, 0x2a4u), 241500u);
+    KTEST_ASSERT_EQ(intel_display_gen9_hdmi_khz(0x00800192u, 0x2a4u), 0u);   // disabled
+    KTEST_ASSERT_EQ(intel_display_gen9_hdmi_khz(0x80800192u, (0x2a4u & ~0x1Cu) | (3u << 2)), 0u); // P reserved
+    // Without Q mode the ratio field is ignored: / (2 x 1 x 2).
+    KTEST_ASSERT_EQ(intel_display_gen9_hdmi_khz(0x80800192u, 0x224u), 483000u);
+}
+
 // The transcoder registers for the canned panel in edid_test.c
 // (1920x1080, h 48/32/160, v 3/5/31): each field is (value - 1), the
 // end in the high half. A decoded timing must round-trip to the EDID's.

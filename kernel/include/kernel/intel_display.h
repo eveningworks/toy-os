@@ -44,6 +44,9 @@ void     intel_display_timing_from_regs(const struct intel_trans_regs *r, struct
 uint32_t intel_display_port_clock_khz(uint32_t port_clk_sel);
 uint32_t intel_display_dotclock_khz(uint32_t port_khz, uint32_t link_m, uint32_t link_n);
 int      intel_display_timing_same(const struct edid_timing *a, const struct edid_timing *b);
+// Gen9: an HDMI-mode DPLL's CFGCR1/CFGCR2 to the pixel clock in kHz, 0
+// for a disabled or unencodable one.
+uint32_t intel_display_gen9_hdmi_khz(uint32_t cfgcr1, uint32_t cfgcr2);
 
 // The panel fitter's window for a mode of w x h on a panel of pw x ph
 // under `scaling` (enum display_scaling); pure, for the KTESTs.

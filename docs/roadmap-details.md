@@ -5991,6 +5991,21 @@ The QEMU suite can cover none of stages 3-4; what it covers is the
 EDID parser, the readout's decoders, and the `resolution` setting's
 plumbing when the Intel driver starts listing more than one mode.
 
+### Task Manager memory that adds up: private per process, a Kernel row and a Shared row
+
+Asked for 2026-10-04 after the Kaby Lake desktop showed 159.5 MB in use
+and processes summing to ~103 MB. Two causes, both measured: a
+process's `MEM` is `vmm_user_bytes()`, EVERY page mapped into it -- so a
+window buffer counts in its app AND in toywm, and toywm's 91 MB includes
+the three scanouts (one of them stolen memory, not RAM at all) -- while
+kernel memory (the 17.6 MB heap, gfx.c's 14.1 MB console back buffer,
+the flip's two 14 MB scanouts, page tables, DMA rings) is in no row.
+Windows' Task Manager shows the PRIVATE working set and "Hardware
+reserved"; Linux's `smem` splits a shared page by PSS. The shape here:
+a private column (frames with one mapper and no shm object), a Shared
+row (shm and granted frames, counted once), a Kernel row (used frames
+minus both), so the rows sum to "in use". Mock up before building.
+
 ### Intel gen9 on the Kaby Lake desktop over HDMI: readout, adopt (cursor + flip), GMBUS EDID, scaler modes, an HDMI modeset
 
 The third test machine (a Lenovo desktop, HD 630 `8086:5912`, one
@@ -6021,7 +6036,10 @@ Adapter until the vendor driver loads. The stages, one flash each:
    watermark; scanouts start 256 KiB-aligned in the GGTT
    (`skl_plane_min_alignment` for linear), where gen8's are packed.
 3. **2, EDID over GMBUS** on the pin pair the active DDI uses (SKL: DPB
-   pin 5, DPC 4, DPD 6), so `lsdisplay` names the monitor.
+   pin 5, DPC 4, DPD 6), so `lsdisplay` names the monitor. BUILT
+   2026-10-04 (`intel_gmbus.c`): DDI D's pin 6 answered 128 bytes, a
+   DELL U2515H, and the firmware's timing -- the transcoder's porches and
+   DPLL1 decoded to 241.5 MHz -- MATCHES its preferred timing to the kHz.
 4. **3, scaler modes**: the ladder below native through `PS_CTRL`,
    keeping the HDMI timing -- runtime `config set resolution` as the
    laptops have it.

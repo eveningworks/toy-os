@@ -113,6 +113,13 @@ int  intel_aux_native_write(uint32_t addr, const uint8_t *buf, int len);
 // slice of the display buffer, carved from the end of the plane's.
 void intel_gen9_readout_log(void);
 int  intel_gen9_cursor_ddb(int pipe);
+// The monitor's EDID over GMBUS on the pin pair the pipe's DDI uses,
+// read once and cached; logs the firmware's timing against it.
+int  intel_gen9_read_edid(int pipe, uint8_t *out, int cap);
+
+// intel_gmbus.c -- the display engine's I2C, for an HDMI/DVI EDID.
+int  intel_gmbus_pin_for_port(int port);   // 0 when the DDI has none
+int  intel_gmbus_read_edid(int pin, uint8_t *out, int len);   // bytes, 0 on failure
 
 // intel_readout.c -- what the firmware programmed, decoded and compared.
 struct display_edid;

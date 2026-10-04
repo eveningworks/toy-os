@@ -551,9 +551,9 @@ static int intel_probe(void) {
 
 static void intel_get_surface(struct display_surface *out) { *out = g_surface; }
 
-// DDI A's AUX channel is the eDP panel's; gen9's EDID is GMBUS, not yet.
+// Gen8's panel answers on DDI A's AUX channel; gen9's monitor on GMBUS.
 static int intel_read_edid(uint8_t *out, int cap) {
-    return g_gen == 8 ? intel_aux_read_edid(out, cap) : 0;
+    return g_gen == 8 ? intel_aux_read_edid(out, cap) : intel_gen9_read_edid(g_pipe, out, cap);
 }
 
 // Modes: the panel's native size (what the firmware lit, index 0) and

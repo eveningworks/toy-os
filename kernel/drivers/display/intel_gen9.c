@@ -15,6 +15,9 @@
 // intel_cursor_regs.h, i915_reg.h, intel_gmbus_regs.h).
 #include "klog.h"
 #include "kfmt.h"
+#include "string.h"   // k_memcpy
+#include "edid.h"
+#include "intel_display.h"
 #include "intel_internal.h"
 
 // driver-none: part of intel-display (intel_display.c declares it)
@@ -139,4 +142,67 @@ int intel_gen9_cursor_ddb(int p) {
     klog_printf("intel-gen9: ddb plane %u-%u, cursor %u-%u, cursor wm0 %#x\n",
                 start, plane_end, plane_end + 1, end, CURSOR_WM0);
     return 1;
+}
+
+// HDMI's pixel clock from a DPLL in HDMI mode: DCO = (integer +
+// fraction / 2^15) x 24 MHz, divided by P x Q x K into the AFE clock,
+// which is five times the pixel clock (TMDS's 10 bits per character
+// over a DDR clock). The inverse of i915's skl_ddi_calculate_wrpll.
+uint32_t intel_display_gen9_hdmi_khz(uint32_t cfgcr1, uint32_t cfgcr2) {
+    static const uint8_t P[8] = { 1, 2, 3, 0, 7, 0, 0, 0 };
+    static const uint8_t K[4] = { 5, 2, 3, 1 };
+    uint32_t p = P[(cfgcr2 >> 2) & 7], k = K[(cfgcr2 >> 5) & 3];
+    uint32_t q = (cfgcr2 & (1u << 7)) ? (cfgcr2 >> 8) & 0xFF : 1;
+    if (!(cfgcr1 & (1u << 31)) || !p || !q) return 0;
+    uint64_t dco_khz = (uint64_t)(cfgcr1 & 0x1FF) * 24000 +
+                       (uint64_t)((cfgcr1 >> 9) & 0x7FFF) * 24000 / 0x8000;
+    return (uint32_t)(dco_khz / (p * q * k) / 5);
+}
+
+// The DDI a transcoder drives (1 = B .. 4 = E), or -1 when it is off.
+static int ddi_of_pipe(int p) {
+    uint32_t f = intel_rd(TRANS_DDI_FUNC_CTL(p));
+    return (f >> 31) ? (int)((f >> 28) & 7) : -1;
+}
+
+// What the firmware programmed, against the EDID's preferred timing --
+// the check stage 4's modeset leans on, as intel_readout.c's is for gen8.
+static void timing_log(int p, const struct display_edid *e) {
+    struct intel_trans_regs r = {
+        intel_rd(TRANS_HTOTAL(p)), intel_rd(TRANS_HTOTAL(p) + 4), intel_rd(TRANS_HSYNC(p)),
+        intel_rd(TRANS_VTOTAL(p)), intel_rd(TRANS_VTOTAL(p) + 4), intel_rd(TRANS_VSYNC(p)),
+    };
+    struct edid_timing t;
+    intel_display_timing_from_regs(&r, &t);
+    int port = ddi_of_pipe(p);
+    uint32_t sel = port > 0 ? (intel_rd(DPLL_CTRL2) >> (port * 3 + 1)) & 3 : 0;
+    if (sel) t.pixel_khz = intel_display_gen9_hdmi_khz(intel_rd(DPLL_CFGCR1(sel)),
+                                                       intel_rd(DPLL_CFGCR2(sel)));
+    klog_printf("intel-gen9: firmware timing %ux%u h %u %u %u v %u %u %u, DPLL%u %u kHz\n",
+                t.hactive, t.vactive, t.hsync_off, t.hsync_w, t.hblank,
+                t.vsync_off, t.vsync_w, t.vblank, sel, t.pixel_khz);
+    if (!e || !e->timing_count) return;
+    int same = intel_display_timing_same(&t, &e->timing[0]);
+    uint32_t want = e->timing[0].pixel_khz;
+    int clk = t.pixel_khz + 10 >= want && t.pixel_khz <= want + 10;
+    klog_printf("intel-gen9: firmware timing %s EDID timing 0, pixel clock %s (%u vs %u kHz)\n",
+                same ? "MATCHES" : "DIFFERS FROM", clk ? "agrees" : "DIFFERS", t.pixel_khz, want);
+}
+
+static uint8_t g_edid[EDID_BLOCK];
+static int g_edid_len = -1;   // -1 until read once
+
+int intel_gen9_read_edid(int p, uint8_t *out, int cap) {
+    if (g_edid_len < 0) {
+        int port = ddi_of_pipe(p);
+        int pin = intel_gmbus_pin_for_port(port);
+        g_edid_len = pin ? intel_gmbus_read_edid(pin, g_edid, EDID_BLOCK) : 0;
+        klog_printf("intel-gen9: EDID over GMBUS pin %d (DDI %c): %d bytes\n",
+                    pin, port >= 0 ? 'A' + port : '-', g_edid_len);
+        struct display_edid e;
+        timing_log(p, g_edid_len == EDID_BLOCK && edid_parse(g_edid, g_edid_len, &e) ? &e : 0);
+    }
+    int n = g_edid_len < cap ? g_edid_len : cap;
+    if (n > 0) k_memcpy(out, g_edid, (size_t)n);
+    return n > 0 ? n : 0;
 }
