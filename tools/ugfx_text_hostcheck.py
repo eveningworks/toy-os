@@ -277,7 +277,8 @@ def build(tmp, control=False):
 
     exe = os.path.join(tmp, "hostcheck")
     cmd = ["gcc", "-O2", "-Wall", "-Wextra", "-o", exe, src,
-           os.path.join(ROOT, "userland", "ui", "uui_edit.c")]
+           os.path.join(ROOT, "userland", "ui", "uui_edit.c"),
+           os.path.join(ROOT, "userland", "ui", "uui_undo.c")]   # uui_edit's undo
     if control:
         cmd.append("-I" + tmp)          # BEFORE the real tree: first match wins
     cmd += ["-I" + os.path.join(ROOT, "userland"),

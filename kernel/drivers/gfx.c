@@ -740,22 +740,13 @@ void gfx_blend_pixel(int x, int y, uint32_t color, uint8_t alpha) {
 // resolution, not synthesized here; this function's whole job is just to
 // alpha-composite the already-antialiased glyph onto whatever fg/bg pair
 // the caller wants.
-// Maps a character to its glyph slot in font_ttf_variants[]: ASCII
-// 32-126 map straight to indices 0..94 (c - 32), and the six baked
-// Nordic letters (font_ttf_extra_codepoints[], font_ttf.h) map to
-// 95..100 by linear scan -- fine at 6 entries, not worth a table for
-// this few. Returns -1 for anything else (falls back to '?' below).
-// `c` comes in as int rather than char specifically so callers can
-// pass an already-widened codepoint (0-255) without the signed-char
-// sign-extension landmine documented in docs/decisions.md -- see that
-// entry for why char is signed in this build and what it broke before
-// callers started passing unsigned char/int through here.
+// Maps a character to its glyph slot in font_ttf_variants[] -- the
+// header's font_ttf_slot(), arithmetic over ASCII then Latin-1. Returns
+// -1 for anything else (drawn as '?' below). `c` is an int already
+// widened to 0-255: a signed `char` above 0x7F would be negative here
+// (docs/decisions/drivers.md, the Nordic-keyboard entry).
 static int font_ttf_glyph_index(int c) {
-    if (c >= 32 && c <= 126) return c - 32;
-    for (int i = 0; i < FONT_TTF_EXTRA_COUNT; i++) {
-        if (font_ttf_extra_codepoints[i] == (unsigned char)c) return FONT_TTF_ASCII_COUNT + i;
-    }
-    return -1;
+    return c < 0 ? -1 : font_ttf_slot((unsigned int)c);
 }
 
 // The same walk, under the name the rest of the kernel may call it by

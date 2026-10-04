@@ -40,7 +40,9 @@ substantial rendered derivatives of it. Install locally with e.g.
 `sudo pacman -S ttf-jetbrains-mono` (CachyOS/Arch via AUR), or download
 from https://www.jetbrains.com/lp/mono/ to regenerate.
 
-Run from the repo root: `python3 tools/genttf.py`
+Run from the repo root: `python3 tools/genttf.py [--font PATH]` -- `--font`
+names the .ttf when it is not at FONT_PATH (a release zip unpacked
+anywhere; v2.304 reproduces the committed tables byte for byte).
 """
 import sys
 
@@ -83,32 +85,26 @@ SIZES = [
 
 OUT_C = "kernel/drivers/font_ttf.c"
 OUT_H = "kernel/include/api/font_ttf.h"
-OUT_SLOTS = "kernel/lib/font_slots.c"  # shared source: both rings link it
 PREVIEW = "font_ttf_preview.png"
 
 ASCII_GLYPH_COUNT = 95  # ASCII 32-126
 
-# Nordic letters (Latin-1/ISO-8859-1 single-byte codepoints -- see
-# docs/decisions.md's Nordic-keyboard entry for why Latin-1 over UTF-8)
-# baked as extra glyphs appended after the contiguous ASCII block,
-# rather than widening to the full 0xA0-0xFF Latin-1 Supplement --
-# these six are the letters keyboard.c's `se` layout and the
-# IS_NORDIC_CHAR() gates across apps/ actually produce; adding more
-# later just means appending to this list and re-running this script.
-# (codepoint, label-for-comment) pairs, in the order baked.
-EXTRA_CHARS = [
-    (0xC4, "AE"),  # Ä
-    (0xD6, "OE"),  # Ö
-    (0xC5, "AA"),  # Å
-    (0xE4, "ae"),  # ä
-    (0xF6, "oe"),  # ö
-    (0xE5, "aa"),  # å
-]
+# THE WHOLE LATIN-1 SUPPLEMENT, 0xA0-0xFF, as one contiguous block after
+# ASCII -- so a codepoint's slot is arithmetic (font_ttf_slot() in the
+# header), with no table for either ring to keep. Latin-1 rather than
+# UTF-8: docs/decisions/drivers.md's Nordic-keyboard entry.
+EXTRA_FIRST = 0xA0
+EXTRA_CHARS = list(range(EXTRA_FIRST, 0x100))
+# What a slot is DRAWN with when that differs from its codepoint. A soft
+# hyphen is invisible in a typesetter that hyphenates; a terminal does
+# not, so it shows as a hyphen (xterm, the Linux console).
+RENDER_AS = {0xAD: 0x2D}
 GLYPH_COUNT = ASCII_GLYPH_COUNT + len(EXTRA_CHARS)
 
 
 def render_glyph(font, ch, cell_w, cell_h, baseline_y):
     img = Image.new("L", (cell_w, cell_h), 0)
+    ch = chr(RENDER_AS.get(ord(ch), ord(ch)))
     d = ImageDraw.Draw(img)
     d.text((0, baseline_y), ch, font=font, fill=255, anchor="ls")
     return list(img.getdata())
@@ -117,8 +113,8 @@ def render_glyph(font, ch, cell_w, cell_h, baseline_y):
 # The full ordered list of codepoints baked into every size, in the
 # exact order emit_c()/render all iterate -- ASCII 32-126 first (index
 # 0..94), then EXTRA_CHARS (index 95..). Index into this list IS the
-# glyph index font_ttf_glyph_index() (gfx.c) returns.
-ALL_CODEPOINTS = list(range(32, 32 + ASCII_GLYPH_COUNT)) + [cp for cp, _label in EXTRA_CHARS]
+# glyph index font_ttf_slot() returns.
+ALL_CODEPOINTS = list(range(32, 32 + ASCII_GLYPH_COUNT)) + EXTRA_CHARS
 
 
 def header_text():
@@ -168,7 +164,8 @@ def header_text():
     lines.append("")
     lines.append(f"#define FONT_TTF_GLYPH_COUNT {GLYPH_COUNT}")
     lines.append(f"#define FONT_TTF_ASCII_COUNT {ASCII_GLYPH_COUNT} // ASCII 32-126, indices 0..{ASCII_GLYPH_COUNT - 1}")
-    lines.append(f"#define FONT_TTF_EXTRA_COUNT {len(EXTRA_CHARS)} // Nordic letters, indices {ASCII_GLYPH_COUNT}..{GLYPH_COUNT - 1}")
+    lines.append(f"#define FONT_TTF_EXTRA_FIRST 0x{EXTRA_FIRST:02X} // the Latin-1 Supplement...")
+    lines.append(f"#define FONT_TTF_EXTRA_COUNT {len(EXTRA_CHARS)} // ...0x{EXTRA_FIRST:02X}-0xFF, indices {ASCII_GLYPH_COUNT}..{GLYPH_COUNT - 1}")
     lines.append("")
     lines.append("struct font_ttf_variant {")
     lines.append("    const unsigned char *glyphs; // FONT_TTF_GLYPH_COUNT * h * w bytes,")
@@ -180,12 +177,32 @@ def header_text():
     lines.append("")
     lines.append("extern const struct font_ttf_variant font_ttf_variants[FONT_SIZE_COUNT];")
     lines.append("")
-    lines.append("// Latin-1 codepoints of the FONT_TTF_EXTRA_COUNT glyphs baked after")
-    lines.append("// the contiguous ASCII block, in baked order -- e.g.")
-    lines.append("// font_ttf_extra_codepoints[0] == 0xC4 ('\\xc4', Ä). See")
-    lines.append("// font_ttf_glyph_index() (gfx.c) for the codepoint -> glyph-index")
-    lines.append("// lookup that uses this.")
-    lines.append("extern const unsigned char font_ttf_extra_codepoints[FONT_TTF_EXTRA_COUNT];")
+    lines.append("// A codepoint's glyph slot, or -1 when the font has none: ASCII 32-126,")
+    lines.append("// then Latin-1 0xA0-0xFF. ONE definition for both rings -- a ring-3")
+    lines.append("// atlas must use the same slots or every client reads the wrong glyph.")
+    lines.append("// Take an UNSIGNED value: a `char` above 0x7F is negative here.")
+    lines.append("static inline int font_ttf_slot(unsigned int c) {")
+    lines.append("    if (c >= 32 && c <= 126) return (int)c - 32;")
+    lines.append("    if (c >= FONT_TTF_EXTRA_FIRST && c < FONT_TTF_EXTRA_FIRST + FONT_TTF_EXTRA_COUNT)")
+    lines.append("        return FONT_TTF_ASCII_COUNT + (int)(c - FONT_TTF_EXTRA_FIRST);")
+    lines.append("    return -1;")
+    lines.append("}")
+    lines.append("")
+    lines.append("// The inverse: the codepoint a slot holds, or 0 past the end.")
+    lines.append("static inline unsigned int font_ttf_slot_codepoint(int slot) {")
+    lines.append("    if (slot < 0 || slot >= FONT_TTF_GLYPH_COUNT) return 0;")
+    lines.append("    if (slot < FONT_TTF_ASCII_COUNT) return (unsigned int)(32 + slot);")
+    lines.append("    return FONT_TTF_EXTRA_FIRST + (unsigned int)(slot - FONT_TTF_ASCII_COUNT);")
+    lines.append("}")
+    lines.append("")
+    lines.append("// The codepoint a slot is DRAWN with, for a rasteriser: a soft hyphen")
+    lines.append("// shows as a hyphen, as on xterm and the Linux console.")
+    lines.append("static inline unsigned int font_ttf_slot_draw_codepoint(int slot) {")
+    lines.append("    unsigned int cp = font_ttf_slot_codepoint(slot);")
+    for src, dst in sorted(RENDER_AS.items()):
+        lines.append(f"    if (cp == 0x{src:02X}) return 0x{dst:02X};")
+    lines.append("    return cp;")
+    lines.append("}")
     lines.append("")
     lines.append("#endif")
     return "\n".join(lines) + "\n"
@@ -194,10 +211,12 @@ def header_text():
 def emit_c(all_glyphs):
     lines = []
     lines.append("// Anti-aliased bitmap fonts baked from JetBrains Mono (OFL 1.1),")
-    lines.append("// ASCII 32-126 plus six Nordic letters (Latin-1 Ä/Ö/Å/ä/ö/å) appended")
-    lines.append("// after them. GENERATED by tools/genttf.py -- see that file and")
+    lines.append("// ASCII 32-126 then the Latin-1 Supplement 0xA0-0xFF. GENERATED by")
+    lines.append("// tools/genttf.py -- see that file and")
     lines.append("// tools/OFL.txt, not this one, to change the fonts or license text.")
     lines.append('#include "font_ttf.h"')
+    lines.append("")
+    lines.append("// driver-none: baked glyph tables, not a device")
     lines.append("")
     for name, _size, cw, ch, _baseline in SIZES:
         glyphs = all_glyphs[name]
@@ -223,29 +242,6 @@ def emit_c(all_glyphs):
     lines.append("};")
     with open(OUT_C, "w") as f:
         f.write("\n".join(lines) + "\n")
-    emit_slots()
-
-
-# THE SLOT ORDER IS ABI AND BOTH RINGS NEED IT, so it is its own file
-# rather than the tail of the 16k-line bitmap blob. A ring-3 font
-# rasteriser must produce the SAME slots in the SAME order as ring 0 or
-# the atlas it hands over is nonsense; linking one definition is what
-# makes that true by construction instead of by two lists agreeing.
-def emit_slots():
-    lines = [
-        "// GENERATED by tools/genttf.py -- do not edit.",
-        "//",
-        "// The Latin-1 codepoints baked after ASCII, and the ONE definition",
-        "// of them: kernel/lib is shared source, so ring 0 and ring 3 link",
-        "// the same bytes. See api/font_ttf.h for the counts.",
-        '#include "font_ttf.h"',
-        "",
-        "const unsigned char font_ttf_extra_codepoints[FONT_TTF_EXTRA_COUNT] = {",
-        "    " + ", ".join(f"0x{cp:02X}" for cp, _label in EXTRA_CHARS) + ",",
-        "};",
-    ]
-    with open(OUT_SLOTS, "w") as f:
-        f.write("\n".join(lines) + "\n")
 
 
 def render_preview():
@@ -256,7 +252,8 @@ def render_preview():
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
         "abcdefghijklmnopqrstuvwxyz",
         "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
-        "ÄÖÅ äöå  Nordic: ÄÖÅ äöå",
+        "".join(chr(c) for c in range(0xA1, 0xD0)),
+        "".join(chr(c) for c in range(0xD0, 0x100)),
     ]
     blocks = []
     for name, size, cw, ch, baseline in SIZES:
@@ -318,8 +315,11 @@ def check_header():
 
 
 def main():
+    global FONT_PATH
     if "--check" in sys.argv:
         sys.exit(check_header())
+    if "--font" in sys.argv:
+        FONT_PATH = sys.argv[sys.argv.index("--font") + 1]
     all_glyphs = {}
     for name, size, cw, ch, baseline in SIZES:
         font = ImageFont.truetype(FONT_PATH, size)
@@ -328,7 +328,7 @@ def main():
         f.write(header_text())
     emit_c(all_glyphs)
     render_preview()
-    print("ok: preview + " + OUT_C + " + " + OUT_H + " + " + OUT_SLOTS + " written")
+    print("ok: preview + " + OUT_C + " + " + OUT_H + " written")
 
 
 if __name__ == "__main__":

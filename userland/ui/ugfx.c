@@ -6,6 +6,7 @@
 #include "rt/sys.h" // sys_sbrk, sys_win_request -- the screen half, below
 #include "ttf.h"    // the SAME rasterizer the kernel uses -- see ugfx_font_load
 #include "font_shm.h" // the session atlas /bin/fontd publishes
+#include "font_ttf.h" // font_ttf_slot(): the slot layout both rings share
 #include "ui/ulog.h"  // which source a client got its glyphs from
 #include <stdlib.h>
 #include <stdio.h>   // snprintf -- the shm object's name
@@ -351,12 +352,12 @@ void ugfx_draw_rect(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t
     ugfx_fill_rect(s, x + w - 1, y, 1, h, color);
 }
 
-// Character -> glyph slot. The shared table is ASCII 32..126 laid out
-// contiguously from index 0; anything outside that draws as a space,
-// which is the quiet-degradation choice (a client rendering a stray
-// byte should look wrong, not read out of bounds).
+// Character -> glyph slot: ASCII 32..126 then Latin-1 0xA0-0xFF, the
+// layout font_ttf.h defines for both rings. Anything else -- or a slot
+// past what this font carries -- draws as a space, the quiet-degradation
+// choice (a stray byte should look wrong, not read out of bounds).
 static int glyph_index(unsigned char c) {
-    int idx = (int)c - WIN_FONT_FIRST_CHAR;
+    int idx = font_ttf_slot(c);
     if (idx < 0 || idx >= g_glyph_count) return 0;
     return idx;
 }
@@ -643,20 +644,9 @@ const struct ugfx_font *ugfx_set_font(const struct ugfx_font *f) {
 
 // --- a private font, rasterized by this app (tier 2) ------------------
 //
-// **ONLY THE 95 ASCII SLOTS, and that is a real limit, not laziness.**
-// The session atlas carries 101 slots -- ASCII 32..126 plus six Nordic
-// letters -- but glyph_index() above, which is the whole of what ring 3
-// knows about slot layout, maps `c - WIN_FONT_FIRST_CHAR` and rejects
-// anything past `count`. So a client cannot ADDRESS slots 95..100 today
-// whatever is in them, and rasterizing them here would produce glyphs
-// nothing can ask for. Doing it properly means the UTF-8 migration
-// (docs/roadmap.md), which replaces byte-indexed slots outright.
-//
-// Stated rather than silently matched, because the alternative was to
-// copy font_ttf.h's extra-codepoint table into ring 3 -- a second copy
-// of a table the kernel already owns, kept true by somebody
-// remembering, which is the exact shape this project deletes.
-#define PRIV_SLOTS 95
+// The same slots as the session atlas (font_ttf.h), so a private font
+// draws Latin-1 too.
+#define PRIV_SLOTS FONT_TTF_GLYPH_COUNT
 
 unsigned long ugfx_font_arena_size(int px) {
     if (px < 1) px = 1;
@@ -738,7 +728,7 @@ int ugfx_font_load(const char *path, int px, int bold,
     unsigned char advs[PRIV_SLOTS];
     int cell_w = 1;
     for (int i = 0; i < PRIV_SLOTS; i++) {
-        gids[i] = ttf_glyph_index(&t, (uint32_t)(WIN_FONT_FIRST_CHAR + i));
+        gids[i] = ttf_glyph_index(&t, font_ttf_slot_draw_codepoint(i));
         int adv = ttf_advance_px(&t, gids[i], px);
         if (adv < 0) adv = 0;
         if (adv > 0) adv += smear;

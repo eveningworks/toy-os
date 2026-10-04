@@ -20,7 +20,7 @@
 // 8 sizes are baked in. gfx_set_font_px() (gfx.c) SNAPS to the nearest
 // of them when no face is loaded, which is why an arbitrary size is
 // answerable only with one; gfx_font_size() reports which it snapped
-// to. The 101-glyph set here is also the set a runtime atlas
+// to. The 191-glyph set here is also the set a runtime atlas
 // rasterizes, so the two are interchangeable everywhere.
 #include <stddef.h>
 
@@ -36,9 +36,10 @@ enum font_size {
     FONT_SIZE_COUNT
 };
 
-#define FONT_TTF_GLYPH_COUNT 101
+#define FONT_TTF_GLYPH_COUNT 191
 #define FONT_TTF_ASCII_COUNT 95 // ASCII 32-126, indices 0..94
-#define FONT_TTF_EXTRA_COUNT 6 // Nordic letters, indices 95..100
+#define FONT_TTF_EXTRA_FIRST 0xA0 // the Latin-1 Supplement...
+#define FONT_TTF_EXTRA_COUNT 96 // ...0xA0-0xFF, indices 95..190
 
 struct font_ttf_variant {
     const unsigned char *glyphs; // FONT_TTF_GLYPH_COUNT * h * w bytes,
@@ -50,11 +51,30 @@ struct font_ttf_variant {
 
 extern const struct font_ttf_variant font_ttf_variants[FONT_SIZE_COUNT];
 
-// Latin-1 codepoints of the FONT_TTF_EXTRA_COUNT glyphs baked after
-// the contiguous ASCII block, in baked order -- e.g.
-// font_ttf_extra_codepoints[0] == 0xC4 ('\xc4', Ä). See
-// font_ttf_glyph_index() (gfx.c) for the codepoint -> glyph-index
-// lookup that uses this.
-extern const unsigned char font_ttf_extra_codepoints[FONT_TTF_EXTRA_COUNT];
+// A codepoint's glyph slot, or -1 when the font has none: ASCII 32-126,
+// then Latin-1 0xA0-0xFF. ONE definition for both rings -- a ring-3
+// atlas must use the same slots or every client reads the wrong glyph.
+// Take an UNSIGNED value: a `char` above 0x7F is negative here.
+static inline int font_ttf_slot(unsigned int c) {
+    if (c >= 32 && c <= 126) return (int)c - 32;
+    if (c >= FONT_TTF_EXTRA_FIRST && c < FONT_TTF_EXTRA_FIRST + FONT_TTF_EXTRA_COUNT)
+        return FONT_TTF_ASCII_COUNT + (int)(c - FONT_TTF_EXTRA_FIRST);
+    return -1;
+}
+
+// The inverse: the codepoint a slot holds, or 0 past the end.
+static inline unsigned int font_ttf_slot_codepoint(int slot) {
+    if (slot < 0 || slot >= FONT_TTF_GLYPH_COUNT) return 0;
+    if (slot < FONT_TTF_ASCII_COUNT) return (unsigned int)(32 + slot);
+    return FONT_TTF_EXTRA_FIRST + (unsigned int)(slot - FONT_TTF_ASCII_COUNT);
+}
+
+// The codepoint a slot is DRAWN with, for a rasteriser: a soft hyphen
+// shows as a hyphen, as on xterm and the Linux console.
+static inline unsigned int font_ttf_slot_draw_codepoint(int slot) {
+    unsigned int cp = font_ttf_slot_codepoint(slot);
+    if (cp == 0xAD) return 0x2D;
+    return cp;
+}
 
 #endif

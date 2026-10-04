@@ -10,8 +10,7 @@
 #include "fixed.h"
 
 uint32_t font_atlas_slot_codepoint(int slot) {
-    if (slot < FONT_TTF_ASCII_COUNT) return (uint32_t)(32 + slot);
-    return font_ttf_extra_codepoints[slot - FONT_TTF_ASCII_COUNT];
+    return font_ttf_slot_codepoint(slot);
 }
 
 // How hard to smear a synthesized bold. Scaled with the size, because a
@@ -101,7 +100,7 @@ int font_atlas_plan(const struct ttf_font *t, int px, int weight,
     int count = FONT_TTF_GLYPH_COUNT;
     int cell_w = 1, mono = 1, first_adv = -1;
     for (int s = 0; s < count; s++) {
-        p->gids[s] = ttf_glyph_index(t, font_atlas_slot_codepoint(s));
+        p->gids[s] = ttf_glyph_index(t, font_ttf_slot_draw_codepoint(s));
         int adv = ttf_advance_px(t, p->gids[s], px);
         if (adv < 0) adv = 0;
         // A SMEARED GLYPH IS WIDER THAN ITS OUTLINE, so its advance has

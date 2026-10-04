@@ -47,6 +47,7 @@
 #include "lib/cmd.h"
 #include "ui/ugfx.h"
 #include "query_abi.h"
+#include "font_ttf.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,18 +72,14 @@ static int kernel_slot(int slot, struct query_fontglyph *out) {
 
 // Which slot draws `c`.
 //
-// ASCII 32..126 is contiguous at 0..94 in every font this system builds,
-// so the arithmetic answer is tried FIRST and then CHECKED against the
-// record's own codepoint -- a guess that verifies itself costs one
-// syscall, and the walk below is only reached for the six Latin-1
-// extras or for a font whose layout has changed. Neither this program
-// nor any other client carries a copy of the extras table; the records
-// name their own codepoints, which is the fact that makes a second
-// table unnecessary.
+// font_ttf_slot()'s arithmetic answer is tried FIRST and then CHECKED
+// against the record's own codepoint -- a guess that verifies itself
+// costs one syscall, and the walk below is only reached for a kernel
+// whose layout has changed.
 static int slot_of(int c, struct query_fontglyph *out) {
-    if (c >= 32 && c <= 126 && kernel_slot(c - 32, out)
-        && out->codepoint == (uint32_t)c)
-        return c - 32;
+    int guess = c < 0 ? -1 : font_ttf_slot((unsigned)c);
+    if (guess >= 0 && kernel_slot(guess, out) && out->codepoint == (uint32_t)c)
+        return guess;
 
     for (int i = 0; i < 256; i++) {
         if (!kernel_slot(i, out)) break;

@@ -27,21 +27,13 @@
 
 // driver-none: a QUERY provider over the loaded faces
 
-// The set is the same 101 glyphs everywhere -- ASCII 32..126 then six
-// Latin-1 extras. A runtime atlas rasterises exactly that set, which is
+// The set is the same everywhere -- ASCII 32..126 then Latin-1
+// 0xA0-0xFF. A runtime atlas rasterises exactly that set, which is
 // what makes one index answer for both sources.
 static int fontglyph_count(void) { return FONT_TTF_GLYPH_COUNT; }
 
-// The codepoint a slot draws. The inverse of gfx_glyph_index(), and it
-// is written here rather than exported because this is the only caller
-// that ever needs to go this way round -- everything else in the kernel
-// starts from a character.
-static int slot_codepoint(int slot) {
-    if (slot < FONT_TTF_ASCII_COUNT) return slot + 32;
-    int extra = slot - FONT_TTF_ASCII_COUNT;
-    if (extra < FONT_TTF_EXTRA_COUNT) return font_ttf_extra_codepoints[extra];
-    return 0;
-}
+// The codepoint a slot draws: the inverse of gfx_glyph_index().
+static int slot_codepoint(int slot) { return (int)font_ttf_slot_codepoint(slot); }
 
 // FNV-1a, 32-bit. Chosen because the ring-3 half has to compute the
 // identical value over its own mapping and this is short enough to be
