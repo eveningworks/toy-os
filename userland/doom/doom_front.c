@@ -3,7 +3,8 @@
 //   the launcher page   before the game -- the data being played, its
 //                       title picture, Start, and the keys (mockup H3)
 //   the game-data card  no WAD, or "Change game data...": pick one and
-//                       download it, or use a file (mockup W1)
+//                       download it, or use a file (mockup W1) -- after
+//                       its licence: agreed to for id's, read for BSD (L2)
 //   the key sheet       F1 over a paused game; F1 again is DOOM's own
 //                       help, which the sheet would otherwise hide (H1)
 //
@@ -22,6 +23,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "keyboard.h"
+#include "input_keys.h"   // INPUT_KEY_ENTER -- the licence's key-up
 #include "kpath.h"
 #include "rt/sys.h"
 #include "ui/ulog.h"
@@ -32,9 +34,12 @@
 #include "ui/uui_primitives.h"
 #include "lib/uconf.h"
 #include "lib/uzip.h"
+#include "lib/ufileop.h"
+#include "ui/uui_label.h"   // uui_label_wrap_next -- the licence's paragraphs
+#include <kcrc.h>           // the accepted licence is remembered by its CRC
 #include "uhttp.h"
 
-enum view { V_GAME, V_PAGE, V_DATA, V_FETCH };
+enum view { V_GAME, V_PAGE, V_DATA, V_LICENCE, V_FETCH };
 static enum view g_view = V_GAME;
 static int g_help;
 static const struct doom_iwad *g_cur;     // the page's, then the game's
@@ -81,6 +86,11 @@ static volatile unsigned long g_got, g_total;
 static volatile int g_phase;               // 0 fetching, 1 unpacking
 static volatile int g_cancel;
 static int g_fetch_i = -1;                 // DOOM_IWADS index being fetched
+static int g_lic_i = -1;                   // ...and the one whose licence is shown
+// ENTER AGREES ONLY ONCE IT HAS BEEN LET GO on the licence card: the
+// Enter that pressed Download is still down, and its auto-repeat would
+// otherwise agree to a licence nobody saw.
+static int g_enter_up;
 static int g_fetch_rc;
 static char g_fetch_err[192];
 static char g_fetch_host[64];              // the host the URL really names -- a mirror's
@@ -110,6 +120,7 @@ enum {
     C_ROW0, C_ROW_LAST = C_ROW0 + 7,           // the card's options
     C_FILE, C_CANCEL, C_PRIMARY,               // the card's buttons
     C_STOP,                                    // the download's Cancel
+    C_BACK, C_AGREE,                           // the licence's
     C_RESUME,                                  // the sheet's
     CTLS
 };
@@ -132,6 +143,27 @@ static const char *primary_label(void) {
     if (g_sel < 0 || g_sel >= g_row_n) return "Download";
     return doom_iwad_present(&DOOM_IWADS[g_rows[g_sel]]) ? "Use" : "Download";
 }
+
+// The notice's paragraphs wrapped into `w`: how many lines, and drawn
+// from (x, y) when `s` is given. One walk for both, so the card's height
+// is the text's.
+static int licence_walk(struct ugfx_surface *s, const struct doom_iwad *wd, int x, int y, int w,
+                        uint32_t bg) {
+    char para[512], line[160];
+    int n = 0;
+    for (const char *p = wd->notice; p && *p;) {
+        size_t len = strcspn(p, "\n");
+        snprintf(para, sizeof para, "%.*s", (int)len, p);
+        for (const char *q = para; q && *q; n++) {
+            q = uui_label_wrap_next(q, w, line, sizeof line);
+            if (s) ugfx_draw_string_clipped(s, x, y + n * (u() + 3), w, line, UTHEME_TEXT, bg);
+        }
+        n++;                                    // a blank line between paragraphs
+        p += len + (p[len] == '\n');
+    }
+    return n;
+}
+static int licence_lines(const struct doom_iwad *wd, int w) { return licence_walk(0, wd, 0, 0, w, 0); }
 
 // One place that says where every control is, for drawing and for the
 // pointer alike.
@@ -168,6 +200,15 @@ static void layout(struct uapp *a) {
             int kw = btn_w("Cancel");
             g_r[C_CANCEL] = (struct rect){ g_r[C_PRIMARY].x - p / 2 - kw, by, kw, btn_h() };
         }
+    } else if (g_view == V_LICENCE) {
+        int cw = p * 36 < W - 2 * p ? p * 36 : W - 2 * p;
+        int lines = licence_lines(&DOOM_IWADS[g_lic_i], cw - 4 * p);
+        int ch = p + u() * 2 + u() + p / 2 + p + lines * (u() + 3) + u() + p + p + btn_h() + p;
+        g_card = (struct rect){ (W - cw) / 2, (H - ch) / 2, cw, ch };
+        int by = g_card.y + ch - p - btn_h();
+        g_r[C_BACK] = (struct rect){ g_card.x + p, by, btn_w("Back"), btn_h() };
+        int aw = btn_w(DOOM_IWADS[g_lic_i].agree ? "Agree and download" : "Download");
+        g_r[C_AGREE] = (struct rect){ g_card.x + cw - p - aw, by, aw, btn_h() };
     } else if (g_view == V_FETCH) {
         int cw = p * 36 < W - 2 * p ? p * 36 : W - 2 * p;
         int ch = p + u() * 2 + u() + p + u() / 2 + p + u() + p + u() + p + btn_h() + p;
@@ -332,6 +373,30 @@ static void draw_data(struct uapp *a, struct ugfx_surface *s) {
     button(s, C_PRIMARY, primary_label(), 1);
 }
 
+static void draw_licence(struct ugfx_surface *s) {
+    ugfx_fill(s, ugfx_rgb(0, 0, 0));
+    const struct rect *k = &g_card;
+    const struct doom_iwad *wd = &DOOM_IWADS[g_lic_i];
+    int p = u(), x = k->x + p, w = k->w - 2 * p, y = k->y + p;
+    uint32_t bg = UTHEME_WINDOW_BG;
+    card(s, k);
+    char t[96];
+    snprintf(t, sizeof t, "%s: the licence", wd->name);
+    bold(t, s, x, y, w, bg);
+    dim(wd->licence, s, x, y + u() + u() / 2, w, bg);
+    y += u() * 2 + u() + p / 2;
+    int lines = licence_lines(wd, w - 2 * p);
+    int bh = lines * (u() + 3) + u() + p;
+    uui_fill_round_rect(s, x, y, w, bh, p / 3, UTHEME_SEPARATOR);
+    uui_fill_round_rect(s, x + 1, y + 1, w - 2, bh - 2, p / 3 - 1, UTHEME_WHITE);
+    licence_walk(s, wd, x + p, y + p / 2, w - 2 * p, UTHEME_WHITE);
+    snprintf(t, sizeof t, "Saved in /usr/share/licenses/%s.", wd->licence_file);
+    dim(t, s, x + p, y + bh - u() - p / 2, w - 2 * p, UTHEME_WHITE);
+    ugfx_fill_rect(s, k->x + 1, g_r[C_BACK].y - p / 2, k->w - 2, 1, UTHEME_SEPARATOR);
+    button(s, C_BACK, "Back", 0);
+    button(s, C_AGREE, wd->agree ? "Agree and download" : "Download", 1);
+}
+
 static void draw_fetch(struct uapp *a, struct ugfx_surface *s) {
     (void)a;
     ugfx_fill(s, ugfx_rgb(0, 0, 0));
@@ -387,6 +452,32 @@ static int zip_progress(void *ctx, unsigned long done, unsigned long total) {
     return g_cancel;
 }
 
+// The licence beside the game data: the archive's own text when it has
+// one, else the notice that was shown. Best effort -- the game runs
+// either way, and the log says when it could not be written.
+static void save_licence(const struct doom_iwad *w, const char *zip) {
+    if (!w->licence_file) return;
+    char path[160], err[96];
+    mkdir("/usr/share/licenses", 0755);
+    snprintf(path, sizeof path, "/usr/share/licenses/%s", w->licence_file);
+    if (zip && w->licence_member) {
+        if (uzip_extract(zip, w->licence_member, path, 0, 0, err, sizeof err) == 0) return;
+        ulogf("doom: could not save %s: %s\n", path, err);
+        return;
+    }
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0) { ulogf("doom: could not save %s\n", path); return; }
+    char head[128];
+    int n = snprintf(head, sizeof head, "%s\n%s\n\n", w->name, w->licence);
+    int ok = write(fd, head, (size_t)n) == n;
+    for (const char *p = w->notice; ok && *p;) {
+        size_t len = strcspn(p, "\n");
+        ok = write(fd, p, len) == (long)len && write(fd, "\n\n", 2) == 2;
+        p += len + (p[len] == '\n');
+    }
+    close(fd);
+}
+
 static void *fetch_worker(void *arg) {
     (void)arg;
     const struct doom_iwad *w = &DOOM_IWADS[g_fetch_i];
@@ -429,9 +520,11 @@ static void *fetch_worker(void *arg) {
         if (uzip_extract(tmp, w->zip_member, dest, zip_progress, 0, g_fetch_err,
                          (int)sizeof g_fetch_err) == 0)
             g_fetch_rc = 0;
+        if (g_fetch_rc == 0) save_licence(w, tmp);
         unlink(tmp);
     } else {
         g_fetch_rc = 0;
+        save_licence(w, NULL);
     }
     uapp_post(g_app, EV_DONE, 0);
     return 0;
@@ -491,6 +584,35 @@ static void show_data(struct uapp *a, int back) {
     uapp_redraw(a);
 }
 
+// "ASKED ONCE PER LICENCE": the CRC of the notice agreed to, so a
+// changed text asks again (tools/fetch_extras.py keeps the same rule).
+static void accept_key(const struct doom_iwad *w, char *key, int cap, char *val, int vcap) {
+    snprintf(key, (size_t)cap, "licence_%.*s", (int)strcspn(w->file, "."), w->file);
+    snprintf(val, (size_t)vcap, "%08x", (unsigned)kcrc32(w->notice, strlen(w->notice)));
+}
+
+static int accepted(const struct doom_iwad *w) {
+    char key[40], want[16], have[16];
+    accept_key(w, key, sizeof key, want, sizeof want);
+    return uconf_get(DOOM_CONF, key, have, sizeof have) && !strcmp(have, want);
+}
+
+// Download pressed: the licence first, unless it was agreed to before.
+static void ask_licence(struct uapp *a, int iwad) {
+    const struct doom_iwad *w = &DOOM_IWADS[iwad];
+    if (!w->notice || (w->agree && accepted(w))) {
+        if (w->notice) ulogf("doom: licence for %s accepted before\n", w->file);
+        start_fetch(a, iwad);
+        return;
+    }
+    g_lic_i = iwad;
+    g_view = V_LICENCE;
+    g_enter_up = 0;
+    g_hot = g_pressed = -1;
+    ulogf("doom: licence for %s shown (%s)\n", w->file, w->agree ? "agree" : "notice");
+    uapp_redraw(a);
+}
+
 static void file_chosen(void *ctx, const char *path) {
     struct uapp *a = ctx;
     if (!path) { uapp_redraw(a); return; }
@@ -510,17 +632,15 @@ static void file_chosen(void *ctx, const char *path) {
     doom_iwad_path(w, dest, sizeof dest);
     if (strcmp(dest, path)) {
         // Copied, not linked: the file may be on a stick about to leave.
+        // THROUGH .part AND A RENAME, so a copy that fails half way never
+        // costs the WAD already installed under that name.
+        static struct ufileop op;   // ~33 KB of walk state: never a local
+        char part[176];
+        snprintf(part, sizeof part, "%s.part", dest);
         mkdir(DOOM_WAD_DIR, 0755);
-        int in_fd = open(path, O_RDONLY), out = open(dest, O_WRONLY | O_CREAT | O_TRUNC);
-        static char buf[16384];
-        long n = 0;
-        int ok = in_fd >= 0 && out >= 0;
-        while (ok && (n = read(in_fd, buf, sizeof buf)) > 0) ok = write(out, buf, (size_t)n) == n;
-        ok = ok && n == 0;
-        if (in_fd >= 0) close(in_fd);
-        if (out >= 0) close(out);
-        if (!ok) {
-            unlink(dest);
+        struct ufileop_policy pol = { 0 };
+        if (ufileop_copy(path, part, &op, &pol) != UFILEOP_OK || rename(part, dest) != 0) {
+            unlink(part);
             snprintf(g_note, sizeof g_note, "Could not copy it to %s.", DOOM_WAD_DIR);
             uapp_redraw(a);
             return;
@@ -564,8 +684,22 @@ static void activate(struct uapp *a, int id) {
             g_cur = w;
             show_page(a);
         } else {
-            start_fetch(a, g_rows[g_sel]);
+            ask_licence(a, g_rows[g_sel]);
         }
+        return;
+    }
+    case C_BACK:
+        show_data(a, g_back);
+        return;
+    case C_AGREE: {
+        const struct doom_iwad *w = &DOOM_IWADS[g_lic_i];
+        if (w->agree) {
+            char key[40], val[16];
+            accept_key(w, key, sizeof key, val, sizeof val);
+            uconf_set(DOOM_CONF, key, val);
+            ulogf("doom: licence for %s agreed\n", w->file);
+        }
+        start_fetch(a, g_lic_i);
         return;
     }
     case C_STOP:
@@ -614,6 +748,7 @@ void doom_front_draw(struct uapp *a, struct ugfx_surface *s) {
     if (g_view == V_PAGE) fit_page(a);   // after layout: it reads the side panel's width
     if (g_view == V_PAGE) draw_page(s);
     else if (g_view == V_DATA) draw_data(a, s);
+    else if (g_view == V_LICENCE) draw_licence(s);
     else if (g_view == V_FETCH) draw_fetch(a, s);
     log_layout();
 }
@@ -665,12 +800,12 @@ void doom_help_draw(struct uapp *a, struct ugfx_surface *s) {
 static const char *const CTL_NAME[CTLS] = {
     [C_START] = "start", [C_CHANGE] = "change", [C_SHOW] = "show",
     [C_FILE] = "usefile", [C_CANCEL] = "cancel", [C_PRIMARY] = "primary",
-    [C_STOP] = "stop", [C_RESUME] = "resume",
+    [C_STOP] = "stop", [C_RESUME] = "resume", [C_BACK] = "back", [C_AGREE] = "agree",
 };
 
 // Every control where it is, for a test to press by asking.
 static void log_layout(void) {
-    static const char *const VIEW[] = { "game", "page", "data", "fetch" };
+    static const char *const VIEW[] = { "game", "page", "data", "licence", "fetch" };
     uapp_logf_layout("doom: layout view %s%s\n", VIEW[g_view], g_help ? " sheet" : "");
     for (int i = 0; i < CTLS; i++) {
         if (g_r[i].w <= 0) continue;
@@ -721,10 +856,20 @@ int doom_front_key(struct uapp *a, int key, unsigned mods) {
         if (key == KEY_ARROW_DOWN && g_sel + 1 < g_row_n) { g_sel++; uapp_redraw(a); return 1; }
         if (enter) { activate(a, C_PRIMARY); return 1; }
         if (key == 0x1B && g_back) { activate(a, C_CANCEL); return 1; }
+    } else if (g_view == V_LICENCE) {
+        if (enter) {
+            if (g_enter_up) activate(a, C_AGREE);
+            return 1;
+        }
+        if (key == 0x1B) { activate(a, C_BACK); return 1; }
     } else if (g_view == V_FETCH) {
         if (key == 0x1B) { g_cancel = 1; return 1; }
     }
     return 0;
+}
+
+void doom_front_phys(int keycode, int down) {
+    if (!down && (keycode == INPUT_KEY_ENTER || keycode == INPUT_KEY_KPENTER)) g_enter_up = 1;
 }
 
 int doom_front_user(struct uapp *a, int a0, int a1) {

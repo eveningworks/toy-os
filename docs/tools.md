@@ -4612,7 +4612,10 @@ window without going through it will find its layout polls timing out.
   guest's `/etc/doom.conf` gets `mirror=` aimed at a server the tool runs
   on loopback, serving `data/doom/doom1.wad` and (when `fetch_wad.py
   --freedoom` has run) Freedoom's zip behind a 302 to a 1100-character
-  URL, GitHub's shape. **The control runs first**: a `doom1.wad` with one
+  URL, GitHub's shape. The licence step is checked on the way: id's is
+agreed to once (a second Download does not ask), Freedoom's is a notice,
+and both are found in `/usr/share/licenses` afterwards. **The control
+runs first**: a `doom1.wad` with one
   byte flipped must be refused on its SHA-256 and leave nothing in
   `/usr/share/doom`. Then the real file, its hash read back with `sum`
   outside the app, the sheet by pixel against the frame before it, F1 on

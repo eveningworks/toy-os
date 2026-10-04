@@ -19,6 +19,7 @@
 // TinySoundFont does, plays a bank audibly wrong. Linked modulators
 // (a destination with bit 15 set) are dropped.
 #include <string.h>
+#include "lib/ubytes.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include "lib/usnd_sf2.h"
@@ -38,16 +39,12 @@
 
 struct span { const uint8_t *p; uint32_t n; };
 
-static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
-static uint32_t rd32(const uint8_t *p) {
-    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
-}
 
 // A sub-chunk of a LIST body, by id. 0 when absent or malformed.
 static int find_chunk(struct span list, const char *id, struct span *out) {
     uint32_t off = 0;
     while (list.n - off >= 8 && off <= list.n) {
-        uint32_t sz = rd32(list.p + off + 4);
+        uint32_t sz = ub_le32(list.p + off + 4);
         if (sz > list.n - off - 8) return 0;
         if (memcmp(list.p + off, id, 4) == 0) {
             out->p = list.p + off + 8;
@@ -77,8 +74,8 @@ static int table(struct span pdta, const char *id, uint32_t rec,
 // monotonic, in-range rule as its generator index.
 static int mods_ok(const struct span *bags, uint32_t nbags, uint32_t nmods) {
     for (uint32_t i = 0; i < nbags; i++) {
-        uint32_t m = rd16(bags->p + i * 4 + 2);
-        if (m >= nmods || (i && m < rd16(bags->p + (i - 1) * 4 + 2))) return 0;
+        uint32_t m = ub_le16(bags->p + i * 4 + 2);
+        if (m >= nmods || (i && m < ub_le16(bags->p + (i - 1) * 4 + 2))) return 0;
     }
     return 1;
 }
@@ -102,22 +99,22 @@ static int read_tables(struct span pdta, struct tables *t) {
     // Bag and generator indices must be monotonic and in range, which is
     // what makes every [this, next) walk below safe without a recheck.
     for (uint32_t i = 0; i < t->nphdr; i++) {
-        uint32_t b = rd16(t->phdr.p + i * 38 + 24);
+        uint32_t b = ub_le16(t->phdr.p + i * 38 + 24);
         if (b >= t->npbag) return 0;
-        if (i && b < rd16(t->phdr.p + (i - 1) * 38 + 24)) return 0;
+        if (i && b < ub_le16(t->phdr.p + (i - 1) * 38 + 24)) return 0;
     }
     for (uint32_t i = 0; i < t->ninst; i++) {
-        uint32_t b = rd16(t->inst.p + i * 22 + 20);
+        uint32_t b = ub_le16(t->inst.p + i * 22 + 20);
         if (b >= t->nibag) return 0;
-        if (i && b < rd16(t->inst.p + (i - 1) * 22 + 20)) return 0;
+        if (i && b < ub_le16(t->inst.p + (i - 1) * 22 + 20)) return 0;
     }
     for (uint32_t i = 0; i < t->npbag; i++) {
-        uint32_t g = rd16(t->pbag.p + i * 4);
-        if (g >= t->npgen || (i && g < rd16(t->pbag.p + (i - 1) * 4))) return 0;
+        uint32_t g = ub_le16(t->pbag.p + i * 4);
+        if (g >= t->npgen || (i && g < ub_le16(t->pbag.p + (i - 1) * 4))) return 0;
     }
     for (uint32_t i = 0; i < t->nibag; i++) {
-        uint32_t g = rd16(t->ibag.p + i * 4);
-        if (g >= t->nigen || (i && g < rd16(t->ibag.p + (i - 1) * 4))) return 0;
+        uint32_t g = ub_le16(t->ibag.p + i * 4);
+        if (g >= t->nigen || (i && g < ub_le16(t->ibag.p + (i - 1) * 4))) return 0;
     }
     return 1;
 }
@@ -171,8 +168,8 @@ static void mod_put(struct sf2_mod *list, int *n, const struct sf2_mod *m, int s
 static void apply_mods(const struct span *mods, uint32_t m0, uint32_t m1, struct zone *z) {
     for (uint32_t i = m0; i < m1; i++) {
         const uint8_t *p = mods->p + i * 10;
-        struct sf2_mod m = { rd16(p), rd16(p + 2), rd16(p + 6), rd16(p + 8),
-                             (int16_t)rd16(p + 4) };
+        struct sf2_mod m = { ub_le16(p), ub_le16(p + 2), ub_le16(p + 6), ub_le16(p + 8),
+                             (int16_t)ub_le16(p + 4) };
         // A linked modulator feeds another modulator, not a generator.
         if (m.dest & 0x8000 || (m.src & 0xFF) == 127 || m.dest >= SF2_GEN_COUNT) continue;
         mod_put(z->mod, &z->nmod, &m, 0);
@@ -209,12 +206,12 @@ static void apply_bag(const struct span *gens, uint32_t g0, uint32_t g1,
                       int terminal, struct zone *z) {
     for (uint32_t g = g0; g < g1; g++) {
         const uint8_t *p = gens->p + g * 4;
-        uint16_t op = rd16(p);
-        if (op == terminal) { z->target = rd16(p + 2); return; }
+        uint16_t op = ub_le16(p);
+        if (op == terminal) { z->target = ub_le16(p + 2); return; }
         if (op == SF2_KEY_RANGE) { z->key_lo = p[2]; z->key_hi = p[3]; continue; }
         if (op == SF2_VEL_RANGE) { z->vel_lo = p[2]; z->vel_hi = p[3]; continue; }
         if (op >= SF2_GEN_COUNT) continue;
-        z->gen[op] = (int16_t)rd16(p + 2);
+        z->gen[op] = (int16_t)ub_le16(p + 2);
         z->set[op] = 1;
     }
 }
@@ -303,16 +300,16 @@ static int make_region(struct builder *bd, const struct tables *t,
     int sid = iz->target;
     if (sid < 0 || (uint32_t)sid >= t->nshdr - 1) return 0;
     const uint8_t *sh = t->shdr.p + (uint32_t)sid * 46;
-    uint16_t type = rd16(sh + 44);
+    uint16_t type = ub_le16(sh + 44);
     if (type & 0x8000) return 0;                // ROM sample: no data here
 
     // Offsets in 64-bit, so a hostile coarse offset cannot wrap an
     // address back into range.
-    int64_t start = (int64_t)rd32(sh + 20) + r.gen[SF2_START_OFS] + 32768LL * r.gen[SF2_START_COARSE];
-    int64_t end   = (int64_t)rd32(sh + 24) + r.gen[SF2_END_OFS]   + 32768LL * r.gen[SF2_END_COARSE];
-    int64_t ls    = (int64_t)rd32(sh + 28) + r.gen[SF2_LSTART_OFS] + 32768LL * r.gen[SF2_LSTART_COARSE];
-    int64_t le    = (int64_t)rd32(sh + 32) + r.gen[SF2_LEND_OFS]   + 32768LL * r.gen[SF2_LEND_COARSE];
-    uint32_t rate = rd32(sh + 36);
+    int64_t start = (int64_t)ub_le32(sh + 20) + r.gen[SF2_START_OFS] + 32768LL * r.gen[SF2_START_COARSE];
+    int64_t end   = (int64_t)ub_le32(sh + 24) + r.gen[SF2_END_OFS]   + 32768LL * r.gen[SF2_END_COARSE];
+    int64_t ls    = (int64_t)ub_le32(sh + 28) + r.gen[SF2_LSTART_OFS] + 32768LL * r.gen[SF2_LSTART_COARSE];
+    int64_t le    = (int64_t)ub_le32(sh + 32) + r.gen[SF2_LEND_OFS]   + 32768LL * r.gen[SF2_LEND_COARSE];
+    uint32_t rate = ub_le32(sh + 36);
     if (start < 0 || end > (int64_t)bd->b->nsamples || end - start < 2) return 0;
     if (rate < 400 || rate > 1000000) return 0;
     r.start = (uint32_t)start;
@@ -340,12 +337,12 @@ static int make_region(struct builder *bd, const struct tables *t,
 
 static int build_preset(struct builder *bd, const struct tables *t, uint32_t p) {
     const uint8_t *ph = t->phdr.p + p * 38;
-    uint32_t b0 = rd16(ph + 24), b1 = rd16(ph + 38 + 24);
+    uint32_t b0 = ub_le16(ph + 24), b1 = ub_le16(ph + 38 + 24);
     struct sf2_preset pr;
     memset(&pr, 0, sizeof pr);
     memcpy(pr.name, ph, 20);
-    pr.program = rd16(ph + 20);
-    pr.bank = rd16(ph + 22);
+    pr.program = ub_le16(ph + 20);
+    pr.bank = ub_le16(ph + 22);
     pr.first = bd->b->nregions;
 
     struct zones *z = bd->z;
@@ -354,8 +351,8 @@ static int build_preset(struct builder *bd, const struct tables *t, uint32_t p) 
     z->pglobal.target = -1;
 
     for (uint32_t bag = b0; bag < b1; bag++) {
-        uint32_t g0 = rd16(t->pbag.p + bag * 4), g1 = rd16(t->pbag.p + (bag + 1) * 4);
-        uint32_t m0 = rd16(t->pbag.p + bag * 4 + 2), m1 = rd16(t->pbag.p + (bag + 1) * 4 + 2);
+        uint32_t g0 = ub_le16(t->pbag.p + bag * 4), g1 = ub_le16(t->pbag.p + (bag + 1) * 4);
+        uint32_t m0 = ub_le16(t->pbag.p + bag * 4 + 2), m1 = ub_le16(t->pbag.p + (bag + 1) * 4 + 2);
         z->pz = z->pglobal;
         z->pz.target = -1;
         apply_bag(&t->pgen, g0, g1, SF2_INSTRUMENT, &z->pz);
@@ -367,11 +364,11 @@ static int build_preset(struct builder *bd, const struct tables *t, uint32_t p) 
         if ((uint32_t)z->pz.target >= t->ninst - 1) return -EINVAL;
 
         const uint8_t *in = t->inst.p + (uint32_t)z->pz.target * 22;
-        uint32_t ib0 = rd16(in + 20), ib1 = rd16(in + 22 + 20);
+        uint32_t ib0 = ub_le16(in + 20), ib1 = ub_le16(in + 22 + 20);
         inst_defaults(&z->iglobal);
         for (uint32_t ib = ib0; ib < ib1; ib++) {
-            uint32_t h0 = rd16(t->ibag.p + ib * 4), h1 = rd16(t->ibag.p + (ib + 1) * 4);
-            uint32_t n0 = rd16(t->ibag.p + ib * 4 + 2), n1 = rd16(t->ibag.p + (ib + 1) * 4 + 2);
+            uint32_t h0 = ub_le16(t->ibag.p + ib * 4), h1 = ub_le16(t->ibag.p + (ib + 1) * 4);
+            uint32_t n0 = ub_le16(t->ibag.p + ib * 4 + 2), n1 = ub_le16(t->ibag.p + (ib + 1) * 4 + 2);
             z->iz = z->iglobal;
             z->iz.target = -1;
             apply_bag(&t->igen, h0, h1, SF2_SAMPLE_ID, &z->iz);
@@ -452,14 +449,14 @@ int sf2_parse(const uint8_t *d, size_t n, struct sf2_bank **out) {
         usnd_fail("not a SoundFont 2 file");
         return -EINVAL;
     }
-    uint32_t riff = rd32(d + 4);
+    uint32_t riff = ub_le32(d + 4);
     struct span body = { d + 12, (uint32_t)((riff - 4 < n - 12) ? riff - 4 : n - 12) };
     if (riff < 4) body.n = 0;
 
     struct span info = { 0, 0 }, sdta = { 0, 0 }, pdta = { 0, 0 };
     uint32_t off = 0;
     while (body.n - off >= 12 && off <= body.n) {
-        uint32_t sz = rd32(body.p + off + 4);
+        uint32_t sz = ub_le32(body.p + off + 4);
         if (sz > body.n - off - 8) break;
         if (memcmp(body.p + off, "LIST", 4) == 0 && sz >= 4) {
             struct span l = { body.p + off + 12, sz - 4 };
@@ -477,7 +474,7 @@ int sf2_parse(const uint8_t *d, size_t n, struct sf2_bank **out) {
     uint32_t ns = smpl.n / 2;
     int16_t *s = alloc_samples(ns);
     if (!s) { usnd_fail("out of memory for the SoundFont"); return -ENOMEM; }
-    for (uint32_t i = 0; i < ns; i++) s[i] = (int16_t)rd16(smpl.p + i * 2);
+    for (uint32_t i = 0; i < ns; i++) s[i] = (int16_t)ub_le16(smpl.p + i * 2);
     return build(info, pdta, s, ns, out);
 }
 
@@ -488,16 +485,7 @@ int sf2_parse(const uint8_t *d, size_t n, struct sf2_bank **out) {
 // keeps the peak at one copy rather than two.
 
 static int read_at(int fd, uint32_t off, void *dst, uint32_t n) {
-    if (sys_lseek(fd, off, SYS_SEEK_SET) != (long long)off) return 0;
-    uint8_t *p = dst;
-    while (n) {
-        uint32_t chunk = n > (1u << 20) ? (1u << 20) : n;
-        long got = (long)sys_read(fd, p, chunk);
-        if (got <= 0) return 0;
-        p += got;
-        n -= (uint32_t)got;
-    }
-    return 1;
+    return ub_read_at(fd, off, dst, n) == 0;   // 1 = all of it, this file's sense
 }
 
 static uint8_t *read_list(int fd, uint32_t off, uint32_t n) {
@@ -519,7 +507,7 @@ int sf2_load(const char *path, struct sf2_bank **out) {
         usnd_fail("not a SoundFont 2 file");
         return -EINVAL;
     }
-    uint64_t end = 8 + (uint64_t)rd32(hdr + 4);
+    uint64_t end = 8 + (uint64_t)ub_le32(hdr + 4);
     if (end > (uint64_t)size) end = (uint64_t)size;
 
     uint8_t *info = 0, *pdta = 0;
@@ -529,7 +517,7 @@ int sf2_load(const char *path, struct sf2_bank **out) {
     while (off + 12 <= end) {
         uint8_t ch[12];
         if (!read_at(fd, (uint32_t)off, ch, 12)) break;
-        uint32_t sz = rd32(ch + 4);
+        uint32_t sz = ub_le32(ch + 4);
         if (sz < 4 || off + 8 + sz > end) break;
         if (!memcmp(ch, "LIST", 4)) {
             uint32_t body = (uint32_t)off + 12, n = sz - 4;
@@ -543,7 +531,7 @@ int sf2_load(const char *path, struct sf2_bank **out) {
                 while (so + 8 <= (uint64_t)body + n) {
                     uint8_t sh[8];
                     if (!read_at(fd, (uint32_t)so, sh, 8)) break;
-                    uint32_t ssz = rd32(sh + 4);
+                    uint32_t ssz = ub_le32(sh + 4);
                     if (so + 8 + ssz > (uint64_t)body + n) break;
                     if (!memcmp(sh, "smpl", 4)) {
                         smpl_off = (uint32_t)so + 8; smpl_n = ssz; have_smpl = 1;

@@ -91,7 +91,8 @@ struct uui_chart {
     int cur_series;
     struct uui_chart_mark marks[UUI_CHART_MARKS];
     int mark_n;
-    // **A LABELLED VALUE AXIS** (uui_chart_set_axis()): a left gutter of
+    // **A LABELLED VALUE AXIS** (uui_chart_set_axis(), FIT MODE ONLY --
+    // a scrolling chart's gutter would change how many samples show): a left gutter of
     // tick values, the top rounded up to a 1-2-5 step so every gridline
     // sits on a printed number. A sample divided by `axis_div` is the
     // printed value -- 1000 for a milli-unit series. NULL draws none.

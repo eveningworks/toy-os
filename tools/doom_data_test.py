@@ -16,6 +16,10 @@ flipped, and the download must be REFUSED on its SHA-256 and leave no
 file behind. A downloader that skipped the check would sail through
 every later assertion.
 
+THE LICENCE comes before each download: id's must be agreed to, once
+per text (a second Download does not ask), Freedoom's BSD is a notice;
+both end up in /usr/share/licenses, Freedoom's as its own COPYING.txt.
+
 Without data/doom/doom1.wad on the host only the card and the control
 run, and the tool says what it skipped. `tools/fetch_wad.py` gets it;
 `--freedoom` also gets the zip.
@@ -26,6 +30,7 @@ run, and the tool says what it skipped. `tools/fetch_wad.py` gets it;
 """
 
 import argparse
+import gzip
 import http.server
 import os
 import sys
@@ -64,6 +69,7 @@ def check(name, ok, detail=""):
 class Mirror:
     def __init__(self):
         self.tamper = False
+        self.gzip = False   # Content-Encoding: gzip, as a CDN may answer
         self.hits = []
         mirror = self
 
@@ -73,6 +79,9 @@ class Mirror:
 
             def _send(self, data):
                 self.send_response(200)
+                if mirror.gzip:
+                    data = gzip.compress(data)
+                    self.send_header("Content-Encoding", "gzip")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
@@ -172,6 +181,7 @@ def run(dbg, qmp, mirror, tmp):
     kill_doom(dbg)
     dbg.send("sh rm /usr/share/doom/doom1.wad")
     dbg.send("sh rm /usr/share/doom/freedoom1.wad")
+    dbg.send("sh rm /usr/share/licenses/doom-shareware.txt")
     dbg.write_lines("/etc/doom.conf", [f"mirror=http://10.0.2.2:{mirror.port}"])
 
     # --- 1. no game data: the card ------------------------------------
@@ -189,6 +199,14 @@ def run(dbg, qmp, mirror, tmp):
     row = row_named(lay, "doom1.wad")
     press(dbg, row, lay)
     press(dbg, "primary", lay)
+    # id's licence comes first, and must be AGREED to (mockup L2).
+    check("Download shows the shareware's licence, to agree to",
+          bool(wait_log(dbg, "licence for doom1.wad shown (agree)", 10)))
+    dbg.settle()
+    lay = layout(dbg)
+    check("...with Back and Agree and download", "agree" in lay and "back" in lay, str(list(lay)))
+    press(dbg, "agree", lay)
+    check("...and agreeing is remembered", bool(wait_log(dbg, "licence for doom1.wad agreed", 10)))
     said = wait_log(dbg, "download of doom1.wad failed", 60)
     check("a doom1.wad with one byte flipped is REFUSED", bool(said) and "SHA-256" in said, str(said))
     left = files(dbg)
@@ -204,13 +222,21 @@ def run(dbg, qmp, mirror, tmp):
         return
 
     # --- 3. the real download, checked, and the game ---------------------
+    # GZIPPED: Content-Length is then the COMPRESSED size, and a download
+    # that compared it with the bytes it wrote threw a good file away.
+    mirror.gzip = True
     lay = layout(dbg)
     press(dbg, row_named(lay, "doom1.wad"), lay)
     dbg.logs("doom:", clear=True)       # AFTER reading the layout: it is in the log
     press(dbg, "primary", lay)
+    check("a second Download does not ask again",
+          bool(wait_log(dbg, "licence for doom1.wad accepted before", 10)))
     check("the shareware downloads and its SHA-256 matches",
           bool(wait_log(dbg, "downloaded doom1.wad, checksum matches", 120)))
     check("...and the game starts on it", bool(wait_log(dbg, "doom: ready", 120)))
+    mirror.gzip = False
+    lic = dbg.send("sh cat /usr/share/licenses/doom-shareware.txt") or ""
+    check("its licence is saved beside it", "id Software" in lic, lic.strip()[:80])
     sha = dbg.send("sh sum -a sha256 /usr/share/doom/doom1.wad") or ""
     check("the file on the guest's disk is id's 1.9 shareware", SHAREWARE_SHA in sha, sha.strip()[:80])
     deadline = time.time() + 30
@@ -280,6 +306,11 @@ def run(dbg, qmp, mirror, tmp):
         press(dbg, row_named(lay, "freedoom1.wad"), lay)
         dbg.logs("doom:", clear=True)
         press(dbg, "primary", lay)
+        check("Freedoom's licence is a notice, not an agreement",
+              bool(wait_log(dbg, "licence for freedoom1.wad shown (notice)", 10)))
+        dbg.settle()
+        lay = layout(dbg)
+        press(dbg, "agree", lay)
         got = wait_log(dbg, "downloaded freedoom1.wad, checksum matches", 600)
         check("Freedoom downloads through a 1 KB redirect, unzips and checks out", bool(got),
               str(logs(dbg)[-3:]))
@@ -288,10 +319,15 @@ def run(dbg, qmp, mirror, tmp):
         while time.time() < deadline and not dbg.window("Freedoom: Phase 1"):
             time.sleep(0.5)
         check("...and the game runs it", dbg.window("Freedoom: Phase 1") is not None)
+        lic = dbg.send("sh cat /usr/share/licenses/freedoom.txt") or ""
+        check("...and its own COPYING.txt is saved as its licence",
+              "Redistribution and use" in lic, lic.strip()[:80])
 
     kill_doom(dbg)
     dbg.send("sh rm /usr/share/doom/doom1.wad")
     dbg.send("sh rm /usr/share/doom/freedoom1.wad")
+    dbg.send("sh rm /usr/share/licenses/doom-shareware.txt")
+    dbg.send("sh rm /usr/share/licenses/freedoom.txt")
     dbg.send("sh rm /etc/doom.conf")
 
 

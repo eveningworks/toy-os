@@ -3,6 +3,7 @@
 // doom_internal.h.
 #include "doom_internal.h"
 #include "lib/uconf.h"
+#include "lib/ubytes.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,14 +25,27 @@ const struct doom_iwad DOOM_IWADS[] = {
     { "doom1.wad", "DOOM Shareware", "Episode 1 by id Software. Free to share unchanged.",
       "https://raw.githubusercontent.com/Akbar30Bill/DOOM_wads/master/doom1.wad",
       "1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771",
-      4196020, NULL, "raw.githubusercontent.com" },
-    { "doom.wad", "DOOM", "The registered game.", NULL, NULL, 0, NULL, NULL },
-    { "doom2.wad", "DOOM II", "Hell on Earth.", NULL, NULL, 0, NULL, NULL },
+      4196020, NULL, "raw.githubusercontent.com",
+      "id Software shareware licence. Not open source.",
+      "id Software lets anyone share the shareware episode unchanged and free of "
+      "charge. You may not sell it or change it, and it is not the full game.\n"
+      "This copy comes from a third party's GitHub repository, not from id "
+      "Software. DOOM checks that it is id's unmodified version 1.9 before using it.",
+      1, "doom-shareware.txt", NULL },
+    { "doom.wad", "DOOM", "The registered game.", NULL, NULL, 0, NULL, NULL, NULL, NULL, 0, NULL, NULL },
+    { "doom2.wad", "DOOM II", "Hell on Earth.", NULL, NULL, 0, NULL, NULL, NULL, NULL, 0, NULL, NULL },
     { "freedoom1.wad", "Freedoom: Phase 1", "Free game content, BSD licence. Four episodes.",
       "https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip",
       "3f9b264f3e3ce503b4fb7f6bdcb1f419d93c7b546f4df3e874dd878db9688f59",
-      24143781, "freedoom-0.13.0/freedoom1.wad", "github.com/freedoom" },
-    { "freedoom2.wad", "Freedoom: Phase 2", "Free game content, BSD licence.", NULL, NULL, 0, NULL, NULL },
+      24143781, "freedoom-0.13.0/freedoom1.wad", "github.com/freedoom",
+      "BSD 3-clause. Free software.",
+      "Freedoom is free game content: you may use, share and change it, as long "
+      "as its copyright notice stays with it.\n"
+      "It comes from the Freedoom project's own releases on GitHub. DOOM checks "
+      "the release's signed checksum before using it.",
+      0, "freedoom.txt", "freedoom-0.13.0/COPYING.txt" },
+    { "freedoom2.wad", "Freedoom: Phase 2", "Free game content, BSD licence.", NULL, NULL, 0, NULL, NULL,
+      NULL, NULL, 0, NULL, NULL },
 };
 const int DOOM_IWAD_COUNT = (int)(sizeof DOOM_IWADS / sizeof DOOM_IWADS[0]);
 
@@ -44,9 +58,20 @@ int doom_iwad_present(const struct doom_iwad *w) {
     return doom_iwad_path(w, p, sizeof p) && access(p, F_OK) == 0;
 }
 
+// CASE-BLIND: a retail DOOM.WAD off a DOS install or a FAT stick is the
+// same file. The table's lower-case name is what it is installed as.
+static int same_name(const char *a, const char *b) {
+    for (; *a && *b; a++, b++) {
+        char x = *a >= 'A' && *a <= 'Z' ? (char)(*a - 'A' + 'a') : *a;
+        char y = *b >= 'A' && *b <= 'Z' ? (char)(*b - 'A' + 'a') : *b;
+        if (x != y) return 0;
+    }
+    return *a == *b;
+}
+
 const struct doom_iwad *doom_iwad_named(const char *file) {
     for (int i = 0; i < DOOM_IWAD_COUNT; i++)
-        if (!strcmp(DOOM_IWADS[i].file, file)) return &DOOM_IWADS[i];
+        if (same_name(DOOM_IWADS[i].file, file)) return &DOOM_IWADS[i];
     return NULL;
 }
 
@@ -77,27 +102,11 @@ int doom_iwad_url(const struct doom_iwad *w, char *out, int cap) {
 
 // --- the WAD itself --------------------------------------------------------
 
-static unsigned rd16(const unsigned char *p) { return (unsigned)p[0] | (unsigned)p[1] << 8; }
-static uint32_t rd32(const unsigned char *p) {
-    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
-}
-
-static int read_at(int fd, uint32_t off, void *buf, uint32_t n) {
-    if (lseek(fd, (off_t)off, SEEK_SET) != (off_t)off) return -1;
-    uint32_t got = 0;
-    while (got < n) {
-        long r = read(fd, (char *)buf + got, n - got);
-        if (r <= 0) return -1;
-        got += (uint32_t)r;
-    }
-    return 0;
-}
-
 int doom_wad_is_iwad(const char *path) {
     unsigned char h[12];
     int fd = open(path, O_RDONLY);
     if (fd < 0) return 0;
-    int ok = read_at(fd, 0, h, sizeof h) == 0 && !memcmp(h, "IWAD", 4) && rd32(h + 4) > 0;
+    int ok = ub_read_at(fd, 0, h, sizeof h) == 0 && !memcmp(h, "IWAD", 4) && ub_le32(h + 4) > 0;
     close(fd);
     return ok;
 }
@@ -111,10 +120,10 @@ static unsigned char *lump(int fd, const unsigned char *dir, uint32_t n, const c
     for (uint32_t i = 0; i < n; i++) {
         const unsigned char *e = dir + i * 16;
         if (strncmp((const char *)e + 8, name, 8)) continue;
-        uint32_t pos = rd32(e), size = rd32(e + 4);
+        uint32_t pos = ub_le32(e), size = ub_le32(e + 4);
         if (size == 0 || size > cap) return NULL;
         unsigned char *b = malloc(size);
-        if (b && read_at(fd, pos, b, size) == 0) { *len = size; return b; }
+        if (b && ub_read_at(fd, pos, b, size) == 0) { *len = size; return b; }
         free(b);
         return NULL;
     }
@@ -131,19 +140,19 @@ int doom_wad_titlepic(const char *path, uint32_t *out) {
     unsigned char h[12];
     unsigned char *dir = NULL, *pal = NULL, *pic = NULL;
     int rc = -1;
-    if (read_at(fd, 0, h, sizeof h) || (memcmp(h, "IWAD", 4) && memcmp(h, "PWAD", 4))) goto out;
-    uint32_t n = rd32(h + 4), at = rd32(h + 8);
+    if (ub_read_at(fd, 0, h, sizeof h) || (memcmp(h, "IWAD", 4) && memcmp(h, "PWAD", 4))) goto out;
+    uint32_t n = ub_le32(h + 4), at = ub_le32(h + 8);
     if (n == 0 || n > LUMPS_MAX) goto out;
     dir = malloc(n * 16);
-    if (!dir || read_at(fd, at, dir, n * 16)) goto out;
+    if (!dir || ub_read_at(fd, at, dir, n * 16)) goto out;
     uint32_t pl = 0, len = 0;
     pal = lump(fd, dir, n, "PLAYPAL", 64u * 1024u, &pl);
     pic = lump(fd, dir, n, "TITLEPIC", PATCH_MAX, &len);
     if (!pal || pl < 768 || !pic || len < 8) goto out;
-    unsigned w = rd16(pic), ht = rd16(pic + 2);
+    unsigned w = ub_le16(pic), ht = ub_le16(pic + 2);
     if (w == 0 || 8u + 4u * w > len) goto out;
     for (unsigned x = 0; x < w && x < DOOM_TITLE_W; x++) {
-        uint32_t p = rd32(pic + 8 + 4 * x);
+        uint32_t p = ub_le32(pic + 8 + 4 * x);
         while (p < len && pic[p] != 0xFF) {
             if (p + 3 > len) goto out;
             unsigned top = pic[p], cnt = pic[p + 1];

@@ -300,9 +300,10 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     if (!px) {
         // Between Start and the first frame: say so rather than show
         // black, which is indistinguishable from a crashed client.
-        ugfx_fill(s, ugfx_rgb(0, 0, 0));
+        // Straight to the window: no sheet is drawn over this.
+        ugfx_fill(win, ugfx_rgb(0, 0, 0));
         const char *t = st->failed ? "DOOM could not start." : "Loading...";
-        ugfx_draw_string(s, (uapp_width(a) - ugfx_text_width(t)) / 2, uapp_height(a) / 2,
+        ugfx_draw_string(win, (uapp_width(a) - ugfx_text_width(t)) / 2, uapp_height(a) / 2,
                          t, ugfx_rgb(200, 40, 40), UGFX_TRANSPARENT);
         return;
     }
@@ -383,10 +384,13 @@ static void on_phys_key(struct uapp *a, int keycode, int down, unsigned mods) {
     if ((keycode == INPUT_KEY_ENTER || keycode == INPUT_KEY_KPENTER) &&
         (mods & KEY_MOD_ALT))
         return;
-    if (doom_front_up()) return;            // the front end reads on_key
+    if (doom_front_up()) {                  // the front end reads on_key...
+        doom_front_phys(keycode, down);     // ...and wants Enter's release
+        return;
+    }
     if (doom_help_up()) { sheet_key(a, keycode, down); return; }
     if (keycode == INPUT_KEY_F1 && !(mods & (KEY_MOD_ALT | KEY_MOD_CTRL))) {
-        if (down) doom_help_open(a);
+        if (down && dg_frame_pixels()) doom_help_open(a);   // a sheet needs a game under it
         return;
     }
     // Alt+C cycles the screen effect, kept from the game as Alt+Enter is.
@@ -413,12 +417,7 @@ static void on_focus(struct uapp *a, int focused) {
 // so arming a TWS timer on top would be two clocks fighting.
 static int on_tick(struct uapp *a) {
     struct doom_state *st = uapp_state(a);
-    if (!st->started || st->failed) {
-        // The front end is up: nothing ticks, so sleep rather than spin
-        // -- tick_ms 0 polls, and a poll with no game is a busy loop.
-        sys_sleep_ms(20);
-        return 0;
-    }
+    if (!st->started || st->failed) return 0;
     dg_tick();
     // DOOM's own menu opening and closing, said once each -- the one
     // way a test can tell F1-on-the-sheet reached the game's help.
@@ -450,6 +449,7 @@ void doom_start_game(struct uapp *a, const struct doom_iwad *w) {
     struct doom_state *st = uapp_state(a);
     doom_front_leave();
     if (st->started) return;
+    uapp_poll_pause(a, 0);   // the game polls: it has its own 35 Hz
 
     // The savegame directory, made and entered before the game starts.
     // Each level of the path in turn, because SYS_MKDIR creates ONE
@@ -506,6 +506,8 @@ static void on_open(struct uapp *a) {
     // CHECKED BEFORE STARTING, so a missing WAD is the game-data card
     // rather than doomgeneric's own I_Error taking the process down.
     // Arguments ask for a particular start, so they skip the launcher.
+    // The front end waits for events like any app; only the game polls.
+    uapp_poll_pause(a, 1);
     if (doom_front_open(a, g_argc > 1)) doom_start_game(a, doom_iwad_chosen());
     uapp_redraw(a);
 }

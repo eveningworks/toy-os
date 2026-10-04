@@ -95,8 +95,8 @@ EXTRAS = [
             "copy for yourself is not redistribution -- publishing an "
             "image containing it is."
         ),
-        source="https://distro.ibiblio.org/slitaz/sources/packages/d/ "
-               "and other mirrors (see tools/fetch_wad.py)",
+        source="https://raw.githubusercontent.com/Akbar30Bill/DOOM_wads/ "
+               "(a third party's copy; see tools/fetch_wad.py)",
         dest="data/doom/doom1.wad",
         fetch=[sys.executable, os.path.join(HERE, "fetch_wad.py")],
     ),

@@ -383,7 +383,10 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
                 return ATTEMPT_REDIRECT;
             }
             if (req->on_headers)
-                req->on_headers(req->sink_ctx, req->status, scan.content_length);
+                // A gzipped body's Content-Length is the COMPRESSED size,
+                // and the sink sees inflated bytes: unknown, as far as
+                // anything counting the sink's bytes is concerned.
+                req->on_headers(req->sink_ctx, req->status, scan.gzip ? 0 : scan.content_length);
         }
 
         if (off < (size_t)got) {

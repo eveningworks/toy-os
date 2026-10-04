@@ -708,9 +708,11 @@ static void save_draw(struct uapp *a, struct uapp_draw *d) {
     if (!g_chooser_asked) { g_chooser_asked = 1; ask_where(a); }
 }
 
-static void save_key(struct uapp *a, int key, unsigned mods) {
-    (void)mods;
-    if (key == 0x1B) uapp_quit(a, 0);
+// From the font: a 16:9 preview over one line of note. No Esc to close
+// it (userland/CLAUDE.md): Cancel in the chooser, or its X, ends it.
+static void save_size(int *w, int *h) {
+    *w = 36 * ugfx_char_advance('n');
+    *h = *w * 9 / 16 + 3 * ugfx_char_h();
 }
 
 static int save_close(struct uapp *a) {
@@ -725,11 +727,9 @@ static int save_as_main(void) {
     struct uapp_desc desc = {
         .title    = "Save Screenshot",
         .app_id   = "screenshot",
-        .w        = 480,
-        .h        = 300,
+        .on_size  = save_size,
         .on_open  = save_open,
         .on_draw  = save_draw,
-        .on_key   = save_key,
         .on_close = save_close,
     };
     return uapp_run(&desc);

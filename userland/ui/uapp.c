@@ -253,6 +253,7 @@ struct uapp {
     int running;
     int status;
     int timer_armed; // TWS accepted a WIN_REQ_TIMER, so on_tick arrives
+    int poll_paused; // uapp_poll_pause(): park in the blocking wait instead
                      // as an event and the loop can block
 
     // Pointer routing (ui/uui_route.h). Empty unless the app declared
@@ -1265,6 +1266,8 @@ void uapp_inhibit_shortcuts(struct uapp *a, int on) {
     wmchan_send(WIN_REQ_INHIBIT_SHORTCUTS, a->window, on ? 1 : 0, 0, 0, 0);
 }
 
+void uapp_poll_pause(struct uapp *a, int paused) { a->poll_paused = paused ? 1 : 0; }
+
 void uapp_busy_begin(struct uapp *a) {
     a->cursor_before_busy = a->cursor;
     uapp_set_cursor(a, WIN_CURSOR_WAIT);
@@ -2169,6 +2172,10 @@ int uapp_run(const struct uapp_desc *desc) {
         // actually needed, which is why anything with a real cadence
         // should set one -- see uapp.h's tick_ms.
         while (a->running) {
+            if (a->poll_paused) {   // nothing to animate: wait like any app
+                uapp_pump(a, 1);
+                continue;
+            }
             if (desc->on_tick(a)) a->dirty = 1;
             uapp_pump(a, 0);
             sys_yield();

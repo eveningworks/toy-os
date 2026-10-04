@@ -20,6 +20,7 @@
 | `ubootcfg.h` | GRUB's grub.cfg as an EDITABLE model: parse, change one thing, check, save -- for `bootcfg`, the Boot Manager and the Startup settings page. |
 | `ubootmenu.h` | GRUB's menu, read from its grub.cfg, and the ONE-SHOT choice of which entry the next boot takes -- `grub-reboot`'s mechanism, for `reboot --entry` and the Start menu's Restart flyout. |
 | `ubootwords.h` | The kernel's boot words, as a table: GENERATED from docs/boot-flags.md (tools/gen_bootwords.py), which is the only list of them -- the kernel matches its command line by substring and keeps no regi... |
+| `ubytes.h` | Little-endian fields out of a byte buffer, and a read at an offset that does not come back short -- what every parser of an on-disk format here starts by writing (zip, WAD, RIFF/WAV, SoundFont). |
 | `uchan.h` | uchan -- a message channel between two ring-3 processes. |
 | `uchan_page.h` | uchan -- the shared page layout for a message channel between two ring-3 processes. |
 | `uclip.h` | uclip -- the system clipboard, for a ring-3 app. |

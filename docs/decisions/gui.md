@@ -9974,6 +9974,14 @@ is the same argument. **A `mirror=` in `/etc/doom.conf` replaces all but
 the file name** for the same reason: any server will do when the bytes
 are checked, which is also how the test serves them from loopback.
 
+**A licence step comes before the download** (mockup L2): id's
+shareware terms must be AGREED to -- asked once per text, remembered by
+its CRC in `/etc/doom.conf`, the rule `tools/fetch_extras.py` applies to
+the same file at build time -- while Freedoom's BSD licence is shown and
+needs no agreement. The card also says the shareware comes from a third
+party's repository, not id. Each licence is saved in
+`/usr/share/licenses`, Freedoom's as the release's own `COPYING.txt`.
+
 **Freedoom is offered first on an empty machine** (it is free to
 redistribute; Debian's DOOM engines depend on it), while the play order
 when several are present still prefers id's data, as before. Fetching at

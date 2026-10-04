@@ -13,6 +13,7 @@
 // reader that seeks to a fixed offset works on what it was tested with
 // and fails on everything a real recorder writes.
 #include <string.h>
+#include "lib/ubytes.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include "lib/usnd.h"
@@ -39,13 +40,6 @@ struct wav {
     uint8_t *buf;       // WAV_SLICE * block bytes
 };
 
-static uint32_t rd32(const uint8_t *p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-static uint16_t rd16(const uint8_t *p) {
-    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
-}
 
 static int wav_probe(const uint8_t *d, size_t n) {
     return n >= 12 && memcmp(d, "RIFF", 4) == 0 && memcmp(d + 8, "WAVE", 4) == 0;
@@ -73,22 +67,22 @@ static int wav_open(struct usnd_stream *s) {
         uint8_t ch[8];
         if (sys_lseek(s->fd, pos, SYS_SEEK_SET) < 0) break;
         if (sys_read(s->fd, ch, sizeof ch) != (long long)sizeof ch) break;
-        uint32_t size = rd32(ch + 4);
+        uint32_t size = ub_le32(ch + 4);
 
         if (memcmp(ch, "fmt ", 4) == 0 && size >= 16) {
             uint8_t f[40];
             uint32_t want = size > sizeof f ? (uint32_t)sizeof f : size;
             if (sys_read(s->fd, f, want) != (long long)want) break;
-            fmt_tag = rd16(f);
-            w.channels = rd16(f + 2);
-            s->fmt.rate = rd32(f + 4);
-            w.block = rd16(f + 12);
-            w.bits = rd16(f + 14);
+            fmt_tag = ub_le16(f);
+            w.channels = ub_le16(f + 2);
+            s->fmt.rate = ub_le32(f + 4);
+            w.block = ub_le16(f + 12);
+            w.bits = ub_le16(f + 14);
             // EXTENSIBLE hides the real format in the first two bytes of
             // its SubFormat GUID, which is where a 24-bit recording from
             // most hardware ends up.
             if (fmt_tag == WAVE_FORMAT_EXTENSIBLE && want >= 26)
-                fmt_tag = rd16(f + 24);
+                fmt_tag = ub_le16(f + 24);
             have_fmt = 1;
         } else if (memcmp(ch, "data", 4) == 0) {
             w.data_off = pos + 8;

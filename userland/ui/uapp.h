@@ -587,6 +587,13 @@ int uapp_drag_active(struct uapp *a);   // a drag is in flight right now
 // that it lapses automatically when the window loses the focus.
 void uapp_inhibit_shortcuts(struct uapp *a, int on);
 
+// A POLLING app (on_tick, no tick_ms) with nothing to animate for a
+// while -- a game's launcher before the game runs -- parks in the
+// blocking wait like any other app until this is cleared, and on_tick
+// is not called meanwhile. Sleeping inside on_tick instead delays every
+// event behind the sleep.
+void uapp_poll_pause(struct uapp *a, int paused);
+
 void uapp_busy_begin(struct uapp *a);
 void uapp_busy_end(struct uapp *a);
 

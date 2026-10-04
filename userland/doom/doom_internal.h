@@ -27,6 +27,16 @@ struct doom_iwad {
     unsigned long size;     // the download's size, for the card
     const char *zip_member; // when `url` is a .zip: the WAD inside it
     const char *source;     // the host named on the card
+    // THE LICENCE, shown before a download (mockup L2): its name, the
+    // notice in plain words ('\n' between paragraphs), and whether the
+    // person must AGREE (id's terms) or is only told (BSD). Saved as
+    // /usr/share/licenses/<licence_file> -- from <licence_member> in the
+    // zip when there is one, the real text, else the notice itself.
+    const char *licence;
+    const char *notice;
+    int agree;
+    const char *licence_file;
+    const char *licence_member;
 };
 extern const struct doom_iwad DOOM_IWADS[];
 extern const int DOOM_IWAD_COUNT;
@@ -69,6 +79,7 @@ void doom_help_close(struct uapp *a);
 // Input while the front end or the sheet has it. Each returns 1 when it
 // took the event.
 int doom_front_key(struct uapp *a, int key, unsigned mods);
+void doom_front_phys(int keycode, int down);   // key edges, for the licence's Enter
 void doom_front_press(struct uapp *a, int x, int y, unsigned mods);
 void doom_front_motion(struct uapp *a, int x, int y, unsigned buttons);
 void doom_front_release(struct uapp *a, int x, int y, unsigned buttons);

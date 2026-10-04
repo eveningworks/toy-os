@@ -204,7 +204,10 @@ struct plot { int x0, w, top, bot, strip_y; uint32_t top_val, step; };
 static uint32_t scale_of(const struct uui_chart *c);
 static void plot_of(const struct uui_chart *c, struct plot *p) {
     int ch = ugfx_char_h();
-    int axis = c->axis_unit && !c->compact;
+    // FIT MODE ONLY: a scrolling chart shows as many samples as it has
+    // columns, and a gutter sized by the samples shown would change which
+    // samples are shown.
+    int axis = c->axis_unit && !c->compact && c->fit;
     p->x0 = c->x; p->w = c->w;
     p->top = c->y + (c->compact ? 0 : ch + 2);
     p->bot = c->y + c->h - 1 - (!c->compact && c->sample_ms ? ch + 1 : 0);
@@ -221,6 +224,7 @@ static void plot_of(const struct uui_chart *c, struct plot *p) {
     int gw = ugfx_text_width(t), uw = ugfx_text_width(c->axis_unit);
     int gutter = (gw > uw ? gw : uw) + ch / 2 + 4;
     if (gutter < c->w / 2) { p->x0 += gutter; p->w -= gutter; }
+    else p->step = 0;   // no room for the numbers: no axis, never one drawn outside the chart
 }
 
 // The x of sample `i` in fit mode: the history spread over the plot.
@@ -331,9 +335,8 @@ void uui_chart_draw(struct ugfx_surface *s, const struct uui_chart *c) {
     // rest is empty, which is what every monitor does while filling.
     uint32_t top_scale = p.top_val;
     int n = uui_chart_drawn(c);
-    if (n > p.w) n = p.w;   // the axis gutter's columns are not plot
     for (int i = 0; i < n; i++) {
-        int slot = drawn_slot(c, uui_chart_drawn(c) - n + i);
+        int slot = drawn_slot(c, i);
         uint32_t v = c->samples[slot];
         if (v > top_scale) v = top_scale;
         int x = c->x + c->w - n + i;
