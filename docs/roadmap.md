@@ -791,11 +791,12 @@ run on, not by order.
 - [x] ~~virtio transport: PCI capability parsing, virtqueue (descriptor table / avail / used rings)~~
 - [x] ~~`virtio-gpu`: resource create/attach, set_scanout, transfer + flush, and the CURSOR queue~~
 - [x] ~~The compositor should use the hardware cursor plane instead of a software sprite~~ DONE 2026-08-29 (WIN_REQ_FB_CURSOR)
-- [x] ~~An Intel display driver: fastboot readout, cursor plane, backlight, power well~~ DONE 2026-09-02 -- gen8 only, never sets a mode
+- [x] ~~An Intel display driver: fastboot readout, cursor plane, backlight, power well~~ DONE 2026-09-02 -- gen8; modesets since 09-03
 - [x] ~~A page flip on vblank: three scanouts and a buffer age over the framebuffer grant~~ DONE 2026-09-02 -- Intel and virtio-gpu
 - [ ] Screen blanking: the backlight off on idle or lid, never persisted, and any key or motion brings it back
 - [ ] The calendar, context menu and confirm dialog should declare their own damage, as the Start menu already does
 - [ ] Intel modesetting: external outputs on DDI B-D, a second EDID and hotplug -- waits for a laptop with a usable port
+- [ ] Intel gen9 on the Kaby Lake desktop over HDMI: readout, adopt (cursor + flip), GMBUS EDID, scaler modes, an HDMI modeset
 - [ ] Intel blitter acceleration on the BCS ring -- declined 2026-09-03; the 2026-09-17 frame time reopens it
 - [x] ~~A fullscreen state, and direct scanout for a fullscreen client~~ DONE 2026-09-11 -- a lease, `docs/scanout-design.md`
 - [ ] The Broadwell sprite plane: a MAXIMIZED window scanned out, the desktop composed around it -- `docs/scanout-design.md` stage 4

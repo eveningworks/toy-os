@@ -31,7 +31,7 @@
 #include "timer.h"  // coarse_ticks -- rate-limiting the live-scanout probe
 #include "intel_internal.h"
 
-DRIVER_DECLARE("intel-display", "display", "Intel gen8 display engine: eDP modeset, cursor plane, backlight");
+DRIVER_DECLARE("intel-display", "display", "Intel gen8 display engine: eDP modeset, cursor plane, backlight; gen9 read out");
 
 // --- PCI ------------------------------------------------------------
 #define INTEL_VENDOR 0x8086
@@ -101,19 +101,37 @@ static const uint16_t BDW_IDS[] = {
     0x1632, 0x1636, 0x163A, 0x163B, 0x163D, 0x163E,
 };
 
-static int is_gen8(uint16_t id) {
-    for (unsigned i = 0; i < sizeof BDW_IDS / sizeof BDW_IDS[0]; i++)
-        if (BDW_IDS[i] == id) return 1;
+// Kaby Lake (gen9), i915's INTEL_KBL_IDS: READ OUT, NOT CLAIMED --
+// the plane's fields, the stride's units and the display buffer all
+// differ from gen8 (intel_gen9.c), and nothing here drives them yet.
+static const uint16_t KBL_IDS[] = {
+    0x5902, 0x5906, 0x5908, 0x590A, 0x590B, 0x590E,
+    0x5912, 0x5913, 0x5915, 0x5916, 0x5917, 0x591A, 0x591B, 0x591C,
+    0x591D, 0x591E, 0x5921, 0x5923, 0x5926, 0x5927, 0x593B,
+};
+
+static int in_table(const uint16_t *t, unsigned n, uint16_t id) {
+    for (unsigned i = 0; i < n; i++)
+        if (t[i] == id) return 1;
     return 0;
 }
+
+// 8, 9, or 0 for a generation this driver has no register map for.
+static int gen_of(uint16_t id) {
+    if (in_table(BDW_IDS, sizeof BDW_IDS / sizeof BDW_IDS[0], id)) return 8;
+    if (in_table(KBL_IDS, sizeof KBL_IDS / sizeof KBL_IDS[0], id)) return 9;
+    return 0;
+}
+static int g_gen;
 
 static const struct pci_device *find_gpu(void) {
     for (int i = 0; i < pci_device_count(); i++) {
         const struct pci_device *d = pci_device_at(i);
         if (!d || d->vendor_id != INTEL_VENDOR) continue;
         if (d->class_code != 0x03) continue;
-        if (!is_gen8(d->device_id)) {
-            klog_printf("intel-display: %04x:%04x is not gen8 -- not claimed\n",
+        g_gen = gen_of(d->device_id);
+        if (!g_gen) {
+            klog_printf("intel-display: %04x:%04x is not gen8 or gen9 -- not claimed\n",
                         d->vendor_id, d->device_id);
             return 0;
         }
@@ -445,7 +463,10 @@ static int intel_probe(void) {
     uint32_t ggms = (gmch >> 6) & 3;
     uint64_t gtt_bytes = ggms ? ((uint64_t)1 << ggms) << 20 : 0;
     g_gtt_entries = (uint32_t)(gtt_bytes / 8);
-    g_stolen_size = (uint64_t)((gmch >> 8) & 0xFF) << 25;
+    uint32_t gms = (gmch >> 8) & 0xFF;
+    g_stolen_size = (uint64_t)gms << 25;
+    // Gen9 adds 4 MiB steps above 0xF0 (Linux's gen9_stolen_size).
+    if (g_gen == 9 && gms >= 0xF0) g_stolen_size = (uint64_t)(gms - 0xF0 + 1) << 22;
     g_stolen_base = hb ? (pci_config_read32(hb, GMCH_BSM) & 0xFFF00000u) : 0;
     klog_printf("intel-display: %04x:%04x mmio %#llx/%lluM aperture %#llx/%lluM gtt %u entries stolen %#llx/%lluM cmd %#x\n",
                 g_dev->vendor_id, g_dev->device_id,
@@ -454,6 +475,11 @@ static int intel_probe(void) {
                 g_gtt_entries, (unsigned long long)g_stolen_base,
                 (unsigned long long)(g_stolen_size >> 20),
                 pci_config_read16(g_dev, 0x04));
+    if (g_gen == 9) {
+        intel_gen9_readout_log();
+        klog_printf("intel-display: gen9 -- read out, not claimed\n");
+        return 0;
+    }
     log_readout();
 
     // GRUB's framebuffer must be inside the aperture: the plane's

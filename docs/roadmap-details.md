@@ -5991,6 +5991,35 @@ The QEMU suite can cover none of stages 3-4; what it covers is the
 EDID parser, the readout's decoders, and the `resolution` setting's
 plumbing when the Intel driver starts listing more than one mode.
 
+### Intel gen9 on the Kaby Lake desktop over HDMI: readout, adopt (cursor + flip), GMBUS EDID, scaler modes, an HDMI modeset
+
+The third test machine (a Lenovo desktop, HD 630 `8086:5912`, one
+monitor on HDMI at 2560x1440) ran on vesafb: the driver refused any
+device outside `BDW_IDS`. Gen9 keeps gen8's display OFFSETS with
+different FIELDS -- `PLANE_CTL` format in 27:24 (XRGB8888 = 4) and
+tiling in 12:10, `PLANE_STRIDE` in 64-byte units -- and adds a display
+buffer (DDB, `PLANE_BUF_CFG`/`CUR_BUF_CFG`) with per-plane watermarks:
+a plane with no DDB slice fetches nothing. Clocks are `DPLL_CTRL1/2`
+and `DPLLn_CFGCR`, not `PORT_CLK_SEL`/`LCPLL`; the scaler is
+`PS_CTRL`, not `PF_CTL`. Linux's shape is i915's `skl_*` path plus
+fastboot (inherit the firmware's mode); Windows runs the Basic Display
+Adapter until the vendor driver loads. The stages, one flash each:
+
+1. **1a, readout.** BUILT 2026-10-04: `intel_gen9.c` logs the planes,
+   DDB and watermarks, transcoders, DDI buffers, DPLLs, power wells and
+   GMBUS, and the device is NOT claimed.
+2. **1b, adopt.** Claim at the firmware's mode: the gen9 plane checks,
+   the cursor plane (if its DDB slice exists, else program one) and the
+   three-buffer mailbox flip.
+3. **2, EDID over GMBUS** on the pin pair the active DDI uses (SKL: DPB
+   pin 5, DPC 4, DPD 6), so `lsdisplay` names the monitor.
+4. **3, scaler modes**: the ladder below native through `PS_CTRL`,
+   keeping the HDMI timing -- runtime `config set resolution` as the
+   laptops have it.
+5. **4, an HDMI modeset**: a DPLL in HDMI mode from the pixel clock
+   (`skl_ddi_calculate_wrpll`), the DDI buffer translations, the
+   transcoder in HDMI mode, the timings from the EDID.
+
 ### Intel blitter acceleration on the BCS ring
 
 A ring buffer or execlist context on the blitter engine and

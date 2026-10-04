@@ -3883,10 +3883,14 @@ things to know.
   ladder below it, the smaller ones through the panel fitter under a
   pipe cycle (`docs/conventions/gui.md`'s scaling entry has the setting
   and the fitter's arming order).
-- **GEN8 ONLY, BY DEVICE ID.** The register map is Broadwell's; another
-  generation is logged as "not gen8 -- not claimed" and vesafb takes
-  the same pixels. Widening the table means checking every offset
-  against that generation's PRM, not adding an id.
+- **GEN8 CLAIMED, GEN9 READ OUT, BY DEVICE ID.** The write paths are
+  Broadwell's. Kaby Lake (`KBL_IDS`) is logged by `intel_gen9.c` and
+  NOT claimed, so vesafb keeps the pixels; anything else is "not gen8
+  or gen9". Gen9 keeps gen8's plane OFFSETS with different FIELDS
+  (format 27:24, stride in 64-byte units, tiling 12:10) and adds a
+  display buffer every plane needs a slice of -- widening the table
+  means checking every offset AND field against that generation, not
+  adding an id.
 - **THE PROBE RUNS BEFORE THE TIMER**, like every display probe, so its
   waits are iteration-bounded spins. Nothing in this driver may wait on
   `coarse_ticks()` -- on this laptop that hangs the machine solid.

@@ -105,6 +105,9 @@ int  intel_aux_read_edid(uint8_t *out, int cap);   // display_driver.read_edid
 int  intel_aux_native_read(uint32_t addr, uint8_t *buf, int len); // DPCD; bytes or -1
 int  intel_aux_native_write(uint32_t addr, const uint8_t *buf, int len);
 
+// intel_gen9.c -- Kaby Lake's firmware state, logged. Writes nothing.
+void intel_gen9_readout_log(void);
+
 // intel_readout.c -- what the firmware programmed, decoded and compared.
 struct display_edid;
 void intel_readout_log(const struct display_edid *edid);
