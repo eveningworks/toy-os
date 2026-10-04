@@ -558,6 +558,7 @@ void utext_draw(struct utext *t, struct ugfx_surface *s,
             else if (mk < t->mark_count && t->marks[mk].start <= k) cell = t->marks[mk].bg;
             // text-measure-ok: a fixed grid by contract -- see the top of this file
             int rx = x + col * char_w;
+            // text-measure-ok: a tab is n cells of the fixed grid -- see the top of this file
             if (cell != row_bg) ugfx_fill_rect(s, rx, ry, n * char_w, char_h, cell);
             if (ch == '\t' || (ch == ' ' && t->show_ws)) {
                 // SPACES AND TABS, when asked: a centred dot for a space and
@@ -568,6 +569,7 @@ void utext_draw(struct utext *t, struct ugfx_surface *s,
                     int cy = ry + char_h / 2;
                     if (ch == ' ') ugfx_fill_rect(s, rx + char_w / 2 - 1, cy - 1, 2, 2, ink);
                     else {
+                        // text-measure-ok: a tab is n cells of the fixed grid -- see the top of this file
                         int x0 = rx + 2, x1 = rx + n * char_w - 3;
                         ugfx_fill_rect(s, x0, cy, x1 - x0, 1, ink);
                         ugfx_fill_rect(s, x1 - 2, cy - 2, 1, 5, ink);
