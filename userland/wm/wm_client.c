@@ -1509,7 +1509,7 @@ void wm_client_send_mouse(struct window *win, int type, int x, int y, unsigned b
     // next one -- see WIN_MOUSE_MODS_SHIFT. Read here rather than passed
     // in because every caller would otherwise read the same global.
     ev.mods = WIN_MOUSE_BUTTONS(buttons) |
-              ((unsigned)wm_rawin_mods_now() << WIN_MOUSE_MODS_SHIFT);
+              ((unsigned)wm_rawin_pointer_mods() << WIN_MOUSE_MODS_SHIFT);
     if (!win_events_push(win->client_pid, &ev)) {
         note_dropped(win);
         // So the next motion is not read as "already delivered".

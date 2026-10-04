@@ -1848,7 +1848,10 @@ this the obvious way), not from how much history it accumulated.
   fitter (a cut right edge, a band of stale boot text flipping between
   three scanouts). `guictl compositor` shows the drop count; a
   notification lost to it is otherwise invisible. Only the newest slot
-  merges, so a press between two moves keeps its own position.
+  merges, and never into a button EDGE, whose position is where the
+  driver reported it (`mouse_try_get_button_edge()`); the WM replays each
+  edge a frame at a time with that position and the modifiers held then
+  (`wm_rawin_pointer_mods()`), and does not park while one is queued.
 - **EVERY CLIENT IS PINGED ON A CADENCE, not just one being closed.**
   `WM_PING_INTERVAL_DEFAULT` (2s) beside the existing
   `WM_PING_TIMEOUT_DEFAULT` (3s), both in `wm_internal.h`, both with a

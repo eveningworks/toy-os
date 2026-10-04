@@ -303,8 +303,11 @@ void mouse_feed_abs(int x, int y, int max_x, int max_y) {
 // class driver queues per-button DOWN/UP flags; keyboard.c beside this
 // file already does it (keyboard_try_get_transition). The thumb buttons
 // made it visible because a thumb tap is short.
+// Each edge keeps WHERE the pointer was when the driver reported it: a
+// press and a release a long way apart, drained in one pass, must not
+// both read the pass's final position (a click becomes a drag).
 #define BTN_TRANS_MAX 32
-static uint8_t btn_trans[BTN_TRANS_MAX];
+static struct { uint8_t mask; int x, y; } btn_trans[BTN_TRANS_MAX];
 static int btn_trans_head, btn_trans_tail;
 
 // FIVE BITS: left, right, middle, then the two thumb buttons (SIDE and
@@ -319,18 +322,25 @@ void mouse_feed_buttons(uint8_t mask) {
         // the ones that un-stick a button -- keyboard.c's rule.
         if (next == btn_trans_tail)
             btn_trans_tail = (btn_trans_tail + 1) % BTN_TRANS_MAX;
-        btn_trans[btn_trans_head] = mask;
+        btn_trans[btn_trans_head].mask = mask;
+        btn_trans[btn_trans_head].x = mouse_x;
+        btn_trans[btn_trans_head].y = mouse_y;
         btn_trans_head = next;
     }
     mouse_buttons = mask;
 }
 
-int mouse_try_get_button_transition(uint8_t *out_mask) {
+int mouse_try_get_button_edge(uint8_t *out_mask, int *out_x, int *out_y) {
     if (btn_trans_tail == btn_trans_head) return 0;
-    uint8_t m = btn_trans[btn_trans_tail];
+    if (out_mask) *out_mask = btn_trans[btn_trans_tail].mask;
+    if (out_x) *out_x = btn_trans[btn_trans_tail].x;
+    if (out_y) *out_y = btn_trans[btn_trans_tail].y;
     btn_trans_tail = (btn_trans_tail + 1) % BTN_TRANS_MAX;
-    if (out_mask) *out_mask = m;
     return 1;
+}
+
+int mouse_try_get_button_transition(uint8_t *out_mask) {
+    return mouse_try_get_button_edge(out_mask, 0, 0);
 }
 
 void mouse_feed_wheel(int notches) { wheel_delta += notches; }

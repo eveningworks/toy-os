@@ -43,6 +43,12 @@ int wm_rawin_take_key(uint8_t *out_mods, int *out_down);
 // the one caller that wants modifiers without consuming a key
 // (desktop.c, deciding whether a click extends a selection).
 uint8_t wm_rawin_mods_now(void);
+// The modifiers for this frame's POINTER event: the ones held when a
+// replayed edge happened, else the live ones. A click reads these.
+uint8_t wm_rawin_pointer_mods(void);
+// Input already drained into the WM's own queues -- the kernel cannot
+// see it, so the loop must not park while this is nonzero.
+int wm_rawin_pending(void);
 
 // Accumulated wheel notches since the last call, CONSUMING them.
 int wm_rawin_take_wheel(void);

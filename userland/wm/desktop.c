@@ -923,7 +923,7 @@ void desktop_handle_click(int mx, int my) {
     // Modifiers come from the LIVE keyboard state -- a click carries
     // none of its own. Ctrl adds to the selection, Shift too (both are
     // "extend" on every desktop this imitates); plain replaces.
-    uint8_t mods = wm_rawin_mods_now();
+    uint8_t mods = wm_rawin_pointer_mods();
     enum rb_mode mode = (mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT))
                         ? RB_ADD : RB_REPLACE;
 
@@ -1350,7 +1350,7 @@ int desktop_drop_here(int mx, int my) {
     static struct uclip c;
     uclip_drag_load(&c);
     if (uclip_count(&c) <= 0 || uclip_kind(&c) != UCLIP_KIND_FILES) return 0;
-    int copy = (wm_rawin_mods_now() & KEY_MOD_CTRL) != 0;
+    int copy = (wm_rawin_pointer_mods() & KEY_MOD_CTRL) != 0;
     paste_from(&c, copy ? UCLIP_COPY : UCLIP_CUT);
     return 1;
 }

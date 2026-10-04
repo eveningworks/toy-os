@@ -1032,12 +1032,13 @@ void wm_run(void) {
         // wm_rawin_pump() below still drains the whole queue. A wait that
         // returned an event would hide one from the pump every time.
         //
-        // TWO THINGS MUST DEFEAT THE WAIT, and both are invisible to the
-        // kernel. Injected input from the debug console lives in ring-3
-        // memory, so pushing to it wakes nobody -- and the loop takes one
-        // per iteration, so a press would block with its release still
-        // queued. And a repaint we already owe should not wait 100 ms to
-        // happen, which also keeps the first frame prompt.
+        // THREE THINGS MUST DEFEAT THE WAIT, all invisible to the kernel.
+        // Input already in ring-3 memory -- injected from the debug
+        // console, or real input the pump drained into wm_rawin's queues
+        // -- wakes nobody, and the loop takes one key and one button
+        // edge per iteration, so a press would block with its release
+        // still queued. And a repaint we already owe should not wait
+        // 100 ms to happen, which also keeps the first frame prompt.
         {
             uint32_t wait_ms = WM_IDLE_WAIT_MS;
             uint64_t due = wm_client_next_timer_due();
@@ -1048,7 +1049,7 @@ void wm_run(void) {
                 uint64_t in_ms = due > now_ns ? (due - now_ns + 999999) / 1000000 : 0;
                 if (in_ms < wait_ms) wait_ms = (uint32_t)in_ms;
             }
-            if (redraw_pending || wm_debug_work_pending()) wait_ms = 0;
+            if (redraw_pending || wm_debug_work_pending() || wm_rawin_pending()) wait_ms = 0;
             // A ghost in flight wants a frame every WM_ANIM_FRAME_MS, not
             // the idle park (wm_anim.h).
             if ((wm_anim_active() || start_menu_animating()) && wait_ms > WM_ANIM_FRAME_MS)

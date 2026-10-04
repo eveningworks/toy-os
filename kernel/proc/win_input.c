@@ -23,12 +23,14 @@ static struct {
     int head;    // next slot to pop
     int count;   // how many are queued
     int dropped; // overflow drops since the last reset
+    int newest_edge; // the newest slot is a button EDGE: never merged into
 } q;
 
 void win_input_reset(void) {
     q.head = 0;
     q.count = 0;
     q.dropped = 0;
+    q.newest_edge = 0;
 }
 
 // Input is what a full queue sheds. Everything else -- WIN_EV_SCREEN,
@@ -44,7 +46,7 @@ static int is_input(uint32_t type) {
     }
 }
 
-int win_input_push(const struct win_event *ev) {
+static int queue_push(const struct win_event *ev, int edge) {
     int pid = win_server_compositor_pid();
     if (!pid || !ev) return 0;
 
@@ -53,8 +55,10 @@ int win_input_push(const struct win_event *ev) {
     // buttons as the NEWEST queued move replaces it, so motion never
     // holds more than one slot -- a mouse moving through one slow frame
     // evicted a WIN_EV_SCREEN and left the desktop painting the old
-    // mode. Only the newest slot: a press in between keeps its place.
-    if (ev->type == WIN_EV_RAW_MOUSE && q.count > 0) {
+    // mode. Only the newest slot, and never an EDGE: the drag that
+    // follows a press has the press's mask, and merging it there moved
+    // the press to where the drag ended.
+    if (ev->type == WIN_EV_RAW_MOUSE && q.count > 0 && !edge && !q.newest_edge) {
         struct win_event *last = &q.ring[(q.head + q.count - 1) % WIN_EVENT_QUEUE_MAX];
         if (last->type == ev->type && last->mods == ev->mods) {
             *last = *ev;
@@ -93,6 +97,7 @@ int win_input_push(const struct win_event *ev) {
 
     q.ring[(q.head + q.count) % WIN_EVENT_QUEUE_MAX] = *ev;
     q.count++;
+    q.newest_edge = edge;
 
     // The woken syscall returns 0 ("try again"), NOT the event: this
     // may be running in an IRQ under some other process's CR3, so the
@@ -104,6 +109,8 @@ int win_input_push(const struct win_event *ev) {
     futex_note_ready(pid);
     return 1;
 }
+
+int win_input_push(const struct win_event *ev) { return queue_push(ev, 0); }
 
 const void *win_input_wait_chan(void) { return &q; }
 
@@ -125,16 +132,20 @@ int win_input_dropped(void) { return q.dropped; }
 // would overflow the queue in a fraction of a second while the user sat
 // still.
 static int g_last_x = -1, g_last_y = -1;
-static uint8_t g_last_buttons;
+static uint8_t g_last_buttons;   // the mask last PUSHED -- only an edge changes it
 
-static void push(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
+static void push_ev(uint32_t type, int32_t a, int32_t b, uint32_t mods, int edge) {
     struct win_event ev;
     k_memset(&ev, 0, sizeof ev);
     ev.type = type;
     ev.a = a;
     ev.b = b;
     ev.mods = mods;
-    win_input_push(&ev);
+    queue_push(&ev, edge);
+}
+
+static void push(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
+    push_ev(type, a, b, mods, 0);
 }
 
 void win_input_poll(void) {
@@ -153,6 +164,25 @@ void win_input_poll(void) {
         armed = 1;
     }
 
+    // BUTTON EDGES ARE DRAINED, EACH AT ITS OWN POSITION; THE POSITION
+    // IS THEN SAMPLED. This poll runs from scheduler_idle(), so on a busy
+    // machine a whole click can fall between two passes -- comparing the
+    // mask against the last one seen then reports nothing at all
+    // (api/mouse.h's transition queue). Motion after them carries the
+    // last EDGE's mask, never the sampled level: an edge reported after
+    // the drain would otherwise arrive as a mask change on a move, and
+    // then again as an edge.
+    int lx = g_last_x, ly = g_last_y;
+    uint8_t edge = 0;
+    for (int budget = 32; budget > 0; budget--) {
+        int ex = 0, ey = 0;
+        if (!mouse_try_get_button_edge(&edge, &ex, &ey)) break;
+        push_ev(WIN_EV_RAW_MOUSE, ex, ey, edge, 1);
+        g_last_buttons = edge;
+        lx = ex;
+        ly = ey;
+    }
+
     int x = 0, y = 0;
     uint8_t buttons = 0;
     mouse_get_state(&x, &y, &buttons);
@@ -165,24 +195,10 @@ void win_input_poll(void) {
     if (win_server_hw_cursor_armed() && (x != g_last_x || y != g_last_y))
         gfx_hw_cursor_move(x, y);
 
-    // BUTTON EDGES ARE DRAINED; THE POSITION IS SAMPLED. This poll runs
-    // from scheduler_idle(), so on a busy machine a whole click can fall
-    // between two passes -- comparing the mask against the last one seen
-    // then reports nothing at all (api/mouse.h's transition queue). Each
-    // edge carries the position it is being delivered at, which is why
-    // draining one satisfies the motion push below as well.
-    uint8_t edge = 0;
-    int pushed = 0;
-    for (int budget = 32; budget > 0; budget--) {
-        if (!mouse_try_get_button_transition(&edge)) break;
-        push(WIN_EV_RAW_MOUSE, x, y, edge);
-        pushed = 1;
-    }
-    if (!pushed && (x != g_last_x || y != g_last_y))
-        push(WIN_EV_RAW_MOUSE, x, y, buttons);
+    if (x != lx || y != ly)
+        push(WIN_EV_RAW_MOUSE, x, y, g_last_buttons);
     g_last_x = x;
     g_last_y = y;
-    g_last_buttons = buttons;
 
     // Keys and wheel notches are CONSUMING reads, so each one is pushed
     // exactly once and there is no "on change" to apply -- a repeated

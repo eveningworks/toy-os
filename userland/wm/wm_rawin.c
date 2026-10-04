@@ -61,6 +61,11 @@
 static int g_mx, g_my;
 static uint8_t g_buttons;
 static int g_seeded;
+// What this FRAME shows: an edge being replayed shows the position it
+// happened at, else the newest position.
+static int g_show_x, g_show_y;
+static uint8_t g_show_mods;
+static int g_show_edge;
 
 // **BUTTON MASKS ARE A QUEUE, AND THE FRAME TAKES ONE PER FRAME.** The
 // position above is a state and coalesces; a button change is a thing
@@ -70,8 +75,15 @@ static int g_seeded;
 // its release arriving together cancel and the click is gone. The
 // kernel already keeps them apart (win_input.c pushes one event per
 // edge, and its queue refuses to coalesce a move over a differing mask).
-#define WM_RAWIN_BTNS 32
-static uint8_t g_btn_q[WM_RAWIN_BTNS];
+//
+// AN EDGE KEEPS ITS POSITION AND MODIFIERS. Replayed a frame later, it
+// must still say where it happened and what was held then -- a press at
+// A and a release at B drained together used to replay as a press at B.
+// Motion coalesces only up to the next edge (wm_rawin_mouse()).
+// One more than a pump can deliver, since a full ring holds size - 1.
+#define WM_RAWIN_BTNS 64
+struct rawin_btn { uint8_t buttons, mods; int x, y; };
+static struct rawin_btn g_btn_q[WM_RAWIN_BTNS];
 static int g_btn_head, g_btn_tail;
 // The newest mask SEEN, which is what a queued edge is compared against.
 // g_buttons is the one being SHOWN this frame and can be several edges
@@ -81,11 +93,13 @@ static int g_btn_head, g_btn_tail;
 // let whichever ran first eat the frame's click.
 static uint8_t g_btn_latest;
 
-static void btn_push(uint8_t mask) {
+static uint8_t g_key_mods;
+
+static void btn_push(uint8_t mask, int x, int y) {
     int next = (g_btn_head + 1) % WM_RAWIN_BTNS;
     // Oldest out, so the releases survive -- wm_rawin.c's key rule.
     if (next == g_btn_tail) g_btn_tail = (g_btn_tail + 1) % WM_RAWIN_BTNS;
-    g_btn_q[g_btn_head] = mask;
+    g_btn_q[g_btn_head] = (struct rawin_btn){ mask, g_key_mods, x, y };
     g_btn_head = next;
 }
 
@@ -96,10 +110,10 @@ static void btn_push(uint8_t mask) {
 #define WM_RAWIN_DRAIN_MAX 32
 
 // KEYS ARE A QUEUE -- see wm_rawin.h for why that changed when releases
-// arrived. Same depth as the drain budget, for the same reason: a pump
-// cannot deliver more than one queue's worth, so the queue cannot need
-// to hold more.
-#define WM_RAWIN_KEYS 32
+// arrived. The frame takes one key, and wm.c does not park while any
+// wait (wm_rawin_pending()), so a backlog drains at loop speed; the ring
+// holds one full pump on top of one (a full ring holds size - 1).
+#define WM_RAWIN_KEYS 64
 struct rawin_key {
     int     code;
     uint8_t mods;
@@ -108,11 +122,9 @@ struct rawin_key {
 static struct rawin_key g_keys[WM_RAWIN_KEYS];
 static int g_key_head, g_key_tail;
 
-// The modifiers as of the most recent key event, kept beside the queue
-// rather than read out of it: desktop.c wants "what is held now" without
-// consuming anything, and taking it from the queue's tail would answer
-// with the OLDEST unconsumed event instead of the newest.
-static uint8_t g_key_mods;
+// g_key_mods (above btn_push) is the modifiers as of the most recent key
+// event, kept beside the queue rather than read out of it: "what is held
+// now" without consuming anything.
 static int g_wheel;
 
 static void key_push(int code, uint8_t mods, int down) {
@@ -158,6 +170,9 @@ void wm_rawin_init(int screen_w, int screen_h) {
     g_buttons = 0;
     g_btn_latest = 0;
     g_btn_head = g_btn_tail = 0;
+    g_show_x = g_mx;
+    g_show_y = g_my;
+    g_show_edge = 0;
     g_seeded = 1;
 }
 
@@ -167,6 +182,8 @@ void wm_rawin_clamp(int screen_w, int screen_h) {
     if (g_my >= screen_h) g_my = screen_h - 1;
     if (g_mx < 0) g_mx = 0;
     if (g_my < 0) g_my = 0;
+    if (g_show_x >= screen_w) g_show_x = screen_w - 1;
+    if (g_show_y >= screen_h) g_show_y = screen_h - 1;
 }
 
 void wm_rawin_pump(void) {
@@ -181,12 +198,13 @@ void wm_rawin_pump(void) {
     while (budget-- > 0 && sys_poll_event(&ev) == 1) {
         switch (ev.type) {
         case WIN_EV_RAW_MOUSE:
-            // Position coalesced by assignment -- the newest wins.
+            // Position coalesced by assignment -- the newest wins --
+            // except that an edge also keeps its own.
             g_mx = ev.a;
             g_my = ev.b;
             if ((uint8_t)ev.mods != g_btn_latest) {
                 g_btn_latest = (uint8_t)ev.mods;
-                btn_push(g_btn_latest);
+                btn_push(g_btn_latest, ev.a, ev.b);
             }
             break;
         case WIN_EV_RAW_KEY:
@@ -227,15 +245,30 @@ void wm_rawin_pump(void) {
     // pump takes two frames to play out, which is what makes it a
     // click rather than nothing at all.
     if (g_btn_tail != g_btn_head) {
-        g_buttons = g_btn_q[g_btn_tail];
+        const struct rawin_btn *e = &g_btn_q[g_btn_tail];
+        g_buttons = e->buttons;
+        g_show_x = e->x;
+        g_show_y = e->y;
+        g_show_mods = e->mods;
+        g_show_edge = 1;
         g_btn_tail = (g_btn_tail + 1) % WM_RAWIN_BTNS;
+    } else {
+        g_show_x = g_mx;
+        g_show_y = g_my;
+        g_show_edge = 0;
     }
 }
 
 void wm_rawin_mouse(int *out_x, int *out_y, uint8_t *out_buttons) {
-    if (out_x) *out_x = g_mx;
-    if (out_y) *out_y = g_my;
+    if (out_x) *out_x = g_show_x;
+    if (out_y) *out_y = g_show_y;
     if (out_buttons) *out_buttons = g_buttons;
+}
+
+uint8_t wm_rawin_pointer_mods(void) { return g_show_edge ? g_show_mods : g_key_mods; }
+
+int wm_rawin_pending(void) {
+    return g_key_tail != g_key_head || g_btn_tail != g_btn_head;
 }
 
 int wm_rawin_take_key(uint8_t *out_mods, int *out_down) {

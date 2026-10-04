@@ -69,6 +69,9 @@ void mouse_get_state(int *x, int *y, uint8_t *buttons);
 // and the click is gone. Whoever turns pointer state into events drains
 // this first and samples the level only when it is empty.
 int mouse_try_get_button_transition(uint8_t *out_mask);
+// The same, with the position the pointer had when the edge was
+// reported -- what an event for it must carry.
+int mouse_try_get_button_edge(uint8_t *out_mask, int *out_x, int *out_y);
 
 // The bounds the pointer is clamped to. These are NOT always the
 // display size -- they are whatever mouse_set_bounds() was last given,

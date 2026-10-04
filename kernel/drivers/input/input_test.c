@@ -341,6 +341,42 @@ KTEST("input", "a press and its release both survive one polling pass") {
     KTEST_ASSERT(!rgot2);
 }
 
+KTEST("input", "a button edge keeps the position it was reported at") {
+    // A press at A and a release at B drained in one pass must not both
+    // read B, or the compositor sees a click become a drag. Same
+    // preemption rule as the test above: nothing asserted while it is off.
+    scheduler_preempt_disable();
+    int x0 = 0, y0 = 0, bw = 0, bh = 0;
+    uint8_t before = 0;
+    mouse_get_state(&x0, &y0, &before);
+    mouse_get_bounds(&bw, &bh);
+    while (mouse_try_get_button_edge(0, 0, 0)) ;
+
+    int ax = bw / 4, ay = bh / 4, bx = bw / 2, by = bh / 2;
+    mouse_set_position(ax, ay);
+    input_report_buttons(0x01);
+    mouse_set_position(bx, by);
+    input_report_buttons(0);
+
+    uint8_t m1 = 0xFF, m2 = 0xFF;
+    int x1 = -1, y1 = -1, x2 = -1, y2 = -1;
+    int got1 = mouse_try_get_button_edge(&m1, &x1, &y1);
+    int got2 = mouse_try_get_button_edge(&m2, &x2, &y2);
+
+    mouse_set_position(x0, y0);
+    input_report_buttons(before);
+    while (mouse_try_get_button_edge(0, 0, 0)) ;
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT(got1 && got2);
+    KTEST_ASSERT_EQ(m1, 0x01);
+    KTEST_ASSERT_EQ(x1, ax);
+    KTEST_ASSERT_EQ(y1, ay);
+    KTEST_ASSERT_EQ(m2, 0);
+    KTEST_ASSERT_EQ(x2, bx);
+    KTEST_ASSERT_EQ(y2, by);
+}
+
 KTEST("input", "the PS/2 pair registered itself with the core") {
     // The registry is what makes a second kind of input device
     // possible; if the built-in pair stopped appearing in it, a `lsdev`
