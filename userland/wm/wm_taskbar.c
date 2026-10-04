@@ -310,14 +310,16 @@ static int same_app(int a, int b) {
 // A menu is not a window the strip lists -- and neither is a DIALOG,
 // which belongs to the window that owns it (Win32 gives an owned window
 // no button of its own either). Both are `unlisted`.
-// A popup or a dialog has no button -- nor does a window a screenshot
-// is hiding (WIN_SHOT_NO_SELF): the tool is not in its own picture,
-// taskbar included.
-static int unlisted(int i) {
-    if (windows[i].popup || windows[i].dialog) return 1;
+// A popup or a dialog is NEVER a strip window; a window a screenshot is
+// hiding (WIN_SHOT_NO_SELF) is one, but not SHOWN NOW: the tool is not
+// in its own picture, taskbar included. A rank belongs to every strip
+// window; a button only to those shown now.
+static int strip_window(int i) { return !windows[i].popup && !windows[i].dialog; }
+static int shown_now(int i) {
     int hidden = wm_render_hidden_pid();
-    return hidden && wm_client_is_client_window(&windows[i]) && windows[i].client_pid == hidden;
+    return !(hidden && wm_client_is_client_window(&windows[i]) && windows[i].client_pid == hidden);
 }
+static int unlisted(int i) { return !strip_window(i) || !shown_now(i); }
 
 // THE STRIP LISTS IN `task_rank` ORDER, never windows[] order:
 // windows[] is z-order, a click raises, and a raise moves the window to
@@ -661,9 +663,10 @@ int taskbar_layout(struct taskbar_button *out, int max) {
     }
     // THE OVERFLOW BUTTON takes its room from the row only when something
     // will not fit -- Windows 11's "..." at the end of the strip.
-    // WHENEVER ANYTHING IS HIDDEN IT IS THERE, the buttons giving way to
-    // it down to none -- every window keeps a handle. Only a strip too
-    // narrow for the overflow button alone places nothing at all.
+    // WHENEVER ANYTHING IS HIDDEN AND IT FITS, IT IS THERE, the buttons
+    // giving way to it down to none -- every window keeps a handle. A
+    // strip too narrow for it alone keeps the buttons that fit: some
+    // handles beat none.
     int fit = (avail + TB_GAP) / (w + TB_GAP);
     if (fit > max) fit = max;
     int ovf = 0;
@@ -675,8 +678,6 @@ int taskbar_layout(struct taskbar_button *out, int max) {
             fit = (avail - ovf) / (w + TB_GAP);
             if (fit > max) fit = max;
             if (fit < 0) fit = 0;
-        } else {
-            fit = 0;
         }
     }
     if (n > fit) n = fit;
@@ -1014,7 +1015,7 @@ static void commit_order(void) {
         uint32_t seq = 0;
         int members[TB_BUTTONS_MAX], m = 0;
         for (int i; m < TB_BUTTONS_MAX && (i = next_in_order(&seq)) >= 0; )
-            if (!unlisted(i) && same_app(i, starter)) members[m++] = i;
+            if (strip_window(i) && same_app(i, starter)) members[m++] = i;
         for (int j = 0; j < m; j++) windows[members[j]].task_rank = wm_next_open_seq();
     }
     if (!first_new) return;
@@ -1024,7 +1025,7 @@ static void commit_order(void) {
     // rank, where it would meet the windows it has just re-ranked.
     uint32_t seq = 0;
     for (int i; (i = next_in_order(&seq)) >= 0 && seq < first_new; )
-        if (!windows[i].popup && !windows[i].dialog) windows[i].task_rank = wm_next_open_seq();
+        if (strip_window(i)) windows[i].task_rank = wm_next_open_seq();
 }
 
 // Raise without the toggle a click has: a drag-over wants the window IN

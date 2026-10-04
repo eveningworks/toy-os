@@ -690,7 +690,11 @@ def check_close_all_join(dbg, qmp, res):
     force_quit_notice(dbg, nt)
 
 
-LONG_NAMES = ["/tmp/close-all-notice-check-a-rather-long-name-%d.txt" % k for k in range(3)]
+# Distinct in their FIRST characters: a window title is cut short, so a
+# suffix ("-0", "-1") would not tell the windows apart.
+LONG_NAMES = ["/tmp/n%d-close-all-notice-check-a-long-name.txt" % k for k in range(3)]
+# CLOSE_BATCH_WAIT_NS in userland/wm/close_batch.h -- keep the two equal.
+CLOSE_WAIT_S = 5.0
 
 
 def check_stayed_sentence(dbg, qmp, res):
@@ -698,49 +702,62 @@ def check_stayed_sentence(dbg, qmp, res):
     TITLES, never its end -- "and 1 more did not close. The other 1
     closed." -- where a fixed buffer used to cut it mid-word."""
     close_everything(dbg)
-    dirty = 0
     for path in LONG_NAMES:
         dbg.send(f"sh write {path} hello")
         before = dbg.state()["windows"]
         dbg.send(f"gui spawn {NOTEPAD} {path}")
+        # THIS file's window, focused: the prefix is unique to it.
         poll(lambda: dbg.state()["windows"] > before and
-             os.path.basename(path)[:8] in focused_title(dbg), 15)
+             focused_title(dbg).startswith(path[:12]), 15)
         dbg.settle()
         qmp.send_text("x")   # dirty: it will ask to save
-        dirty += bool(poll(lambda: focused_title(dbg).startswith("*"), 6))
+        poll(lambda: focused_title(dbg).startswith("*" + path[:12]), 6)
+    titles = [w.get("title", "") for w in dbg.windows()]
+    dirty = [p for p in LONG_NAMES if any(t.startswith("*" + p[:12]) for t in titles)]
+    res.check("three long-titled Notepads, each with unsaved text",
+              len(dirty) == 3, f"titles {titles}")
     spawn_notepads(dbg, 1)   # the one that closes
     tb = strip(dbg)
     dbg.logs("closeall:", clear=True)
     if tb["buttons"]:
         window_menu_for_button(dbg, tb["buttons"][0])
     row = dbg.ctxmenu_row("Close all 4 windows")
+    t_ask = time.time()   # the WM's deadline is no earlier than this + CLOSE_WAIT_S
     if row:
         dbg.click(*row)
         dbg.settle()
     # A REPEATED Close all that asks nobody must not push the card back:
-    # half-way through the wait, ask the three that are still open again.
+    # early in the wait, ask the three that are still open again.
     poll(lambda: not notepads(dbg), 4)   # the clean one, "untitled", has closed
-    t0 = time.time()
-    time.sleep(2.5)   # the gap under test, not a wait for state
+    time.sleep(CLOSE_WAIT_S / 4)   # the gap under test, not a wait for state
     tb = strip(dbg)
     if tb["buttons"]:
         window_menu_for_button(dbg, tb["buttons"][0])
     row = dbg.ctxmenu_row("Close all 3 windows")
+    t_rep = time.time()   # the repeat lands no earlier than this
     if row:
         dbg.click(*row)
-    t1 = time.time()
+    t_rep_done = time.time()
     said = wait_log(dbg, "did not close", 12)
-    t2 = time.time()
+    t_card = time.time()
     again = asks(dbg)
-    res.check("a repeated Close all asks nobody and does not restart the wait",
-              len(again) == 2 and "asking 0 " in again[1] and bool(said) and t2 < t1 + 4.0,
-              f"asks {again}; repeat at +{t1 - t0:.1f}s, card at +{t2 - t0:.1f}s")
+    detail = (f"asks {again}; repeat at +{t_rep - t_ask:.1f}..{t_rep_done - t_ask:.1f}s, "
+              f"card seen at +{t_card - t_ask:.1f}s, wait {CLOSE_WAIT_S}s")
+    if t_rep_done >= t_ask + CLOSE_WAIT_S:
+        # A slow guest: the repeat may have landed after the wait, where
+        # it starts a batch of its own and proves nothing either way.
+        print(f"  SKIP  a repeated Close all does not restart the wait -- {detail}")
+    else:
+        # Restarted, the card could not come before t_rep + the wait.
+        res.check("a repeated Close all asks nobody and does not restart the wait",
+                  len(again) == 2 and "asking 0 " in again[1] and bool(said) and
+                  t_card < t_rep + CLOSE_WAIT_S, detail)
     nt = poll(lambda: dbg.state().get("notice"), 3) or {}
     sub = nt.get("sub", "")
     res.check("three long titles stayed: the sentence keeps its count and its end",
-              dirty == 3 and bool(said) and "3 of 4" in said and
+              bool(said) and "3 of 4" in said and
               sub.endswith("and 1 more did not close. The other 1 closed.") and ".." in sub,
-              f"{dirty} made dirty, log {said!r}, notice {nt}")
+              f"log {said!r}, notice {nt}")
     force_quit_notice(dbg, nt)
     for path in LONG_NAMES:
         dbg.send(f"sh rm {path}")

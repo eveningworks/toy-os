@@ -40,7 +40,9 @@ int close_batch_ask(struct close_batch *b) {
         if (b->e[k].asked) continue;
         b->e[k].asked = 1;
         int i = close_batch_window(b, k);
-        if (i >= 0) { wm_request_close(i); asked++; }
+        // Already asking something (its save prompt, still open from an
+        // earlier batch): a second close would ask it twice.
+        if (i >= 0 && wm_dialog_blocker(i) < 0) { wm_request_close(i); asked++; }
     }
     // Only a NEW ask restarts the wait: a repeated click that asks
     // nobody must not keep pushing the notice back.
