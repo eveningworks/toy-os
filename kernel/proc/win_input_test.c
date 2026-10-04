@@ -132,16 +132,20 @@ KTEST("win_input", "mouse motion coalesces into one slot, and a press keeps its 
     }
     KTEST_ASSERT_EQ(win_input_pending(), 1);
     KTEST_ASSERT_EQ(win_input_dropped(), 0);
-    struct win_event press = raw_mouse(100, 200, 1);   // button down: a new slot
-    KTEST_ASSERT(win_input_push(&press));
-    struct win_event drag = raw_mouse(101, 201, 1);    // moving with it held: merges into that slot
+    struct win_event press = raw_mouse(100, 200, 1);   // button down: an EDGE, its own slot
+    KTEST_ASSERT(win_input_push_mouse_edge(&press, WIN_INPUT_EDGE_DOWN));
+    struct win_event drag = raw_mouse(101, 201, 1);    // moving with it held: NOT merged into the press
     KTEST_ASSERT(win_input_push(&drag));
-    KTEST_ASSERT_EQ(win_input_pending(), 2);
+    struct win_event drag2 = raw_mouse(102, 202, 1);   // ...but into the drag before it
+    KTEST_ASSERT(win_input_push(&drag2));
+    KTEST_ASSERT_EQ(win_input_pending(), 3);
     struct win_event got;
     KTEST_ASSERT(win_input_pop(&got));
     KTEST_ASSERT_EQ(got.a, 3 * WIN_EVENT_QUEUE_MAX - 1);   // the newest position won
     KTEST_ASSERT(win_input_pop(&got));
-    KTEST_ASSERT_EQ(got.a, 101); KTEST_ASSERT_EQ((int)got.mods, 1);
+    KTEST_ASSERT_EQ(got.a, 100); KTEST_ASSERT_EQ((int)got.mods, 1);   // the press stayed put
+    KTEST_ASSERT(win_input_pop(&got));
+    KTEST_ASSERT_EQ(got.a, 102);
     win_server_set_compositor(0, 0);
 }
 
@@ -507,24 +511,54 @@ KTEST("win_input", "a release with nowhere to go is refused and counted") {
     KTEST_ASSERT_EQ(dropped_after, dropped_before + 1);
 }
 
-KTEST("win_input", "a button-up edge is kept like a key release; motion is not") {
-    // The caller says which pushes are edges; a button-up is never shed.
+KTEST("win_input", "a button-up edge is kept like a key release; motion is the one evicted") {
+    // Motion first, then a full share of button-up edges: the last edge
+    // needs a slot, and the motion -- unkept -- is the one that goes.
     SKIP_IF_ROLE_HELD;
     int pid = spare_pid();
     if (!pid) KTEST_SKIP("no spare pid");
     win_server_set_compositor(pid, 0);
+    struct win_event move = raw_mouse(1000, 1000, 0);
+    int took_move = win_input_push(&move);
     int took_ups = 0;
     for (int i = 0; i < WIN_INPUT_MAX; i++) {
         struct win_event up = raw_mouse(i, i, 0);
         took_ups += win_input_push_mouse_edge(&up, WIN_INPUT_EDGE_UP);
     }
-    struct win_event move = raw_mouse(500, 500, 0);
-    int took_move = win_input_push(&move);       // nothing unkept to evict
-    int ups = 0;
+    int bad = win_input_push_mouse_edge(&move, 3)          // not an edge value
+            + win_input_push_mouse_edge(&(struct win_event){ .type = WIN_EV_RAW_KEY }, WIN_INPUT_EDGE_UP);
+    int ups = 0, moves = 0;
     struct win_event got;
-    while (win_input_pop(&got)) if (got.type == WIN_EV_RAW_MOUSE && got.a < WIN_INPUT_MAX) ups++;
+    while (win_input_pop(&got)) {
+        if (got.a == 1000) moves++;
+        else if (got.type == WIN_EV_RAW_MOUSE) ups++;
+    }
     win_server_set_compositor(0, 0);
+    KTEST_ASSERT(took_move);
     KTEST_ASSERT_EQ(took_ups, WIN_INPUT_MAX);
-    KTEST_ASSERT(!took_move);
     KTEST_ASSERT_EQ(ups, WIN_INPUT_MAX);
+    KTEST_ASSERT_EQ(moves, 0);                  // evicted, not a release
+    KTEST_ASSERT_EQ(bad, 0);                    // both refused outright
+}
+
+KTEST("win_input", "a refused release is logged") {
+    SKIP_IF_ROLE_HELD;
+    int pid = spare_pid();
+    if (!pid) KTEST_SKIP("no spare pid");
+    win_server_set_compositor(pid, 0);
+    for (int i = 0; i < WIN_INPUT_MAX; i++) {
+        struct win_event up = { .type = WIN_EV_RAW_KEY_UP, .a = 'a' + i % 26 };
+        win_input_push(&up);
+    }
+    win_input_refuse_log_reset();               // past the once-a-second limit
+    uint64_t from = klog_total_bytes();
+    struct win_event up = { .type = WIN_EV_RAW_KEY_UP, .a = 'z' };
+    int took = win_input_push(&up);
+    static char tail[512];
+    uint64_t first = 0;
+    uint32_t n = klog_read(from, tail, sizeof tail - 1, &first);
+    tail[n] = 0;
+    win_server_set_compositor(0, 0);
+    KTEST_ASSERT(!took);
+    KTEST_ASSERT(k_strstr(tail, "found no room") != 0);
 }

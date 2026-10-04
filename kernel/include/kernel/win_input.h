@@ -54,10 +54,16 @@ int win_input_push(const struct win_event *ev);
 
 // A RAW_MOUSE button edge: WIN_INPUT_EDGE_DOWN (a press) or
 // WIN_INPUT_EDGE_UP (a release -- kept like a key release, never shed).
-// Never merged with motion. Same return as win_input_push().
+// Never merged with motion. win_input_poll() reports its own edges
+// through this. Returns 0 for a non-RAW_MOUSE event or any other edge
+// value, else as win_input_push().
 #define WIN_INPUT_EDGE_DOWN 1
 #define WIN_INPUT_EDGE_UP   2
 int win_input_push_mouse_edge(const struct win_event *ev, int edge);
+
+// For a KTEST that must see a refused release's log line: lets the next
+// one through the once-a-second limit at once.
+void win_input_refuse_log_reset(void);
 
 // win_input_poll()'s key half: the key and positional streams, in turn,
 // as far as input's share of the queue allows. Exported for its KTEST.

@@ -100,7 +100,7 @@ static void unmap_scanouts(uint64_t pml4, int count, uint64_t pages) {
 // something the panel is reading. Counted rather than assumed away:
 // "a window drawn in front of you" is what that looks like.
 static unsigned long long g_back_fallback, g_back_calls;
-static struct ratelimit g_back_rl;   // both lines below share one a second
+static struct ratelimit g_rotate_rl, g_fallback_rl;   // a line a second each
 
 void win_surface_back_stats(unsigned long long *calls, unsigned long long *fallback) {
     if (calls)    *calls    = g_back_calls;
@@ -117,17 +117,20 @@ static int free_back(void) {
     // WM moved to ring 3 (nothing in userland/ can read a kernel flag),
     // and this is the half of the WM that stayed behind.
     if (dbgflag_enabled(DBGFLAG_WM)) {
-        if (ratelimit_ok(&g_back_rl, 0)) {
-            klog_printf("win_surface: rotate front %d live %d of %d (presents %llu, fallback %llu)\n",
-                        g_front, live, g_count, g_back_calls, g_back_fallback);
+        unsigned held = 0;
+        if (ratelimit_ok(&g_rotate_rl, &held)) {
+            klog_printf("win_surface: rotate front %d live %d of %d (presents %llu, fallback %llu; "
+                        "%u more)\n", g_front, live, g_count, g_back_calls, g_back_fallback, held);
         }
     }
     for (int b = 0; b < g_count; b++)
         if (b != g_front && b != live) return b;
     g_back_fallback++;
-    if (ratelimit_ok(&g_back_rl, 0)) {
+    unsigned held = 0;
+    if (ratelimit_ok(&g_fallback_rl, &held)) {
         klog_printf("win_surface: no free buffer (front %d live %d of %d) -- handing back 0, "
-                    "%llu of %llu\n", g_front, live, g_count, g_back_fallback, g_back_calls);
+                    "%llu of %llu (%u more)\n", g_front, live, g_count, g_back_fallback,
+                    g_back_calls, held);
     }
     return 0;
 }

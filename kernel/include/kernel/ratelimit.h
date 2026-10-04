@@ -32,4 +32,11 @@ static inline int ratelimit_ok(struct ratelimit *rl, unsigned *held) {
     return 1;
 }
 
+// Forget the last line: the next one goes at once. For a KTEST that has
+// to see the line, never for production code.
+static inline void ratelimit_reset(struct ratelimit *rl) {
+    rl->next_ns = 0;
+    rl->suppressed = 0;
+}
+
 #endif

@@ -93,19 +93,22 @@ static void remove_at(int i) {
 }
 
 // `edge`: 0 for no button edge, EDGE_DOWN or EDGE_UP for one -- always
-// the CALLER's truth (the poll knows its edges; a direct push says so
-// through win_input_push_mouse_edge()), never guessed from the bits.
+// the CALLER's truth, stated through win_input_push_mouse_edge() (the
+// poll's push_button_edge() and any direct push alike), never guessed
+// from the bits.
 #define EDGE_DOWN WIN_INPUT_EDGE_DOWN
 #define EDGE_UP   WIN_INPUT_EDGE_UP
 
 // The one way an event is refused: counted, and a RELEASE said (at most
 // a line a second, kernel/ratelimit.h) -- a client will hold that key or
 // button. 0, for the caller to return.
+static struct ratelimit g_refuse_rl;
+void win_input_refuse_log_reset(void) { ratelimit_reset(&g_refuse_rl); }
+
 static int refuse(const struct win_event *ev, int release) {
-    static struct ratelimit rl;
     unsigned held = 0;
     q.dropped++;
-    if (release && ratelimit_ok(&rl, &held))
+    if (release && ratelimit_ok(&g_refuse_rl, &held))
         klog_printf(KLOG_ERR "win_input: a release (type %u) found no room "
                     "(%u more not logged)\n", ev->type, held);
     return 0;
@@ -190,8 +193,9 @@ static int queue_push(const struct win_event *ev, int edge) {
 int win_input_push(const struct win_event *ev) { return queue_push(ev, 0); }
 
 int win_input_push_mouse_edge(const struct win_event *ev, int edge) {
-    if (!ev || ev->type != WIN_EV_RAW_MOUSE) return 0;
-    return queue_push(ev, edge == EDGE_UP ? EDGE_UP : EDGE_DOWN);
+    if (!ev || ev->type != WIN_EV_RAW_MOUSE) return 0;          // not a mouse event
+    if (edge != EDGE_UP && edge != EDGE_DOWN) return 0;         // not an edge
+    return queue_push(ev, edge);
 }
 
 // What an input drain may take: input's share of the queue, unused.
@@ -227,18 +231,36 @@ int win_input_dropped(void) { return q.dropped; }
 static int g_last_x = -1, g_last_y = -1;
 static uint8_t g_last_buttons;   // the mask last PUSHED -- only an edge changes it
 
-static void push_ev(uint32_t type, int32_t a, int32_t b, uint32_t mods, int edge) {
+static void push(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
     struct win_event ev;
     k_memset(&ev, 0, sizeof ev);
     ev.type = type;
     ev.a = a;
     ev.b = b;
     ev.mods = mods;
-    queue_push(&ev, edge);
+    queue_push(&ev, 0);
 }
 
-static void push(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
-    push_ev(type, a, b, mods, 0);
+// One button transition, as the edges a client needs: the buttons it
+// LIFTS as a release (mask without them), then the ones it PRESSES as a
+// press (the new mask) -- so 01 -> 10 is an up AND a down, and the up is
+// kept like any release. Through win_input_push_mouse_edge(), the same
+// door a direct push uses. Needs two slots; the caller checks.
+static void push_button_edge(int x, int y, uint8_t from, uint8_t to) {
+    struct win_event ev;
+    k_memset(&ev, 0, sizeof ev);
+    ev.type = WIN_EV_RAW_MOUSE;
+    ev.a = x;
+    ev.b = y;
+    uint8_t lifted = from & (uint8_t)~to, pressed = to & (uint8_t)~from;
+    if (lifted) {
+        ev.mods = from & (uint8_t)~lifted;
+        win_input_push_mouse_edge(&ev, EDGE_UP);
+    }
+    if (pressed || !lifted) {
+        ev.mods = to;
+        win_input_push_mouse_edge(&ev, EDGE_DOWN);
+    }
 }
 
 static int take_key(void) {
@@ -300,12 +322,12 @@ void win_input_poll(void) {
     uint8_t edge = 0;
     // EVERY SOURCE BELOW IS READ ONLY WHILE THE QUEUE HAS ROOM, and what
     // does not fit stays in its own queue for the next poll -- so this
-    // poll never makes queue_push() evict input to fit input.
+    // poll never makes queue_push() evict input to fit input. A button
+    // transition may be two events (push_button_edge()), so it waits for
+    // two slots.
     int ex = 0, ey = 0;
-    while (input_room() > 0 && mouse_try_get_button_edge(&edge, &ex, &ey)) {
-        // An edge that lifts any button is a release: never shed.
-        push_ev(WIN_EV_RAW_MOUSE, ex, ey, edge,
-                (g_last_buttons & (uint8_t)~edge) ? EDGE_UP : EDGE_DOWN);
+    while (input_room() >= 2 && mouse_try_get_button_edge(&edge, &ex, &ey)) {
+        push_button_edge(ex, ey, g_last_buttons, edge);
         g_last_buttons = edge;
         lx = ex;
         ly = ey;

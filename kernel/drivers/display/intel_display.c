@@ -412,13 +412,14 @@ static int intel_scanout_live(void) {
     for (int b = 0; b < g_scanouts; b++)
         if (g_scanout_ggtt[b] == live) return b;
     g_live_miss++;
-    if (ratelimit_ok(&g_live_rl, 0)) {      // one line a second
+    unsigned held = 0;
+    if (ratelimit_ok(&g_live_rl, &held)) {  // one line a second
         klog_printf("intel-display: DSPSURFLIVE %#x matches no scanout (%llu of %llu) -- "
-                    "assuming 0; scanouts %#x %#x %#x\n",
+                    "assuming 0; scanouts %#x %#x %#x (%u more)\n",
                     live, g_live_miss, g_live_calls,
                     g_scanouts > 0 ? g_scanout_ggtt[0] : 0,
                     g_scanouts > 1 ? g_scanout_ggtt[1] : 0,
-                    g_scanouts > 2 ? g_scanout_ggtt[2] : 0);
+                    g_scanouts > 2 ? g_scanout_ggtt[2] : 0, held);
     }
     return 0;
 }
