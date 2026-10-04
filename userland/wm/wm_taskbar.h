@@ -35,11 +35,13 @@
 // font-derived floor as more windows open, and once even the floor will
 // not fit, windows of the same application COLLAPSE into one button
 // carrying a count. Clicking a collapsed button opens a list of its
-// windows (Windows' jump list; KDE Plasma's grouped-task popup). The
-// deliberate difference from Windows is what happens past that: it never
-// runs out, because it scrolls. This drops the buttons that do not fit
-// and says so through `taskbar_hidden()` rather than drawing off-screen,
-// which is the failure this file exists to end. A second row is the
+// windows (Windows' jump list; KDE Plasma's grouped-task popup).
+// `desktop.taskbar_combine` moves that point -- always, when full (the
+// above), never -- as Windows 11's "Combine taskbar buttons" does. Past
+// it, the buttons that do not fit go behind an OVERFLOW button at the
+// end of the row, a count that opens a list of them (Windows 11's
+// overflow flyout), rather than being drawn off-screen, which is the
+// failure this file exists to end. A second row is the
 // obvious next step and is deliberately not taken -- `taskbar_h` is a
 // constant that the desktop icon area, the Start menu's anchor, the
 // context-menu clamp and every damage rect all derive from -- and now
@@ -241,11 +243,33 @@ int taskbar_hover(void);
 // counter is what says "ask again". The idle cost is one compare.
 void taskbar_poll_config(void);
 
-// How many windows the last taskbar_layout() could not place at all.
-// Nonzero only when even collapsed, floor-width buttons overflow the
-// strip. Read by the debug console so a test can assert the strip
-// stopped overflowing rather than assert on pixels.
+// How many windows the last taskbar_layout() could not give a button --
+// the ones behind the overflow button. Nonzero only when even the floor
+// width (and, when combining, grouping) does not fit them.
 int taskbar_hidden(void);
+
+// WHEN WINDOWS OF ONE APP SHARE A BUTTON: `desktop.taskbar_combine`.
+enum taskbar_combine {
+    TASKBAR_COMBINE_FULL,     // only when the floor width does not fit -- the DEFAULT
+    TASKBAR_COMBINE_ALWAYS,   // one button per app from the first window
+    TASKBAR_COMBINE_NEVER,    // one per window; past the floor, the overflow button
+};
+enum taskbar_combine taskbar_combine(void);
+
+// THE OVERFLOW BUTTON, after the last window button while anything is
+// hidden: its x and width from the last layout, and how many windows it
+// stands for (0 = there is none). Its press opens their list on release.
+int taskbar_overflow(int *x, int *w);
+int taskbar_overflow_menu_open(void);
+int taskbar_overflow_armed(void);   // pressed, not yet released
+#define TASKBAR_HOVER_OVERFLOW (-3)
+
+// Listed windows of windows[idx]'s application, idx included; 0 when
+// idx itself has no button (a dialog, a popup). What "Close all N
+// windows" counts -- and taskbar_close_app() asks every one of them to
+// close (close_batch.h).
+int taskbar_app_windows(int idx);
+void taskbar_close_app(int idx);
 
 // A left PRESS at (mx, my) inside the taskbar's window-button area.
 // Returns 1 if a button claimed it -- which ARMS it: the click itself

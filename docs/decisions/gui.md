@@ -3195,17 +3195,26 @@ Windows has shrunk-then-grouped since XP; KDE Plasma shrinks then wraps
 to extra rows or scrolls; GNOME has no taskbar and Wayland has no
 protocol for one, so this is panel-side either way.
 
-**Where toy-os deliberately differs: it runs out.** Past the point where
-even collapsed floor-width buttons will not fit, the extras are DROPPED
-and counted through `taskbar_hidden()` rather than drawn off-screen.
-Windows and KDE never run out because they scroll or wrap. A second row
-was the tempting fix and was not taken, because `taskbar_h` is a
-constant that the desktop icon area, the Start menu's anchor, the
-context-menu clamp and every `wm_damage_rect(0, screen_h - taskbar_h,
-...)` all derive from -- a variable height is a change to all of those,
-for a case reached at about thirty windows. Reporting the shortfall
-honestly costs nothing and is what a test can assert on; drawing
-off-screen was the bug.
+**Past that, an overflow button -- Windows 11's shape.** Past the point
+where even the floor width (and, when combining, grouping) will not fit,
+the extras go behind an OVERFLOW button at the end of the row: an
+up-chevron and a count, whose list raises any of them. Until 2026-10-04
+they were DROPPED and counted through `taskbar_hidden()` alone, which a
+test could see and a user could not -- with `desktop.taskbar_combine`
+set to `never` the shortfall arrives at a dozen windows instead of
+thirty, and a window with no handle at all is not an answer. KDE scrolls
+or wraps; a second row was the tempting fix and is still not taken,
+because `taskbar_h` is a constant that the desktop icon area, the Start
+menu's anchor, the context-menu clamp and every `wm_damage_rect(0,
+screen_h - taskbar_h, ...)` all derive from. Drawing off-screen was the
+bug.
+
+**When to combine is the user's: `desktop.taskbar_combine`** -- `always`,
+`full` (the default, the policy above) or `never`, Windows 11's "Combine
+taskbar buttons" with its three values. `always` groups from the first
+window; `never` shrinks to the floor and then overflows. Plasma's
+equivalent is a grouping on/off plus "only when the taskbar is full",
+the same three outcomes as two controls.
 
 **Grouping needed an identity, and one already existed but was empty.**
 `struct window.app_id` is the client's own name for what its window IS,

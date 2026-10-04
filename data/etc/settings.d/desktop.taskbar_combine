@@ -1,0 +1,12 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Combine buttons
+Category=Desktop
+Group=Taskbar
+Default=full
+Choices=always,full,never
+Description=One button per app instead of one per window
+Order=12
+Choice.always=Always
+Choice.full=When full
+Choice.never=Never

@@ -110,7 +110,7 @@ def main():
         dbg.settle()
         # A clean fixture: nothing a previous tool left behind.
         for k in ("taskbar_buttons", "taskbar_align", "taskbar_float", "start_position", "taskbar_theme",
-                  "taskbar_height", "start_button", "taskbar_peek"):
+                  "taskbar_height", "start_button", "taskbar_peek", "taskbar_combine"):
             dbg.send(f"sh config unset desktop.{k}")
         dbg.settle()
         for app in ("Terminal", "Notepad"):

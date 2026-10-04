@@ -891,6 +891,20 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
                            taskbar_gliding() ? "true" : "false",
                            (unsigned)taskbar_glide_frames());
         }
+        {
+            // The overflow button, or null while nothing is hidden.
+            static const char *const combine_names[] = { "full", "always", "never" };
+            int ox, ow, oc = taskbar_overflow(&ox, &ow);
+            if (oc)
+                dbg_out_printf(o, "\"combine\":\"%s\",\"overflow\":{\"x\":%d,\"w\":%d,\"cx\":%d,"
+                               "\"cy\":%d,\"count\":%d,\"open\":%s},",
+                               combine_names[taskbar_combine()], ox, ow, ox + ow / 2,
+                               bar_y + taskbar_h / 2, oc,
+                               taskbar_overflow_menu_open() ? "true" : "false");
+            else
+                dbg_out_printf(o, "\"combine\":\"%s\",\"overflow\":null,",
+                               combine_names[taskbar_combine()]);
+        }
         dbg_out_printf(o, "\"start\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
                      "\"cx\":%d,\"cy\":%d,\"mark\":%s},\"tray_x\":%d,"
                      "\"tray_pressed\":%d,\"hidden\":%d,\"buttons\":[",

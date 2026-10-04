@@ -7,6 +7,7 @@
 // transparency entry measured a cached Start menu alone at 3.4 ms), and
 // the page asks for full-screen damage while it is up.
 #include "leave_page.h"
+#include "close_batch.h"
 #include "wm_internal.h"
 #include "wm_overlay.h"
 #include "wm_log.h"
@@ -17,7 +18,7 @@
 #include "ui/utheme.h"
 #include "kapi.h"
 #include "keyboard.h"   // KEY_ARROW_*
-#include "rt/sys.h"     // sys_poweroff(), sys_monotonic_ns()
+#include "rt/sys.h"     // sys_poweroff()
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -37,16 +38,12 @@ static char g_into_label[UBOOTMENU_MAX][UBOOTMENU_TITLE + 12];
 static struct context_menu_item g_into_item[UBOOTMENU_MAX];
 static char g_into_link[UBOOTMENU_TITLE + 24];
 
-// The apps asked to close. By (pid, window) and never by index:
-// close_window() renumbers windows[].
+// The apps asked to close (close_batch.h).
 // MORE THAN THIS MANY WINDOWS AND THE PAGE WILL NOT ACT: an app it did
 // not ask would lose its work unasked. Far past any real session here.
 #define LEAVE_APPS 128
-struct asked { int pid; uint32_t win; char title[48]; int gone; };
-static struct asked g_apps[LEAVE_APPS];
-static int g_app_n;
-static uint64_t g_deadline_ns;
-#define CLOSE_WAIT_NS 5000000000ull   // Windows waits about this long too
+static struct close_batch_entry g_store[LEAVE_APPS];
+static struct close_batch g_apps = { g_store, LEAVE_APPS, 0, 0 };
 
 static uint32_t *g_snap;
 static int g_snap_w, g_snap_h, g_snap_ok;
@@ -73,17 +70,7 @@ static int listed(const struct window *w) {
     return wm_client_is_client_window(w) && !w->popup && !w->dialog;
 }
 
-static int find_window(int pid, uint32_t win) {
-    for (int i = 0; i < window_count; i++)
-        if (windows[i].client_pid == pid && windows[i].client_win == win) return i;
-    return -1;
-}
-
-static int remaining(void) {
-    int n = 0;
-    for (int i = 0; i < g_app_n; i++) n += !g_apps[i].gone;
-    return n;
-}
+static int remaining(void) { return close_batch_remaining(&g_apps); }
 
 // --- acting -----------------------------------------------------------------
 
@@ -92,7 +79,7 @@ static void refused(const char *why) {
     k_strlcpy(g_note, why, sizeof g_note);
     wm_logf("leave: %s\n", why);
     g_phase = PH_CHOOSE;
-    g_app_n = 0;
+    close_batch_reset(&g_apps);
     redraw_pending = 1;
 }
 
@@ -136,7 +123,7 @@ static void perform(void) {
 
 static void begin(int action) {
     g_action = action;
-    g_app_n = 0;
+    close_batch_reset(&g_apps);
     g_note[0] = 0;
     int all = 0;
     for (int i = 0; i < window_count; i++) all += listed(&windows[i]);
@@ -144,37 +131,21 @@ static void begin(int action) {
         refused("Too many windows are open to ask; close some first.");
         return;
     }
-    for (int i = 0; i < window_count; i++) {
-        if (!listed(&windows[i])) continue;
-        struct asked *a = &g_apps[g_app_n++];
-        a->pid = windows[i].client_pid;
-        a->win = windows[i].client_win;
-        k_strlcpy(a->title, windows[i].title, sizeof a->title);
-        a->gone = 0;
-    }
-    wm_logf("leave: %s chosen, asking %d app(s) to close\n", NAME[action], g_app_n);
-    if (!g_app_n) { perform(); return; }
-    // Asked by (pid, window) each, since every close may renumber.
-    for (int i = 0; i < g_app_n; i++) {
-        int idx = find_window(g_apps[i].pid, g_apps[i].win);
-        if (idx >= 0) wm_request_close(idx);
-    }
+    for (int i = 0; i < window_count; i++)
+        if (listed(&windows[i])) close_batch_add(&g_apps, i);
+    wm_logf("leave: %s chosen, asking %d app(s) to close\n", NAME[action], g_apps.n);
+    if (!g_apps.n) { perform(); return; }
+    close_batch_ask(&g_apps);
     g_phase = PH_CLOSING;
     g_focus = 0;
-    g_deadline_ns = sys_monotonic_ns() + CLOSE_WAIT_NS;
     redraw_pending = 1;
 }
 
 void leave_page_poll(void) {
     if (!leave_page_open || g_phase == PH_CHOOSE) return;
-    int changed = 0;
-    for (int i = 0; i < g_app_n; i++)
-        if (!g_apps[i].gone && find_window(g_apps[i].pid, g_apps[i].win) < 0) {
-            g_apps[i].gone = 1;
-            changed = 1;
-        }
+    int changed = close_batch_update(&g_apps);
     if (!remaining()) { perform(); return; }
-    if (g_phase == PH_CLOSING && sys_monotonic_ns() >= g_deadline_ns) {
+    if (g_phase == PH_CLOSING && close_batch_expired(&g_apps)) {
         g_phase = PH_STUCK;
         g_focus = 0;   // Cancel: the safe answer is the default one
         wm_logf("leave: %d app(s) did not close\n", remaining());
@@ -221,7 +192,7 @@ void leave_page_show(enum leave_action focus) {
 void leave_page_cancel(void) {
     if (!leave_page_open) return;
     leave_page_open = 0;
-    g_app_n = 0;
+    close_batch_reset(&g_apps);
     // The snapshot is a whole screen: not kept between openings.
     free(g_snap);
     g_snap = 0;
@@ -259,7 +230,7 @@ static void layout(void) {
     // count under them (draw_closing).
     int fixed = D + u() * 5 + u() * 2 + btn_h() + u() * 2 + 2 * u();
     int fit = (H - fixed) / (rh + rg);
-    int rows = g_app_n < fit ? g_app_n : fit < 1 ? 1 : fit;
+    int rows = g_apps.n < fit ? g_apps.n : fit < 1 ? 1 : fit;
     g_rows_shown = rows;
     int block = D + u() * 5 + rows * (rh + rg) + u() * 2 + btn_h();
     int top = (H - block) / 2;
@@ -407,19 +378,19 @@ static void draw_closing(struct ugfx_surface *s) {
     }
     for (int i = 0; i < g_rows_shown; i++) {
         const struct rect *r = &g_r[C_ROW0 + i];
-        int gone = g_apps[i].gone;
+        int gone = g_apps.e[i].gone;
         uui_glass_round_rect(s, r->x, r->y, r->w, r->h, u() / 2, WHITE,
                              gone ? 12 : g_hot == C_ROW0 + i ? 40 : 26, gone ? 40 : 90);
         const char *st = gone ? "closed" : g_phase == PH_STUCK ? "still open" : "closing...";
         uint32_t sc = gone ? SOFT : g_phase == PH_STUCK ? ugfx_rgb(255, 179, 173) : SOFT;
         int sw = ugfx_text_width(st);
         int ty = r->y + (r->h - u()) / 2;
-        ugfx_draw_string_elided(s, r->x + u(), ty, r->w - 3 * u() - sw, g_apps[i].title,
+        ugfx_draw_string_elided(s, r->x + u(), ty, r->w - 3 * u() - sw, g_apps.e[i].title,
                                 gone ? SOFT : WHITE, UGFX_TRANSPARENT);
         ugfx_draw_string_clipped(s, r->x + r->w - u() - sw, ty, sw + 1, st, sc, UGFX_TRANSPARENT);
     }
-    if (g_rows_shown < g_app_n) {
-        k_snprintf(t, sizeof t, "and %d more", g_app_n - g_rows_shown);
+    if (g_rows_shown < g_apps.n) {
+        k_snprintf(t, sizeof t, "and %d more", g_apps.n - g_rows_shown);
         const struct rect *last = &g_r[C_ROW0 + g_rows_shown - 1];
         text_c(s, cx, last->y + last->h + u() / 2, t, SOFT);
     }
@@ -463,7 +434,7 @@ static void activate(int id) {
     if (id >= C_ROW0 && id < C_ROW0 + g_rows_shown) {
         // An app still open: back to it, with the page gone -- whatever it
         // is asking is behind the page.
-        int idx = find_window(g_apps[id - C_ROW0].pid, g_apps[id - C_ROW0].win);
+        int idx = close_batch_window(&g_apps, id - C_ROW0);
         leave_page_cancel();
         if (idx >= 0) raise_with_dialogs(idx);
     }
@@ -540,9 +511,9 @@ int leave_page_control(int i, const char **name, int *x, int *y, int *w, int *h)
 }
 
 int leave_page_app(int i, const char **title, int *gone) {
-    if (i < 0 || i >= g_app_n) return 0;
-    *title = g_apps[i].title;
-    *gone = g_apps[i].gone;
+    if (i < 0 || i >= g_apps.n) return 0;
+    *title = g_apps.e[i].title;
+    *gone = g_apps.e[i].gone;
     return 1;
 }
 

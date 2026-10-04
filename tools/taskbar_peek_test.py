@@ -76,7 +76,8 @@ def main():
 
     with DebugConsole(args.sock) as dbg:
         dbg.settle()
-        for k in ("taskbar_buttons", "taskbar_align", "taskbar_float", "taskbar_peek", "start_position"):
+        for k in ("taskbar_buttons", "taskbar_align", "taskbar_float", "taskbar_peek", "start_position",
+                  "taskbar_combine"):
             dbg.send(f"sh config unset desktop.{k}")
         for app in ("Task Manager", "Notepad", "Notepad"):
             dbg.open_app(app)

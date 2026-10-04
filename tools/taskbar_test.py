@@ -50,6 +50,14 @@ still worth having: it showed there was no unconditional assertion on
 by silently forgetting windows). "no window is left off the strip"
 exists because of that run.
 
+The combine and Close-all sections were seen red the same way
+(`tools/mutate.py`, 2026-10-04): offering Close all at ONE window
+reddens exactly "one Notepad: ... no Close all", and never placing the
+overflow button reddens exactly "...behind an overflow button". A first
+attempt at that control fired for the wrong reason -- `--in-gui` against
+a guest whose desktop was not up yet, so every check errored -- which is
+why a control's FAILING CHECK is read, not just its exit status.
+
 CAVEAT
 ------
 Spawning thirty-odd Notepads is the point, and it is slow -- each one is
@@ -312,6 +320,229 @@ def check_height(dbg, qmp, res):
               f"default {base['h']}, got {back['h']}")
 
 
+# --- combining, the overflow button, Close all ----------------------------
+
+# Every setting a section below changes; unset at the end whatever happens,
+# since a setting outlives the tool (CLAUDE.md).
+TOUCHED = ("desktop.taskbar_combine", "desktop.taskbar_buttons", "desktop.taskbar_height")
+
+
+def close_everything(dbg):
+    for _ in range(64):
+        n = dbg.state()["windows"]
+        if n <= 0:
+            return
+        dbg.send("gui close %d" % (n - 1))
+        dbg.settle()
+    # Something refused (an unsaved Notepad from an earlier tool):
+    # kill the clients outright.
+    for w in dbg.windows():
+        if w.get("client_pid"):
+            dbg.send(f"sh kill {w['client_pid']}")
+    time.sleep(1.0)
+    dbg.settle()
+
+
+def set_and_wait(dbg, name, value, field=None, want=None, timeout=6.0):
+    """Set (or, value None, unset) a setting and wait until the strip
+    reports it -- the WM re-reads on a change counter, a frame later."""
+    dbg.send(f"sh config unset {name}" if value is None else f"sh config set {name} {value}")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        tb = strip(dbg)
+        if field is None or tb.get(field) == want:
+            return tb
+        time.sleep(0.2)
+    return strip(dbg)
+
+
+def spawn_notepads(dbg, n):
+    for _ in range(n):
+        before = dbg.state()["windows"]
+        dbg.send("gui spawn " + NOTEPAD)
+        deadline = time.time() + 15
+        while time.time() < deadline and dbg.state()["windows"] <= before:
+            time.sleep(0.2)
+        dbg.settle()
+
+
+def menu_labels(dbg):
+    m = dbg.ctxmenu() or {}
+    return [r.get("label") for r in m.get("rows", [])] if m.get("open") else []
+
+
+def dismiss_menu(dbg):
+    if (dbg.ctxmenu() or {}).get("open"):
+        dbg.key("0x1b")
+        dbg.settle()
+
+
+def check_combine(dbg, res):
+    """`desktop.taskbar_combine`: always groups from the second window,
+    when-full (the default) does not until the floor, never does not at
+    all -- and then the overflow button holds the rest."""
+    close_everything(dbg)
+    tb = set_and_wait(dbg, "desktop.taskbar_combine", "always", "combine", "always")
+    spawn_notepads(dbg, 2)
+    tb = strip(dbg)
+    counts = [b["count"] for b in tb["buttons"]]
+    res.check("combine=always: two Notepads share one button",
+              counts == [2] and "notepad" in tb["buttons"][0]["label"],
+              f"combine={tb.get('combine')} counts={counts} "
+              f"labels={[b['label'] for b in tb['buttons']]}")
+    if counts == [2]:
+        b = tb["buttons"][0]
+        dbg.click(b["cx"], b["cy"])
+        dbg.settle()
+        labels = menu_labels(dbg)
+        res.check("...and its list ends in \"Close all 2 windows\"",
+                  bool(labels) and labels[-1] == "Close all 2 windows", f"rows {labels}")
+        dismiss_menu(dbg)
+
+    # THE CONTROL: the same two windows, the default mode -- two buttons.
+    tb = set_and_wait(dbg, "desktop.taskbar_combine", None, "combine", "full")
+    counts = [b["count"] for b in tb["buttons"]]
+    res.check("combine=full (the default): the same two get a button each",
+              counts == [1, 1], f"combine={tb.get('combine')} counts={counts}")
+
+    # NEVER, PAST THE FLOOR. Icon buttons on the thickest strip are the
+    # widest a button gets, so a dozen windows overflow it -- rather than
+    # the thirty-odd floor-width labelled buttons a 1280 strip holds.
+    set_and_wait(dbg, "desktop.taskbar_buttons", "icons", "buttons_kind", "icons")
+    set_and_wait(dbg, "desktop.taskbar_height", "96")
+    tb = set_and_wait(dbg, "desktop.taskbar_combine", "never", "combine", "never")
+    opened = 2
+    while opened < 16 and (tb.get("overflow") is None or tb["overflow"]["count"] < 2):
+        spawn_notepads(dbg, 1)
+        opened += 1
+        tb = strip(dbg)
+    ovf = tb.get("overflow")
+    res.check("combine=never: no button stands for more than one window",
+              all(b["count"] == 1 for b in tb["buttons"]),
+              f"counts {[b['count'] for b in tb['buttons']]}")
+    res.check("...and the windows that do not fit are behind an overflow button",
+              ovf is not None and ovf["count"] == tb["hidden"] ==
+              opened - len(tb["buttons"]) and tb["hidden"] >= 2,
+              f"{opened} windows, {len(tb['buttons'])} buttons, hidden={tb['hidden']}, "
+              f"overflow={ovf}")
+    if ovf is None:
+        return
+    right = ovf["x"] + ovf["w"]
+    last = max(b["x"] + b["w"] for b in tb["buttons"]) if tb["buttons"] else 0
+    res.check("...placed after the last button and clear of the tray",
+              last < ovf["x"] and right <= tb["tray_x"],
+              f"last button ends {last}, overflow {ovf['x']}..{right}, tray {tb['tray_x']}")
+
+    # Its list raises a hidden window: the front window afterwards is
+    # one with no button of its own.
+    dbg.click(ovf["cx"], ovf["cy"])
+    dbg.settle()
+    m = dbg.ctxmenu() or {}
+    rows = m.get("rows", []) if m.get("open") else []
+    res.check("clicking the overflow button lists the hidden windows",
+              len(rows) == ovf["count"], f"{len(rows)} rows for {ovf['count']} hidden: {m}")
+    if rows:
+        # Row 0: the LAST row is the newest window, which is in front
+        # already, and raising it would change nothing to see.
+        before = dbg.state()["front_pid"]
+        dbg.click(rows[0]["cx"], rows[0]["cy"])
+        dbg.settle()
+        st = dbg.state()
+        tb = strip(dbg)
+        front = st["windows"] - 1
+        res.check("choosing one raises that hidden window",
+                  st["front_pid"] != before and all(b["index"] != front for b in tb["buttons"]),
+                  f"front pid {before} -> {st['front_pid']}, front index {front}, "
+                  f"button indices {[b['index'] for b in tb['buttons']]}")
+
+
+def window_menu_for_button(dbg, b):
+    dbg.rclick(b["cx"], b["cy"])
+    dbg.settle()
+    return menu_labels(dbg)
+
+
+def wait_log(dbg, needle, timeout):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        hit = [line for line in dbg.logs("closeall:", clear=False) if needle in line]
+        if hit:
+            return hit[-1]
+        time.sleep(0.25)
+    return None
+
+
+def notepads(dbg):
+    return [w for w in dbg.windows() if "untitled" in w.get("title", "")]
+
+
+def check_close_all(dbg, qmp, res):
+    """The window menu's "Close all N windows": offered only when the app
+    has more than one window, asks each, and names the ones that stayed."""
+    close_everything(dbg)
+    spawn_notepads(dbg, 1)
+    tb = strip(dbg)
+    labels = window_menu_for_button(dbg, tb["buttons"][0]) if tb["buttons"] else []
+    res.check("one Notepad: its window menu has Close and no Close all",
+              "Close" in labels and not any(lb.startswith("Close all") for lb in labels),
+              f"rows {labels}")
+    dismiss_menu(dbg)
+
+    spawn_notepads(dbg, 2)
+    tb = strip(dbg)
+    labels = window_menu_for_button(dbg, tb["buttons"][0]) if tb["buttons"] else []
+    res.check("three Notepads: \"Close all 3 windows\" directly under Close",
+              "Close" in labels and labels.index("Close") + 1 < len(labels) and
+              labels[labels.index("Close") + 1] == "Close all 3 windows", f"rows {labels}")
+    dbg.logs("closeall:", clear=True)
+    row = dbg.ctxmenu_row("Close all 3 windows")
+    if row:
+        dbg.click(*row)
+        dbg.settle()
+    said = wait_log(dbg, "all 3 window(s) closed", 8)
+    res.check("Close all closes all three", bool(said) and not notepads(dbg),
+              f"log {said!r}, notepads left {len(notepads(dbg))}")
+
+    # ONE REFUSES: the front Notepad has typed text and asks to save.
+    spawn_notepads(dbg, 3)
+    qmp.send_text("unsaved")
+    dbg.settle()
+    time.sleep(0.5)
+    tb = strip(dbg)
+    labels = window_menu_for_button(dbg, tb["buttons"][0]) if tb["buttons"] else []
+    dbg.logs("closeall:", clear=True)
+    t0 = time.time()
+    row = dbg.ctxmenu_row("Close all 3 windows")
+    if row:
+        dbg.click(*row)
+        dbg.settle()
+    said = wait_log(dbg, "did not close", 12)
+    waited = time.time() - t0
+    res.check("with one refusing, the notice comes after the wait, not before",
+              bool(said) and "1 of 3" in said and 4.0 <= waited <= 9.0,
+              f"log {said!r} after {waited:.1f}s")
+    time.sleep(0.3)
+    st = dbg.state()
+    nt = st.get("notice") or {}
+    btns = {b["label"]: b for b in nt.get("buttons", [])}
+    res.check("the notice says one Notepad window stayed open, and names it",
+              nt.get("title") == "1 Notepad window stayed open" and
+              "untitled" in nt.get("sub", "") and "The other 2 closed" in nt.get("sub", ""),
+              f"notice {nt}")
+    res.check("...offering Show it and Force Quit",
+              {"Show it", "Force Quit"} <= set(btns), f"buttons {list(btns)}")
+    res.check("the two that could close did",
+              len(notepads(dbg)) == 1, f"notepads left {[w['title'] for w in notepads(dbg)]}")
+    fq = btns.get("Force Quit")
+    if fq:
+        dbg.click(fq["x"] + fq["w"] // 2, fq["y"] + fq["h"] // 2)
+        deadline = time.time() + 6
+        while time.time() < deadline and notepads(dbg):
+            time.sleep(0.3)
+        res.check("Force Quit ends the one that stayed",
+                  not notepads(dbg), f"left {[w['title'] for w in notepads(dbg)]}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -319,8 +550,11 @@ def main():
     ap.add_argument("--in-gui", action="store_true")
     ap.add_argument("--pixels", action="store_true",
                     help="also check the last button is drawn where it says")
+    ap.add_argument("--only", choices=("height", "combine", "closeall", "overflow"),
+                    action="append", help="run only these sections (repeatable)")
     args = ap.parse_args()
     port_guard.resolve_instance(args, "taskbar_test")
+    only = set(args.only or ("height", "combine", "closeall", "overflow"))
 
     qmp = QMPSession(port=args.qmp_port)
     if not args.in_gui:
@@ -329,10 +563,23 @@ def main():
     res = Result()
     with DebugConsole(args.sock) as dbg:
         dbg.settle()
-        # FIRST: the overflow checks below leave twenty Notepads open,
-        # past which nothing more can spawn -- `config` included.
-        check_height(dbg, qmp, res)
-        run(dbg, qmp, res, args.pixels)
+        try:
+            # FIRST: the overflow checks at the end leave twenty Notepads
+            # open, past which nothing more can spawn -- `config` included.
+            if "height" in only:
+                check_height(dbg, qmp, res)
+            if "combine" in only:
+                check_combine(dbg, res)
+            if "closeall" in only:
+                for name in TOUCHED:
+                    dbg.send(f"sh config unset {name}")
+                check_close_all(dbg, qmp, res)
+        finally:
+            for name in TOUCHED:
+                dbg.send(f"sh config unset {name}")
+            dbg.settle()
+        if "overflow" in only:
+            run(dbg, qmp, res, args.pixels)
 
     n_ok, n_bad = len(res.passes), len(res.fails)
     print(f"\ntaskbar_test: {n_ok} passed, {n_bad} failed")

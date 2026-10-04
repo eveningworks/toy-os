@@ -1,10 +1,11 @@
 // See crash_notice.h.
 //
-// TWO KINDS OF CARD share the stack, the timing and the drawing: a
-// crash (polled from the kernel) and a FILE a client made (WIN_REQ_NOTICE,
+// THREE KINDS OF CARD share the stack, the timing and the drawing: a
+// crash (polled from the kernel), a FILE a client made (WIN_REQ_NOTICE,
 // a screenshot so far), which carries a thumbnail and Open / Copy /
-// Folder. The compositor acts on those itself, because the client is
-// usually gone by the time anyone clicks.
+// Folder, and the windows a Close all left open. The compositor acts on
+// those itself, because the client is usually gone by the time anyone
+// clicks.
 #include "wm_internal.h"
 #include "wm_overlay.h"
 #include "wm_shadow.h"
@@ -21,6 +22,7 @@
 #include "lib/uclip.h"
 #include "lib/uopen.h"
 #include "win_proto.h"
+#include "wm_log.h"
 #include <stdio.h>
 
 #define MAX_NOTICES   3
@@ -32,7 +34,9 @@
 enum { BTN_CLOSE = 0, BTN_A, BTN_B, BTN_C, BTN_D, BTNS };
 #define BTN_DETAILS BTN_A   // a crash's
 #define BTN_REOPEN  BTN_B
-enum { KIND_CRASH = 0, KIND_SHOT };
+#define BTN_SHOW    BTN_A   // a close-all's
+#define BTN_FORCE   BTN_B
+enum { KIND_CRASH = 0, KIND_SHOT, KIND_STAYED };
 
 #define PATH_MAX_NOTICE (WIN_NOTICE_PIECES_MAX * (WIN_TITLE_LEN - 1) + 1)
 
@@ -46,6 +50,9 @@ struct notice {
     int can_reopen;
     char path[PATH_MAX_NOTICE];   // a file notice's file
     struct uimg thumb;            // ...and its picture, scaled to the card; owned
+    uint32_t seq[NOTICE_STAYED_MAX];   // a close-all's windows, by open_seq
+    int pid[NOTICE_STAYED_MAX];
+    int nwin;
     uint64_t until;
 };
 
@@ -130,6 +137,28 @@ static void tell(const struct query_crash *c) {
     k_strlcpy(n.program, c->program, sizeof n.program);
     n.can_reopen = a != 0;   // a desktop app; a daemon is init's to restart
     push(&n);
+}
+
+// --- the windows a Close all left open -------------------------------------
+
+void crash_notice_stayed(const char *title, const char *sub, const char *icon,
+                         const uint32_t *seq, const int *pid, int n) {
+    struct notice c;
+    k_memset(&c, 0, sizeof c);
+    c.kind = KIND_STAYED;
+    k_strlcpy(c.title, title, sizeof c.title);
+    k_strlcpy(c.sub, sub, sizeof c.sub);
+    k_strlcpy(c.icon, icon ? icon : "tb-close-all", sizeof c.icon);
+    if (n > NOTICE_STAYED_MAX) n = NOTICE_STAYED_MAX;
+    for (int k = 0; k < n; k++) { c.seq[k] = seq[k]; c.pid[k] = pid[k]; }
+    c.nwin = n;
+    push(&c);
+}
+
+static int stayed_open(const struct notice *n) {
+    for (int k = 0; k < n->nwin; k++)
+        if (wm_window_by_seq(n->seq[k]) >= 0) return 1;
+    return 0;
 }
 
 // --- a file a client made (WIN_REQ_NOTICE) --------------------------------
@@ -229,7 +258,9 @@ void crash_notice_init(void) {
 void crash_notice_poll(void) {
     uint64_t now = sys_monotonic_ns();
     for (int i = g_count - 1; i >= 0; i--)
-        if (now >= g_n[i].until && g_hover_card != i) drop(i);
+        if ((now >= g_n[i].until && g_hover_card != i) ||
+            (g_n[i].kind == KIND_STAYED && !stayed_open(&g_n[i])))   // saved and closed meanwhile
+            drop(i);
     if (now < g_next_poll) return;
     g_next_poll = now + POLL_NS;
     struct query_crash c;
@@ -264,6 +295,8 @@ static void card_rect(int i, int *x, int *y, int *w, int *h) {
     *y = screen_h - taskbar_h - gap() - below - *h;
 }
 
+static const char *stayed_label(int b) { return b == BTN_SHOW ? "Show it" : "Force Quit"; }
+
 static const char *shot_label(int b) {
     return b == BTN_A ? "Open" : b == BTN_B ? "Copy" : b == BTN_C ? "Folder" : "Save as...";
 }
@@ -291,9 +324,17 @@ static int button_rect(int i, int b, int *x, int *y, int *w, int *h) {
         return 0;
     }
     if (b == BTN_C || b == BTN_D) return 0;
+    int right = cx + cw - pad();
+    if (n->kind == KIND_STAYED) {
+        // Right-aligned, Force Quit last: Show it, then the one that loses work.
+        int fw = ugfx_text_width(stayed_label(BTN_FORCE)) + 2 * ugfx_char_w();
+        int sw = ugfx_text_width(stayed_label(BTN_SHOW)) + 2 * ugfx_char_w();
+        *w = b == BTN_FORCE ? fw : sw;
+        *x = b == BTN_FORCE ? right - fw : right - fw - pad() / 2 - sw;
+        return 1;
+    }
     int bw = ugfx_text_width("Details") + 2 * ugfx_char_w();
     int rw = ugfx_text_width("Reopen") + 2 * ugfx_char_w();
-    int right = cx + cw - pad();
     if (b == BTN_REOPEN) {
         if (!n->can_reopen) return 0;
         *w = rw; *x = right - rw;
@@ -319,6 +360,7 @@ const char *crash_notice_button(int b, int r[4]) {
     if (!g_count || b < BTN_A || b > BTN_D) return 0;
     if (!button_rect(0, b, &r[0], &r[1], &r[2], &r[3])) return 0;
     if (g_n[0].kind == KIND_SHOT) return shot_label(b);
+    if (g_n[0].kind == KIND_STAYED) return stayed_label(b);
     return b == BTN_DETAILS ? "Details" : "Reopen";
 }
 
@@ -327,7 +369,7 @@ const char *crash_notice_sub(void)  { return g_count ? g_n[0].sub : 0; }
 
 const char *crash_notice_describe(int details[4], int reopen[4]) {
     if (!g_count) return 0;
-    if (g_n[0].kind == KIND_SHOT) {   // a file card has no Details or Reopen
+    if (g_n[0].kind != KIND_CRASH) {   // only a crash has Details and Reopen
         for (int i = 0; i < 4; i++) details[i] = reopen[i] = 0;
         return g_n[0].title;
     }
@@ -395,6 +437,33 @@ int crash_notice_handle_click(int mx, int my) {
             snprintf(args, sizeof args, "--save-as %s", n.path);
             int pid = sys_spawn("/bin/wm/apps/screenshot", args, -1);
             if (pid > 0) wm_track_launched(pid);
+        }
+        return 1;
+    }
+    if (n.kind == KIND_STAYED) {
+        if (b == BTN_SHOW) {
+            for (int k = 0; k < n.nwin; k++) {
+                int w = wm_window_by_seq(n.seq[k]);
+                if (w < 0) continue;
+                wm_window_unminimize(w);
+                wm_ensure_reachable(w);
+                raise_with_dialogs(w);   // its question with it
+                redraw_pending = 1;
+                break;
+            }
+        } else if (b == BTN_FORCE) {
+            // SIGKILL, as Task Manager's Force Quit: the client's exit
+            // takes its windows down through the ordinary path.
+            for (int k = 0; k < n.nwin; k++) {
+                int w = wm_window_by_seq(n.seq[k]);
+                if (w < 0) continue;
+                if (windows[w].client_pid > 0) {
+                    wm_logf("closeall: force-quitting pid %d\n", windows[w].client_pid);
+                    sys_kill(windows[w].client_pid, SIGKILL);
+                } else {
+                    close_window(w);
+                }
+            }
         }
         return 1;
     }
@@ -470,12 +539,15 @@ void crash_notice_draw(int mx, int my) {
                 ugfx_draw_line(s, cx + k, cy - k, cx - k, cy + k, UTHEME_TEXT, GEOM_AA);
                 continue;
             }
-            int shot = n->kind == KIND_SHOT;
-            int primary = shot ? b == BTN_A : b == BTN_REOPEN;
-            uint32_t bg = primary ? UTHEME_ACCENT : UTHEME_BUTTON_BG;
-            const char *label = shot ? shot_label(b) : b == BTN_REOPEN ? "Reopen" : "Details";
+            int shot = n->kind == KIND_SHOT, stayed = n->kind == KIND_STAYED;
+            int primary = shot ? b == BTN_A : !stayed && b == BTN_REOPEN;
+            int danger = stayed && b == BTN_FORCE;
+            uint32_t bg = danger ? utheme_action(UTHEME_ACT_DANGER)
+                        : primary ? UTHEME_ACCENT : UTHEME_BUTTON_BG;
+            const char *label = shot ? shot_label(b) : stayed ? stayed_label(b)
+                              : b == BTN_REOPEN ? "Reopen" : "Details";
             uui_button_draw(s, bx, by, bw, bh, label, bg,
-                            primary ? UTHEME_ACCENT_TEXT : UTHEME_TEXT,
+                            primary || danger ? UTHEME_ACCENT_TEXT : UTHEME_TEXT,
                             hot ? UUI_STATE_HOVER : UUI_STATE_REST);
         }
     }

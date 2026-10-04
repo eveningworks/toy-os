@@ -41,4 +41,11 @@ const char *crash_notice_button(int b, int r[4]);
 const char *crash_notice_path(void);   // a file card's file, or NULL
 const char *crash_notice_sub(void);
 
+// THE WINDOWS A CLOSE-ALL LEFT OPEN (close_batch.h): a card naming them,
+// with Show it (the first, raised) and Force Quit (SIGKILL to each one's
+// client). Held by open_seq; the card goes once every window has.
+#define NOTICE_STAYED_MAX 16
+void crash_notice_stayed(const char *title, const char *sub, const char *icon,
+                         const uint32_t *seq, const int *pid, int n);
+
 #endif

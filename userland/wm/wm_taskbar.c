@@ -18,6 +18,7 @@
 #include "lib/utween.h"
 #include "wm_shadow.h"
 #include "ui/utheme.h"
+#include "close_batch.h"   // taskbar_close_app()
 
 #define TB_GAP 4
 
@@ -29,8 +30,21 @@
 static int btn_floor(void) { return 3 * ugfx_char_w() + 2 * TB_PAD; }
 
 static int g_hidden;
+// The windows behind the overflow button, by open_seq, in strip order --
+// filled by taskbar_layout(), read by the overflow menu.
+#define TB_HIDDEN_MAX 64
+static uint32_t g_hidden_seq[TB_HIDDEN_MAX];
+static int g_hidden_n;
+static int g_ovf_x, g_ovf_w;   // the overflow button; w 0 = there is none
 
 int taskbar_hidden(void) { return g_hidden; }
+
+int taskbar_overflow(int *x, int *w) {
+    if (!g_ovf_w || !g_hidden) return 0;
+    if (x) *x = g_ovf_x;
+    if (w) *w = g_ovf_w;
+    return g_hidden;
+}
 
 // --- the Start button's appearance ------------------------------------
 //
@@ -54,6 +68,7 @@ int taskbar_default_h(void) { return TASKBAR_H_DEFAULT; }
 // --- style, theme and the panel's geometry ------------------------------
 
 static enum taskbar_buttons g_buttons = TASKBAR_BUTTONS_LABELLED;
+static enum taskbar_combine g_combine = TASKBAR_COMBINE_FULL;
 static int g_float;
 static int g_align_center;
 static int g_start_center;
@@ -62,6 +77,7 @@ static int g_bar_h = TASKBAR_H_DEFAULT;
 static int g_deflated;   // a floating panel filling its band, see below
 
 enum taskbar_buttons taskbar_buttons(void) { return g_buttons; }
+enum taskbar_combine taskbar_combine(void) { return g_combine; }
 int taskbar_align_centered(void) { return g_align_center; }
 int taskbar_dark(void) { return g_dark; }
 int taskbar_bar_h(void) { return g_bar_h; }
@@ -177,6 +193,13 @@ void taskbar_poll_config(void) {
         g_deflated = defl;
         damage_strip();
     }
+    // The overflow button is lit while its list is up, and the list
+    // closes from places that know nothing of the strip (Esc, a click away).
+    static int ovf_lit;
+    if (taskbar_overflow_menu_open() != ovf_lit) {
+        ovf_lit = !ovf_lit;
+        damage_strip();
+    }
 
     static uint64_t seen_gen;
     static int primed;
@@ -201,14 +224,20 @@ void taskbar_poll_config(void) {
     int sc = k_strcmp(msg.value, "center") == 0;
     setting_get("desktop.taskbar_theme", &msg);
     int dark = k_strcmp(msg.value, "light") != 0;
+    // Every value named, the default included (see start_button below).
+    setting_get("desktop.taskbar_combine", &msg);
+    enum taskbar_combine combine =
+        k_strcmp(msg.value, "always") == 0 ? TASKBAR_COMBINE_ALWAYS :
+        k_strcmp(msg.value, "never") == 0  ? TASKBAR_COMBINE_NEVER : TASKBAR_COMBINE_FULL;
     setting_get("desktop.taskbar_peek", &msg);
     wm_peek_set_mode(k_strcmp(msg.value, "off") == 0 ? WM_PEEK_OFF :
                      k_strcmp(msg.value, "highlight") == 0 ? WM_PEEK_HIGHLIGHT :
                      WM_PEEK_PREVIEW);
 
     int look_changed = buttons != g_buttons || ac != g_align_center ||
-                       sc != g_start_center || dark != g_dark;
+                       sc != g_start_center || dark != g_dark || combine != g_combine;
     g_buttons = buttons;
+    g_combine = combine;
     g_align_center = ac;
     g_float = fl;
     g_start_center = sc;
@@ -445,14 +474,21 @@ int taskbar_button_rect_for(int idx, int *x, int *y, int *w, int *h) {
     // frame budget exists to catch, and the WM has one thread.
     static struct taskbar_button b[64];
     int n = taskbar_layout(b, 64);
+    struct taskbar_geom g;
+    taskbar_geom(&g);
+    *y = g.btn_y; *h = g.btn_h;
+    // Its own button, its group's -- not another window of its app that
+    // happens to have a button of its own (`never`, or room to spare).
     for (int k = 0; k < n; k++) {
-        if (b[k].first != idx && !same_app(b[k].first, idx)) continue;
-        struct taskbar_geom g;
-        taskbar_geom(&g);
+        if (b[k].first != idx && !((b[k].count > 1 || unlisted(idx)) && same_app(b[k].first, idx)))
+            continue;
         *x = b[k].x; *w = b[k].w;
-        *y = g.btn_y; *h = g.btn_h;
         return 1;
     }
+    // Hidden: the overflow button stands for it.
+    if (idx >= 0 && idx < window_count)
+        for (int k = 0; k < g_hidden_n; k++)
+            if (g_hidden_seq[k] == windows[idx].open_seq) return taskbar_overflow(x, w) > 0;
     return 0;
 }
 
@@ -534,8 +570,28 @@ static void apply_drag(struct taskbar_button *out, int count, int w) {
 //                  buttons cannot be left of a centred Start: the
 //                  declaration's Requires=/Otherwise= makes
 //                  `desktop.taskbar_align` read `center` meanwhile.
+// The overflow button: an up-chevron and a two-digit count, padded as
+// a window button is. One width in both button styles.
+static int overflow_w(void) {
+    return ugfx_char_h() * 7 / 10 + 4 + ugfx_text_width("99") + 2 * 8;   // wm_render.c draws it
+}
+
+// Records the windows behind the overflow button -- for a hidden GROUP,
+// every member, in strip order.
+static void note_hidden(int starter, int grouped) {
+    if (!grouped) {
+        if (g_hidden_n < TB_HIDDEN_MAX) g_hidden_seq[g_hidden_n++] = windows[starter].open_seq;
+        return;
+    }
+    uint32_t seq = 0;
+    for (int j; g_hidden_n < TB_HIDDEN_MAX && (j = next_in_order(&seq)) >= 0; )
+        if (!unlisted(j) && same_app(j, starter)) g_hidden_seq[g_hidden_n++] = windows[j].open_seq;
+}
+
 int taskbar_layout(struct taskbar_button *out, int max) {
     g_hidden = 0;
+    g_hidden_n = 0;
+    g_ovf_w = 0;
     stamp_unopened();
     struct taskbar_geom g;
     taskbar_geom(&g);
@@ -555,25 +611,27 @@ int taskbar_layout(struct taskbar_button *out, int max) {
     int listed = listed_count();
     if (!out || max <= 0 || listed <= 0 || avail <= 0) { g_hidden = listed; return 0; }
 
-    // THE WIDTH, and whether to group. Labelled buttons shrink first and
-    // group only if shrinking is not enough -- two windows of one app
-    // stay two buttons while there is room, since grouping is a response
-    // to pressure, not a policy. An icon button never shrinks; it is
-    // already the icon.
-    int n = listed, grouped = 0, w;
+    // THE WIDTH, and whether to group -- `desktop.taskbar_combine`.
+    // `full`: labelled buttons shrink first and group only if shrinking
+    // is not enough, since grouping is a response to pressure. `always`
+    // groups from the first window, `never` not at all. An icon button
+    // never shrinks; it is already the icon.
+    int grouped = g_combine == TASKBAR_COMBINE_ALWAYS;
+    int may_group = g_combine == TASKBAR_COMBINE_FULL;
+    int n = grouped ? group_count() : listed, w;
     if (icons) {
         w = g.btn_h + 8;                       // 48 at the default: the icon is the button
-        if (n * (w + TB_GAP) - TB_GAP > avail) { n = group_count(); grouped = 1; }
+        if (may_group && n * (w + TB_GAP) - TB_GAP > avail) { n = group_count(); grouped = 1; }
     } else {
         int natural = win_btn_w(), floor_w = btn_floor();
         if (avail < floor_w) { g_hidden = listed; return 0; }
         w = fit_width(avail, n, natural);
-        if (w < floor_w) {
+        if (w < floor_w && may_group) {
             n = group_count();
             grouped = 1;
             w = fit_width(avail, n, natural);
         }
-        if (w < floor_w) w = floor_w;          // past this the extras simply do not fit
+        if (w < floor_w) w = floor_w;          // past this, the overflow button
         // A GROUPED button may be wider than a plain one: there are few of
         // them and its label carries a count as well as a name ("notepad
         // (32)" at the plain width is "not (32)"). The icon is part of the
@@ -585,14 +643,24 @@ int taskbar_layout(struct taskbar_button *out, int max) {
             if (wide > w) w = wide;
         }
     }
+    // THE OVERFLOW BUTTON takes its room from the row only when something
+    // will not fit -- Windows 11's "..." at the end of the strip.
     int fit = (avail + TB_GAP) / (w + TB_GAP);
+    if (fit > max) fit = max;
+    int ovf = 0;
+    if (n > fit) {
+        ovf = overflow_w();
+        fit = (avail - ovf) / (w + TB_GAP);
+        if (fit > max) fit = max;
+        if (fit < 0) fit = 0;
+    }
     if (n > fit) n = fit;
-    if (n > max) n = max;
 
     // THE PLACE. A centred group is centred on the SCREEN, as Windows'
     // is, and pushed aside only by what it would otherwise overlap.
     int row = n > 0 ? n * (w + TB_GAP) - TB_GAP : 0;
-    int group = row + (with_group ? sw + (n > 0 ? TB_GAP : 0) : 0);
+    if (ovf) row += (n > 0 ? TB_GAP : 0) + ovf;
+    int group = row + (with_group ? sw + (row > 0 ? TB_GAP : 0) : 0);
     int x = lo;
     if (g_align_center || with_group) {
         x = screen_w / 2 - group / 2;
@@ -610,10 +678,18 @@ int taskbar_layout(struct taskbar_button *out, int max) {
         if (unlisted(i)) continue;
         if (grouped && !starts_group(i)) continue;
         int members = grouped ? group_size(i) : 1;
-        if (count >= n) { g_hidden += members; continue; }
+        if (count >= n) {
+            g_hidden += members;
+            note_hidden(i, grouped);
+            continue;
+        }
         fill_button(&out[count], i, grouped ? group_front(i) : i, members,
                     x + count * (w + TB_GAP), w, !icons);
         count++;
+    }
+    if (g_hidden && ovf) {
+        g_ovf_x = x + count * (w + TB_GAP);
+        g_ovf_w = ovf;
     }
     if (g_drag.dragging) apply_drag(out, count, w);
     return count;
@@ -663,7 +739,15 @@ void taskbar_update_hover(int mx, int my, uint8_t buttons) {
             want = TASKBAR_HOVER_START;
         } else {
             static struct taskbar_button b[64];
+            static char ovf_tip[32];
             int n = taskbar_layout(b, 64);
+            int ox, ow, hidden = taskbar_overflow(&ox, &ow);
+            if (hidden && uui_hit(ox, screen_h - taskbar_h, ow, taskbar_h, mx, my)) {
+                want = TASKBAR_HOVER_OVERFLOW;
+                k_snprintf(ovf_tip, sizeof ovf_tip, "%d more window%s", hidden, hidden == 1 ? "" : "s");
+                tip = ovf_tip; tx = ox; tw = ow;
+                n = 0;
+            }
             for (int k = 0; k < n; k++) {
                 if (!uui_hit(b[k].x, screen_h - taskbar_h, b[k].w, taskbar_h, mx, my))
                     continue;
@@ -712,10 +796,52 @@ void taskbar_update_hover(int mx, int my, uint8_t buttons) {
 // The group popup's rows. Static because context_menu_open_at() keeps
 // the caller's array for as long as the menu is open (context_menu.h),
 // so a stack local would be a dangling read the moment this returns.
+// Its windows, then a rule and "Close all N windows".
 #define TB_GROUP_ROWS 12
-static struct context_menu_item g_rows[TB_GROUP_ROWS];
+static struct context_menu_item g_rows[TB_GROUP_ROWS + 2];
 static uint32_t g_row_target[TB_GROUP_ROWS];   // open_seq: see row_raise()
 static char g_row_label[TB_GROUP_ROWS][WIN_LABEL_MAX_CHARS * 3];
+static uint32_t g_group_seq;                   // the group, for its Close all
+static char g_close_all_label[32];
+
+// The overflow button's list: as many as a menu holds, then a greyed
+// count of the rest.
+#define TB_OVF_ROWS 16
+static struct context_menu_item g_ovf_rows[TB_OVF_ROWS + 1];
+static uint32_t g_ovf_target[TB_OVF_ROWS];
+static char g_ovf_label[TB_OVF_ROWS][WIN_LABEL_MAX_CHARS * 3];
+static char g_ovf_more[32];
+static int g_ovf_armed;   // pressed on the overflow button; it opens on the release
+
+int taskbar_overflow_menu_open(void) { return context_menu_showing(g_ovf_rows); }
+
+int taskbar_app_windows(int idx) {
+    if (idx < 0 || idx >= window_count || unlisted(idx)) return 0;
+    int n = 0;
+    for (int j = 0; j < window_count; j++) n += !unlisted(j) && same_app(idx, j);
+    return n;
+}
+
+void taskbar_close_app(int idx) {
+    if (taskbar_app_windows(idx) <= 0) return;
+    static int which[64];
+    int n = 0;
+    uint32_t seq = 0;
+    for (int j; n < 64 && (j = next_in_order(&seq)) >= 0; )
+        if (!unlisted(j) && same_app(idx, j)) which[n++] = j;
+    close_all_begin(which, n);
+}
+
+static void group_close_all(void *ctx) {
+    int i = wm_window_by_seq(*(uint32_t *)ctx);
+    if (i >= 0) taskbar_close_app(i);
+}
+
+static void copy_title(char *dst, int cap, const char *src) {
+    int k = 0;
+    for (; src[k] && k < cap - 1; k++) dst[k] = src[k];
+    dst[k] = '\0';
+}
 
 // BY open_seq, NOT INDEX: any window closing while the menu is open
 // compacts windows[], and a held index would raise another app's window.
@@ -736,10 +862,7 @@ static void open_group_menu(const struct taskbar_button *b) {
     uint32_t seq = 0;
     for (int i; n < TB_GROUP_ROWS && (i = next_in_order(&seq)) >= 0; ) {
         if (unlisted(i) || !same_app(b->first, i)) continue;
-        int k = 0;
-        for (; windows[i].title[k] && k < (int)sizeof g_row_label[n] - 1; k++)
-            g_row_label[n][k] = windows[i].title[k];
-        g_row_label[n][k] = '\0';
+        copy_title(g_row_label[n], (int)sizeof g_row_label[n], windows[i].title);
         g_row_target[n] = windows[i].open_seq;
         g_rows[n] = (struct context_menu_item){ .label = g_row_label[n], .on_select = row_raise,
                                                 .ctx = &g_row_target[n],
@@ -747,7 +870,38 @@ static void open_group_menu(const struct taskbar_button *b) {
         n++;
     }
     if (n == 0) return;
+    int all = taskbar_app_windows(b->first);
+    if (all > 1) {
+        g_group_seq = windows[b->first].open_seq;
+        k_snprintf(g_close_all_label, sizeof g_close_all_label, "Close all %d windows", all);
+        g_rows[n++] = (struct context_menu_item){ .separator = 1 };
+        g_rows[n++] = (struct context_menu_item){ .label = g_close_all_label,
+                                                  .on_select = group_close_all,
+                                                  .ctx = &g_group_seq, .icon = "tb-close-all",
+                                                  .tint = UTHEME_ACT_DANGER };
+    }
     context_menu_open_at(b->x, screen_h - taskbar_h, g_rows, n);
+}
+
+// The windows behind the overflow button, in strip order.
+static void open_overflow_menu(void) {
+    int ox, ow, n = 0;
+    if (!taskbar_overflow(&ox, &ow)) return;
+    for (int k = 0; k < g_hidden_n && n < TB_OVF_ROWS; k++) {
+        int i = wm_window_by_seq(g_hidden_seq[k]);
+        if (i < 0) continue;
+        copy_title(g_ovf_label[n], (int)sizeof g_ovf_label[n], windows[i].title);
+        g_ovf_target[n] = g_hidden_seq[k];
+        g_ovf_rows[n] = (struct context_menu_item){ .label = g_ovf_label[n], .on_select = row_raise,
+                                                    .ctx = &g_ovf_target[n],
+                                                    .icon = wm_window_icon_name(i) };
+        n++;
+    }
+    if (g_hidden_n > n) {
+        k_snprintf(g_ovf_more, sizeof g_ovf_more, "and %d more", g_hidden_n - n);
+        g_ovf_rows[n++] = (struct context_menu_item){ .label = g_ovf_more, .disabled = 1 };
+    }
+    if (n) context_menu_open_at(ox, screen_h - taskbar_h, g_ovf_rows, n);
 }
 
 // Acting on one window: raise it, recover it, or minimize it. Unchanged
@@ -784,6 +938,14 @@ int taskbar_handle_click(int mx, int my) {
     static struct taskbar_button btns[TB_BUTTONS_MAX];
     int n = taskbar_layout(btns, TB_BUTTONS_MAX);
     int ty = screen_h - taskbar_h;
+    int ox, ow;
+    if (taskbar_overflow(&ox, &ow) && uui_hit(ox, ty, ow, taskbar_h, mx, my)) {
+        if (g_tip_ours) { wm_tooltip_cancel(); g_tip_ours = 0; }
+        wm_peek_close();
+        g_ovf_armed = 1;
+        damage_strip();
+        return 1;
+    }
     for (int b = 0; b < n; b++) {
         if (!uui_hit(btns[b].x, ty, btns[b].w, taskbar_h, mx, my)) continue;
         if (g_tip_ours) { wm_tooltip_cancel(); g_tip_ours = 0; }
@@ -801,6 +963,7 @@ int taskbar_handle_click(int mx, int my) {
 }
 
 uint32_t taskbar_armed_key(void) { return g_drag.armed ? g_drag.key : 0; }
+int taskbar_overflow_armed(void) { return g_ovf_armed; }
 
 int taskbar_drag_state(int *armed, int *dragging) {
     if (armed) *armed = g_drag.armed;
@@ -868,6 +1031,13 @@ void taskbar_update_press(int mx, int my, uint8_t buttons) {
         dnd_key = 0;
     }
 
+    if (g_ovf_armed && !down) {
+        g_ovf_armed = 0;
+        int ox, ow;
+        if (taskbar_overflow(&ox, &ow) && uui_hit(ox, screen_h - taskbar_h, ow, taskbar_h, mx, my))
+            open_overflow_menu();
+        damage_strip();
+    }
     if (!g_drag.armed) return;
     if (down) {
         if (mx == g_drag.mx && g_drag.dragging) return;
@@ -962,6 +1132,11 @@ int taskbar_handle_right_click(int mx, int my) {
     static struct taskbar_button btns[TB_BUTTONS_MAX];
     int n = taskbar_layout(btns, TB_BUTTONS_MAX);
     int ty = screen_h - taskbar_h;
+    int ox, ow;
+    if (taskbar_overflow(&ox, &ow) && uui_hit(ox, ty, ow, taskbar_h, mx, my)) {
+        open_overflow_menu();
+        return 1;
+    }
     for (int b = 0; b < n; b++) {
         if (!uui_hit(btns[b].x, ty, btns[b].w, taskbar_h, mx, my)) continue;
         if (btns[b].count > 1) {

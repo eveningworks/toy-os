@@ -184,6 +184,16 @@ each surface choosing its own kind. A client only marks where its glass is; the 
 as KDE's blur protocol has it. Off by default; Settings > Appearance >
 Transparency.
 
+**The taskbar** lists windows in the order they opened, drag to
+reorder, labelled or icon-only, left or centred, floating or not. Windows
+of one app combine into one counted button always, only when the strip
+is full (the default) or never (Settings > Desktop > Taskbar > Combine
+buttons); what still does not fit sits behind an overflow button whose
+list raises it. A window's menu and a grouped button's list offer
+**Close all N windows**: each is asked as Close asks one, and any that
+stay open (Notepad asking to save) are named on a card after a few
+seconds, with Show it and Force Quit.
+
 **The tray's flyouts are one card**, drawn by one kit: network (the
 adapter's state, a switch that takes it down, live traffic, its
 address, Copy / Renew / Details), volume (each application, the output

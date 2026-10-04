@@ -1144,6 +1144,17 @@ def icon_tb_close():
     return im
 
 
+def icon_tb_close_all():
+    # Close's X in a window, another window's corner behind it: every
+    # window of the app (the window menu's "Close all N windows").
+    im, d = _tb()
+    d.line([(20, 10), (54, 10), (54, 44)], fill=TB_INK, width=6, joint="curve")
+    d.rounded_rectangle([8, 20, 44, 56], radius=4, outline=TB_INK, width=6)
+    d.line([18, 30, 34, 46], fill=TB_INK, width=6)
+    d.line([34, 30, 18, 46], fill=TB_INK, width=6)
+    return im
+
+
 def icon_tb_unfullscreen():
     # Four corners pointing in: the fullscreen glyph turned inside out.
     im, d = _tb()
@@ -1775,6 +1786,7 @@ ICONS = {
     "tb-maximize": icon_tb_maximize,
     "tb-restore": icon_tb_restore,
     "tb-close": icon_tb_close,
+    "tb-close-all": icon_tb_close_all,
     "tb-pin": icon_tb_pin,
     "tb-power": icon_tb_power,
     "tb-star": icon_tb_star,

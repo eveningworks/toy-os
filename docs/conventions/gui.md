@@ -1624,8 +1624,11 @@ this the obvious way), not from how much history it accumulated.
   pixels, so tests were clicking beside the buttons they aimed at.
   Buttons shrink to a font-derived floor, then windows of one
   APPLICATION collapse into one counted button whose click opens a list
-  of them; anything that still will not fit is dropped and counted by
-  `taskbar_hidden()` rather than drawn off-screen. Grouping is by
+  of them -- `desktop.taskbar_combine` (`always` | `full`, the default |
+  `never`) moves that point, Windows 11's "Combine taskbar buttons".
+  Anything that still will not fit goes behind an OVERFLOW button at the
+  end of the row (`taskbar_overflow()`, counted by `taskbar_hidden()`),
+  whose list raises any of them; never drawn off-screen. Grouping is by
   `struct window.app_identity` (see above), which reaches the compositor
   through `WIN_REQ_WINDOW_APPID`, asked once at create because
   `WIN_REQ_WINDOW_INFO`'s single `text` is the title. A window with no
@@ -1655,6 +1658,16 @@ this the obvious way), not from how much history it accumulated.
   (`apply_drag()`) and the release commits into ranks. Buttons are
   DRAWN at `taskbar_draw_x()` (a glide) and HIT at their layout x. `gui taskbar --json` reports all of it;
   `tools/taskbar_style_test.py` checks each where it is drawn.
+- **ASKING SEVERAL WINDOWS TO CLOSE IS `close_batch.h`, HELD BY
+  `open_seq`.** The Leave page and "Close all N windows" (the window menu
+  and a grouped button's list, offered only when the app has more than
+  one listed window) share one tracker: record every window FIRST, then
+  ask each through `wm_request_close()` -- an ask can close a kernel-space
+  window at once and renumber `windows[]` -- and poll which have gone
+  against a 5 s deadline. What is still open then is the CALLER's to
+  present: the Leave page lists it, Close all puts a notice card up
+  (`crash_notice_stayed()`: Show it, Force Quit) that leaves by itself
+  once those windows close. A third batch close uses the same tracker.
 - **AN APP'S OPTIONS WINDOW IS `ui/uui_prefs.h`.** A sidebar of pages,
   "Caption: control" rows, Defaults / OK / Cancel, modal, nothing applied
   until OK. The app declares its controls (ids below

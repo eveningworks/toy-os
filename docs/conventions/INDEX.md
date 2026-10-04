@@ -441,9 +441,11 @@ whenever a headline here tells you something you did not already know.
 - **`uui_radio_list` arms on press and COMMITS ON RELEASE**
 - **A WINDOW'S APPLICATION IDENTITY IS THE KERNEL'S, not the app's**
 - **The TASKBAR'S LAYOUT IS ONE FUNCTION, and past a floor it groups by
-  app**
+  app** (`desktop.taskbar_combine`), then overflows into a button
 - **THE TASKBAR'S LAYOUT IS FOUR INDEPENDENT SETTINGS, AND EVERY RECT
   COMES FROM `taskbar_geom()`**
+- **ASKING SEVERAL WINDOWS TO CLOSE IS `close_batch.h`, HELD BY
+  `open_seq`**
 - **AN APP'S OPTIONS WINDOW IS `ui/uui_prefs.h`**
 - **A POPUP CHOOSES ON THE RELEASE, AND ONE CLOSED UNDER A PRESS OWES
   THAT PRESS A RELEASE**

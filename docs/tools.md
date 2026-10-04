@@ -1340,7 +1340,7 @@ manual steps to be worth automating:
   assertion in the file passes vacuously, which is this repo's "the data
   never reached the code under test" trap exactly.
 - **`taskbar_test.py`** -- opens Notepad until the taskbar overflows,
-  and asserts the strip never reaches the tray. Eleven checks against
+  and asserts the strip never reaches the tray. Checks against
   `gui taskbar --json`, which comes from the SAME `taskbar_layout()`
   that draws the buttons and hit-tests them (`userland/wm/wm_taskbar.c`)
   -- before that fix the debug console was a fourth, independent walk of
@@ -1350,6 +1350,12 @@ manual steps to be worth automating:
   collapsing windows of one application into a counted button with a
   jump-list popup. Slow (each window is a real process, so budget a
   couple of minutes), deliberately NOT in `gui_regress.py`.
+  Also `desktop.taskbar_combine` (always groups two windows, `full`
+  does not, `never` overflows into the overflow button and its list
+  raises a hidden window) and "Close all N windows" (offered only past
+  one window; closes three; with one refusing, the notice after the 5 s
+  wait and its Force Quit). `--only height|combine|closeall|overflow`
+  runs sections; every setting it touches is unset at the end.
   Its positive control is worth reading in the file: the first attempt
   reddened three checks and left the OVERFLOW check green, because the
   layout's placement guard still refused to put a button past the strip

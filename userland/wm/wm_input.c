@@ -444,7 +444,8 @@ void wm_handle_left_click(int mx, int my) {
 // resolves it through ctx_target(), and a window that has gone does
 // nothing.
 static uint32_t g_ctx_window_seq;
-static struct context_menu_item g_window_menu[5];
+static struct context_menu_item g_window_menu[6];
+static char g_close_all_label[32];
 
 static int ctx_target(void *ctx) { return wm_window_by_seq(*(uint32_t *)ctx); }
 
@@ -457,6 +458,12 @@ static int ctx_target(void *ctx) { return wm_window_by_seq(*(uint32_t *)ctx); }
 static void ctx_close_window(void *ctx) {
     int i = ctx_target(ctx);
     if (i >= 0) wm_request_close(i);
+}
+
+// Every window of its app, each asked as Close asks one (close_batch.h).
+static void ctx_close_all(void *ctx) {
+    int i = ctx_target(ctx);
+    if (i >= 0) taskbar_close_app(i);
 }
 
 void wm_window_minimize(int i) {
@@ -654,6 +661,15 @@ void wm_open_window_menu(int idx, int mx, int my) {
     items[n++] = (struct context_menu_item){ .label = "Close", .on_select = ctx_close_window,
                                              .ctx = &g_ctx_window_seq, .icon = "tb-close",
                                              .tint = UTHEME_ACT_DANGER, .accel = "Alt+F4" };
+    // ...and the app's other windows with it, only when it has some --
+    // Windows' jump list offers "Close all windows" on the same terms.
+    int all = taskbar_app_windows(idx);
+    if (all > 1) {
+        k_snprintf(g_close_all_label, sizeof g_close_all_label, "Close all %d windows", all);
+        items[n++] = (struct context_menu_item){ .label = g_close_all_label, .on_select = ctx_close_all,
+                                                 .ctx = &g_ctx_window_seq, .icon = "tb-close-all",
+                                                 .tint = UTHEME_ACT_DANGER };
+    }
     context_menu_open_at(mx, my, items, n);
 }
 

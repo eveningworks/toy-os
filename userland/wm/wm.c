@@ -43,6 +43,7 @@
 #include "volume_popup.h"
 #include "brightness_popup.h"
 #include "crash_notice.h"
+#include "close_batch.h"
 #include "network_popup.h"
 #include "remote_popup.h"
 #include "wm_overlay.h"
@@ -1139,6 +1140,7 @@ void wm_run(void) {
         brightness_poll_config();
         crash_notice_poll();
         leave_page_poll();       // the apps asked to close: gone yet?
+        close_all_poll();        // ...and a Close all's
 
         // Drain everything the kernel has queued for us, then read the
         // position out of it. One pump per frame, fully draining -- see

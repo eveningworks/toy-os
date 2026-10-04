@@ -74,7 +74,7 @@ def main():
     with DebugConsole(args.sock) as dbg:
         dbg.settle()
         for k in ("taskbar_buttons", "taskbar_align", "start_position", "taskbar_float",
-                  "taskbar_peek", "animations"):
+                  "taskbar_peek", "animations", "taskbar_combine"):
             dbg.send(f"sh config unset desktop.{k}")
         # Peek off: its card would open over the strip during the slow moves.
         dbg.send("sh config set desktop.taskbar_peek off")

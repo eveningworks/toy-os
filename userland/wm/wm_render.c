@@ -1381,6 +1381,29 @@ static void draw_taskbar(void) {
             ugfx_fill_rect(s, x + 8, y + h - 2, w - 16, 2, p->accent);
     }
 
+    // THE OVERFLOW BUTTON: an up-chevron and how many windows it holds.
+    // Lit while its list is open, as a button is while its window is.
+    int ox, ow, hidden = taskbar_overflow(&ox, &ow);
+    if (hidden) {
+        int y = g.btn_y, h = g.btn_h;
+        uint32_t bg = p->bar;
+        if (taskbar_overflow_armed()) bg = uui_state_bg(p->bar, UUI_STATE_PRESSED);
+        else if (taskbar_overflow_menu_open()) bg = p->focus;
+        else if (hover == TASKBAR_HOVER_OVERFLOW) bg = p->hover;
+        if (bg != p->bar) tb_ground(ox, y, ow, h, g.btn_r, bg, light && bg == p->focus, p->focus_edge);
+        char num[8];
+        k_snprintf(num, sizeof num, hidden > 99 ? "99+" : "%d", hidden);
+        // The chevron is the mockup's 10x6 beside 14 px text, from the font.
+        int k = ugfx_char_h() * 7 / 20, v = ugfx_char_h() / 5, nw = ugfx_text_width(num);
+        int gap = 4, cx = ox + (ow - (2 * k + gap + nw)) / 2 + k, cy = y + h / 2;
+        for (int t = 0; t < 2; t++) {   // two rows: a 1.6 px stroke
+            ugfx_draw_line(s, cx - k, cy + v + t, cx, cy - v + t, p->text, GEOM_AA);
+            ugfx_draw_line(s, cx, cy - v + t, cx + k, cy + v + t, p->text, GEOM_AA);
+        }
+        ugfx_draw_string_clipped(s, cx + k + gap, y + (h - ugfx_char_h()) / 2, nw + 1, num, p->text,
+                                 wm_glass_ink_bg(WM_GLASS_TASKBAR, bg, p->bar));
+    }
+
     taskbar_glide_frame_done();
 
     draw_tray(&g, p);
