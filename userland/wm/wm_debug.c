@@ -1286,7 +1286,8 @@ static void cmd_state(struct dbg_out *o, int json) {
                      move_outline_mode ? "outline" : "live");
         dbg_out_printf(o, "\"resize_lag_ms\":%u,", resize_lag_ms);
         dbg_out_printf(o, "\"redraw_pending\":%s,\"pending\":%d,",
-                     redraw_pending ? "true" : "false", wm_debug_input_pending());
+                     redraw_pending || wm_client_present_frame_pending() ? "true" : "false",
+                     wm_debug_input_pending());
         dbg_out_printf(o, "\"hwcursor\":%s,",
                      wm_hwcursor_active() ? "true" : "false");
         // Ghosts in flight (wm_anim.h): a test that reads pixels waits
@@ -1645,7 +1646,7 @@ static void cmd_compositor(struct dbg_out *o, int json) {
                           "\"culled_total\":%u,\"frames\":%u,\"presents_unchanged\":%u,"
                           "\"presents_full\":%u}}\r\n",
                     cs.drawn, cs.culled, cs.drawn_total, cs.culled_total, cs.frames,
-                    wm_client_presents_unchanged(), wm_client_presents_full());
+                    wm_client_presents_unchanged(), wm_render_presents_full());
     } else if (!pid) {
         dbg_out_write(o, "compositor: none registered\r\n");
     } else {

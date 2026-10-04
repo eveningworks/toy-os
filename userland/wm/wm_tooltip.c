@@ -32,11 +32,7 @@ static int box_x, box_y, box_w, box_h;
 static int tip_max_w(void) { return screen_w / 3; }
 
 void wm_tooltip_cancel(void) {
-    if (wm_tooltip_open) {
-        wm_tooltip_damage();
-        redraw_pending = 1;
-    }
-    wm_tooltip_open = 0;
+    wm_tooltip_open = 0;   // where it was is the core's to damage (wm_overlay.h)
     tip_text[0] = '\0';
     hot_since = 0;
 }

@@ -518,10 +518,16 @@ static void send_release(struct window *win, int b) {
 // `gui compositor` reports it (tools/occlusion_test.py reads it).
 static unsigned g_presents_unchanged;
 unsigned wm_client_presents_unchanged(void) { return g_presents_unchanged; }
-// Presents that asked for a frame while no damage was recorded -- a FULL
-// repaint charged to a present (tools/occlusion_test.py: none should).
-static unsigned g_presents_full;
-unsigned wm_client_presents_full(void) { return g_presents_full; }
+// A FRAME A PRESENT ASKED FOR, kept apart from redraw_pending so the
+// render can tell a frame that NOTHING ELSE asked for (wm.c's render
+// gate, wm_render.c's present-only full-frame count).
+static int g_present_frame;
+int wm_client_present_frame_pending(void) { return g_present_frame; }
+int wm_client_take_present_frame(void) {
+    int v = g_present_frame;
+    g_present_frame = 0;
+    return v;
+}
 
 static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
                               int w, int h, uint32_t seq, const struct win_damage *dmg) {
@@ -617,12 +623,7 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     }
     win->client_damage_all = 0;
     if (first) wm_anim_open(idx);
-    // A present that asks for a frame with NO damage box asks for a full
-    // repaint; none should, and this counts any that does.
-    int dx, dy, dw, dh;
-    wm_debug_damage(&dx, &dy, &dw, &dh);
-    if (dw <= 0 || dh <= 0) g_presents_full++;
-    redraw_pending = 1;
+    g_present_frame = 1;
     wm_resize_shown(idx, 0);
 }
 

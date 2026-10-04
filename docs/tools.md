@@ -2739,7 +2739,13 @@ window without going through it will find its layout polls timing out.
   damage checks: a desktop-menu submenu closed by hover leaves no shadow
   band past its far edge (darker while open is the control); the
   calendar, closed by opening the network flyout, leaves its rect
-  wallpaper again; and re-setting `system.timezone` to its own value --
+  wallpaper again; so does the network flyout dismissed by a real click
+  outside with the pointer still -- by pixels with the verifier OFF, and
+  by a scene repaint landing at once, three closes running, because the
+  tray clock's once-a-second frame clears a close that asked for no
+  frame within a second and a settled picture cannot tell them apart
+  (the remote flyout too where the guest shows its tray item); and
+  re-setting `system.timezone` to its own value --
   every client re-presents an identical frame -- counts as
   `presents_unchanged`, with no present charged a full frame
   (`presents_full`, not the global full-frame count, which debug

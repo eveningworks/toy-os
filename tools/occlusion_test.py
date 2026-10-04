@@ -26,6 +26,10 @@ And two about what is damaged rather than drawn:
   - CLOSED BY ANOTHER: the calendar, closed by opening the network
     flyout, leaves its rect wallpaper again -- the core damages a closed
     overlay's last rect itself.
+  - CLOSED BY A CLICK OUTSIDE: the network (and, where the guest shows
+    it, the remote) flyout, dismissed with the pointer not moving, is
+    wallpaper again -- by pixels, with the verifier off, since a close
+    that asks for no frame leaves the verifier nothing to judge.
   - UNCHANGED PRESENT: re-setting `system.timezone` to its own value makes
     every client re-present an identical frame; each must be counted as
     unchanged, and no present may ask for a full frame (`presents_full`).
@@ -195,14 +199,78 @@ def calendar_closed_by_flyout(dbg, qmp, tmp, res):
               "; ".join(bugs)[:400])
 
 
+def scene_repaints(dbg):
+    for line in (dbg.send("gui state") or "").splitlines():
+        if line.startswith("scene repaints:"):
+            return int(line.split(":")[1])
+    return -1
+
+
+def flyout_closed_by_click(dbg, qmp, tmp, res, name):
+    """A tray flyout dismissed by a click OUTSIDE it, with the pointer not
+    moving, is gone from the screen AT ONCE: its own close path neither
+    damages nor asks for a frame -- the core does both. Pixels, not the
+    verifier, which judges nothing when no frame is drawn at all.
+
+    THE TRAY CLOCK DRAWS A FRAME EVERY SECOND and the core damages a
+    closed overlay in whatever frame comes next, so a close that asked for
+    no frame still clears within a second, and a settled picture cannot
+    tell the two apart. So the check that matters is the TIMING: a scene
+    repaint between the click and a query a few hundred ms later, three
+    closes running (a clock tick landing inside every window is ~1%)."""
+    j = dbg.json(f"gui {name} --json")
+    t = j.get("tray") or {}
+    if not t.get("w") or j.get("tray_hidden"):
+        print(f"  NOT COVERED  {name}: no tray item on this guest")
+        return
+    sw = dbg.state()["screen"]["w"]
+    park = (sw // 2, 40)                     # empty desktop, far from the tray
+    dbg.warp_cursor(qmp, *park)
+    dbg.settle(1.0)
+    before = shot(qmp, tmp, f"{name}_before")
+    prompt = []
+    for k in range(3):
+        dbg.send(f"gui click {t['cx']} {t['cy']}")
+        dbg.settle(1.0)
+        j = dbg.json(f"gui {name} --json")
+        if not res.check(f"{name}: clicking its tray item opened the flyout (#{k + 1})",
+                         j.get("open")):
+            return
+        if k == 0:
+            opened = shot(qmp, tmp, f"{name}_open")
+        dbg.warp_cursor(qmp, *park)          # the real pointer, back where it rests
+        dbg.settle(1.0)
+        # A REAL button press where the pointer already is, not `gui
+        # click`: nothing about it but the close may ask for a frame.
+        s0 = scene_repaints(dbg)
+        qmp.click(settle=0.02)
+        s1 = scene_repaints(dbg)
+        prompt.append(s1 > s0)
+        dbg.settle(1.0)
+    shut = not dbg.json(f"gui {name} --json").get("open")
+    res.check(f"{name}: every close drew a frame at once, not at the next clock tick",
+              all(prompt), f"frame within the query window: {prompt}")
+    after = shot(qmp, tmp, f"{name}_closed")
+    pts = [(x, y) for x in range(j["x"] + 6, j["x"] + j["w"] - 6, 14)
+           for y in range(j["y"] + 6, j["y"] + j["h"] - 6, 14)]
+    differ = sum(1 for p in pts if opened.getpixel(p) != before.getpixel(p))
+    stale = [p for p in pts if max(abs(a - b) for a, b in
+                                   zip(after.getpixel(p), before.getpixel(p))) > 1]
+    res.check(f"{name}: the open flyout covered the probes (the control)",
+              pts and differ >= len(pts) // 2, f"{differ} of {len(pts)} differed")
+    res.check(f"{name}: a click outside closed it and its rect is wallpaper again",
+              shut and pts and not stale,
+              f"closed={shut}, {len(stale)} of {len(pts)} stale, first {stale[:1]}")
+
+
 def unchanged_present(dbg, res):
     """A present that changed nothing draws NO frame. Every client re-presents
     on a setting notice (uapp redraws on WIN_EV_SETTING), almost always an
     identical frame; with the damage list empty, the compositor must not
     turn it into a full-screen repaint. Judged by the compositor's own
-    attribution (`presents_full`: presents that asked for a frame with no
-    damage recorded), not by the global full-frame count, which a debug
-    command may move for its own reasons."""
+    attribution (`presents_full`: frames that ONLY presents asked for and
+    that went full-screen), not by the global full-frame count, which a
+    debug command may move for its own reasons."""
     def counts():
         c = dbg.json("gui compositor --json")["windows"]
         return c["presents_full"], c["presents_unchanged"]
@@ -226,6 +294,8 @@ def run(dbg, qmp, tmp, res):
         calendar_closed_by_flyout(dbg, qmp, tmp, res)
     finally:
         dbg.damage_verify(False)
+    for name in ("network", "remote"):   # the verifier OFF: it repairs what it sees
+        flyout_closed_by_click(dbg, qmp, tmp, res, name)
     for _ in range(2):
         dbg.send("gui spawn /bin/wm/apps/notepad")
         deadline = time.time() + 20

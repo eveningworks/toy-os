@@ -1025,6 +1025,10 @@ void wm_run(void) {
     wm_exit_requested = 0;
 
     wm_render_reset(); // first frame must be a full repaint -- see wm_render.c
+    // Nothing open, nothing drawn -- at session START only: a mid-session
+    // full repaint (a font, a mode) must not make an open overlay look
+    // freshly opened.
+    wm_overlay_reset();
     tray_init();
     osk_init();   // its tray item, beside the clock's
     volume_tray_init();   // the tray's second item, after the clock takes slot 0
@@ -1084,7 +1088,8 @@ void wm_run(void) {
                 uint64_t in_ms = due > now_ns ? (due - now_ns + 999999) / 1000000 : 0;
                 if (in_ms < wait_ms) wait_ms = (uint32_t)in_ms;
             }
-            if (redraw_pending || wm_debug_work_pending() || wm_rawin_pending()) wait_ms = 0;
+            if (redraw_pending || wm_client_present_frame_pending() ||
+                wm_debug_work_pending() || wm_rawin_pending()) wait_ms = 0;
             // A ghost in flight wants a frame every WM_ANIM_FRAME_MS, not
             // the idle park (wm_anim.h).
             if ((wm_anim_active() || start_menu_animating()) && wait_ms > WM_ANIM_FRAME_MS)
@@ -1639,7 +1644,11 @@ void wm_run(void) {
 
         wmwd_phase("render");
         int rendered = 0;
-        if (redraw_pending) {
+        int by_present = wm_client_take_present_frame();
+        if (redraw_pending || by_present) {
+            // Asked for by presents ALONE: such a frame must be damage-
+            // limited, and wm_render.c counts any that is not.
+            wm_render_set_present_only(by_present && !redraw_pending);
             redraw_pending = 0;
             wm_render_frame(mx, my);
             rendered = 1;

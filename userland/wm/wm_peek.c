@@ -142,8 +142,7 @@ static void set_highlight(uint32_t seq) {
 }
 
 void wm_peek_close(void) {
-    if (wm_peek_open) wm_peek_damage();
-    wm_peek_open = 0;
+    wm_peek_open = 0;   // its card is the core's to damage (wm_overlay.h)
     drop_thumbs();
     g_hot_entry = -1;
     g_hot_close = 0;

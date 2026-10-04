@@ -129,8 +129,9 @@ const char *wm_overlay_parent(void) { return g_parent; }
 // WHERE EACH OVERLAY WAS LAST DRAWN, so damaging it can cover the rect
 // it has since left. Kept HERE rather than in each overlay because the
 // record-after-draw is the part they would forget -- the same argument
-// the hover compare above is built on. `w` of 0 means "not drawn since
-// it last closed", which is the state a closing damage leaves behind.
+// the hover compare above is built on. `w` of 0 means "nothing on screen
+// to cover": never drawn, or closed and its rect already damaged by
+// wm_overlay_frame_begin() before the draw pass cleared it.
 static struct { int x, y, w, h; } g_drawn[OVERLAY_COUNT];
 
 // Was it open as of the last draw pass? The core owns this so an
@@ -212,6 +213,9 @@ void wm_overlay_reset(void) {
 void wm_overlay_poll_geometry(void) {
     for (int i = 0; i < OVERLAY_COUNT; i++) {
         const struct wm_overlay *o = &g_overlays[i];
+        // A CLOSE ASKS FOR THE FRAME as well as being damaged by it
+        // (wm_overlay_frame_begin()): no close path needs to do either.
+        if (g_was_open[i] && !o->is_open()) { redraw_pending = 1; continue; }
         if (!o->is_open() || !o->rect) continue;
         if (g_drawn[i].w <= 0) continue;      // never drawn: nothing to cover
         int x, y, w, h;

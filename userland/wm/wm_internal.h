@@ -518,9 +518,14 @@ void wm_cull_stats(struct wm_cull_stats *out);
 // Client presents whose damage list named nothing on screen, since boot
 // (wm_client.c): each drew NO frame.
 unsigned wm_client_presents_unchanged(void);
-// ...and presents that asked for a frame with no damage recorded, i.e. a
-// full repaint charged to a present. None should.
-unsigned wm_client_presents_full(void);
+// A frame a client's present asked for, apart from redraw_pending
+// (wm_client.c); take_ clears it. wm.c's render gate reads both.
+int wm_client_present_frame_pending(void);
+int wm_client_take_present_frame(void);
+// The next wm_render_frame() was asked for by presents ALONE (wm.c), and
+// how many such frames went full-screen -- none should (wm_render.c).
+void wm_render_set_present_only(int only);
+unsigned wm_render_presents_full(void);
 
 // Damage verification (debug): render every frame twice and report any
 // pixel the damage-limited pass got wrong. See wm_render.c's own

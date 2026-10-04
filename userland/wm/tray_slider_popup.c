@@ -123,11 +123,7 @@ void tray_slider_open(struct tray_slider_popup *p) {
 
 void tray_slider_close(struct tray_slider_popup *p) {
     if (!p->open) return;
-    // Damaged BEFORE the flag drops, or the rect is computed for a
-    // panel the frame is no longer drawing and what it covered stays on
-    // screen.
-    damage(p);
-    p->open = 0;
+    p->open = 0;   // the core damages where it was and asks for the frame (wm_overlay.h)
     p->scale.dragging = 0;
     p->scale.hovered = 0;
 }
