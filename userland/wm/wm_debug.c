@@ -1285,8 +1285,11 @@ static void cmd_state(struct dbg_out *o, int json) {
                      resize_outline_mode ? "outline" : "live",
                      move_outline_mode ? "outline" : "live");
         dbg_out_printf(o, "\"resize_lag_ms\":%u,", resize_lag_ms);
-        dbg_out_printf(o, "\"redraw_pending\":%s,\"pending\":%d,",
-                     redraw_pending ? "true" : "false", wm_debug_input_pending());
+        dbg_out_printf(o, "\"redraw_pending\":%s,\"frame_owed\":%s,\"pending\":%d,",
+                     redraw_pending ? "true" : "false",
+                     wm_overlay_close_pending() ? "true" : "false", wm_debug_input_pending());
+        dbg_out_printf(o, "\"scene_repaints\":%u,\"clock_ticks\":%u,",
+                     wm_scene_frames(), wm_clock_ticks());
         dbg_out_printf(o, "\"hwcursor\":%s,",
                      wm_hwcursor_active() ? "true" : "false");
         // Ghosts in flight (wm_anim.h): a test that reads pixels waits
@@ -1362,6 +1365,9 @@ static void cmd_state(struct dbg_out *o, int json) {
                  move_outline_mode ? "outline" : "live");
     dbg_out_printf(o, "injected events pending: %d\r\n", wm_debug_input_pending());
     dbg_out_printf(o, "scene repaints: %u\r\n", wm_scene_frames());
+    dbg_out_printf(o, "frame owed: %d (an overlay closed, its frame not drawn)\r\n",
+                 wm_overlay_close_pending());
+    dbg_out_printf(o, "clock ticks: %u\r\n", wm_clock_ticks());
     dbg_out_write(o, "launched (still running):");
     int any = 0;
     for (int i = 0; i < wm_launched_max(); i++) {

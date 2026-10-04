@@ -138,6 +138,9 @@ static struct { int x, y, w, h; } g_drawn[OVERLAY_COUNT];
 // overlay's on_open can fire from ONE place -- see wm_overlay.h on why
 // each overlay's own open path is the wrong place for it.
 static int g_was_open[OVERLAY_COUNT];
+// A drawn overlay has closed and its frame is not drawn yet: set by
+// wm_overlay_poll_geometry() once an iteration, cleared by the draw pass.
+static int g_close_owed;
 
 void wm_overlay_draw(int mx, int my) {
     for (int i = OVERLAY_COUNT - 1; i >= 0; i--) {
@@ -170,22 +173,20 @@ void wm_overlay_draw(int mx, int my) {
         if (o->rect && o->rect(&x, &y, &w, &h))
             g_drawn[i] = (typeof(g_drawn[0])){ x, y, w, h };
     }
+    g_close_owed = 0;   // every close up to now has had its frame
 }
+
+// Drawn by the last pass and shut now: the ONE copy of "this close still
+// needs its frame". Evaluated once an iteration into g_close_owed (the
+// render gate's question) and again by the frame itself.
+static int closed_since_drawn(int i) { return g_was_open[i] && !g_overlays[i].is_open(); }
+
+int wm_overlay_close_pending(void) { return g_close_owed; }
 
 // THE CLOSE IS THE CORE'S TO DAMAGE: an overlay that was drawn last frame
 // and is shut now has its last drawn rect, shadow included, damaged here
 // -- whoever closed it, by whatever path. Before the frame's damage is
 // final, so after input and before wm_overlay_draw() clears the record.
-// Drawn by the last pass and shut now: the ONE copy of "this close still
-// needs its frame", read by the render gate and by the frame itself.
-static int closed_since_drawn(int i) { return g_was_open[i] && !g_overlays[i].is_open(); }
-
-int wm_overlay_close_pending(void) {
-    for (int i = 0; i < OVERLAY_COUNT; i++)
-        if (closed_since_drawn(i)) return 1;
-    return 0;
-}
-
 int wm_overlay_frame_begin(void) {
     int full = 0;
     for (int i = 0; i < OVERLAY_COUNT; i++) {
@@ -202,6 +203,7 @@ int wm_overlay_frame_begin(void) {
 }
 
 void wm_overlay_reset(void) {
+    g_close_owed = 0;
     for (int i = 0; i < OVERLAY_COUNT; i++) {
         g_was_open[i] = 0;
         g_drawn[i].w = 0;
@@ -221,8 +223,10 @@ void wm_overlay_reset(void) {
 // Called from the poll phase, BEFORE the frame's clip is derived, so
 // the repair lands on the same frame rather than the next one.
 void wm_overlay_poll_geometry(void) {
+    g_close_owed = 0;
     for (int i = 0; i < OVERLAY_COUNT; i++) {
         const struct wm_overlay *o = &g_overlays[i];
+        if (closed_since_drawn(i)) g_close_owed = 1;
         if (!o->is_open() || !o->rect) continue;
         if (g_drawn[i].w <= 0) continue;      // never drawn: nothing to cover
         int x, y, w, h;

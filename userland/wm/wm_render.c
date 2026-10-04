@@ -2158,13 +2158,13 @@ void wm_frame_stats_reset(void) {
 uint32_t wm_scene_frames(void) { return g_scene_frames; }
 
 void wm_render_frame(int mx, int my) {
-    g_scene_frames++;
     // The lease decision first: while a client holds the display's
     // buffers this compositor's frame is not on screen, so it is not
     // drawn. Ending a lease inside update() asks for a full repaint,
     // which the rest of this frame then does.
     wm_scanout_update();
     if (wm_scanout_active()) { damage_reset(); return; }
+    g_scene_frames++;   // a scene DRAWN: a leased frame is not one
 
     // After the lease check, so a frame that drew nothing is not timed.
     unsigned long long t0_ns = sys_monotonic_ns();

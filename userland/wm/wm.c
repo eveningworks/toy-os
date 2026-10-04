@@ -918,6 +918,11 @@ static int overlay_close_frame(void) {
     return wm_overlay_close_pending() && !wm_scanout_active();
 }
 
+// The tray clock's once-a-second updates, for `gui state`: a test that
+// must tell a frame it caused from the clock's own lines up on these.
+static unsigned g_clock_ticks;
+unsigned wm_clock_ticks(void) { return g_clock_ticks; }
+
 void wm_run(void) {
     // Claim the compositor role, then take the framebuffer grant it
     // gates. Both can be refused -- another process may already hold the
@@ -1423,6 +1428,7 @@ void wm_run(void) {
         if (this_second != last_second) {
             last_second = this_second;
             tray_update_clock(); // also sets redraw_pending + damages the taskbar strip
+            g_clock_ticks++;
             volume_tray_update(); // the speaker icon follows the level
             remote_poll();        // who is on this machine, and what they did
             // A CADENCE, not a generation compare, and network_popup.c

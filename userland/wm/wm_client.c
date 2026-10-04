@@ -518,10 +518,10 @@ static void send_release(struct window *win, int b) {
 // `gui compositor` reports it (tools/occlusion_test.py reads it).
 static unsigned g_presents_unchanged;
 unsigned wm_client_presents_unchanged(void) { return g_presents_unchanged; }
-// Presents that asked for a frame while contributing NO damage of their
-// own -- the only way a present can make a frame full-screen, since a
-// frame with no damage box is a full repaint. None should; counted where
-// the request is made, so nothing else that empties or resets the box
+// Presents that would have asked for a frame with NO damage box -- a full
+// repaint for nothing -- measured from the box itself after the present's
+// own damage calls, and given no frame. None should; counted where the
+// request is made, so nothing else that empties or resets the box later
 // (a first frame, an overlay, a screenshot) is charged to a present.
 static unsigned g_presents_full;
 unsigned wm_client_presents_full(void) { return g_presents_full; }
@@ -593,13 +593,12 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     // struct win_damage): a caret blink repaints a caret, not a window
     // through every window under it. Clipped to the content, so a client
     // cannot damage its way over its neighbours.
-    int added = 1;   // this present damaged something of its own
     if (first) {
         wm_damage_window_rect(win->x, win->y, win->w, win->h);
     } else if (dmg && (dmg->flags & WIN_DAMAGE_LIST) && !win->client_damage_all) {
         int cx = window_content_x(win), cy = window_content_y(win);
         int cw = window_content_w(win), ch = window_content_h(win);
-        added = 0;
+        int added = 0;
         for (int k = 0; k < dmg->n && k < WIN_DAMAGE_MAX; k++) {
             int x0 = dmg->r[k].x, y0 = dmg->r[k].y;
             int x1 = x0 + dmg->r[k].w, y1 = y0 + dmg->r[k].h;
@@ -621,7 +620,16 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     }
     win->client_damage_all = 0;
     if (first) wm_anim_open(idx);
-    if (!added) g_presents_full++;
+    // MEASURED, NOT ASSUMED: with no damage box after the calls above, a
+    // frame would be a full repaint for nothing this present put there --
+    // so it is counted, and no frame is asked for.
+    int dx, dy, dw, dh;
+    wm_debug_damage(&dx, &dy, &dw, &dh);
+    if (dw <= 0 || dh <= 0) {
+        g_presents_full++;
+        wm_resize_shown(idx, 0);
+        return;
+    }
     redraw_pending = 1;
     wm_resize_shown(idx, 0);
 }

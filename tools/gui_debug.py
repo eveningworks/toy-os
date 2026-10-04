@@ -625,6 +625,26 @@ class DebugConsole:
         m = re.search(r"scene repaints: (\d+)", self.send("gui state") or "")
         return int(m.group(1)) if m else -1
 
+    def clock_ticks(self):
+        """How many times the tray clock has updated (`gui state`'s `clock
+        ticks`) -- each one asks for a frame -- or -1."""
+        m = re.search(r"clock ticks: (\d+)", self.send("gui state") or "")
+        return int(m.group(1)) if m else -1
+
+    def wait_clock_tick(self, timeout):
+        """Poll until the tray clock ticks. Returns the seconds it took, or
+        None -- for a test that must act just AFTER a tick, so the next one
+        is a second away and cannot stand in for a frame it is timing."""
+        t0 = time.time()
+        c0 = self.clock_ticks()
+        while c0 >= 0:
+            if self.clock_ticks() > c0:
+                return time.time() - t0
+            if time.time() - t0 >= timeout:
+                break
+            time.sleep(0.01)
+        return None
+
     def wait_scene_repaint(self, after, timeout):
         """Poll until the scene repaint count passes `after`. Returns the
         seconds it took, or None once `timeout` has passed -- BOUNDED, so a

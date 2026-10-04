@@ -204,6 +204,9 @@ def calendar_closed_by_flyout(dbg, qmp, tmp, res):
 # drawn by the next tick -- ~1 s after the click, given it lands just after
 # one. Under this bound, over it.
 CLOSE_FRAME_S = 0.5
+# How long to wait for the clock to tick before a timed click: its period,
+# with room.
+TICK_WAIT_S = 1.5
 
 
 def flyout_closed_by_click(dbg, qmp, tmp, res, name):
@@ -243,18 +246,24 @@ def flyout_closed_by_click(dbg, qmp, tmp, res, name):
         dbg.settle(1.0)
         # A REAL button press where the pointer already is, not `gui
         # click`: nothing about it but the close may ask for a frame.
-        # Click just AFTER a clock tick, so the next one is ~1 s away and
-        # cannot stand in for a frame the close failed to ask for.
-        dbg.wait_scene_repaint(dbg.scene_repaints(), 1.5)
+        # Click just AFTER a clock tick, and after the frame it asked for,
+        # so the next tick is ~1 s away and cannot stand in for a frame the
+        # close failed to ask for. Each wait is recorded: a missed one
+        # fails the check rather than quietly unaligning it.
+        pre = dbg.scene_repaints()
+        ticked = dbg.wait_clock_tick(TICK_WAIT_S)
+        drawn = dbg.wait_scene_repaint(pre, CLOSE_FRAME_S) if ticked is not None else None
         s0 = dbg.scene_repaints()
         qmp.click(settle=0.02)
-        took = dbg.wait_scene_repaint(s0, CLOSE_FRAME_S)
-        prompt.append(round(took, 3) if took is not None else None)
+        took = dbg.wait_scene_repaint(s0, CLOSE_FRAME_S) if s0 >= 0 else None
+        prompt.append({"tick": ticked is not None, "tick_frame": drawn is not None,
+                       "close_frame_s": round(took, 3) if took is not None else None})
         dbg.settle(1.0)
     shut = not dbg.json(f"gui {name} --json").get("open")
     res.check(f"{name}: every close drew a frame at once, not at the next clock tick",
-              all(p is not None for p in prompt),
-              f"seconds to the next scene repaint (bound {CLOSE_FRAME_S}): {prompt}")
+              all(p["tick"] and p["tick_frame"] and p["close_frame_s"] is not None
+                  for p in prompt),
+              f"bound {CLOSE_FRAME_S} s after a tick: {prompt}")
     after = shot(qmp, tmp, f"{name}_closed")
     pts = [(x, y) for x in range(j["x"] + 6, j["x"] + j["w"] - 6, 14)
            for y in range(j["y"] + 6, j["y"] + j["h"] - 6, 14)]
@@ -390,6 +399,11 @@ def run(dbg, qmp, tmp, res):
         bugs = dbg.damage_bugs()
         res.check("the damage verifier (reference render: no culling) saw nothing stale",
                   bugs == [], "; ".join(bugs)[:400])
+        # Every present of the run -- carets, hovers, drags, resizes --
+        # damaged something on screen before it asked for a frame.
+        pf = dbg.json("gui compositor --json")["windows"]["presents_full"]
+        res.check("no present in the whole run asked for a frame with no damage box",
+                  pf == 0, f"presents_full={pf}")
     finally:
         dbg.damage_verify(False)
         set_conf(dbg, **DEFAULTS)

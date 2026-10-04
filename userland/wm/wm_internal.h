@@ -508,6 +508,8 @@ void wm_debug_damage(int *out_x, int *out_y, int *out_w, int *out_h);
 // the cheap cursor-only path. `gui state` reports it so a test can tell
 // "this input repainted something" from "the pointer sprite moved".
 uint32_t wm_scene_frames(void);
+// The tray clock's updates so far (wm.c), each of which asks for a frame.
+unsigned wm_clock_ticks(void);
 
 // Windows DRAWN, and CULLED -- skipped because the opaque windows above
 // them left nothing of them visible in the frame's damage (wm_render.c's

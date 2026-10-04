@@ -204,7 +204,8 @@ struct wm_overlay {
 // wm_overlay_close_pending() says a drawn overlay has closed (never during
 // a scanout lease, when no frame is drawn and asking would spin), and
 // that frame's wm_overlay_frame_begin() damages the overlay's last drawn
-// rect, shadow included.
+// rect, shadow included. Answered from wm_overlay_poll_geometry()'s pass,
+// once an iteration, and cleared by the draw pass.
 int wm_overlay_close_pending(void);
 // Once a frame, before its damage is final: the damage above, and 1 when
 // the frame must be a full repaint for an overlay's sake (see `repaint`).
