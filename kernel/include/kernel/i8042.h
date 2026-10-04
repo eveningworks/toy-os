@@ -13,8 +13,13 @@
 // each byte to the right device by its AUX bit.
 void i8042_poll(void);
 
-// Declares the PS/2 keyboard and mouse to the input core. Called from
-// kernel_main() once, after the IDT is up. See kernel/drivers/input/input.c.
+// Probes for the controller and, if one answers, declares the PS/2
+// keyboard and mouse to the input core. Called from kernel_main() once,
+// after the IDT is up. See kernel/drivers/input/input.c.
 void i8042_register_sources(void);
+
+// 1 if a controller answered the probe. Without one nothing is
+// registered, polled or written -- mouse_init() checks it too.
+int i8042_present(void);
 
 #endif

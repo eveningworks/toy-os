@@ -454,3 +454,61 @@ KTEST("win_input", "with one free slot per poll, keys and positions both drain")
     KTEST_ASSERT_EQ(keys, 4);
     KTEST_ASSERT_EQ(phys, 4);
 }
+
+KTEST("win_input", "at the full ring, a release still evicts a press rather than being refused") {
+    // Notices at their reserve AND input at its share: the ring is full,
+    // and a release must still go in, in place of the oldest press.
+    SKIP_IF_ROLE_HELD;
+    int pid = spare_pid();
+    if (!pid) KTEST_SKIP("no spare pid");
+    win_server_set_compositor(pid, 0);
+    struct win_event n = { 0 };
+    n.type = WIN_EV_FONT;    win_input_push(&n);
+    n.type = WIN_EV_SCREEN;  win_input_push(&n);
+    n.type = WIN_EV_SETTING; win_input_push(&n);
+    for (int w = 1; w <= FSWATCH_MAX; w++) { n.type = WIN_EV_FSWATCH; n.a = w; win_input_push(&n); }
+    for (int i = 0; i < WIN_INPUT_MAX; i++) {
+        struct win_event press = key_event(i);
+        win_input_push(&press);
+    }
+    int full = win_input_pending();
+    struct win_event up = { .type = WIN_EV_RAW_KEY_UP, .a = 'q' };
+    int took = win_input_push(&up);
+    int found = 0, first_key = -1;
+    struct win_event got;
+    while (win_input_pop(&got)) {
+        if (got.type == WIN_EV_RAW_KEY_UP && got.a == 'q') found = 1;
+        if (got.type == WIN_EV_RAW_KEY && first_key < 0) first_key = got.a;
+    }
+    win_server_set_compositor(0, 0);
+    KTEST_ASSERT_EQ(full, WIN_EVENT_QUEUE_MAX);
+    KTEST_ASSERT(took);
+    KTEST_ASSERT(found);
+    KTEST_ASSERT_EQ(first_key, 1);   // press 0 was the one evicted
+}
+
+KTEST("win_input", "a release with nowhere to go is refused and SAID") {
+    SKIP_IF_ROLE_HELD;
+    int pid = spare_pid();
+    if (!pid) KTEST_SKIP("no spare pid");
+    win_server_set_compositor(pid, 0);
+    for (int i = 0; i < WIN_INPUT_MAX; i++) {
+        struct win_event up = { .type = WIN_EV_RAW_KEY_UP, .a = 'a' + i % 26 };
+        win_input_push(&up);
+    }
+    int dropped_before = win_input_dropped();
+    uint64_t log_from = klog_total_bytes();
+    struct win_event up = { .type = WIN_EV_RAW_KEY_UP, .a = 'z' };
+    int took = win_input_push(&up);
+    static char tail[512];
+    uint64_t first = 0;
+    uint32_t n = klog_read(log_from, tail, sizeof tail - 1, &first);
+    tail[n] = 0;
+    int dropped_after = win_input_dropped();
+    win_server_set_compositor(0, 0);
+    KTEST_ASSERT(!took);
+    KTEST_ASSERT_EQ(dropped_after, dropped_before + 1);
+    // Nothing else in the suite refuses a release, so the once-a-second
+    // limit has nothing to hold this line back for.
+    KTEST_ASSERT(k_strstr(tail, "found no room") != 0);
+}

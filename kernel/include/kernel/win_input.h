@@ -41,11 +41,14 @@
 void win_input_poll(void);
 
 // Queues `ev` for the compositor and wakes it (its wait channel and its
-// wakeword both). Returns 1 if queued, 0 with no compositor. Safe from
-// an interrupt handler: the wake only flips scheduler state. Motion
-// with the same buttons as the newest queued motion REPLACES it; input
-// past WIN_INPUT_MAX drops its oldest event that is not a release, or is
-// refused. A notice replaces an older copy of itself, moving to the end.
+// wakeword both). Returns 1 if queued (or merged), 0 if there is no
+// compositor OR the event was refused for lack of room -- input at
+// WIN_INPUT_MAX with only releases queued (a refused release is logged).
+// Safe from an interrupt handler: the wake only flips scheduler state.
+// Motion with the same buttons as the newest queued motion REPLACES it;
+// input past WIN_INPUT_MAX drops its oldest event that is not a release.
+// A RAW_MOUSE whose mask drops a button held by the last one is a release
+// too. A notice replaces an older copy of itself, moving to the end.
 int win_input_push(const struct win_event *ev);
 
 // win_input_poll()'s key half: the key and positional streams, in turn,

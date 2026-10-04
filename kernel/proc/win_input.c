@@ -15,6 +15,7 @@
 #include "irqflags.h" // irq_save(): every producer and the consumer share the queue
 #include "kfmt.h"     // klog_printf -- notices past their reserve are said
 #include "klog.h"     // KLOG_ERR
+#include "ratelimit.h" // at most a line a second
 
 // --- the queue --------------------------------------------------------
 //
@@ -47,6 +48,7 @@ static struct {
     int ninput;  // ...of which raw input
     int dropped; // overflow drops since the last reset
     int newest_edge; // the newest slot is a button EDGE: never merged into
+    uint8_t last_buttons; // the mask of the newest RAW_MOUSE queued
 } q;
 
 void win_input_reset(void) {
@@ -91,17 +93,34 @@ static void remove_at(int i) {
     q.count--;
 }
 
-// Said, but not once per event: the first, then every 64th.
-static int log_due(unsigned *n) { return ((*n)++ % 64) == 0; }
-static unsigned g_lost_releases, g_over_reserve;
-
 // `edge`: 0 for no button edge, EDGE_DOWN or EDGE_UP for one.
 #define EDGE_DOWN 1
 #define EDGE_UP   2
 
+// The one way an event is refused: counted, and a RELEASE said (at most
+// a line a second, kernel/ratelimit.h) -- a client will hold that key or
+// button. 0, for the caller to return.
+static int refuse(const struct win_event *ev, int release) {
+    static struct ratelimit rl;
+    unsigned held = 0;
+    q.dropped++;
+    if (release && ratelimit_ok(&rl, &held))
+        klog_printf(KLOG_ERR "win_input: a release (type %u) found no room "
+                    "(%u more not logged)\n", ev->type, held);
+    return 0;
+}
+
 // 1 queued (or merged), 0 refused. Interrupts are off.
 static int enqueue(const struct win_event *ev, int edge) {
+    int release = is_release(ev) || edge == EDGE_UP;
     if (is_input(ev->type)) {
+        if (ev->type == WIN_EV_RAW_MOUSE) {
+            // A DIRECT push carries no edge flag, so a button-up is told
+            // from the bits: one held by the last mouse event and not by
+            // this one. It is kept like any release.
+            if (!edge && (q.last_buttons & (uint8_t)~ev->mods)) release = 1;
+            q.last_buttons = (uint8_t)ev->mods;
+        }
         // MOTION IS A STATE, NOT A BACKLOG (Windows holds one WM_MOUSEMOVE
         // per queue; X compresses MotionNotify). A move with the same
         // buttons as the NEWEST queued move replaces it. Only the newest
@@ -115,45 +134,42 @@ static int enqueue(const struct win_event *ev, int edge) {
                 return 1;
             }
         }
-        // Full: the OLDEST unmarked input goes (the old end, for
-        // kernel/win_input.h's reason); with none -- or, never expected, a
-        // ring full of notices -- the NEW input is refused, never written
-        // over anything. win_input_poll() takes from a source only with
-        // room, so for its events neither happens; a refused RELEASE can
-        // only be a direct push, and is said.
-        int victim = -1;
-        if (q.ninput == WIN_INPUT_MAX)
+        // Input at its share: the OLDEST unmarked input goes (the old end,
+        // for kernel/win_input.h's reason); with none, the NEW one is
+        // refused. Then never written over anything. win_input_poll()
+        // takes from a source only with room, so neither refusal happens
+        // to its events; only a direct push can be refused.
+        if (q.ninput == WIN_INPUT_MAX) {
+            int victim = -1;
             for (int i = 0; i < q.count && victim < 0; i++) {
                 int slot = (q.head + i) % WIN_EVENT_QUEUE_MAX;
                 if (is_input(q.ring[slot].type) && !q.keep[slot]) victim = i;
             }
-        if ((q.ninput == WIN_INPUT_MAX && victim < 0) || q.count == WIN_EVENT_QUEUE_MAX) {
-            q.dropped++;
-            if ((is_release(ev) || edge == EDGE_UP) && log_due(&g_lost_releases))
-                klog_printf(KLOG_ERR "win_input: a release (type %u) found no room -- %u so far\n",
-                            ev->type, g_lost_releases);
-            return 0;
-        }
-        if (victim >= 0) {
-            q.dropped++;
+            if (victim < 0) return refuse(ev, release);
             remove_at(victim);
+            q.dropped++;
         }
+        if (q.count == WIN_EVENT_QUEUE_MAX) return refuse(ev, release);
         q.ninput++;
     } else {
         for (int i = 0; i < q.count; i++)
             if (coalesces(&q.ring[(q.head + i) % WIN_EVENT_QUEUE_MAX], ev)) { remove_at(i); break; }
         // The reserve covers the kernel's four notice types; more notices
-        // than that means a new kind that does not coalesce -- said
-        // loudly, and refused rather than written past the ring.
-        if (q.count - q.ninput >= WIN_INPUT_NOTICE_RESERVE && log_due(&g_over_reserve))
-            klog_printf(KLOG_ERR "win_input: %d notices queued, past the reserve of %d "
-                        "(type %u) -- %u times so far\n", q.count - q.ninput + 1,
-                        WIN_INPUT_NOTICE_RESERVE, ev->type, g_over_reserve);
-        if (q.count == WIN_EVENT_QUEUE_MAX) { q.dropped++; return 0; }
+        // than that means a new kind that does not coalesce -- said, and
+        // refused rather than written past the ring.
+        if (q.count - q.ninput >= WIN_INPUT_NOTICE_RESERVE) {
+            static struct ratelimit rl;
+            unsigned held = 0;
+            if (ratelimit_ok(&rl, &held))
+                klog_printf(KLOG_ERR "win_input: %d notices queued, past the reserve of %d "
+                            "(type %u; %u more not logged)\n", q.count - q.ninput + 1,
+                            WIN_INPUT_NOTICE_RESERVE, ev->type, held);
+        }
+        if (q.count == WIN_EVENT_QUEUE_MAX) return refuse(ev, 0);
     }
     int slot = (q.head + q.count) % WIN_EVENT_QUEUE_MAX;
     q.ring[slot] = *ev;
-    q.keep[slot] = (uint8_t)(is_release(ev) || edge == EDGE_UP);
+    q.keep[slot] = (uint8_t)release;
     q.count++;
     q.newest_edge = edge != 0;
     return 1;
