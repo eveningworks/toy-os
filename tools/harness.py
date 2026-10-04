@@ -64,10 +64,13 @@ class Results:
         return [r for r in self.rows if not r[1]]
 
     def finish(self, tool):
-        """Print the summary line; 0 when something was judged or skipped
-        and nothing failed -- a skip is neither a pass nor a fail."""
+        """Print the summary line; 0 when something was JUDGED and nothing
+        failed. A skip is neither a pass nor a fail -- so a run that only
+        skipped judged nothing, and that is not a pass."""
         print("\n" + self.summary(tool))
-        return 0 if (self.rows or self.skips) and not self.fails else 1
+        if not self.rows:
+            print(f"{tool}: nothing judged")
+        return 0 if self.rows and not self.fails else 1
 
 
 def poll(fn, timeout, step=0.2):

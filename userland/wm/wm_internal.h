@@ -368,7 +368,16 @@ void close_window(int idx);
 //
 // close_window() remains the unconditional teardown, for the WM's own
 // use and for a client that has agreed (WIN_REQ_DESTROY).
+//
+// A SINGLE close (the X, Alt+F4, the window menu, the taskbar, End Task)
+// first BRINGS THE WINDOW FORWARD -- unminimized, reachable, raised with
+// its dialogs -- since an app that is asking something ignores the close,
+// and the question is the answer to "why did it not close?" (Windows
+// restores a minimized window whose close it asks about). A BATCH close
+// (Close all, the Leave page) uses wm_request_close_quiet(): no raise, no
+// focus change, and its own list names what stayed.
 void wm_request_close(int idx);
+void wm_request_close_quiet(int idx);
 
 // --- client liveness (apps/wm/wm_client.c) ---------------------------
 //

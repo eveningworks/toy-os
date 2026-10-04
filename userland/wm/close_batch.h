@@ -31,10 +31,9 @@ void close_batch_init(struct close_batch *b, struct close_batch_entry *store, in
 void close_batch_reset(struct close_batch *b);
 // Records windows[idx]; 0 when the batch is full or already holds it.
 int close_batch_add(struct close_batch *b, int idx);
-// Asks every entry NOT YET ASKED -- raising a window's modal dialog
-// first, since that is what it waits on -- and starts the wait on the
-// first call, restarting it later only when it asked any; returns how
-// many it asked. Once each: a second
+// Asks every entry NOT YET ASKED, QUIETLY (wm_request_close_quiet(): no
+// raise, no focus change), and starts the wait on the first call,
+// restarting it later only when it asked any; returns how many it asked. Once each: a second
 // WIN_EV_CLOSE to a window already asking to save would ask it again.
 // Once the wait is over the caller resets the batch, so a later Close
 // all asks again -- a window whose prompt is STILL open included. The

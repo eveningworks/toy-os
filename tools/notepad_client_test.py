@@ -825,6 +825,7 @@ def markdown_checks(dbg, qmp, tmp, res):
 
 
 SECOND_CLOSE_FILE = "/tmp/np_second_close.txt"
+NOTEPAD_SESSION = "/var/lib/notepad/session"
 
 
 def tabs_now(dbg):
@@ -838,52 +839,86 @@ def held_closes(dbg):
     return len(dbg.logs("notepad: close while asking", clear=False))
 
 
-def kill_notepads(dbg, names):
-    for w in dbg.windows():
-        if w.get("client_pid") and any(n in w.get("title", "") for n in names):
-            dbg.send(f"sh kill {w['client_pid']}")
-    poll(lambda: not any(any(n in w.get("title", "") for n in names) for w in dbg.windows()), 6)
+def windows_of(dbg, pid):
+    return [w for w in dbg.windows() if w.get("client_pid") == pid]
+
+
+def main_window(dbg, pid):
+    """The pid's own top-level window -- never another Notepad's."""
+    return next((w for w in windows_of(dbg, pid)
+                 if not w.get("title", "").startswith(("Save As", "Open", "Notepad Options"))), None)
+
+
+def spawn_notepad(dbg, arg=""):
+    """Spawn one Notepad; its pid, once ITS window is up (the first window
+    whose pid no earlier window had)."""
+    before = {w.get("client_pid") for w in dbg.windows()}
+    dbg.send(f"gui spawn {SPAWN_PATH} {arg}".rstrip())
+    w = poll(lambda: next((w for w in dbg.windows() if w.get("client_pid") not in before
+                           and w.get("client_pid")), None), SPAWN_TIMEOUT_S)
+    dbg.settle()
+    return w.get("client_pid") if w else None
+
+
+def kill_pid(dbg, pid):
+    if pid:
+        dbg.send(f"sh kill {pid}")
+        poll(lambda: not windows_of(dbg, pid), 6)
 
 
 def second_close_checks(dbg, res):
-    """A WINDOW close while Notepad is asking something must not re-aim
-    the question, and must not be lost.
+    """A WINDOW close while Notepad is asking something.
 
-    A tab's prompt: two dirty tabs -- a file, then an untitled one --
-    Ctrl-W on the second, then Alt+F4. It used to walk the close to the
-    FIRST dirty tab (switch_to() before ask_discard()'s guard), so Don't
-    Save threw away the file's tab; and once that was guarded, the close
-    was dropped, so only the tab went. Now Don't Save discards the tab
-    asked about and the window's close goes on: the FILE is asked next.
+    A tab's prompt -- THE ONE EXCEPTION to "ignored": two dirty tabs, a
+    file then an untitled one, Ctrl-W on the second, then Alt+F4. It used
+    to walk the close to the FIRST dirty tab (switch_to() before
+    ask_discard()'s guard), so Don't Save threw away the file's tab; then,
+    once guarded, the close was dropped. Now the close is held and the
+    session written, Don't Save discards the tab asked about, and the
+    close goes on: the FILE is asked next.
 
-    The Save As chooser: the same while the chooser a tab's Save opened
-    is up -- the close must not switch tabs or ask anything new under it."""
+    The Save As chooser a tab's Save opened: the close must switch no
+    tab and ask nothing new under it.
+
+    Options open, the window minimized: a single close is ignored by the
+    app and BRINGS THE QUESTION FORWARD -- unminimized, the dialog in
+    front."""
+    pids = []
+    try:
+        second_close_tab(dbg, res, pids)
+        second_close_chooser(dbg, res, pids)
+        second_close_brings_forward(dbg, res, pids)
+    finally:
+        for pid in pids:
+            kill_pid(dbg, pid)
+        dbg.send(f"sh rm {SECOND_CLOSE_FILE}")
+
+
+def _click_ask(dbg, pid, i):
+    w = main_window(dbg, pid)
+    btns = dialog_buttons(dbg)
+    if w and len(btns) == 3:
+        x, y, bw, bh = btns[i]
+        c = w["content"]
+        dbg.send(f"gui click {c['x'] + x + bw // 2} {c['y'] + y + bh // 2}")
+
+
+def second_close_tab(dbg, res, pids):
     dbg.logs("notepad: close while asking", clear=True)
     dbg.send(f"sh write {SECOND_CLOSE_FILE} kept")
-    dbg.send(f"gui spawn {SPAWN_PATH} {SECOND_CLOSE_FILE}")
+    dbg.send(f"sh rm {NOTEPAD_SESSION}")
+    pid = spawn_notepad(dbg, SECOND_CLOSE_FILE)
+    pids.append(pid)
     base = SECOND_CLOSE_FILE.rsplit("/", 1)[-1]
-    win = poll(lambda: find_window(dbg, base), SPAWN_TIMEOUT_S)
-    if not win:
-        res.check("second close: Notepad opens the file", False, f"no window for {base}")
-        return
-    dbg.settle()
 
     def title():
-        w = find_window(dbg, base) or find_window(dbg, "untitled")
+        w = main_window(dbg, pid)
         return w.get("title", "") if w else ""
-
-    def click_button(i):
-        w = find_window(dbg, base) or find_window(dbg, "untitled")
-        btns = dialog_buttons(dbg)
-        if w and len(btns) == 3:
-            x, y, bw, bh = btns[i]
-            c = w["content"]
-            dbg.send(f"gui click {c['x'] + x + bw // 2} {c['y'] + y + bh // 2}")
-            return True
-        return False
-
+    if not poll(lambda: title().endswith(base), SPAWN_TIMEOUT_S):
+        res.check("second close: Notepad opens the file", False, f"title {title()!r}")
+        return
     type_text(dbg, "x")
-    poll(lambda: title().startswith("*"), 6)
+    poll(lambda: title() == "*" + SECOND_CLOSE_FILE, 6)
     key(dbg, "0x0e")                          # Ctrl-N: tab 2
     poll(lambda: tabs_now(dbg) == (2, 1), 6)
     type_text(dbg, "y")
@@ -894,32 +929,37 @@ def second_close_checks(dbg, res):
               bool(ready) and bool(btns),
               f"title {title()!r}, tabs {tabs_now(dbg)}, buttons {btns}")
     if not btns:
-        kill_notepads(dbg, (base, "untitled"))
         return
     dbg.send("gui key 0xa5 alt")              # Alt+F4 while that prompt is up
     held = poll(lambda: held_closes(dbg) >= 1, 6)
     res.check("...a window close while it asks is held, not acted on",
               bool(held) and tabs_now(dbg) == (2, 1), f"held {held}, tabs {tabs_now(dbg)}")
-    click_button(1)                           # Don't Save
-    # The asked-about tab goes AND the close goes on, to the file's tab.
+    session = dbg.send(f"sh cat {NOTEPAD_SESSION}")
+    res.check("...and the session is written then, as an accepted close writes it",
+              SECOND_CLOSE_FILE in session, f"`cat` returned {session[:160]!r}")
+    _click_ask(dbg, pid, 1)                   # Don't Save
     nxt = poll(lambda: tabs_now(dbg) == (1, 0) and len(dialog_buttons(dbg)) == 3 and
-               title().lstrip("*").rsplit("/", 1)[-1] == base, 6)
+               title().lstrip("*") == SECOND_CLOSE_FILE, 6)
     res.check("...Don't Save discards the tab asked about, and the close goes on to the file",
               bool(nxt), f"tabs {tabs_now(dbg)}, title {title()!r}, "
               f"buttons {len(dialog_buttons(dbg))}")
-    click_button(1)                           # Don't Save, for the file too
-    gone = poll(lambda: not (find_window(dbg, base) or find_window(dbg, "untitled")), 6)
+    _click_ask(dbg, pid, 1)                   # Don't Save, for the file too
+    gone = poll(lambda: not windows_of(dbg, pid), 6)
     res.check("...and answering that closes the window", bool(gone),
-              f"windows {[w['title'] for w in dbg.windows()]}")
-    kill_notepads(dbg, (base, "untitled"))
+              f"windows {[w['title'] for w in windows_of(dbg, pid)]}")
 
-    # --- the Save As chooser -------------------------------------------
+
+def second_close_chooser(dbg, res, pids):
     dbg.logs("notepad: close while asking", clear=True)
-    dbg.send(f"gui spawn {SPAWN_PATH}")
-    if not poll(lambda: find_window(dbg, "untitled"), SPAWN_TIMEOUT_S):
-        res.check("chooser close: Notepad opens", False)
+    pid = spawn_notepad(dbg)
+    pids.append(pid)
+
+    def title():
+        w = main_window(dbg, pid)
+        return w.get("title", "") if w else ""
+    if not poll(lambda: title() == "untitled", SPAWN_TIMEOUT_S):
+        res.check("chooser close: Notepad opens", False, f"title {title()!r}")
         return
-    dbg.settle()
     type_text(dbg, "a")
     poll(lambda: title() == "*untitled", 6)
     key(dbg, "0x0e")
@@ -927,15 +967,14 @@ def second_close_checks(dbg, res):
     type_text(dbg, "b")
     key(dbg, "0x17")                          # Ctrl-W on tab 2: asks
     poll(lambda: len(dialog_buttons(dbg)) == 3, 6)
-    n0 = len(dbg.windows())
-    click_button(0)                           # Save -> untitled -> the chooser
-    chooser = poll(lambda: next((w for w in dbg.windows() if w.get("title") == "Save As"), None), 8)
-    main = find_window(dbg, "untitled")
+    _click_ask(dbg, pid, 0)                   # Save -> untitled -> the chooser
+    chooser = poll(lambda: next((w for w in windows_of(dbg, pid)
+                                 if w.get("title") == "Save As"), None), 8)
+    main = main_window(dbg, pid)
     res.check("chooser close: a tab's Save opens the Save As chooser",
-              chooser is not None and main is not None and len(dbg.windows()) > n0,
-              f"windows {[w['title'] for w in dbg.windows()]}")
+              chooser is not None and main is not None,
+              f"windows {[w['title'] for w in windows_of(dbg, pid)]}")
     if not chooser or not main:
-        kill_notepads(dbg, ("untitled", "Save As"))
         return
     dbg.send(f"gui close {main['z']}")        # a window close under the chooser
     held = poll(lambda: held_closes(dbg) >= 1, 6)
@@ -943,8 +982,47 @@ def second_close_checks(dbg, res):
     res.check("...a window close while the chooser is up is held: no tab switch, no new ask",
               bool(held) and tabs_now(dbg) == (2, 1) and not dialog_buttons(dbg),
               f"held {held}, tabs {tabs_now(dbg)}, buttons {dialog_buttons(dbg)}")
-    kill_notepads(dbg, ("untitled", "Save As"))
-    dbg.send(f"sh rm {SECOND_CLOSE_FILE}")
+
+
+def second_close_brings_forward(dbg, res, pids):
+    pid = spawn_notepad(dbg)
+    pids.append(pid)
+    for k in ("0xA4", "0x96", "o"):           # F10, Right, o: Edit > Options...
+        dbg.send(f"gui key {k}")
+        dbg.settle(0.3)
+    opts = poll(lambda: next((w for w in windows_of(dbg, pid)
+                              if "Notepad Options" in w.get("title", "")), None), 12)
+    main = main_window(dbg, pid)
+    if not opts or not main:
+        res.check("bring forward: Notepad with Options open", False,
+                  f"windows {[w['title'] for w in windows_of(dbg, pid)]}")
+        return
+    # Minimized from its taskbar button's window menu, as a person would.
+    b = next((b for b in dbg.json("gui taskbar --json")["buttons"]
+              if b.get("index") == main["z"]), None)
+    if b:
+        dbg.rclick(b["cx"], b["cy"])
+        row = dbg.ctxmenu_row("Minimize")
+        if row:
+            dbg.click(*row)
+    mini = poll(lambda: (main_window(dbg, pid) or {}).get("state") == "minimized", 6)
+    res.check("bring forward: Notepad, Options open, minimized",
+              bool(mini), f"state {(main_window(dbg, pid) or {}).get('state')}")
+    if not mini:
+        return
+    dbg.send(f"gui close {main_window(dbg, pid)['z']}")   # a SINGLE close
+
+    def forward():
+        ws = dbg.windows()
+        top = max(ws, key=lambda w: w["z"]) if ws else {}
+        m = main_window(dbg, pid) or {}
+        return m.get("state") == "normal" and "Notepad Options" in top.get("title", "")
+    ok = poll(forward, 6)
+    ws = dbg.windows()
+    res.check("...a single close is ignored and brings it forward: unminimized, Options in front",
+              bool(ok) and main_window(dbg, pid) is not None,
+              f"state {(main_window(dbg, pid) or {}).get('state')}, "
+              f"front {max(ws, key=lambda w: w['z'])['title'] if ws else None!r}")
 
 
 def main():

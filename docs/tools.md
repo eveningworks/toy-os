@@ -156,8 +156,9 @@ manual steps to be worth automating:
   results table (`Results`: `.check()`/`.ok()` returning the verdict,
   `.passes`/`.fails`, `.rows`, `.failed()`, `.skip(name, why)` for a
   check a run could not judge (`.skips`, and `, K skipped` on the
-  summary), and `.finish(tool)` printing the `<tool>: N passed, M
-  failed` line `gui_regress.py` reads),
+  summary; a run that judged nothing exits 1), `poll(fn, timeout)`, a
+  bounded wait on an observable, and `.finish(tool)` printing the
+  `<tool>: N passed, M failed` line `gui_regress.py` reads),
   `copy_disk(src, dst, cwd=None)` (the sparse, reflinked copy), and
   `BodyServer` (a threaded HTTP(S) server on this machine answering
   with one body or a route table, reached from a guest as 10.0.2.2).
@@ -2552,11 +2553,13 @@ window without going through it will find its layout polls timing out.
   entry-shaped regex rather than `split()[-1]`; and a reference
   screenshot must park the caret first, since `load_file()` resets the
   cursor to 0 and a caret bar is a real pixel difference. Last (or
-  alone, `--only second-close`): a window close while Notepad is asking
-  is HELD -- two dirty tabs, Ctrl-W on the second, Alt+F4, Don't Save:
-  that tab goes and the close goes on to ask about the FILE's tab; and a
-  window close under a tab's Save As chooser switches no tab and asks
-  nothing new.
+  alone, `--only second-close`): a window close while Notepad is asking.
+  Under a TAB's prompt (its one exception) it is held and the session
+  written -- two dirty tabs, Ctrl-W on the second, Alt+F4, Don't Save:
+  that tab goes and the close goes on to ask about the FILE's tab; under
+  a tab's Save As chooser it switches no tab and asks nothing new; and
+  with Options open and the window minimized, a single close is ignored
+  and brings it forward -- unminimized, Options in front.
 - **`clipboard_test.py`** -- drives the system TEXT clipboard across two
   apps, which is the claim that makes it a system clipboard rather than
   a feature of one: text copied in Notepad pastes into the GUI Terminal,
@@ -3283,8 +3286,10 @@ window without going through it will find its layout polls timing out.
   Cb/Cr reddens exactly the four pixel comparisons and no layout check.
   It restores the original wallpaper on the way out, and its comment
   says why that matters -- leaving "no wallpaper" behind fails the NEXT
-  run's first check, which cost a confusing red run. In
-  `gui_regress.py`.
+  run's first check, which cost a confusing red run. Last (or alone,
+  `--only close-chooser`): closing the viewer while its Open chooser is
+  up closes both -- an app with no `on_close` closes, question or not.
+  In `gui_regress.py`.
 - **`blank_window_test.py`** -- opens EVERY app in the registry and
   requires its window to contain more than a flat fill. Reads the app
   list from the KERNEL (`gui apps`), so an app added tomorrow is covered

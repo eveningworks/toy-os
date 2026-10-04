@@ -1670,22 +1670,29 @@ this the obvious way), not from how much history it accumulated.
   already asking to save. The first ask always starts the wait; after
   that only an ask of someone restarts it. Once it is over the batch
   resets, so a later Close all asks again, a window whose prompt is
-  still open included. A window with a MODAL dialog is asked too, its
-  dialog raised first, since that answer is what the close waits on.
+  still open included. A batch asks QUIETLY
+  (`wm_request_close_quiet()`): it raises nothing and moves no focus.
   What is still open then is the CALLER's to present: the Leave page
-  lists it ("a dialog is open" when that is why), Close all puts a
-  notice card up (`crash_notice_stayed()`: Show it, Force Quit) that
-  leaves by itself once those windows close. A third batch close uses
+  lists it ("a dialog is open" when a WM-visible modal is why), Close
+  all puts a notice card up (`crash_notice_stayed()`: Show it, Force
+  Quit) that leaves by itself once those windows close; Show it, on
+  either, unminimizes and raises the window. A third batch close uses
   the same tracker.
-- **A CLOSE WHILE THE APP IS ASKING SOMETHING CHANGES NOTHING, AND THE
-  CLIENT ENFORCES IT** -- the WM cannot see a prompt drawn inside a
-  window. An `on_close` starts with `if (uapp_question_open(a)) return
-  0;` (a modal window of the app's own, or an open `uui_dialog` in
-  `desc.widgets`); without an `on_close`, uapp refuses for the app. The
-  close is HELD, not lost, where the app can carry it on: Notepad turns
-  a tab's pending close into the window's, so the answer continues the
-  close. Wayland's `xdg_toplevel.close` is the same contract: a request,
-  idempotent, the client's to answer.
+- **A CLOSE WHILE AN APP IS ASKING SOMETHING IS IGNORED, AND A SINGLE
+  CLOSE BRINGS THE QUESTION FORWARD** -- Windows' shape. A single close
+  (`wm_request_close()`: the X, Alt+F4, the window menu, the taskbar,
+  End Task) first unminimizes, makes reachable and raises the window with
+  its dialogs, so whatever it asks -- a WM-visible modal, or a prompt
+  drawn inside the window, which the WM cannot see -- is in front. The
+  CLIENT ignores the close: an app that asks on close starts `on_close`
+  with `if (uapp_question_open(a)) return 0;` (a modal window of its own,
+  or an open `uui_dialog` in `desc.widgets`). An app with no `on_close`
+  closes, question or not -- an Open chooser guards no data. **ONE
+  EXCEPTION:** Notepad turns a close under a TAB's prompt (or the Save
+  As that prompt opened) into the window's close, writing its session
+  then, so that answer carries the close on. Batch closes are quiet (the
+  rule above). Wayland's `xdg_toplevel.close` is the same contract: a
+  request, the client's to answer.
 - **AN APP'S OPTIONS WINDOW IS `ui/uui_prefs.h`.** A sidebar of pages,
   "Caption: control" rows, Defaults / OK / Cancel, modal, nothing applied
   until OK. The app declares its controls (ids below

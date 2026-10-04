@@ -201,8 +201,9 @@ static void leave(struct uapp *a) {
 }
 
 static int on_close(struct uapp *a) {
+    if (uapp_question_open(a)) return 0;   // its answer decides (uapp_desc.on_close)
     if (!page_dirty()) return 1;
-    if (!uui_dialog_is_open(&g_ask)) ask_leave(a, -1);
+    ask_leave(a, -1);
     uapp_redraw(a);
     return 0;
 }

@@ -1734,10 +1734,9 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
 
     case WIN_EV_CLOSE:
         // The default ACCEPTS. An app that wants to refuse says so;
-        // an app that has never heard of closing still closes -- unless
-        // it is asking something, which the answer decides.
-        if (d->on_close ? d->on_close(a) : !uapp_question_open(a)) uapp_quit(a, 0);
-        else ulogf("uapp: close refused%s\n", uapp_question_open(a) ? " -- a question is open" : "");
+        // an app that has never heard of closing still closes -- an Open
+        // chooser guards no data (uapp_desc.on_close).
+        if (!d->on_close || d->on_close(a)) uapp_quit(a, 0);
         break;
 
     case WIN_EV_RESIZE:

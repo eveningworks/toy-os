@@ -633,13 +633,28 @@ static void wm_offer_force_quit(int idx) {
 // CLIENT's to close, because it may have unsaved state and because the
 // process would otherwise go on drawing into a buffer that is no longer
 // on screen.
-void wm_request_close(int idx) {
+void wm_request_close_quiet(int idx) {
     if (idx < 0 || idx >= window_count) return;
     if (wm_client_is_client_window(&windows[idx])) {
         wm_client_send_close(&windows[idx]);
         return;
     }
     close_window(idx); // shifts windows[] -- no caller may touch idx again
+}
+
+void wm_request_close(int idx) {
+    if (idx < 0 || idx >= window_count) return;
+    if (wm_client_is_client_window(&windows[idx]) && !windows[idx].popup) {
+        // Held by open_seq: the raise reorders windows[].
+        if (!windows[idx].open_seq) windows[idx].open_seq = wm_next_open_seq();
+        uint32_t seq = windows[idx].open_seq;
+        wm_window_unminimize(idx);
+        wm_ensure_reachable(idx);
+        raise_with_dialogs(idx);
+        redraw_pending = 1;
+        idx = wm_window_by_seq(seq);
+    }
+    wm_request_close_quiet(idx);
 }
 
 void close_window(int idx) {

@@ -39,14 +39,10 @@ int close_batch_ask(struct close_batch *b) {
     for (int k = 0; k < b->n; k++) {
         if (b->e[k].asked) continue;
         b->e[k].asked = 1;
+        // QUIET: a batch raises nothing and moves no focus; what stays
+        // is named by its caller's list, whose Show it brings it forward.
         int i = close_batch_window(b, k);
-        if (i < 0) continue;
-        // A MODAL DIALOG OPEN takes the owner's input, so its answer is
-        // what the close waits on: brought forward, so it can be seen.
-        // The close is still sent; the client holds it (uapp_desc.on_close).
-        if (wm_dialog_blocker(i) >= 0) raise_with_dialogs(i);
-        i = close_batch_window(b, k);   // a raise reorders windows[]
-        if (i >= 0) { wm_request_close(i); asked++; }
+        if (i >= 0) { wm_request_close_quiet(i); asked++; }
     }
     // The FIRST ask always starts the wait, so a batch that asked nobody
     // still ends; after that only a NEW ask restarts it, so a repeated

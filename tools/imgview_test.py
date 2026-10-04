@@ -823,12 +823,53 @@ def check_auto_resize_falls_back(dbg, res):
     restore_window_size(dbg, start)
 
 
+def check_close_with_chooser(dbg, res):
+    """The Image Viewer has no on_close, so a close while its Open chooser
+    is up CLOSES it, chooser and all -- an Open chooser guards no data
+    (uapp_desc.on_close). A uapp that refused here would leave a window
+    nobody could close without answering a question it never asked."""
+    before = {w.get("client_pid") for w in dbg.windows()}
+    dbg.send("gui spawn /bin/wm/apps/imgview")
+    deadline = time.time() + 20
+    win = None
+    while time.time() < deadline and win is None:
+        win = next((w for w in dbg.windows() if w.get("title") == TITLE_VIEWER and
+                    w.get("client_pid") not in before), None)
+        time.sleep(0.3)
+    if win is None:
+        res.check("close with chooser: the viewer opens", False)
+        return
+    pid = win["client_pid"]
+    dbg.settle()
+    dbg.send("gui key 0x0f")                  # Ctrl-O
+    deadline = time.time() + 10
+    chooser = None
+    while time.time() < deadline and chooser is None:
+        chooser = next((w for w in dbg.windows() if w.get("client_pid") == pid and
+                        w.get("title") == "Open Image"), None)
+        time.sleep(0.3)
+    res.check("close with chooser: Ctrl-O opens the Open chooser", chooser is not None,
+              f"windows {[w['title'] for w in dbg.windows()]}")
+    main = next((w for w in dbg.windows() if w.get("client_pid") == pid and
+                 w.get("title") == TITLE_VIEWER), None)
+    if main:
+        dbg.send(f"gui close {main['z']}")
+    deadline = time.time() + 8
+    while time.time() < deadline and any(w.get("client_pid") == pid for w in dbg.windows()):
+        time.sleep(0.3)
+    left = [w["title"] for w in dbg.windows() if w.get("client_pid") == pid]
+    res.check("...and closing the viewer under it closes both", not left, f"left {left}")
+    if left:
+        dbg.send(f"sh kill {pid}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     port_guard.add_instance_args(ap)   # --instance N, or the legacy --sock/--qmp-port
     ap.add_argument("--in-gui", action="store_true",
                     help="the VM already shows the desktop")
     ap.add_argument("--shot", metavar="DIR", help="keep the screenshots here")
+    ap.add_argument("--only", choices=("close-chooser",), help="run only this section")
     args = ap.parse_args()
     port_guard.resolve_instance(args, "imgview_test")
 
@@ -841,7 +882,9 @@ def main():
     os.makedirs(tmp, exist_ok=True)
     print("imgview_test: checks")
     try:
-        run(dbg, qmp, tmp, res)
+        if not args.only:
+            run(dbg, qmp, tmp, res)
+        check_close_with_chooser(dbg, res)
     finally:
         dbg.close()
     print(f"\nimgview_test: {len(res.passes)} passed, {len(res.fails)} failed")
