@@ -112,7 +112,49 @@ def main():
     return report()
 
 
+def maximize(dbg, win):
+    """Maximize by LABEL from the title-bar context menu -- hires_test's
+    helper, so nothing here measures the chrome. True when offered."""
+    dbg.rclick(win["x"] + win["w"] // 2, win["y"] + 6)
+    dbg.settle()
+    row = dbg.ctxmenu_row("Maximize")
+    if row is None:
+        return False
+    dbg.click(*row)
+    dbg.settle(); time.sleep(1.0)
+    return True
+
+
+def fills(dbg, qmp, shot, name, title, TARGET):
+    """The window titled `title` fills TARGET above the taskbar, and the far
+    corner shows the CLIENT's pixels rather than the desktop's."""
+    from PIL import Image
+    m = next((w for w in dbg.windows() if w["title"] == title), None)
+    tbh = dbg.state()["taskbar_h"]
+    check(f"{name}: the frame fills the NEW screen",
+          m is not None and m["w"] == TARGET[0] and m["h"] == TARGET[1] - tbh,
+          str({k: m.get(k) for k in ("x", "y", "w", "h")}) if m else "no window")
+    qmp.stable_pixels(shot(f"mode_{name}.png"))
+    im = Image.open(shot(f"mode_{name}.png")).convert("RGB")
+    far = im.getpixel((TARGET[0] - 20, TARGET[1] - tbh - 20))
+    bar = im.getpixel((TARGET[0] // 2, TARGET[1] - tbh // 2))
+    check(f"{name}: the far corner, outside the old mode, carries the window, not the taskbar",
+          far != bar, f"corner {far} taskbar {bar}")
+
+
 def run(dbg, qmp, shot, orig, TARGET):
+
+    # A window MAXIMIZED BEFORE the change must follow it. The WM resizes
+    # it before forwarding WIN_EV_SCREEN, so a client that bounded its
+    # buffer by a cached screen size would ack the OLD one here.
+    pre = None
+    if TARGET[0] > orig[0]:
+        dbg.open_app("Notepad")
+        dbg.settle(); time.sleep(1.0)
+        wins = dbg.windows()
+        if check("Notepad opened at the boot mode", bool(wins), str(wins)[:80]):
+            pre = wins[-1]["title"]
+            check("...and maximized there", maximize(dbg, wins[-1]))
 
     # --- 1. the change, measured at the device -------------------------
     reply = set_res(dbg, *TARGET)
@@ -124,6 +166,10 @@ def run(dbg, qmp, shot, orig, TARGET):
     stored = next((ln.strip() for ln in stored if "x" in ln), "")
     check("...and the setting reads back through the hardware",
           stored == f"{TARGET[0]}x{TARGET[1]}", stored or reply.strip()[-80:])
+    if pre:
+        fills(dbg, qmp, shot, "premax", pre, TARGET)
+        dbg.send(f"gui close {len(dbg.windows()) - 1}")
+        dbg.settle(); time.sleep(0.5)
 
     # --- 2. the desktop still draws and responds -----------------------
     tb = dbg.json("gui taskbar --json")["start"]
@@ -142,26 +188,8 @@ def run(dbg, qmp, shot, orig, TARGET):
     wins = dbg.windows()   # the newest window is last, as hires_test.py reads it
     if check("Notepad opened at the new size", bool(wins), str(wins)[:80]):
         win = wins[-1]
-        # Maximize by LABEL from the title-bar context menu -- hires_test's
-        # helper, so nothing here measures the chrome.
-        dbg.rclick(win["x"] + win["w"] // 2, win["y"] + 6)
-        dbg.settle()
-        row = dbg.ctxmenu_row("Maximize")
-        if check("the title-bar context menu offers Maximize", row is not None):
-            dbg.click(*row)
-            dbg.settle(); time.sleep(1.0)
-            m = next((w for w in dbg.windows() if w["title"] == win["title"]), None)
-            tbh = dbg.state()["taskbar_h"]
-            check("a maximized frame fills the NEW screen",
-                  m is not None and m["w"] == TARGET[0] and m["h"] == TARGET[1] - tbh,
-                  str({k: m.get(k) for k in ("x", "y", "w", "h")}) if m else "no window")
-            from PIL import Image
-            qmp.stable_pixels(shot("mode_max.png"))
-            im = Image.open(shot("mode_max.png")).convert("RGB")
-            far = im.getpixel((TARGET[0] - 20, TARGET[1] - tbh - 20))
-            bar = im.getpixel((TARGET[0] // 2, TARGET[1] - tbh // 2))
-            check("the far corner, outside the old mode, carries the window, not the taskbar",
-                  far != bar, f"corner {far} taskbar {bar}")
+        if check("the title-bar context menu offers Maximize", maximize(dbg, win)):
+            fills(dbg, qmp, shot, "max", win["title"], TARGET)
         dbg.send(f"gui close {len(dbg.windows()) - 1}")   # by index, newest last
         dbg.settle(); time.sleep(0.5)
 

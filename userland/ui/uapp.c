@@ -754,6 +754,24 @@ int uapp_focused(const struct uapp *a) { return a->focused; }
 int uapp_width(const struct uapp *a) { return a->w; }
 int uapp_height(const struct uapp *a) { return a->h; }
 
+// THE SCREEN BOUNDS A BUFFER, not a constant: one bigger than the
+// screen is memory nobody can see (xdg-shell's configure_bounds), and
+// WIN_CLIENT_MAX_W/H is only the ceiling when the screen cannot be
+// asked. Asked FRESH every time, never cached: the WM resizes a
+// maximized window BEFORE it forwards WIN_EV_SCREEN, so a cached size
+// would still be the old screen's when the bigger resize arrives.
+static void clamp_to_screen(int *w, int *h) {
+    int mw = WIN_CLIENT_MAX_W, mh = WIN_CLIENT_MAX_H;
+    struct query_display d;
+    if (sys_query_record(QUERY_DISPLAY, 0, &d, sizeof d) >= (int)sizeof d &&
+        d.width > 0 && d.height > 0) {
+        if ((int)d.width < mw) mw = (int)d.width;
+        if ((int)d.height < mh) mh = (int)d.height;
+    }
+    if (*w > mw) *w = mw;
+    if (*h > mh) *h = mh;
+}
+
 // **A RESIZE SENDS NOTHING.** It rebuilds the buffer the client is about
 // to draw into and re-lays the page out; the new size reaches the
 // compositor on the next PRESENT, drawn at it. WIN_REQ_RESIZE existed
@@ -770,8 +788,7 @@ int uapp_height(const struct uapp *a) { return a->h; }
 // this process's, so the bound is checked where the allocation is.
 int uapp_resize(struct uapp *a, int w, int h) {
     if (w <= 0 || h <= 0) return 0;
-    if (w > WIN_CLIENT_MAX_W) w = WIN_CLIENT_MAX_W;
-    if (h > WIN_CLIENT_MAX_H) h = WIN_CLIENT_MAX_H;
+    clamp_to_screen(&w, &h);
 
     // The buffer being drawn into, if this frame has one; otherwise the
     // next frame's surf_back() sizes whichever comes back.
@@ -881,8 +898,7 @@ static int popup_open(void *ctx, int ax, int ay, int aw, int ah, int w, int h,
                       void *owner, int *out_x, int *out_y) {
     (void)ctx;
     if (w <= 0 || h <= 0 || comp_pid() <= 0) return 0;
-    if (w > WIN_CLIENT_MAX_W) w = WIN_CLIENT_MAX_W;
-    if (h > WIN_CLIENT_MAX_H) h = WIN_CLIENT_MAX_H;
+    clamp_to_screen(&w, &h);
     struct uapp_surf *s = 0;
     for (int i = 1; i < WIN_CLIENT_MAX; i++)
         if (!g_surf[i].used) { s = &g_surf[i]; break; }
@@ -988,8 +1004,8 @@ static int buttons_heard(const struct uui_router *r, int has_on_action, const ch
 
 struct uapp_window *uapp_window_open(struct uapp *a, const struct uapp_window_desc *desc) {
     if (!a || !desc || desc->w <= 0 || desc->h <= 0 || comp_pid() <= 0) return 0;
-    int w = desc->w > WIN_CLIENT_MAX_W ? WIN_CLIENT_MAX_W : desc->w;
-    int h = desc->h > WIN_CLIENT_MAX_H ? WIN_CLIENT_MAX_H : desc->h;
+    int w = desc->w, h = desc->h;
+    clamp_to_screen(&w, &h);
     struct uapp_surf *s = 0;
     for (int i = 1; i < WIN_CLIENT_MAX; i++)
         if (!g_surf[i].used) { s = &g_surf[i]; break; }
@@ -1970,6 +1986,7 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     if (desc->on_size)     desc->on_size(&a->w, &a->h);
     else if (desc->layout) uui_layout_natural_size(desc->layout, &a->w, &a->h);
     if (a->w <= 0 || a->h <= 0) return 0;
+    clamp_to_screen(&a->w, &a->h);
 
     // **NO COMPOSITOR CHANNEL, NO WINDOW.** The pixels are this
     // process's own memory and the compositor gets at them only because

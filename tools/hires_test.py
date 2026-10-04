@@ -8,13 +8,13 @@ Two constants that have to move together and did not:
   * the mode the display layer selects (DISPLAY_MAX_W/H plus the ladder
     in kernel/drivers/display/display.c, and whether a modesetting
     driver -- bochs.c, vmsvga.c, virtio-gpu -- picked it up), and
-  * WIN_CLIENT_MAX_W/H (kernel/include/abi/win_proto.h), the largest
-    pixel buffer the window server will hand a ring-3 client.
+  * the largest buffer a ring-3 client will make -- the screen, under
+    the WIN_CLIENT_MAX_W/H ceiling (ui/uapp.c's clamp_to_screen(),
+    kernel/include/abi/win_proto.h).
 
 When the second is smaller than the first, MAXIMIZE FAILS SILENTLY. The
-WM proposes the new content size, `resize_window()` refuses it (a
-refusal is a normal protocol outcome -- it looks exactly like a client
-declining), the client keeps its old buffer, and the window wears
+WM proposes the new content size, the client clamps it and acks the
+smaller one (it looks exactly like a client declining), and the window wears
 full-screen chrome around it with undrawn desktop filling the
 difference. Nothing logs an error and no existing GUI tool notices,
 because every one of them runs at the mode this OS boots into by

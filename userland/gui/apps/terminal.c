@@ -117,8 +117,8 @@ static const char *shell_path(char *buf, size_t cap) {
 }
 
 // The screen. The grid GROWS to fit the window rather than being a
-// fixed 200x60: the display ceiling is 1920x1080 (WIN_CLIENT_MAX_W/H)
-// and a maximized terminal there wants ~240x67 cells, so the old fixed
+// fixed 200x60: a maximized terminal at 1920x1080 already wants
+// ~240x67 cells, so the old fixed
 // cap left a dead band below the last row and to the right of the last
 // column, silently. xterm reallocates on resize and CROPS (no reflow);
 // so does this. What bounds it now is the WINDOW, which the compositor

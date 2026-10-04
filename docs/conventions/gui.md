@@ -231,8 +231,8 @@ this the obvious way), not from how much history it accumulated.
     path; mapping both once makes a flip a number in a message.
   - **THE MEMORY IS THE CLIENT'S, SO THE CLIENT CLAMPS.** The kernel
     used to refuse an oversized window because it was doing the
-    allocating; `uapp_resize()` bounds the size where the allocation is
-    now (`WIN_CLIENT_MAX_W/H`). Nothing is contiguous any more -- the
+    allocating; `uapp` bounds the size where the allocation is now
+    (`clamp_to_screen()`: the screen, under `WIN_CLIENT_MAX_W/H`). Nothing is contiguous any more -- the
     frames behind an shm object are whatever the allocator has.
   - **A FAILED SECOND BUFFER IS A SINGLE-BUFFERED WINDOW, NOT A REFUSED
     ONE.** It then tears exactly as every window did before, which is
@@ -490,24 +490,21 @@ this the obvious way), not from how much history it accumulated.
   draw text until a disk font loaded could not report why the disk font
   did not load.
 
-- **`WIN_CLIENT_MAX_W/H` TRACKS THE DISPLAY CEILING, AND A SCREEN BIGGER
-  THAN IT BREAKS MAXIMIZE SILENTLY.** `abi/win_proto.h`'s
-  `WIN_CLIENT_MAX_W/H` is the largest pixel buffer the window server
-  will hand a ring-3 client, and it used to be 1280x720 because that is
-  what `boot.asm` asks GRUB for. The moment a modesetting driver
-  (`bochs.c`, `vmsvga.c`, virtio-gpu) came up at 1920x1080, maximize
-  asked for a 1918x1038 content area, `resize_window()` refused it, and
-  **nothing anywhere said so** -- a refusal is a normal protocol outcome
-  and is indistinguishable from a client declining. What you get is the
-  failure `win_proto.h` already describes for the resize grip:
-  full-screen chrome around a stale buffer, with undrawn desktop filling
-  the difference. So **raise it WITH `DISPLAY_MAX_W/H`**
-  (`kernel/drivers/display/display.c`), or the display gains pixels no
-  window can use. It is 1920x1080 against a 3840x2160 display ceiling
-  today, and the gap is deliberate: the server allocates a window's
-  pixels CONTIGUOUSLY and up front, so 4K is 8100 contiguous frames
-  asked for twice over on every resize -- `docs/roadmap.md`'s growable
-  client buffers item is the prerequisite, not a bigger constant.
+- **THE SCREEN BOUNDS A WINDOW'S BUFFER; `WIN_CLIENT_MAX_W/H` IS ONLY
+  THE CEILING, AND IT TRACKS THE DISPLAY'S.** `ui/uapp.c`'s
+  `clamp_to_screen()` limits every buffer -- toplevel, dialog, popup,
+  resize -- to the current mode, asked through `QUERY_DISPLAY` on each
+  call. Fresh rather than cached because the WM resizes a maximized
+  window BEFORE it forwards `WIN_EV_SCREEN`, so a cached size would
+  still be the old screen's. This is xdg-shell's `configure_bounds`:
+  Windows' default is the desktop's size too (`SM_CXMAXTRACK`), and
+  neither KWin nor Mutter has a fixed cap. `WIN_CLIENT_MAX_W/H`
+  (`abi/win_proto.h`) bites only when the display cannot be asked, and
+  must equal `DISPLAY_MAX_W/H` (`kernel/drivers/display/display.c`): a
+  cap below the screen breaks maximize and the resize grip SILENTLY --
+  full-size chrome around a stale buffer, nothing logged. It was
+  1920x1080 until 2026-10-04 for a contiguity reason that had gone on
+  2026-09-08 (buffers are shm objects), and a 2560x1440 desktop hit it.
   `tools/hires_test.py` is the check, and it needs an ISO built with
   `KCMDLINE="video=..."` because at the default mode every assertion in
   it passes vacuously.

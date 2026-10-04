@@ -590,11 +590,9 @@ this the obvious way), not from how much history it accumulated.
   `WIN_FB_VADDR` `0x8500000000`, heap ~2038 MiB below the stack. The
   trap: the compositor region is DERIVED
   (`MAX_PIDS * CLIENT_MAX * STRIDE`), so its base looks isolated while
-  it spans gigabytes. **This does NOT make 4K work** --
-  `WIN_CLIENT_MAX_W/H` is still 1280x720 and window buffers still come
-  from `pmm_alloc_contiguous()` (8192 contiguous frames at 4K, refused
-  silently under fragmentation). Raising the caps before that is fixed
-  turns a hard limit into an intermittent silent failure.
+  it spans gigabytes. (Window buffers have since become shm objects with
+  no fixed address or contiguity; the screen bounds their size --
+  `docs/conventions/gui.md`.)
 - **A FRAME IS ALLOCATED FROM A ZONE, EVERY CALLER NAMES ONE, AND
   `kmalloc` MEMORY MAY BE ABOVE 4 GiB.** `pmm_alloc_frame(zone)` and
   `pmm_alloc_contiguous(count, zone)` -- Linux's gfp mask at every site,
