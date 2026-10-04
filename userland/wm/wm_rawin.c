@@ -289,6 +289,8 @@ int wm_rawin_take_key(uint8_t *out_mods, int *out_down) {
 
 uint8_t wm_rawin_mods_now(void) { return g_key_mods; }
 
+int wm_rawin_has_key(void) { return g_key_tail != g_key_head; }
+
 int wm_rawin_take_wheel(void) {
     int w = g_wheel;
     g_wheel = 0;

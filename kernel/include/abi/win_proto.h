@@ -272,7 +272,11 @@
 #define WIN_EV_KEY_PHYS 41
 
 // THE COMPOSITOR HAS STOPPED READING A BUFFER: `window` the surface, a:
-// the buffer index, b: its generation. Wayland's wl_buffer.release. Sent
+// the buffer index, b: its generation, mods: the sequence of the PRESENT
+// being released (WIN_REQ_PRESENT's c; 0 from a compositor that sends
+// none). Wayland's wl_buffer.release. A release can arrive late -- one
+// the inbox refused is re-sent -- so a client matches the sequence too:
+// the same buffer at the same generation may have been presented again. Sent
 // when a present makes another buffer the front, which is the moment the
 // old one can no longer be read (the compositor is single-threaded, so
 // no composite is in flight then). A client draws only into a buffer it

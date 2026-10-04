@@ -84,7 +84,8 @@ struct wmchan_msg {
                         // slot it PROPOSES, and its buffers are already
                         // named after that
     int32_t  a, b, c;   // CREATE: w, h. PRESENT: WIN_PRESENT_B(buf,gen),
-                        // WIN_PRESENT_SIZE(w,h). HINTS: flags, min_w,
+                        // WIN_PRESENT_SIZE(w,h), c: the present's sequence
+                        // (nonzero), echoed by its release. HINTS: flags, min_w,
                         // min_h. CURSOR/TIMER/PONG/CLOSE_PID: a.
                         // In a REPLY, `a` is the answer.
     union {

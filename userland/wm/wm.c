@@ -241,6 +241,15 @@ void wm_focus_sync(void) {
     wm_shortcut_focus_changed(f);
 }
 
+// A NEW WINDOW, told where it stands at once. A client starts out
+// believing it has focus (uapp does), so one created behind another --
+// or two created before the next sync -- would otherwise keep that belief.
+void wm_focus_created(int idx) {
+    wm_focus_sync();
+    if (idx != wm_focus_index() && !windows[idx].popup)
+        wm_client_send_focus(&windows[idx], 0);
+}
+
 void window_invalidate(struct window *win) {
     wm_damage_window_rect(win->x, win->y, win->w, win->h);
     redraw_pending = 1;
@@ -471,6 +480,7 @@ void open_app(const struct gui_app *app) {
 
     win->open_seq = wm_next_open_seq();
     window_count++;
+    wm_focus_created(window_count - 1);
     // AFTER window_count++, because restoring takes an INDEX: it calls
     // wm_ensure_reachable(), which addresses windows by index and would
     // not see a slot the count does not cover yet.
@@ -1390,22 +1400,11 @@ void wm_run(void) {
         // deliberately unclaimed at the WM level now, free for a future
         // per-window or modal use (e.g. canceling a confirm dialog)
         // instead of double-booking it as "exit everything".
-        uint8_t key_mods = 0;
-        int key_down = 1;
-        int key = wm_rawin_take_key(&key_mods, &key_down);
-        // A `gui key` from the debug console, if the real keyboard had
-        // nothing -- deliberately second, so a human at the keyboard is
-        // never pre-empted by a queued test keystroke.
-        if (key == -1) {
-            int injected = wm_debug_next_key_full(&key_mods, &key_down);
-            if (injected) key = injected;
-            else key_down = 1;   // nothing injected: leave the default alone
-        }
-
         int wheel = wm_rawin_take_wheel();
         if (wheel == 0) wheel = wm_debug_next_wheel(); // `gui wheel`, same
                                                         // second-place rule as
-                                                        // the injected key above
+                                                        // the injected key below
+        int wheel_seen = wheel != 0;   // for the idle clock, before anything takes it
 
         // THE TRAY TAKES THE WHEEL FIRST, and only over its own item or
         // its open panel -- which is where KDE, GNOME and Windows all
@@ -1419,153 +1418,176 @@ void wm_run(void) {
         // taller than its pane would scroll whatever is behind it.
         if (wheel != 0 && wm_overlay_wheel(mx, my, wheel)) wheel = 0;
 
-        if (key != -1 || wheel != 0) {
-            // Before routing: a client must hear it is focused before
-            // its first key, and the inhibitor must not outlive focus.
-            wm_focus_sync();
-            int f = wm_focus_index();
-            int kt = wm_key_target(f); // a popup of f's client, or f
+        // EVERY QUEUED KEY, not one a frame: a burst (a paste, a held key
+        // under a slow frame) otherwise outran the frame rate and the ring
+        // dropped what it could not hold. Bounded, so a flood still lets
+        // the frame finish; the wheel is handled on the first pass only.
+        int any_key = 0;
+        for (int keys_seen = 0; keys_seen < WM_KEYS_PER_FRAME; keys_seen++) {
+            uint8_t key_mods = 0;
+            int key_down = 1;
+            int key = wm_rawin_take_key(&key_mods, &key_down);
+            // A `gui key` from the debug console, if the real keyboard had
+            // nothing -- deliberately second, so a human at the keyboard is
+            // never pre-empted by a queued test keystroke. One a frame, and
+            // only on the first pass: the drain below is the real keyboard's.
+            if (key == -1 && keys_seen == 0) {
+                int injected = wm_debug_next_key_full(&key_mods, &key_down);
+                if (injected) key = injected;
+                else key_down = 1;   // nothing injected: leave the default alone
+            }
 
-            // Alt+F4 closes the focused window, and is handled HERE
-            // rather than delivered to the app -- a window-manager
-            // shortcut, exactly as it is in Windows (routed through
-            // DefWindowProc to WM_SYSCOMMAND/SC_CLOSE) and in KDE
-            // (a KWin global shortcut). The app still decides what
-            // happens, because this asks through the same
-            // wm_request_close() the X button uses and a client may
-            // refuse it; what the app does NOT get is the chance to
-            // silently swallow the keystroke, which is the whole
-            // point of the shortcut existing.
-            //
-            // Matched on the modifier bit rather than a dedicated
-            // KEY_ALT_F4 code: nothing is folded for a function key
-            // the way Ctrl/Alt are folded into a letter, so mods are
-            // usable here, and this generalises to any future
-            // Alt+F<n> without a new code each time.
-            // Super/Win TOGGLES the Start menu -- open if closed,
-            // close if open, exactly as on Windows and KDE. A
-            // window-manager shortcut like Alt+F4 below, consumed
-            // here so it never reaches the focused window: a
-            // full-screen app must not be able to swallow the Start
-            // menu.
-            //
-            // Suppressed while a MODAL overlay owns input (the
-            // confirm dialog, the file picker). Those take the
-            // screen deliberately, and opening a menu behind one
-            // would leave two things claiming the next click.
-            // The context menu is not modal in that sense and is
-            // simply replaced.
-            // ANY OTHER KEY PRESSED WHILE SUPER IS HELD means this
-            // Super was a MODIFIER, not the Start-menu gesture. Set
-            // here rather than inside the shortcut branch, because it
-            // is true whether or not the combination was bound: holding
-            // Super and typing E must not open the menu on the way out
-            // even when nothing is bound to Super+E.
-            if (key_down && key != KEY_SUPER && (key_mods & KEY_MOD_SUPER))
-                g_super_used = 1;
+            if (key != -1 || wheel != 0) {
+                // Before routing: a client must hear it is focused before
+                // its first key, and the inhibitor must not outlive focus.
+                wm_focus_sync();
+                int f = wm_focus_index();
+                int kt = wm_key_target(f); // a popup of f's client, or f
 
-            if (key == KEY_SUPER) {
-                // **BOTH EDGES, AND THE GESTURE IS ON THE RELEASE.**
-                // Super is a modifier now (api/keyboard.h), so pressing
-                // it ARMS and anything pressed while it is held disarms;
-                // only a release that was never used toggles the Start
-                // menu. Windows and KDE both behave exactly this way,
-                // and it is what lets Super+E exist at all -- opening
-                // the menu on the press would open it on the way into
-                // every Super shortcut.
-                if (key_down) {
-                    g_super_used = 0;
-                } else if (!g_super_used && !wm_overlay_modal_open() &&
-                           !wm_shortcut_inhibited(f)) {
-                    if (start_menu_open) start_menu_close();
-                    else start_menu_open_now();
-                    redraw_pending = 1;
-                }
-            } else if (key != -1 && !key_down) {
-                // A RELEASE GOES STRAIGHT TO THE FOCUSED CLIENT, and
-                // takes none of the shortcut branches below: Super
-                // and Alt+F4 act on the PRESS, exactly as
-                // docs/gui-guidelines.md's arm-then-commit rule says
-                // a control should, and firing them again on the way
-                // up would toggle the Start menu twice per keystroke.
+                // Alt+F4 closes the focused window, and is handled HERE
+                // rather than delivered to the app -- a window-manager
+                // shortcut, exactly as it is in Windows (routed through
+                // DefWindowProc to WM_SYSCOMMAND/SC_CLOSE) and in KDE
+                // (a KWin global shortcut). The app still decides what
+                // happens, because this asks through the same
+                // wm_request_close() the X button uses and a client may
+                // refuse it; what the app does NOT get is the chance to
+                // silently swallow the keystroke, which is the whole
+                // point of the shortcut existing.
                 //
-                // A client can therefore see a release whose press
-                // the WM consumed -- Super held over a window, say.
-                // It has to tolerate that, and every real system says
-                // the same: an X11 grab produces exactly this shape.
-                // Tracking held keys means ignoring an up you have no
-                // down for, which is the sane implementation anyway.
-                if (kt >= 0 &&
-                    wm_client_is_client_window(&windows[kt])) {
-                    wm_client_send_key_up(&windows[kt], key, key_mods);
+                // Matched on the modifier bit rather than a dedicated
+                // KEY_ALT_F4 code: nothing is folded for a function key
+                // the way Ctrl/Alt are folded into a letter, so mods are
+                // usable here, and this generalises to any future
+                // Alt+F<n> without a new code each time.
+                // Super/Win TOGGLES the Start menu -- open if closed,
+                // close if open, exactly as on Windows and KDE. A
+                // window-manager shortcut like Alt+F4 below, consumed
+                // here so it never reaches the focused window: a
+                // full-screen app must not be able to swallow the Start
+                // menu.
+                //
+                // Suppressed while a MODAL overlay owns input (the
+                // confirm dialog, the file picker). Those take the
+                // screen deliberately, and opening a menu behind one
+                // would leave two things claiming the next click.
+                // The context menu is not modal in that sense and is
+                // simply replaced.
+                // ANY OTHER KEY PRESSED WHILE SUPER IS HELD means this
+                // Super was a MODIFIER, not the Start-menu gesture. Set
+                // here rather than inside the shortcut branch, because it
+                // is true whether or not the combination was bound: holding
+                // Super and typing E must not open the menu on the way out
+                // even when nothing is bound to Super+E.
+                if (key_down && key != KEY_SUPER && (key_mods & KEY_MOD_SUPER))
+                    g_super_used = 1;
+
+                if (key == KEY_SUPER) {
+                    // **BOTH EDGES, AND THE GESTURE IS ON THE RELEASE.**
+                    // Super is a modifier now (api/keyboard.h), so pressing
+                    // it ARMS and anything pressed while it is held disarms;
+                    // only a release that was never used toggles the Start
+                    // menu. Windows and KDE both behave exactly this way,
+                    // and it is what lets Super+E exist at all -- opening
+                    // the menu on the press would open it on the way into
+                    // every Super shortcut.
+                    if (key_down) {
+                        g_super_used = 0;
+                    } else if (!g_super_used && !wm_overlay_modal_open() &&
+                               !wm_shortcut_inhibited(f)) {
+                        if (start_menu_open) start_menu_close();
+                        else start_menu_open_now();
+                        redraw_pending = 1;
+                    }
+                } else if (key != -1 && !key_down) {
+                    // A RELEASE GOES STRAIGHT TO THE FOCUSED CLIENT, and
+                    // takes none of the shortcut branches below: Super
+                    // and Alt+F4 act on the PRESS, exactly as
+                    // docs/gui-guidelines.md's arm-then-commit rule says
+                    // a control should, and firing them again on the way
+                    // up would toggle the Start menu twice per keystroke.
+                    //
+                    // A client can therefore see a release whose press
+                    // the WM consumed -- Super held over a window, say.
+                    // It has to tolerate that, and every real system says
+                    // the same: an X11 grab produces exactly this shape.
+                    // Tracking held keys means ignoring an up you have no
+                    // down for, which is the sane implementation anyway.
+                    if (kt >= 0 &&
+                        wm_client_is_client_window(&windows[kt])) {
+                        wm_client_send_key_up(&windows[kt], key, key_mods);
+                    }
+                } else if (wm_overlay_key(key, key_mods)) {
+                    // AN OPEN OVERLAY OWNS THE KEYBOARD, which is what lets
+                    // the Start menu be typed into -- xdg_popup's grab, and
+                    // Windows' menu loop, both put the keyboard here. It
+                    // consumes only what it acts on (see wm_overlay.h), so a
+                    // shortcut is not shadowed by a popup being open.
+                    redraw_pending = 1;
+                } else if (!wm_shortcut_inhibited(f) &&
+                           wm_shortcut_fire(key, key_mods)) {
+                    // A BOUND KEY NEVER REACHES A WINDOW. Checked before
+                    // Alt+F4 and before routing, because a shortcut is the
+                    // compositor's and an app cannot be allowed to shadow
+                    // one (wm_shortcut.c).
+                    redraw_pending = 1;
+                } else if (key == ' ' && (key_mods & KEY_MOD_ALT) && f >= 0) {
+                    // ALT+SPACE: the focused window's menu, at its corner --
+                    // Windows' system-menu shortcut (KDE's is Alt+F3). The
+                    // one way back from FULLSCREEN, which has no title bar
+                    // and hides the taskbar, and whose content area's
+                    // right-click belongs to the app.
+                    int mx0 = windows[f].x + 8, my0 = windows[f].y + 8;
+                    if (mx0 < 8) mx0 = 8;
+                    if (my0 < 8) my0 = 8;
+                    wm_open_window_menu(f, mx0, my0);
+                    redraw_pending = 1;
+                } else if (key == KEY_F4 && (key_mods & KEY_MOD_ALT) && f >= 0) {
+                    wm_request_close(f); // may shift windows[] -- f is dead after this
+                    redraw_pending = 1;
+                } else if (kt >= 0 && key != -1 && wm_client_is_client_window(&windows[kt])) {
+                    // Focused window belongs to a ring-3 client: the
+                    // key becomes a protocol message rather than a
+                    // callback. Same focus rule either way -- who gets
+                    // the key is the WM's decision, and it doesn't
+                    // change because the recipient is a process.
+                    wm_client_send_key(&windows[kt], key, key_mods);
+                    redraw_pending = 1;
+                } else if (f >= 0 && key != -1 && windows[f].app && windows[f].app->on_key) {
+                    windows[f].app->on_key(&windows[f], key, key_mods);
+                } else if (f < 0 && key != -1 && !wm_overlay_modal_open()) {
+                    // No window has the focus: the DESKTOP is the focus,
+                    // and its icons take Ctrl+C/X/V and Delete.
+                    if (desktop_handle_key(key, key_mods)) redraw_pending = 1;
                 }
-            } else if (wm_overlay_key(key, key_mods)) {
-                // AN OPEN OVERLAY OWNS THE KEYBOARD, which is what lets
-                // the Start menu be typed into -- xdg_popup's grab, and
-                // Windows' menu loop, both put the keyboard here. It
-                // consumes only what it acts on (see wm_overlay.h), so a
-                // shortcut is not shadowed by a popup being open.
-                redraw_pending = 1;
-            } else if (!wm_shortcut_inhibited(f) &&
-                       wm_shortcut_fire(key, key_mods)) {
-                // A BOUND KEY NEVER REACHES A WINDOW. Checked before
-                // Alt+F4 and before routing, because a shortcut is the
-                // compositor's and an app cannot be allowed to shadow
-                // one (wm_shortcut.c).
-                redraw_pending = 1;
-            } else if (key == ' ' && (key_mods & KEY_MOD_ALT) && f >= 0) {
-                // ALT+SPACE: the focused window's menu, at its corner --
-                // Windows' system-menu shortcut (KDE's is Alt+F3). The
-                // one way back from FULLSCREEN, which has no title bar
-                // and hides the taskbar, and whose content area's
-                // right-click belongs to the app.
-                int mx0 = windows[f].x + 8, my0 = windows[f].y + 8;
-                if (mx0 < 8) mx0 = 8;
-                if (my0 < 8) my0 = 8;
-                wm_open_window_menu(f, mx0, my0);
-                redraw_pending = 1;
-            } else if (key == KEY_F4 && (key_mods & KEY_MOD_ALT) && f >= 0) {
-                wm_request_close(f); // may shift windows[] -- f is dead after this
-                redraw_pending = 1;
-            } else if (kt >= 0 && key != -1 && wm_client_is_client_window(&windows[kt])) {
-                // Focused window belongs to a ring-3 client: the
-                // key becomes a protocol message rather than a
-                // callback. Same focus rule either way -- who gets
-                // the key is the WM's decision, and it doesn't
-                // change because the recipient is a process.
-                wm_client_send_key(&windows[kt], key, key_mods);
-                redraw_pending = 1;
-            } else if (f >= 0 && key != -1 && windows[f].app && windows[f].app->on_key) {
-                windows[f].app->on_key(&windows[f], key, key_mods);
-            } else if (f < 0 && key != -1 && !wm_overlay_modal_open()) {
-                // No window has the focus: the DESKTOP is the focus,
-                // and its icons take Ctrl+C/X/V and Delete.
-                if (desktop_handle_key(key, key_mods)) redraw_pending = 1;
-            }
-            if (f >= 0 && wheel != 0) {
-                // A client gets the same notches as a message. Until
-                // TWP carried a wheel event, only kernel-space apps
-                // could scroll -- so Notepad drew a scrollbar it
-                // could never move.
-                if (wm_client_is_client_window(&windows[kt])) {
-                    wm_client_send_wheel(&windows[kt], wheel);
-                } else if (windows[f].app && windows[f].app->on_wheel) {
-                    windows[f].app->on_wheel(&windows[f], wheel);
+                if (f >= 0 && wheel != 0) {
+                    // A client gets the same notches as a message. Until
+                    // TWP carried a wheel event, only kernel-space apps
+                    // could scroll -- so Notepad drew a scrollbar it
+                    // could never move.
+                    if (wm_client_is_client_window(&windows[kt])) {
+                        wm_client_send_wheel(&windows[kt], wheel);
+                    } else if (windows[f].app && windows[f].app->on_wheel) {
+                        windows[f].app->on_wheel(&windows[f], wheel);
+                    }
                 }
+                // Typing/scrolling is the single most common redraw
+                // trigger this loop sees besides mouse movement -- worth
+                // reporting precisely rather than falling back to a full
+                // repaint for every keystroke.
+                if (f >= 0) wm_damage_window_rect(windows[f].x, windows[f].y, windows[f].w, windows[f].h);
+                redraw_pending = 1;
             }
-            // Typing/scrolling is the single most common redraw
-            // trigger this loop sees besides mouse movement -- worth
-            // reporting precisely rather than falling back to a full
-            // repaint for every keystroke.
-            if (f >= 0) wm_damage_window_rect(windows[f].x, windows[f].y, windows[f].w, windows[f].h);
-            redraw_pending = 1;
+
+            if (key != -1) any_key = 1;
+            wheel = 0;
+            if (key == -1 || !wm_rawin_has_key()) break;
         }
 
         // THE IDLE CLOCK, once every input source has been read. Any of
         // them resets it and stops a running saver; a quiet machine
         // starts one after the configured minutes (wm_idle.h).
-        wm_idle_poll(mouse_moved || buttons != prev_buttons ||
-                     key != -1 || wheel != 0);
+        wm_idle_poll(mouse_moved || buttons != prev_buttons || any_key || wheel_seen);
 
         prev_mx = mx; prev_my = my; prev_buttons = buttons;
 

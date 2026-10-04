@@ -173,6 +173,7 @@ struct window {
     uint32_t *client_px[WIN_CLIENT_BUFS];
     uint64_t  client_bytes[WIN_CLIENT_BUFS];   // what was mapped, page-rounded
     uint32_t  client_gen[WIN_CLIENT_BUFS];     // 0 until the buffer has been opened
+    uint32_t  client_seq[WIN_CLIENT_BUFS];     // the present that last made it front
     int client_mapped[WIN_CLIENT_BUFS];        // client_px[b] may legitimately be 0
     int client_front;
     // THE FRONT BUFFER'S SIZE, which is the size of the pixels on

@@ -149,6 +149,14 @@ static uint32_t seq_of(int window) {
 void wm_shortcut_inhibit(int window, int on) {
     uint32_t seq = seq_of(window);
     if (!seq) return;
+    // ONLY THE FOCUSED WINDOW MAY TAKE IT, as only the focused surface's
+    // keyboard-shortcuts-inhibitor is active: a background window would
+    // replace the focused one's, and its own would wake when it gained
+    // focus later with nobody having asked then.
+    if (on && window != wm_focus_index()) {
+        ulogf("wm: shortcuts NOT inhibited -- window %d is not focused\n", window);
+        return;
+    }
     if (on) g_inhibit_seq = seq;
     else if (g_inhibit_seq == seq) g_inhibit_seq = 0;
     ulogf("wm: shortcuts %s by window %d\n", on ? "inhibited" : "released", window);

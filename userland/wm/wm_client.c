@@ -251,6 +251,7 @@ static int on_window_created(int pid, uint32_t id,
 
     windows[window_count].open_seq = wm_next_open_seq();
     window_count++;
+    wm_focus_created(window_count - 1);
     // AFTER window_count++ (restoring addresses windows by index) and
     // after app_id is set, which is what the saved geometry is keyed
     // on. A client's SIZE cannot simply be assigned -- it owns its
@@ -409,6 +410,7 @@ static int on_dialog_created(int pid, uint32_t id, uint32_t owner_id,
 
     windows[window_count].open_seq = wm_next_open_seq();
     window_count++;
+    wm_focus_created(window_count - 1);
     redraw_pending = 1;
     wm_logf("wm: client pid %d opened dialog %u (%dx%d) of %u\n", pid, id, w, h, owner_id);
     return 1;
@@ -505,6 +507,7 @@ static void send_release(struct window *win, int b) {
     ev.window = win->client_win;
     ev.a = b;
     ev.b = (int32_t)win->client_gen[b];
+    ev.mods = win->client_seq[b];
     // OWED, NOT DROPPED: the client holds this buffer until told, and a
     // lost release costs it a frame-time guess (uapp's forced reuse).
     if (win_events_push(win->client_pid, &ev)) win->ev_release &= ~(1u << b);
@@ -512,7 +515,7 @@ static void send_release(struct window *win, int b) {
 }
 
 static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
-                              int w, int h) {
+                              int w, int h, uint32_t seq) {
     int idx = find_client_window(pid, id);
     if (idx < 0) return;
     wm_scanout_client_presented(pid);   // a present from its OWN buffer
@@ -536,6 +539,7 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     int old = win->client_front;
     win->client_front = front;
     win->client_buf = win->client_px[front];
+    win->client_seq[front] = seq;
     win->ev_release &= ~(1u << front);   // on screen again: not free after all
     // THE OLD FRONT IS FREE NOW, and only now: nothing reads it after
     // this, and no composite is in flight while a message is handled.
@@ -1114,7 +1118,7 @@ void wm_client_chan_pump(void) {
             on_window_present(from, m.window, WIN_PRESENT_BUF(m.a),
                               WIN_PRESENT_GEN(m.a),
                               WIN_PRESENT_W((uint32_t)m.b),
-                              WIN_PRESENT_H((uint32_t)m.b));
+                              WIN_PRESENT_H((uint32_t)m.b), (uint32_t)m.c);
             break;
         case WIN_REQ_POPUP: {
             // The third round trip: the client draws its menu at the

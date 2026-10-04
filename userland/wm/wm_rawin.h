@@ -38,6 +38,7 @@ void wm_rawin_mouse(int *out_x, int *out_y, uint8_t *out_buttons);
 // dropped RELEASE is a key the client believes is held down forever,
 // which in a game is a player who will not stop walking.
 int wm_rawin_take_key(uint8_t *out_mods, int *out_down);
+int wm_rawin_has_key(void);   // a key is queued -- wm.c drains them all a frame
 
 // The modifiers as of the last key. Replaces keyboard_mods_now() for
 // the one caller that wants modifiers without consuming a key

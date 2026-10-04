@@ -360,13 +360,18 @@ static int surf_present(struct uapp_surf *s) {
     // present supersedes it -- but flipping anyway would leave the
     // compositor reading the buffer this process is about to draw into,
     // which is the tearing double buffering exists to remove.
+    // THE SEQUENCE TRAVELS, so a late release of an EARLIER present of
+    // this buffer cannot free it while the compositor shows this one.
+    unsigned long long seq = g_present_seq + 1;
+    if ((uint32_t)seq == 0) seq++;   // 0 means "no sequence" on the wire
     if (!wmchan_send(WIN_REQ_PRESENT, (uint32_t)slot_of(s),
                      WIN_PRESENT_B(shown, s->px_gen[shown]),
-                     (int)WIN_PRESENT_SIZE(s->w, s->h), 0, 0)) return 0;
+                     (int)WIN_PRESENT_SIZE(s->w, s->h), (int)(uint32_t)seq, 0)) return 0;
 
+    g_present_seq = seq;
     s->front = shown;
     s->busy[shown] = 1;
-    s->busy_seq[shown] = ++g_present_seq;
+    s->busy_seq[shown] = seq;
     s->back = -1;     // the next frame picks one that has come back
     s->dirty = 0;
     return 1;
@@ -1494,11 +1499,13 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
     // keeps it), resize (a popup has one size) and close (which for a
     // popup is a dismissal).
     // A BUFFER CAME BACK, for any surface: the next frame may draw into
-    // it. A stale one -- a generation since replaced -- is ignored.
+    // it. A stale one -- a generation since replaced, or an earlier
+    // present of a buffer shown again since -- is ignored.
     if (in->type == WIN_EV_BUF_RELEASE) {
         if (in->window < WIN_CLIENT_MAX && g_surf[in->window].used &&
             in->a >= 0 && in->a < UAPP_BUFS &&
-            g_surf[in->window].px_gen[in->a] == (uint32_t)in->b)
+            g_surf[in->window].px_gen[in->a] == (uint32_t)in->b &&
+            (!in->mods || in->mods == (uint32_t)g_surf[in->window].busy_seq[in->a]))
             g_surf[in->window].busy[in->a] = 0;
         return;
     }

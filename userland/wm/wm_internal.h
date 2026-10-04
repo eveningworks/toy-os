@@ -64,6 +64,9 @@ void wm_render_window_into(struct ugfx_surface *dst, struct window *ghost, int f
 //
 // Sized so the common case never reallocates at all.
 #define WM_WINDOWS_INITIAL 8
+// Keys handled per frame at most -- two pumps' worth, so a burst drains
+// in a frame or two and a flood still lets the frame finish.
+#define WM_KEYS_PER_FRAME 64
 
 // Taskbar/title-bar button sizing -- derived from the current font
 // (gfx_char_w/h) rather than fixed pixel constants; see the git history
@@ -106,6 +109,8 @@ void wm_window_menu_forget(int idx);
 
 // Tell the clients a focus change, by identity -- see wm.c.
 void wm_focus_sync(void);
+// windows[idx] was just created: sync, and tell it if it is NOT focused.
+void wm_focus_created(int idx);
 
 // Minimize, and restore to what the window was before -- maximized
 // stays maximized. Every minimize and restore goes through these two;
