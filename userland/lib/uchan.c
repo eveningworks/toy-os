@@ -116,11 +116,13 @@ int uchan_server_scan(struct uchan_server *s, int *gone, int gone_cap) {
         // **WHICH CLIENT WENT IS REPORTED, NOT JUST RECLAIMED.** A
         // server usually holds state per client -- the compositor holds
         // a window -- and reclaiming the slot silently leaves that
-        // state with nothing to retire it. Overflow drops the extra
-        // names rather than the ring: the next scan finds them gone
-        // just the same, one pass later.
-        if (gone && ngone < gone_cap) gone[ngone] = s->pid[k];
-        if (ngone < gone_cap || !gone) ngone++;
+        // state with nothing to retire it. A death that does not fit in
+        // `gone` KEEPS its ring, so the next scan reports it: dropping
+        // the ring unreported lost the death for good, and its windows
+        // with it.
+        if (gone && ngone >= gone_cap) { k++; continue; }
+        if (gone) gone[ngone] = s->pid[k];
+        ngone++;
         unmap(s->ring[k], RING_BYTES);
         s->ring[k] = s->ring[s->count - 1];
         s->pid[k] = s->pid[s->count - 1];

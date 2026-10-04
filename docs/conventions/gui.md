@@ -1935,9 +1935,13 @@ this the obvious way), not from how much history it accumulated.
   focus, font, screen, a popup's dismissal -- is remembered as a bit on
   the window (`ev_pending`) and sent by `wm_client_flush_pending()`
   next frame with the state as it is THEN, which is
-  `xdg_surface.configure`'s "latest wins". **A ping the inbox refused
-  was never asked**: no serial is left outstanding, and a client whose
-  inbox stays full is found unresponsive by exactly that route. **A
+  `xdg_surface.configure`'s "latest wins"; a buffer RELEASE is owed the
+  same way (`ev_release`, cleared if that buffer is presented again).
+  **A ping the inbox refused was never asked**: no serial is left
+  outstanding, so `ping_blocked_tick` records since when it has been
+  refused, and an inbox full for a whole ping timeout marks the client
+  not responding exactly as an unanswered ping does
+  (`forcequit_test.py`'s full-inbox phase). **A
   dead compositor is noticed, not announced**: the kernel no longer
   asks clients to close; a client that waits out `UAPP_WAIT_MS` with
   nothing arriving asks `uchan_client_server_alive()` -- the beacon's
@@ -1947,6 +1951,12 @@ this the obvious way), not from how much history it accumulated.
   the inbox word (`uchan_client_kick()`, an atomic add because two
   writers bump it). `WIN_EV_FONT`/`WIN_EV_SCREEN` reach the compositor
   on its queue and it forwards them, DRM-hotplug-uevent style.
+  **The channel pump is bounded** (`WM_CHAN_DRAIN_MAX`), as the event
+  pump is; what is left keeps the loop from parking. **A dead client the
+  scan's `gone` array cannot hold keeps its ring** and is reported by the
+  next scan (`chan_test`). **A buffer is re-mapped before the old mapping
+  goes** (`map_buf()`): a refused replacement of the buffer on screen
+  keeps the last good frame (`bad_present_test.py`).
 - **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem
   changed?" -- and `SYS_FS_GENERATION_OF(path)` asks it of ONE
   directory, which is what a watcher of one directory should use.** No

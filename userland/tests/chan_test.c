@@ -10,7 +10,8 @@
 // arrives at all; that ASYNC really is async (the sender does not wait);
 // that the server can be WOKEN OUT OF A PARK by a message rather than
 // finding it on a poll; that a round trip gets an answer back; and that
-// a full ring is reported rather than silently dropping.
+// a full ring is reported rather than silently dropping; and that a
+// death the scan's `gone` array cannot hold is reported LATER, not lost.
 #include <stdio.h>
 #include <string.h>
 #include "rt/sys.h"
@@ -63,8 +64,17 @@ static int child_main(void) {
     return 0;
 }
 
+// Connects and waits to be killed -- a client for the deaths check.
+static int idle_main(void) {
+    struct uchan_client c;
+    for (int i = 0; i < 200 && uchan_client_open(&c, SERVICE) != 0; i++) sys_sleep_ms(10);
+    sys_sleep_ms(60000);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "child")) return child_main();
+    if (argc > 1 && !strcmp(argv[1], "idle")) return idle_main();
 
     utest_begin("chan_test", "a message channel between two processes",
                 UTEST_VERDICT_FILE);
@@ -137,6 +147,38 @@ int main(int argc, char **argv) {
                      sent, UCHAN_SLOTS);
         uchan_client_close(&self);
     }
+
+    // MORE DEATHS THAN `gone` HOLDS, between two scans: every one must be
+    // reported eventually. A scan that dropped the overflow's rings
+    // unreported lost those deaths for good (and the compositor's
+    // windows with them).
+    enum { IDLERS = 3 };
+    int idle[IDLERS];
+    for (int i = 0; i < IDLERS; i++) idle[i] = sys_spawn("/tests/chan_test", "idle", -1);
+    for (int t = 0; t < 200 && s.count < IDLERS; t++) {
+        uchan_server_scan(&s, 0, 0);
+        if (s.count < IDLERS) sys_sleep_ms(10);
+    }
+    utest_checkf(s.count == IDLERS, "three idle clients connect (%d)", s.count);
+    for (int i = 0; i < IDLERS; i++) {
+        sys_kill(idle[i], SIGKILL);
+        sys_waitpid(idle[i], &code);
+    }
+    int reported[IDLERS], nrep = 0;
+    for (int t = 0; t < 200 && nrep < IDLERS; t++) {
+        int one;
+        int n = uchan_server_scan(&s, &one, 1);   // room for ONE death a scan
+        if (n == 1 && nrep < IDLERS) reported[nrep++] = one;
+        if (!n) sys_sleep_ms(10);
+    }
+    int all = nrep == IDLERS;
+    for (int i = 0; i < IDLERS && all; i++) {
+        int seen = 0;
+        for (int j = 0; j < nrep; j++) seen |= reported[j] == idle[i];
+        all = seen;
+    }
+    utest_checkf(all, "every death is reported, one a scan (%d of %d)", nrep, IDLERS);
+    utest_checkf(s.count == 0, "...and every dead ring is reclaimed (%d left)", s.count);
 
     uchan_server_close(&s);
     return utest_end();

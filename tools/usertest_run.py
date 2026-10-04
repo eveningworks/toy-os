@@ -544,6 +544,8 @@ EXCLUDED = [
     ("winclient",        "windowed TWP client -- tools/winclient_test.py"),
     ("uiclient",         "windowed ugfx client -- tools/uiclient_test.py"),
     ("hangclient",       "wedges on purpose -- tools/forcequit_test.py"),
+    ("badpresent",       "windowed raw-protocol client, sleeps until killed -- "
+                          "tools/bad_present_test.py"),
     ("event_test",       "waits on window events that only a desktop delivers"),
     ("counter_a",        "runs until descheduled; a scheduler fixture, not a checker"),
     ("counter_b",        "as counter_a"),

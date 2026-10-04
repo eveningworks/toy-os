@@ -15,6 +15,10 @@ there N seconds later. Offering to force-quit an app that deliberately
 declined would be obnoxious; not offering it for one that is hung is the
 entire problem. Only a liveness ping separates them.
 
+A THIRD CASE: a hung client whose inbox FILLS before any ping is
+outstanding. No ping can be sent, so none times out; the WM must notice
+the inbox stayed full (run_full_inbox()).
+
 So the two are tested against each other:
 
   * `winclient` refuses its first two close requests and keeps pumping
@@ -355,6 +359,48 @@ def run(dbg, qmp, tmp, res):
               f"scheduler slot stops the desktop launching anything after 4")
 
 
+def run_full_inbox(dbg, res):
+    """A hung client whose inbox FILLS before any ping is outstanding.
+
+    A ping the inbox cannot take is never sent, so there is no serial to
+    time out; the WM must still notice that the inbox stayed full. The
+    ping cadence is held off while the client hangs and its 64-slot inbox
+    is flooded with keys, then let loose: the window must be marked and
+    Alt+F4 must offer Force Quit, as for a hang found by a ping.
+    """
+    dbg.send("gui pinginterval 100000")
+    if not spawn(dbg, HANG_BIN, HANG_TITLE):
+        res.check("the hang-test client spawns for the full-inbox case", False)
+        return
+    dbg.send("gui key h")
+    dbg.settle()
+    deadline = time.time() + 6.0
+    while time.time() < deadline:
+        if any("hanging now" in l for l in dbg.logs("hangclient:", clear=True)):
+            break
+        time.sleep(0.15)
+    for _ in range(80):           # more than the inbox's 64 slots
+        dbg.send("gui key a")
+    dbg.settle()
+    dbg.send("gui pinginterval 20")
+    time.sleep(max(2.0, PING_TIMEOUT_S * 4))
+    res.check("a hung client whose inbox filled before any ping is marked not responding",
+              marked(dbg, HANG_TITLE),
+              "no ping could be sent, so none timed out and the flag never set")
+    dbg.send(ALT_F4)
+    dbg.settle()
+    got = wait_dialog(dbg)
+    res.check("...and Alt+F4 on it offers Force Quit", got, f"no dialog within {DIALOG_WAIT_S}s")
+    fq = button(dbg, "Force Quit") if got else None
+    if fq:
+        dbg.click(*fq)
+        dbg.settle()
+        deadline = time.time() + 8.0
+        while has_window(dbg, HANG_TITLE) and time.time() < deadline:
+            time.sleep(0.15)
+    dbg.send("gui pinginterval 200")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -381,6 +427,7 @@ def main():
                   f"{PING_TIMEOUT_TICKS} ticks" in (got or ""),
                   f"`gui pingtimeout` said {got!r}")
         run(dbg, qmp, args.tmp, res)
+        run_full_inbox(dbg, res)
 
     n_ok, n_bad = len(res.passes), len(res.fails)
     print(f"\nforcequit_test: {n_ok} passed, {n_bad} failed")

@@ -4359,6 +4359,15 @@ window without going through it will find its layout polls timing out.
   notification is the signal, and a waiter beside it is redundant even
   when it works (CLAUDE.md). Named by no runner -- it is a helper, not a
   test.
+- **`bad_present_test.py`** -- a refused replacement of the buffer ON
+  SCREEN keeps the last good frame and the compositor alive. Drives
+  `/tests/badpresent`, a raw-protocol client (no uapp, which never
+  re-presents its front buffer): it presents buffer 0 at generation 1,
+  then the same buffer at generation 2 with a size its object cannot
+  hold. Asserts toywm's PID is unchanged -- init restarts a crashed
+  desktop, so "it answers" alone passes on the broken build -- and the
+  window still shows generation 1. Control: `mutate.py` putting
+  `unmap_buf()` back before the open restarts toywm. In `gui_regress.py`.
 - **`focus_state_test.py`** -- the focus a CLIENT is told matches
   the focus the WM routes keys by, and minimize/restore keeps a
   maximized window maximized. Focus is read from the client's side --

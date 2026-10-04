@@ -595,6 +595,7 @@ static void wm_force_quit_no(void) {
             windows[i].close_asked_tick = 0;
             windows[i].force_quit_offered_tick = 0;
             windows[i].ping_serial = 0;
+            windows[i].ping_blocked_tick = 0;
             windows[i].not_responding = 0;
             break;
         }

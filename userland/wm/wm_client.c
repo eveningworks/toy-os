@@ -93,12 +93,13 @@ static void send_popup_done(struct window *toplevel, uint32_t slot) {
 }
 
 static int find_client_window(int pid, uint32_t id);
+static void send_release(struct window *win, int b);
 
 void wm_client_flush_pending(void) {
     for (int i = 0; i < window_count; i++) {
         struct window *win = &windows[i];
         if (!wm_client_is_client_window(win)) continue;
-        if (!win->ev_pending && !win->ev_popup_done) continue;
+        if (!win->ev_pending && !win->ev_popup_done && !win->ev_release) continue;
         struct win_event ev = {0};
         ev.window = win->client_win;
         if (win->ev_pending & WM_PEND_CLOSE) {
@@ -127,6 +128,8 @@ void wm_client_flush_pending(void) {
         }
         for (uint32_t slot = 1; slot < 32 && win->ev_popup_done; slot++)
             if (win->ev_popup_done & (1u << slot)) send_popup_done(win, slot);
+        for (int b = 0; b < WIN_CLIENT_BUFS && win->ev_release; b++)
+            if (win->ev_release & (1u << b)) send_release(win, b);
     }
 }
 
@@ -502,7 +505,10 @@ static void send_release(struct window *win, int b) {
     ev.window = win->client_win;
     ev.a = b;
     ev.b = (int32_t)win->client_gen[b];
-    if (!win_events_push(win->client_pid, &ev)) note_dropped(win);
+    // OWED, NOT DROPPED: the client holds this buffer until told, and a
+    // lost release costs it a frame-time guess (uapp's forced reuse).
+    if (win_events_push(win->client_pid, &ev)) win->ev_release &= ~(1u << b);
+    else win->ev_release |= 1u << b;
 }
 
 static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
@@ -530,6 +536,7 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     int old = win->client_front;
     win->client_front = front;
     win->client_buf = win->client_px[front];
+    win->ev_release &= ~(1u << front);   // on screen again: not free after all
     // THE OLD FRONT IS FREE NOW, and only now: nothing reads it after
     // this, and no composite is in flight while a message is handled.
     // Without this the client redrew it while a preempted composite was
@@ -1014,24 +1021,25 @@ void wm_client_chan_pump(void) {
     // which meant it had to know a window existed; it does not any more
     // (docs/winserver-ring3-design.md, stage 6b).
     //
-    // A SMALL FIXED CAP, because the window list grows on demand and
-    // this runs every frame. More than this many GUI clients dying
-    // between two frames is a desktop restart rather than an app
-    // closing, and the ones that overflow are found gone by the next
-    // scan -- one frame later, which nothing can see.
+    // A SMALL FIXED CAP, because this runs every frame: the scan keeps
+    // a death that does not fit and reports it next frame.
     #define WM_CHAN_GONE_MAX 16
     int gone[WM_CHAN_GONE_MAX];
     int n = uchan_server_scan(&g_chan, gone, WM_CHAN_GONE_MAX);
-    if (n > WM_CHAN_GONE_MAX) n = WM_CHAN_GONE_MAX;
     for (int i = 0; i < n; i++) {
         for (int w = window_count - 1; w >= 0; w--)
             if (windows[w].client_pid == gone[i])
                 on_window_destroyed(gone[i], windows[w].client_win);
     }
 
+    // BOUNDED, as wm_rawin_pump() is: clients refill their rings while
+    // this drains them, and "until empty" can starve the frame. What is
+    // left keeps the loop from parking (uchan_server_wait()).
+    #define WM_CHAN_DRAIN_MAX 256
     int from;
     struct wmchan_msg m;
-    while ((from = uchan_server_recv(&g_chan, &m, sizeof m)) != 0) {
+    for (int budget = WM_CHAN_DRAIN_MAX;
+         budget > 0 && (from = uchan_server_recv(&g_chan, &m, sizeof m)) != 0; budget--) {
         m.text[sizeof m.text - 1] = '\0';
         switch (m.type) {
         // THE PAYLOAD IS HERE, which is the point: each of these took a
@@ -1236,12 +1244,15 @@ static void unmap_client_window(struct window *win) {
 // one place that knows both numbers: SYS_MMAP refuses a length past an
 // shm object's own pages (-EINVAL), so a lying client costs its own
 // window a frame and nothing else.
+//
+// **THE OLD MAPPING GOES ONLY ONCE THE NEW ONE IS IN.** `b` can be the
+// slot on screen, and client_buf points into it: unmapped first, a
+// failed replacement left the renderer blitting from a hole.
 static int map_buf(struct window *win, int b, uint32_t gen, int w, int h) {
+    if (w <= 0 || h <= 0) return 0;
     uint64_t bytes = ((uint64_t)w * (uint64_t)h * 4 + 4095) & ~4095ULL;
     if (win->client_mapped[b] && win->client_gen[b] == gen
         && win->client_bytes[b] >= bytes) return 1;
-    unmap_buf(win, b);
-    if (!bytes) return 0;
 
     char nm[WIN_BUF_NAME_MAX];
     k_snprintf(nm, sizeof nm, WIN_BUF_NAME_FMT,
@@ -1267,10 +1278,12 @@ static int map_buf(struct window *win, int b, uint32_t gen, int w, int h) {
         return 0;
     }
 
+    unmap_buf(win, b);
     win->client_px[b] = (uint32_t *)p;
     win->client_bytes[b] = bytes;
     win->client_gen[b] = gen;
     win->client_mapped[b] = 1;
+    if (b == win->client_front && win->client_buf) win->client_buf = win->client_px[b];
     return 1;
 }
 
@@ -1630,10 +1643,14 @@ void wm_client_ping(struct window *win) {
     ev.window = win->client_win;
     ev.a = (int)g_next_serial;
     // A ping the inbox could not take was never asked, so no serial is
-    // left outstanding: the liveness check simply asks again next time
-    // -- and a client whose inbox stays full is found unresponsive by
-    // exactly that route.
-    if (!win_events_push(win->client_pid, &ev)) return;
+    // left outstanding and the liveness check asks again. How long it
+    // has been refused is kept: a client that never drains its inbox is
+    // as hung as one that never answers (wm_client_check_liveness()).
+    if (!win_events_push(win->client_pid, &ev)) {
+        if (!win->ping_blocked_tick) win->ping_blocked_tick = sys_ticks();
+        return;
+    }
+    win->ping_blocked_tick = 0;
     win->ping_serial = g_next_serial;
     win->ping_sent_tick = sys_ticks();
     win->ping_sent_ns = sys_monotonic_ns();
@@ -1717,9 +1734,13 @@ int wm_client_check_liveness(void) {
             // not the last answer.
             if (now - w->ping_sent_tick >= (uint64_t)wm_ping_interval_ticks)
                 wm_client_ping(w);
+            // AN INBOX FULL FOR A WHOLE TIMEOUT is a client not reading
+            // it: hung, though no ping could be outstanding to time out.
+            if (!w->ping_blocked_tick ||
+                now - w->ping_blocked_tick < (uint64_t)wm_ping_timeout_ticks) continue;
+        } else if (now - w->ping_sent_tick < (uint64_t)wm_ping_timeout_ticks) {
             continue;
         }
-        if (now - w->ping_sent_tick < (uint64_t)wm_ping_timeout_ticks) continue;
 
         if (!w->not_responding) {
             w->not_responding = 1;

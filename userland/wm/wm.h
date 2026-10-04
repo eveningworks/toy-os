@@ -216,6 +216,7 @@ struct window {
     uint64_t ping_sent_ns;
     uint64_t ping_sent_tsc;  // rdtsc, for a figure finer than the clocksource under an emulator   // for the round-trip figure `gui compositor` reports
     int not_responding;   // no answer within WM_PING_TIMEOUT_TICKS
+    uint64_t ping_blocked_tick;   // since when a ping found the inbox full; 0 = it did not
 
     // --- events the client's inbox could not take (stage 8) --------
     //
@@ -227,6 +228,7 @@ struct window {
     // held on the toplevel because the popup's own row is gone by then.
     uint32_t ev_pending;      // WM_PEND_* bits
     uint32_t ev_popup_done;   // bit per client slot
+    uint32_t ev_release;      // bit per BUFFER whose release is owed
     int ev_resize_w, ev_resize_h;
     unsigned ev_dropped;
 
