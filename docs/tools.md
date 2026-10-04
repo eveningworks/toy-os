@@ -156,7 +156,8 @@ manual steps to be worth automating:
   results table (`Results`: `.check()`/`.ok()` returning the verdict,
   `.passes`/`.fails`, `.rows`, `.failed()`, `.skip(name, why)` for a
   check a run could not judge (`.skips`, and `, K skipped` on the
-  summary; a run that judged nothing exits 1), `poll(fn, timeout)`, a
+  summary; a run that only skipped exits 77, which `gui_regress.py`
+  reports as SKIP and counts on its own), `poll(fn, timeout)`, a
   bounded wait on an observable, and `.finish(tool)` printing the
   `<tool>: N passed, M failed` line `gui_regress.py` reads),
   `copy_disk(src, dst, cwd=None)` (the sparse, reflinked copy), and
@@ -2557,9 +2558,12 @@ window without going through it will find its layout polls timing out.
   Under a TAB's prompt (its one exception) it is held and the session
   written -- two dirty tabs, Ctrl-W on the second, Alt+F4, Don't Save:
   that tab goes and the close goes on to ask about the FILE's tab; under
-  a tab's Save As chooser it switches no tab and asks nothing new; and
-  with Options open and the window minimized, a single close is ignored
-  and brings it forward -- unminimized, Options in front.
+  a tab's Save As chooser it switches no tab and asks nothing new; with
+  Options open and the window minimized, a single close is ignored and
+  brings it forward -- unminimized, Options in front; and `gui endtask`
+  (End Task) asks Notepad's two windows once each and raises nothing.
+  Tab 2 is saved by NAME first, so the session check can see a tab that
+  was closed being written.
 - **`clipboard_test.py`** -- drives the system TEXT clipboard across two
   apps, which is the claim that makes it a system clipboard rather than
   a feature of one: text copied in Notepad pastes into the GUI Terminal,
@@ -4461,7 +4465,9 @@ window without going through it will find its layout polls timing out.
 - **`devmgr_test.py`** -- the Device Manager (`userland/gui/system/devmgr.c`
   over `lib/udevice.c`): the tree is DRAWN with its icons, "By connection"
   keeps the selection, and Disable/Enable on the network card round-trip
-  through the confirm dialog. **Whether a device is bound is read from
+  through the confirm dialog -- and a window close while that dialog asks
+  is refused (uapp's default holds a close while a question is open in
+  the window). **Whether a device is bound is read from
   `devctl list`, never from the app's own report** -- the app says what it
   believes. The icon check counts saturated pixels AND the columns they
   span, since a saturated selection wash would pass a bare count. It

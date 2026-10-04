@@ -869,10 +869,7 @@ static void group_close_all(void *ctx) {
 static void row_raise(void *ctx) {
     int i = wm_window_by_seq(*(uint32_t *)ctx);
     if (i < 0) return;   // it closed while the menu was open
-    wm_window_unminimize(i);
-    wm_ensure_reachable(i);
-    raise_with_dialogs(i);
-    redraw_pending = 1;
+    wm_bring_forward(i);
 }
 
 // Opens the list of windows a collapsed button stands for -- Windows'

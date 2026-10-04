@@ -742,23 +742,29 @@ int wm_client_debug_command(const char *line, char *out, int cap) {
     return o.len;
 }
 
-// Asks every window owned by `pid` to close, through the SAME
-// wm_request_close() the X button, Alt+F4 and the context menu use --
-// so a client may decline, and there is no fourth close path with its
-// own idea of the rules.
+// Asks every window owned by `pid` to close, through the same polite
+// close the X button uses -- so a client may decline -- but QUIETLY, as
+// a batch: nothing is raised and focus does not move.
 //
-// Iterates DOWNWARD because wm_request_close() may remove the window
-// and shift everything above it down; going upward would skip the
-// window that slid into the index just handled.
-static int on_close_pid(int pid) {
+// RECORDED BY open_seq FIRST, then asked: a close can remove a window
+// and renumber windows[], so walking indices while asking could skip
+// one or ask another twice.
+int wm_end_task(int pid) {
+    static uint32_t seq[256];
+    int n = 0;
+    for (int i = 0; i < window_count && n < (int)(sizeof seq / sizeof seq[0]); i++) {
+        if (windows[i].client_pid != pid || windows[i].popup) continue;   // a menu: nothing to ask
+        if (!windows[i].open_seq) windows[i].open_seq = wm_next_open_seq();
+        seq[n++] = windows[i].open_seq;
+    }
     int asked = 0;
-    for (int i = window_count - 1; i >= 0; i--) {
-        if (i >= window_count) continue;      // the list shrank under us
-        if (windows[i].client_pid != pid) continue;
-        if (windows[i].popup) continue;       // asking a menu to close means nothing
-        wm_request_close(i);
+    for (int k = 0; k < n; k++) {
+        int i = wm_window_by_seq(seq[k]);
+        if (i < 0) continue;   // gone with an earlier one
+        wm_request_close_quiet(i);
         asked++;
     }
+    wm_logf("wm: end task pid %d: asked %d window(s)\n", pid, asked);
     return asked;
 }
 
@@ -1183,7 +1189,7 @@ void wm_client_chan_pump(void) {
             // process. Unprivileged, as it was through the kernel, and
             // strictly weaker than SYS_KILL -- every window it reaches
             // is ASKED, and may refuse.
-            on_close_pid(m.a);
+            wm_end_task(m.a);
             break;
         case WIN_REQ_ACTIVATE: {
             // **THE ONE MESSAGE HERE THAT ANSWERS.** A single-instance

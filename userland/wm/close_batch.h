@@ -3,7 +3,8 @@
 
 // A SET OF WINDOWS ASKED TO CLOSE, and which of them have: the tracker
 // behind the Leave page and the taskbar's "Close all N windows". Each
-// window gets the polite close (wm_request_close), so a client may
+// window gets the polite close, QUIETLY (wm_request_close_quiet(): no
+// raise, no focus change), so a client may
 // refuse -- Notepad asking whether to save -- and the caller decides
 // what to do about the ones still open once the wait is up.
 //

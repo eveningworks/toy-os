@@ -581,7 +581,7 @@ static void on_open(struct uapp *a) {
 }
 
 static int on_close(struct uapp *a) {
-    if (uapp_question_open(a)) return 0;   // what it asks still reads the pages
+    (void)a;
     uui_markdown_free(&g_md);
     for (int i = 0; i < g_npages; i++) free(g_page[i].text);
     free(g_gen);

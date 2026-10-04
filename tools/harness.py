@@ -19,7 +19,8 @@ differences become callbacks). A tool with a genuinely different table
 `Results` is a superset of the shapes the tools used, so adopting it is
 a one-line change: `.check()`/`.ok()` (returns the verdict), `.passes`
 and `.fails` (names), `.rows` ((name, ok, detail)), `.failed()`, and
-`.skip()` for a check that could not be judged this run (`.skips`), and
+`.skip()` for a check that could not be judged this run (`.skips`; a
+run that only skipped exits 77, automake's SKIP), and
 `poll(fn, timeout)`, a bounded wait on an observable. The
 summary line `finish()` prints is the one `gui_regress.py` reads:
 `<tool>: N passed, M failed`, with `, K skipped` after it when any were.
@@ -65,12 +66,18 @@ class Results:
 
     def finish(self, tool):
         """Print the summary line; 0 when something was JUDGED and nothing
-        failed. A skip is neither a pass nor a fail -- so a run that only
-        skipped judged nothing, and that is not a pass."""
+        failed. A skip is neither a pass nor a fail: a run that only
+        skipped judged nothing and exits 77, automake's SKIP, which
+        gui_regress.py reports as SKIP; a run with no checks at all is 1."""
         print("\n" + self.summary(tool))
-        if not self.rows:
-            print(f"{tool}: nothing judged")
-        return 0 if self.rows and not self.fails else 1
+        if self.fails:
+            return 1
+        if self.rows:
+            return 0
+        if self.skips:
+            print(f"{tool}: nothing judged -- every check skipped")
+            return 77
+        return 1
 
 
 def poll(fn, timeout, step=0.2):

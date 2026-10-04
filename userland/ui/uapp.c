@@ -1158,15 +1158,38 @@ static int buttons_heard(const struct uui_router *r, int has_on_action, const ch
     return 0;
 }
 
+// Entering containers (`children`), as uapp_log_layout() does: a dialog
+// may sit inside a layout.
+static int dialog_open_in(struct uui_item *items, int count) {
+    for (int i = 0; i < count; i++) {
+        struct uui_item *it = &items[i];
+        if (!it->ops) continue;
+        if (it->ops == &uui_dialog_ops &&
+            uui_dialog_is_open((const struct uui_dialog *)it->widget))
+            return 1;
+        if (it->ops->children) {
+            int n = 0;
+            struct uui_item *sub = it->ops->children(it->widget, &n);
+            if (sub && dialog_open_in(sub, n)) return 1;
+        }
+    }
+    return 0;
+}
+
+int uapp_inwindow_question_open(struct uapp *a) {
+    const struct uapp_desc *d = a ? a->desc : 0;
+    if (!d) return 0;
+    if (d->layout) {
+        struct uui_item root = { .ops = &uui_layout_ops, .widget = (void *)d->layout };
+        if (dialog_open_in(&root, 1)) return 1;
+    }
+    return d->widgets && dialog_open_in(d->widgets, d->widget_count);
+}
+
 int uapp_question_open(struct uapp *a) {
     for (int i = 1; i < WIN_CLIENT_MAX; i++)
         if (g_dlg[i].slot && (g_dlg[i].desc.flags & UAPP_WIN_MODAL)) return 1;
-    const struct uapp_desc *d = a ? a->desc : 0;
-    for (int i = 0; d && i < d->widget_count; i++)
-        if (d->widgets[i].ops == &uui_dialog_ops &&
-            uui_dialog_is_open((const struct uui_dialog *)d->widgets[i].widget))
-            return 1;
-    return 0;
+    return uapp_inwindow_question_open(a);
 }
 
 static void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
@@ -1733,10 +1756,13 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         break;
 
     case WIN_EV_CLOSE:
-        // The default ACCEPTS. An app that wants to refuse says so;
-        // an app that has never heard of closing still closes -- an Open
-        // chooser guards no data (uapp_desc.on_close).
-        if (!d->on_close || d->on_close(a)) uapp_quit(a, 0);
+        // The default ACCEPTS -- except while a question is open IN the
+        // window ("File already exists", "Disable device"), whose answer
+        // decides. A separate chooser window guards no data, so it does
+        // not hold the close (uapp_desc.on_close).
+        if (d->on_close ? d->on_close(a) : !uapp_inwindow_question_open(a)) uapp_quit(a, 0);
+        else ulogf("uapp: close refused%s\n",
+                   uapp_question_open(a) ? " -- a question is open" : "");
         break;
 
     case WIN_EV_RESIZE:

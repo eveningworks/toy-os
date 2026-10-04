@@ -221,6 +221,22 @@ def main():
     click(dbg, win, bx + bw // 2, by + bh // 2)
     lay = wait_layout(dbg, lambda l: l.get("ask", (0, 0, 0, 0))[2] > 0)
     check("Disable asks first", lay.get("ask", (0, 0, 0, 0))[2] > 0, f"ask={lay.get('ask')}")
+    # A CLOSE WHILE IT ASKS IS REFUSED: the Device Manager has no
+    # on_close, and uapp's default holds the close while a question is
+    # open IN the window (uapp_desc.on_close) -- the answer decides.
+    dbg.logs("uapp: close refused", clear=True)
+    me = next((w for w in dbg.windows() if w.get("title") == TITLE), None)
+    if me:
+        dbg.send(f"gui close {me['z']}")
+    refused = None
+    deadline = time.time() + 4
+    while time.time() < deadline and not refused:
+        refused = dbg.logs("uapp: close refused", clear=False)
+        time.sleep(0.2)
+    check("a close while Disable asks is refused, the window and question kept",
+          bool(refused) and any(w.get("title") == TITLE for w in dbg.windows()) and
+          layout(dbg).get("ask", (0, 0, 0, 0))[2] > 0,
+          f"refused {refused}, windows {[w['title'] for w in dbg.windows()]}")
     dbg.send(f"gui key {K_ESC}")
     lay = wait_layout(dbg, lambda l: l.get("ask", (0, 0, 0, 0))[2] == 0)
     check("Escape closes the question", lay.get("ask", (0, 0, 0, 0))[2] == 0, f"ask={lay.get('ask')}")

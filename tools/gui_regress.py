@@ -444,7 +444,24 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot, kvm=False):
         tail = [l for l in out.splitlines() if l.strip()]
         summary = tail[-1].strip() if tail else "(no output)"
 
-    return ("PASS" if rc == 0 else "FAIL", time.time() - started, summary)
+    return (status_of(rc), time.time() - started, summary)
+
+
+# automake's SKIP convention, which tools/harness.py's finish() follows:
+# a run that judged NOTHING (every check skipped) is neither a pass nor
+# a fail, and is counted on its own line.
+EXIT_SKIP = 77
+
+
+def status_of(rc):
+    return "PASS" if rc == 0 else "SKIP" if rc == EXIT_SKIP else "FAIL"
+
+
+def report_skips(results):
+    skipped = [r[0] for r in results if r[1] == "SKIP"]
+    if skipped:
+        print(f"\ngui_regress: {len(skipped)} tool(s) skipped, judging nothing: "
+              f"{', '.join(skipped)}")
 
 
 def run_remote_suite(picked, args):
@@ -494,6 +511,7 @@ def run_remote_suite(picked, args):
     for name, status, secs, summary in results:
         print(f"  {status:<5} {name:<12} {secs:5.0f}s  {summary}")
 
+    report_skips(results)
     na = [r[0] for r in results if r[1] == "N/A"]
     if na:
         print(f"\ngui_regress: {len(na)} tool(s) cannot run on hardware: "
@@ -564,7 +582,7 @@ def run_one_remote(name, script, host, timeout, keep_logs):
         summary = tail[-1].strip() if tail else "(no output)"
     if rc != 0 and unsupported and not summary.startswith(name):
         return ("N/A", time.time() - started, unsupported[-1][:160])
-    return ("PASS" if rc == 0 else "FAIL", time.time() - started, summary)
+    return (status_of(rc), time.time() - started, summary)
 
 
 def acquire_run_lock():
@@ -750,6 +768,7 @@ def main():
     for name, status, secs, summary in results:
         print(f"  {status:<5} {name:<12} {secs:5.0f}s  {summary}")
 
+    report_skips(results)
     failed = [r[0] for r in results if r[1] == "FAIL"]
     if failed:
         print(f"\ngui_regress: FAILED -- {', '.join(failed)}")

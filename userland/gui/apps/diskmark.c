@@ -740,7 +740,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 }
 
 static int on_close(struct uapp *a) {
-    if (uapp_question_open(a)) return 0;   // its answer decides (uapp_desc.on_close)
+    (void)a;
     // A run cut off by closing the window would otherwise leave its
     // scratch file AND an orphan still writing to the disk.
     if (g_pid > 0) sys_kill(g_pid, 9);

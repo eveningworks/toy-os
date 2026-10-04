@@ -582,6 +582,8 @@ gui spawn PATH [args]    run a ring-3 binary directly -- no Terminal in the loop
 gui watchdog [<ms>|off]  slow-frame threshold, plus how often it fired
 gui pingtimeout [<ticks>] not-responding timeout -- a TEST LEVER, see below
 gui kill PID             end a process -- `gui spawn`'s counterpart
+gui endtask PID          Task Manager's End Task: PID's windows asked to close,
+                         as a batch (no raise, no focus change)
 gui resize W H           the FOCUSED window's CONTENT size, by the configure/ack
                          path -- the one way a test can SET a size: an injected
                          grip drag is not tracked across frames and lands short

@@ -297,11 +297,13 @@ void wm_handle_left_click(int mx, int my) {
             // minimize/maximize/close only happens on release, and only
             // if the cursor's still over this same button then (see
             // wm_update_title_btn_press()). Deliberately doesn't
-            // bring_to_front() here -- that still only happens as part
-            // of the committed action (maximize) or not at all
-            // (minimize/close), same as before this change, so a
-            // press-then-drag-off-then-release cancel has no visible
-            // side effect at all, not even a restack.
+            // bring_to_front() here -- that happens only as part of the
+            // committed action (maximize), so a press-then-drag-off-
+            // then-release cancel has no visible side effect at all, not
+            // even a restack. (A close raises nothing here either: only
+            // a window with a modal dialog is brought forward by
+            // wm_request_close(), and such a window never reaches this
+            // press -- the blocker check above takes it.)
             if (uui_hit(r.min_x, r.y, r.size, r.size, mx, my)) {
                 title_btn_armed_win = i;
                 damage_title_buttons(i);   // the pressed look arrives
@@ -1246,7 +1248,10 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
     }
 
     // Released -- commit if still over the button, otherwise this was a
-    // press-then-drag-off cancel and nothing happens.
+    // press-then-drag-off cancel and nothing happens. The pressed look is
+    // damaged FIRST: a close may renumber windows[], after which the
+    // armed index names another window.
+    damage_title_buttons(title_btn_armed_win);   // the pressed look leaves
     if (now_over) {
         int idx = title_btn_armed_win;
         if (title_btn_armed_kind == 0) {
@@ -1283,7 +1288,6 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
         }
     }
 
-    damage_title_buttons(title_btn_armed_win);   // the pressed look leaves
     title_btn_armed_win = -1;
     title_btn_armed_kind = -1;
     title_btn_pressed_active = 0;

@@ -642,16 +642,21 @@ void wm_request_close_quiet(int idx) {
     close_window(idx); // shifts windows[] -- no caller may touch idx again
 }
 
+void wm_bring_forward(int idx) {
+    if (idx < 0 || idx >= window_count) return;
+    wm_window_unminimize(idx);
+    wm_ensure_reachable(idx);
+    raise_with_dialogs(idx);
+    redraw_pending = 1;
+}
+
 void wm_request_close(int idx) {
     if (idx < 0 || idx >= window_count) return;
-    if (wm_client_is_client_window(&windows[idx]) && !windows[idx].popup) {
+    if (wm_client_is_client_window(&windows[idx]) && wm_dialog_blocker(idx) >= 0) {
         // Held by open_seq: the raise reorders windows[].
         if (!windows[idx].open_seq) windows[idx].open_seq = wm_next_open_seq();
         uint32_t seq = windows[idx].open_seq;
-        wm_window_unminimize(idx);
-        wm_ensure_reachable(idx);
-        raise_with_dialogs(idx);
-        redraw_pending = 1;
+        wm_bring_forward(idx);
         idx = wm_window_by_seq(seq);
     }
     wm_request_close_quiet(idx);

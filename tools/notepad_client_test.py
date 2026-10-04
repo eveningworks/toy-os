@@ -825,6 +825,7 @@ def markdown_checks(dbg, qmp, tmp, res):
 
 
 SECOND_CLOSE_FILE = "/tmp/np_second_close.txt"
+SECOND_CLOSE_B = "np_second_b.txt"   # tab 2, saved by name into the chooser's folder
 NOTEPAD_SESSION = "/var/lib/notepad/session"
 
 
@@ -888,10 +889,12 @@ def second_close_checks(dbg, res):
         second_close_tab(dbg, res, pids)
         second_close_chooser(dbg, res, pids)
         second_close_brings_forward(dbg, res, pids)
+        end_task_is_quiet(dbg, res, pids)
     finally:
         for pid in pids:
             kill_pid(dbg, pid)
         dbg.send(f"sh rm {SECOND_CLOSE_FILE}")
+        dbg.send(f"sh rm /{SECOND_CLOSE_B}")
 
 
 def _click_ask(dbg, pid, i):
@@ -922,7 +925,15 @@ def second_close_tab(dbg, res, pids):
     key(dbg, "0x0e")                          # Ctrl-N: tab 2
     poll(lambda: tabs_now(dbg) == (2, 1), 6)
     type_text(dbg, "y")
-    ready = poll(lambda: title() == "*untitled" and tabs_now(dbg) == (2, 1), 6)
+    # NAMED, so the session would list it if it were written too early.
+    key(dbg, CTRL_S)
+    poll(lambda: any(w.get("title") == "Save As" for w in windows_of(dbg, pid)), 8)
+    type_text(dbg, SECOND_CLOSE_B)
+    key(dbg, ENTER)
+    poll(lambda: title().endswith(SECOND_CLOSE_B), 8)
+    type_text(dbg, "z")                       # and dirty again, so closing it asks
+    ready = poll(lambda: title().startswith("*") and title().endswith(SECOND_CLOSE_B) and
+                 tabs_now(dbg) == (2, 1), 6)
     key(dbg, "0x17")                          # Ctrl-W: asks about tab 2
     btns = poll(lambda: len(dialog_buttons(dbg)) == 3 and dialog_buttons(dbg), 6)
     res.check("second close: two dirty tabs, and closing the second asks",
@@ -934,15 +945,17 @@ def second_close_tab(dbg, res, pids):
     held = poll(lambda: held_closes(dbg) >= 1, 6)
     res.check("...a window close while it asks is held, not acted on",
               bool(held) and tabs_now(dbg) == (2, 1), f"held {held}, tabs {tabs_now(dbg)}")
-    session = dbg.send(f"sh cat {NOTEPAD_SESSION}")
-    res.check("...and the session is written then, as an accepted close writes it",
-              SECOND_CLOSE_FILE in session, f"`cat` returned {session[:160]!r}")
     _click_ask(dbg, pid, 1)                   # Don't Save
     nxt = poll(lambda: tabs_now(dbg) == (1, 0) and len(dialog_buttons(dbg)) == 3 and
                title().lstrip("*") == SECOND_CLOSE_FILE, 6)
     res.check("...Don't Save discards the tab asked about, and the close goes on to the file",
               bool(nxt), f"tabs {tabs_now(dbg)}, title {title()!r}, "
               f"buttons {len(dialog_buttons(dbg))}")
+    # Written on the answer, AFTER that tab went: the file, never tab 2.
+    session = dbg.send(f"sh cat {NOTEPAD_SESSION}")
+    res.check("...and the session then lists the file, not the tab just closed",
+              SECOND_CLOSE_FILE in session and SECOND_CLOSE_B not in session,
+              f"`cat` returned {session[:200]!r}")
     _click_ask(dbg, pid, 1)                   # Don't Save, for the file too
     gone = poll(lambda: not windows_of(dbg, pid), 6)
     res.check("...and answering that closes the window", bool(gone),
@@ -982,6 +995,42 @@ def second_close_chooser(dbg, res, pids):
     res.check("...a window close while the chooser is up is held: no tab switch, no new ask",
               bool(held) and tabs_now(dbg) == (2, 1) and not dialog_buttons(dbg),
               f"held {held}, tabs {tabs_now(dbg)}, buttons {dialog_buttons(dbg)}")
+
+
+def end_task_is_quiet(dbg, res, pids):
+    """End Task is a BATCH: Notepad with Options open behind a Calculator,
+    `gui endtask` asks both of its windows once each and raises nothing --
+    the Calculator stays in front."""
+    pid = spawn_notepad(dbg)
+    pids.append(pid)
+    for k in ("0xA4", "0x96", "o"):           # F10, Right, o: Edit > Options...
+        dbg.send(f"gui key {k}")
+        dbg.settle(0.3)
+    poll(lambda: any("Notepad Options" in w.get("title", "") for w in windows_of(dbg, pid)), 12)
+    before = {w.get("client_pid") for w in dbg.windows()}
+    dbg.send("gui spawn /bin/wm/apps/calculator")
+    calc = poll(lambda: next((w for w in dbg.windows() if w.get("client_pid") not in before
+                              and w.get("client_pid")), None), SPAWN_TIMEOUT_S)
+    if calc:
+        pids.append(calc["client_pid"])
+    dbg.settle()
+
+    def front():
+        ws = dbg.windows()
+        return max(ws, key=lambda w: w["z"]) if ws else {}
+    ready = calc is not None and front().get("client_pid") == calc["client_pid"] and \
+        len(windows_of(dbg, pid)) == 2
+    res.check("end task: Notepad and its Options behind a Calculator", ready,
+              f"front {front().get('title')!r}, notepad windows "
+              f"{[w['title'] for w in windows_of(dbg, pid)]}")
+    if not ready:
+        return
+    said = dbg.send(f"gui endtask {pid}")
+    dbg.settle()
+    res.check("...End Task asks both of its windows, once each, and raises nothing",
+              "asked 2 window(s)" in said and
+              front().get("client_pid") == calc["client_pid"],
+              f"said {said.strip()[:80]!r}, front {front().get('title')!r}")
 
 
 def second_close_brings_forward(dbg, res, pids):

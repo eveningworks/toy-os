@@ -454,10 +454,7 @@ int crash_notice_handle_click(int mx, int my) {
             for (int k = 0; k < n.nwin; k++) {
                 int w = wm_window_by_seq(n.seq[k]);
                 if (w < 0) continue;
-                wm_window_unminimize(w);
-                wm_ensure_reachable(w);
-                raise_with_dialogs(w);   // its question with it
-                redraw_pending = 1;
+                wm_bring_forward(w);   // its question with it
                 break;
             }
         } else if (b == BTN_FORCE) {

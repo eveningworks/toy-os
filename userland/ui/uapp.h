@@ -318,12 +318,15 @@ struct uapp_desc {
     //
     // **AN APP THAT ASKS ON CLOSE IGNORES A CLOSE WHILE IT IS ASKING**:
     // the compositor may send one twice (Alt+F4 twice, a second Close
-    // all, the Leave page), and a single close has already brought the
-    // question forward. Start with `if (uapp_question_open(a)) return 0;`
+    // all, the Leave page), and a single close has already brought a
+    // WM-visible modal forward. Start with `if (uapp_question_open(a)) return 0;`
     // -- the answer already showing decides. ONE DELIBERATE EXCEPTION:
     // Notepad turns a close under a TAB's prompt into the window's, so
     // that answer carries the close on. Without an on_close the close is
-    // ACCEPTED, question or not -- an Open chooser guards no data.
+    // ACCEPTED -- unless a uui_dialog is open IN the window, which uapp
+    // refuses for it; a separate chooser window guards no data. In-window
+    // prompts are not raised on a refused close: no window-scoped raise
+    // request exists (wm_internal.h, wm_request_close()).
     int (*on_close)(struct uapp *a);
 
     // Called on a cadence; repaints if it returns 1. WITH `tick_ms`
@@ -499,9 +502,12 @@ void uapp_logf_layout(const char *fmt, ...) __attribute__((format(printf, 1, 2))
 void uapp_flush(struct uapp *a);
 
 // Is the app asking something: a MODAL window of its own up (a chooser,
-// an Options dialog), or a uui_dialog in desc.widgets open? What an app
-// that asks on close checks first (see uapp_desc.on_close).
+// an Options dialog), or a uui_dialog open anywhere in its widgets or
+// layout, containers entered? What an app that asks on close checks
+// first (see uapp_desc.on_close). The _inwindow_ half is the uui_dialog
+// alone -- what uapp's own default refuses on.
 int uapp_question_open(struct uapp *a);
+int uapp_inwindow_question_open(struct uapp *a);
 
 void uapp_quit(struct uapp *a, int status);
 

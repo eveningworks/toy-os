@@ -324,6 +324,8 @@ static struct uui_dialog g_ask;
 enum { ASK_SAVE = 1, ASK_DISCARD, ASK_CANCEL, ASK_CLOSE_ALL };
 enum { PEND_NONE = 0, PEND_CLOSE, PEND_CLOSE_TAB };
 static int g_pending;
+static int g_session_on_answer;   // a held window close: write the session on the answer (on_close_cb)
+static void session_save(void);
 static int g_after_save;
 static char g_ask_line[96];
 static const char *g_ask_rows[1];
@@ -1287,6 +1289,7 @@ static void run_pending(struct uapp *a) {
     switch (what) {
     case PEND_CLOSE:
         doc_remove(g_cur);   // a quit is coming; this keeps the walk short
+        if (g_session_on_answer) { g_session_on_answer = 0; session_save(); }
         close_all_step(a);
         break;
     case PEND_CLOSE_TAB:
@@ -2026,17 +2029,19 @@ static void on_open_cb(struct uapp *a) {
 // prompt or chooser, and its answer would then discard or save THAT tab.
 // THE ONE EXCEPTION: under a TAB's close (its prompt, or the Save As
 // that prompt opened) the close becomes the window's, so the answer goes
-// on into close_all_step() -- and the session is written now, as an
-// accepted close writes it, since that path never comes back here.
+// on into close_all_step() -- and the session is written THEN, by
+// run_pending(), once that tab is gone: written now, a tab the user just
+// chose to close would reopen next time.
 static int on_close_cb(struct uapp *a) {
     if (uapp_question_open(a)) {
         if (g_pending == PEND_CLOSE_TAB) {
             g_pending = PEND_CLOSE;
-            session_save();
+            g_session_on_answer = 1;
         }
         ulogf("notepad: close while asking -- pending %d\n", g_pending);
         return 0;
     }
+    g_session_on_answer = 0;   // written here, for every tab
     session_save();
     if (must_confirm_close()) { ask_close_all(a); return 0; }
     if (!any_dirty()) return 1;

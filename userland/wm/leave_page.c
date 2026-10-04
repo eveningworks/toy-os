@@ -448,11 +448,7 @@ static void activate(int id) {
         // is asking is behind the page.
         int idx = close_batch_window(&g_apps, id - C_ROW0);
         leave_page_cancel();
-        if (idx >= 0) {
-            wm_window_unminimize(idx);
-            wm_ensure_reachable(idx);
-            raise_with_dialogs(idx);
-        }
+        if (idx >= 0) wm_bring_forward(idx);
     }
 }
 

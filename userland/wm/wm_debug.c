@@ -1824,6 +1824,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  apps                  the gui_app registry\r\n");
     dbg_out_write(o, "  open <AppName>        open a window directly (no menu clicking)\r\n");
     dbg_out_write(o, "  close <index>         close window <index> from `gui windows`\r\n");
+    dbg_out_write(o, "  endtask PID           End Task: ask PID's windows to close, quietly\r\n");
     dbg_out_write(o, "  move X Y              move the cursor, nothing held (for hover)\r\n");
     dbg_out_write(o, "  warp X Y              PARK the real pointer there (a hover that survives)\r\n");
     dbg_out_write(o, "  click X Y             synthetic press+release at a point\r\n");
@@ -2160,6 +2161,18 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
         // without it that test had to go through a Terminal to say it.
         while (k_isblank(*p)) p++;
         cmd_spawn(o, path, *p ? p : 0);
+        return 1;
+    }
+
+    if (k_strcmp(sub, "endtask") == 0) {
+        // Task Manager's End Task (WIN_REQ_CLOSE_PID), without driving
+        // Task Manager: the same wm_end_task(), so a test sees its rules.
+        int pid;
+        if (!parse_int(next_tok(&p), &pid) || pid <= 0) {
+            dbg_out_write(o, "usage: gui endtask PID\r\n");
+            return 1;
+        }
+        dbg_out_printf(o, "gui: end task pid %d: asked %d window(s)\r\n", pid, wm_end_task(pid));
         return 1;
     }
 

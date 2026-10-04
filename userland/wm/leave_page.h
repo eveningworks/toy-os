@@ -7,7 +7,8 @@
 // focused.
 //
 // **IT ASKS EVERY APP TO CLOSE FIRST**, as Windows, KDE and GNOME do: each
-// client window gets the polite close (wm_request_close), the page waits,
+// client window gets the polite close, quietly (wm_request_close_quiet(),
+// via close_batch.h), the page waits,
 // and an app that is still open after a few seconds -- Notepad asking
 // whether to save -- is listed, with Cancel (back to the desktop, where
 // its question is waiting) or "<action> anyway" (mockup R2). There is no
