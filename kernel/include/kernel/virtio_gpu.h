@@ -65,6 +65,8 @@ void virtio_gpu_flush(int x, int y, int w, int h);
 // allow: count is 3 then, 1 otherwise. flip(i) is SET_SCANOUT to that
 // resource, complete before it returns, so live == the last flip.
 int  virtio_gpu_scanout_count(void);
+// Guest RAM behind the scanouts and the cursor: the device reads it.
+uint64_t virtio_gpu_ram_bytes(void);
 void virtio_gpu_scanout_at(int index, struct display_surface *out);
 int  virtio_gpu_flip(int index);
 int  virtio_gpu_scanout_live(void);

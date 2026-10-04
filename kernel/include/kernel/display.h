@@ -145,6 +145,11 @@ struct display_driver {
     // display_scaling() itself; this is for a change with no mode
     // change. Returns 1 when the hardware took it.
     int  (*set_scaling)(int mode);
+
+    // Optional: the system RAM the driver holds for the screen -- extra
+    // scanouts, a cursor image, a framebuffer that IS guest RAM. Not
+    // VRAM or stolen memory, which the frame allocator never counted.
+    uint64_t (*ram_bytes)(void);
 };
 
 // Called by each driver's own *_init() before display_probe() runs.
@@ -183,6 +188,10 @@ int  display_scanout_count(void);
 void display_scanout_at(int index, struct display_surface *out);
 int  display_flip(int index);
 int  display_scanout_live(void);
+
+// RAM held for the screen: the active driver's ram_bytes() plus gfx.c's
+// console back buffer. Task Manager's "Graphics" row (QUERY_MEMINFO).
+uint64_t display_graphics_bytes(void);
 
 // Which mechanism made the framebuffer write-combining at probe time
 // (an enum paging_wc_result). Worth asking about because PAGING_WC_NONE

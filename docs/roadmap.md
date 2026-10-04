@@ -24,7 +24,6 @@ FIRST, and this is what to do first among things that are all
 buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
-- [ ] Task Manager memory that adds up: private per process, a Kernel row and a Shared row  *(Demand paging & shared memory)*
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
@@ -161,7 +160,7 @@ is the bookkeeping that makes any other kind of mapping possible.
 - [x] ~~`mmap(MAP_ANONYMOUS)` and `munmap` over it~~ DONE 2026-08-28 -- SYS_MMAP/SYS_MUNMAP, `kernel/mm/mmap.c`
 - [x] ~~The fault handler consults the region list instead of one range~~ DONE 2026-08-28 -- `uheap_fault()`'s arena branch
 - [x] ~~A `pmap`-style command showing one process's mappings~~ DONE 2026-08-28 -- `/bin/pmap`, over QUERY_PROCMAP
-- [ ] **NEXT** Task Manager memory that adds up: private per process, a Kernel row and a Shared row
+- [x] ~~Task Manager memory that adds up: private per process, a Kernel row and a Shared row~~ DONE 2026-10-04
 - [ ] Lazy zero-filling: one shared zero page mapped read-only until first write
 - [x] ~~File-backed `mmap`~~ DONE 2026-08-28 -- the fault-in REFUSES inside an FS_OP; see `docs/decisions.md`
 - [ ] Shared read-only text pages between instances of the same binary

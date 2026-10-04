@@ -26,6 +26,7 @@
 #include "ui/uui_widget.h"
 #include "ui/uui_primitives.h"
 #include "ui/uui_layout.h"
+#include "ui/uui_stackbar.h"   // Memory's composition
 #include "ui/uui_label.h"
 #include "ui/uui_chart.h"
 #include "ui/uui_table.h"
@@ -284,6 +285,24 @@ static const struct uui_widget_ops devlist_ops = {
 
 #define STATS 12
 static struct uui_label g_title, g_subtitle, g_spacer;
+// Memory's composition: four rows summing to In use (lib/umemcomp.h).
+static struct uui_stackbar g_comp;
+enum { COMP_APPS, COMP_SHARED, COMP_GRAPHICS, COMP_KERNEL };
+
+static void fill_comp(void) {
+    // From the theme on every fill, so a theme change follows.
+    g_comp.seg[COMP_APPS].color = UTHEME_ACCENT;
+    g_comp.seg[COMP_SHARED].color = ugfx_blend(UTHEME_WHITE, UTHEME_ACCENT, 110);
+    g_comp.seg[COMP_GRAPHICS].color = utheme_action(UTHEME_ACT_ARRANGE);
+    g_comp.seg[COMP_KERNEL].color = ugfx_blend(UTHEME_TEXT, UTHEME_WHITE, 70);
+    const unsigned long long v[4] = { g_mem_comp.apps, g_mem_comp.shared,
+                                      g_mem_comp.graphics, g_mem_comp.kernel };
+    for (int i = 0; i < 4; i++) {
+        char t[16];
+        human_size_iec(t, sizeof t, v[i]);
+        uui_stackbar_set(&g_comp, i, v[i], t);
+    }
+}
 static char g_title_text[32], g_subtitle_text[64];
 static struct uui_label g_key[STATS], g_val[STATS];
 static char g_key_text[STATS][24], g_val_text[STATS][48];
@@ -396,6 +415,7 @@ static void fill_stats(void) {
         strlcpy(g_title_text, "Memory", sizeof g_title_text);
         human_size_iec(a, sizeof a, g_mem_total);
         snprintf(g_subtitle_text, sizeof g_subtitle_text, "%s usable", a);
+        fill_comp();
         human_size_iec(a, sizeof a, g_mem_used);
         add_stat("In use", "%s", a);
         human_size_iec(a, sizeof a, g_mem_total - g_mem_used);
@@ -487,7 +507,7 @@ static struct uui_item HEAD_ITEMS[3];
 static struct uui_layout HEAD;
 static struct uui_item STAT_ITEMS[STATS * 2];
 static struct uui_layout STATS_GRID;
-static struct uui_item SIDE_ITEMS[4];
+static struct uui_item SIDE_ITEMS[5];
 static struct uui_layout SIDE;
 static struct uui_item PAGE_ITEMS[2];
 static struct uui_layout PAGE;
@@ -497,8 +517,9 @@ static void select_dev(int i) {
     if (i < 0 || i >= g_ndev) return;
     g_sel = i;
     SIDE_ITEMS[1].widget = &g_dev[i].chart;
-    SIDE_ITEMS[3].hidden = g_dev[i].kind != DEV_NET;
-    if (!SIDE_ITEMS[3].hidden) read_conns();
+    SIDE_ITEMS[2].hidden = g_dev[i].kind != DEV_MEM;
+    SIDE_ITEMS[4].hidden = g_dev[i].kind != DEV_NET;
+    if (!SIDE_ITEMS[4].hidden) read_conns();
     fill_stats();
     // A different chart and a shown/hidden log: lay out NOW, or both
     // draw at the old (or no) geometry until the next tick.
@@ -579,12 +600,20 @@ void tm_perf_init(struct tm_page *page) {
     SIDE_ITEMS[0] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &HEAD, .flags = UUI_FILL_W };
     SIDE_ITEMS[1] = (struct uui_item){ .ops = &uui_chart_ops, .widget = &g_dev[0].chart,
                                         .id = ID_CHART, .name = "perfchart", .flags = UUI_FILL_W };
-    SIDE_ITEMS[2] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &STATS_GRID,
+    uui_stackbar_init(&g_comp, 2);
+    uui_stackbar_add(&g_comp, "Apps and services", 0);
+    uui_stackbar_add(&g_comp, "Shared (window buffers)", 0);
+    uui_stackbar_add(&g_comp, "Graphics", 0);
+    uui_stackbar_add(&g_comp, "Kernel", 0);
+    SIDE_ITEMS[2] = (struct uui_item){ .ops = &uui_stackbar_ops, .widget = &g_comp,
+                                        .name = "memcomp", .flags = UUI_FILL_W, .hidden = 1 };
+    SIDE_ITEMS[3] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &STATS_GRID,
                                         .name = "perfstats", .flags = UUI_FILL_W };
-    SIDE_ITEMS[3] = (struct uui_item){ .ops = &uui_table_ops, .widget = &g_conntable,
+    SIDE_ITEMS[4] = (struct uui_item){ .ops = &uui_table_ops, .widget = &g_conntable,
                                         .id = ID_CONNS, .name = "connlog",
                                         .flags = UUI_FILL_W | UUI_FILL_H, .hidden = 1 };
-    SIDE = (struct uui_layout){ .dir = UUI_COLUMN, .items = SIDE_ITEMS, .count = 4 };
+    SIDE = (struct uui_layout){ .dir = UUI_COLUMN, .items = SIDE_ITEMS,
+                                .count = (int)(sizeof SIDE_ITEMS / sizeof SIDE_ITEMS[0]) };
 
     PAGE_ITEMS[0] = (struct uui_item){ .ops = &devlist_ops, .widget = &g_list, .id = ID_DEVICES,
                                         .name = "devices", .flags = UUI_FILL_H };

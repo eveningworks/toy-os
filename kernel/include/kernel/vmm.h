@@ -146,6 +146,14 @@ struct vmm_audit {
     uint64_t dangling;        // present mappings of a FREE frame -- the violation
     uint64_t first_bad_va;    // where the first one was, for reporting
     uint64_t first_bad_frame;
+    // What the space costs, for Task Manager (QUERY_PROCMEM):
+    // PRIVATE is its own managed frames, a copy-on-write one divided by
+    // how many spaces share it (Linux's PSS), so summed over every
+    // process each frame counts once. SHARED is managed frames mapped
+    // borrowed -- shm, the image cache, scanouts -- whose owner is
+    // elsewhere. MMIO and stolen memory are in neither.
+    uint64_t private_bytes;
+    uint64_t shared_bytes;
 };
 
 // Walks one address space's user half and fills `out`; returns the

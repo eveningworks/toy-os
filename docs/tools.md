@@ -4439,9 +4439,19 @@ window without going through it will find its layout polls timing out.
   Confirm, so a broken build cannot kill the desktop); "Go to service"
   must land on the service; and a remembered 600 px size must leave
   Name its room and Force Quit inside the window.
+  **Memory that adds up**: `meminfo`'s four kinds must sum to its
+  "used" (within 2%; true by construction, so it guards the printing,
+  not the accounting -- the `mm` KTEST on private/shared does that);
+  Processes must list the Kernel, Graphics and Shared memory rows, a
+  kind row must select and Force Quit must do nothing to it; the PID
+  sort must keep the kind rows LAST in both directions; and the
+  Performance page's composition bar must fill edge to edge in
+  `meminfo`'s proportions, read again just before (each part within
+  4 px), from the bar's own `memcomp.seg` describe lines.
   Its resize check asserts the
   table grew by ROUGHLY WHAT THE WINDOW GREW BY, not merely that it
-  changed -- the bug it was written after grew the width correctly and
+  changed -- by as much as the screen leaves room for, since the window
+  opens wider than it did -- the bug it was written after grew the width correctly and
   the height by 16 px against 300, so "it changed" was satisfied. On its
   first run it found a pre-existing bug in `uui_listbox` (see the
   widget-`hit` trap in the widget section above).

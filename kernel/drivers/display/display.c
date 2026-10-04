@@ -7,6 +7,7 @@
 #include "string.h"    // k_strstr, k_isdigit
 #include "driver.h" // driver_bound() -- which driver owns the screen
 #include "edid.h"
+#include "gfx.h"     // gfx_back_buffer_bytes() -- the Graphics row
 
 // driver-none: the display class registry itself
 
@@ -364,4 +365,10 @@ int display_set_scaling(int mode) {
 int display_scanout_live(void) {
     if (!display_has(DISPLAY_CAP_FLIP)) return 0;
     return g_active->scanout_live();
+}
+
+uint64_t display_graphics_bytes(void) {
+    uint64_t n = gfx_back_buffer_bytes();
+    if (g_active && g_active->ram_bytes) n += g_active->ram_bytes();
+    return n;
 }

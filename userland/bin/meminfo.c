@@ -15,6 +15,7 @@
 #include <string.h>
 #include <locale.h>
 #include "lib/human.h"
+#include "lib/umemcomp.h"   // the In use, by kind rows
 
 // --list walks the registry instead -- the generic path, and the reason
 // class 0 exists. Worth having in the FIRST consumer rather than a later
@@ -215,5 +216,18 @@ int main(int argc, char **argv) {
     human_size(u, sizeof u, m.heap_used_bytes);
     snprintf(line, sizeof line, "Kernel heap\n  used:  %s of %s\n", u, t);
     sys_print(line);
+
+    // The four rows Task Manager draws, summing to `used` above.
+    struct umem_comp c;
+    if (umem_comp_read(&c)) {
+        static const char *const label[4] = { "apps:", "shared:", "graphics:", "kernel:" };
+        const uint64_t val[4] = { c.apps, c.shared, c.graphics, c.kernel };
+        sys_print("In use, by kind\n");
+        for (int i = 0; i < 4; i++) {
+            human_size(u, sizeof u, val[i]);
+            snprintf(line, sizeof line, "  %-10s %s\n", label[i], u);
+            sys_print(line);
+        }
+    }
     return 0;
 }

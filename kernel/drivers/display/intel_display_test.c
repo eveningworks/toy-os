@@ -102,6 +102,10 @@ KTEST("intel-display", "a firmware plane matches only in its own generation's en
     KTEST_ASSERT_EQ(intel_display_plane_matches(9, 0x84000400u, 160, 10240), 0);
     KTEST_ASSERT_EQ(intel_display_plane_matches(9, 0x04000000u, 160, 10240), 0);
     KTEST_ASSERT_EQ(intel_display_plane_matches(9, 0x82000000u, 160, 10240), 0);
+    // RGBX order (red and blue swapped) and a rotated plane are refused:
+    // claiming either would draw every frame wrong.
+    KTEST_ASSERT_EQ(intel_display_plane_matches(9, 0x84100000u, 160, 10240), 0);
+    KTEST_ASSERT_EQ(intel_display_plane_matches(9, 0x84000002u, 160, 10240), 0);
     KTEST_ASSERT_EQ(intel_display_plane_matches(7, 0x98000000u, 7680, 7680), 0);
 }
 
@@ -109,6 +113,14 @@ KTEST("intel-display", "a firmware plane matches only in its own generation's en
 
 // The desktop's DPLL1 as the firmware left it for 2560x1440 over HDMI:
 // DCO 402.5 x 24 MHz = 9660 MHz, P2 Q2 K2, / 5 = 241.5 MHz (CVT-RB).
+KTEST("intel-display", "a pixel clock agrees with the EDID's within 1%, either side") {
+    KTEST_ASSERT_EQ(intel_display_clock_agrees(241500, 241500), 1);
+    KTEST_ASSERT_EQ(intel_display_clock_agrees(243900, 241500), 1);   // +0.99%
+    KTEST_ASSERT_EQ(intel_display_clock_agrees(239100, 241500), 1);   // -0.99%
+    KTEST_ASSERT_EQ(intel_display_clock_agrees(244000, 241500), 0);
+    KTEST_ASSERT_EQ(intel_display_clock_agrees(241500, 0), 0);        // no EDID clock
+}
+
 KTEST("intel-display", "a gen9 HDMI DPLL decodes to its pixel clock") {
     KTEST_ASSERT_EQ(intel_display_gen9_hdmi_khz(0x80800192u, 0x2a4u), 241500u);
     KTEST_ASSERT_EQ(intel_display_gen9_hdmi_khz(0x00800192u, 0x2a4u), 0u);   // disabled

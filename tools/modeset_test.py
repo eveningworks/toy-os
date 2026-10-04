@@ -112,6 +112,9 @@ def main():
     return report()
 
 
+ORIG_W = [0]   # the boot mode's width, for fills()' outside-the-old-mode test
+
+
 def maximize(dbg, win):
     """Maximize by LABEL from the title-bar context menu -- hires_test's
     helper, so nothing here measures the chrome. True when offered."""
@@ -136,13 +139,21 @@ def fills(dbg, qmp, shot, name, title, TARGET):
           str({k: m.get(k) for k in ("x", "y", "w", "h")}) if m else "no window")
     qmp.stable_pixels(shot(f"mode_{name}.png"))
     im = Image.open(shot(f"mode_{name}.png")).convert("RGB")
-    far = im.getpixel((TARGET[0] - 20, TARGET[1] - tbh - 20))
-    bar = im.getpixel((TARGET[0] // 2, TARGET[1] - tbh // 2))
-    check(f"{name}: the far corner, outside the old mode, carries the window, not the taskbar",
-          far != bar, f"corner {far} taskbar {bar}")
+    # FAR RIGHT, mid-height: outside the old mode, so a window wearing new
+    # chrome around a stale buffer shows WALLPAPER there. It must match the
+    # window's own ground on the same row, a quarter in -- not merely differ
+    # from the taskbar, which wallpaper does too.
+    if m:
+        c = m["content"]
+        y = c["y"] + c["h"] // 2
+        far = im.getpixel((c["x"] + c["w"] - 20, y))
+        ref = im.getpixel((c["x"] + c["w"] // 4, y))
+        check(f"{name}: the far right, outside the old mode, carries the client's pixels",
+              c["x"] + c["w"] - 20 >= ORIG_W[0] and far == ref, f"far {far} ref {ref} at y {y}")
 
 
 def run(dbg, qmp, shot, orig, TARGET):
+    ORIG_W[0] = orig[0]
 
     # A window MAXIMIZED BEFORE the change must follow it. The WM resizes
     # it before forwarding WIN_EV_SCREEN, so a client that bounded its

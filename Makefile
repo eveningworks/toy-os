@@ -2542,10 +2542,10 @@ run: $(RUN_PREREQ)
 #   existed `std` had none, so the flag was inert on the default -- and
 #   the default is what every headless test boots.
 #
-#   A guest bigger than 1920x1080 gets a bigger DESKTOP and not a bigger
-#   WINDOW: WIN_CLIENT_MAX_W/H (kernel/include/abi/win_proto.h) caps a
-#   client's buffer at 1080p, because the window server allocates those
-#   pixels contiguously. See docs/roadmap.md's growable client buffers.
+#   A window can fill any screen the display layer drives: uapp bounds a
+#   client's buffer by the screen, and WIN_CLIENT_MAX_W/H
+#   (kernel/include/abi/win_proto.h) is only the ceiling, equal to the
+#   display's.
 #
 # VGA=vmware -- the VMware SVGA II adapter, which has a HARDWARE MOUSE
 #   CURSOR: kernel/drivers/vmsvga.c detects it, takes the display over

@@ -546,6 +546,12 @@ struct query_fsstat {
 // LIST of slices in order, QUERY_CMDLINE_PART bytes each; concatenate
 // them. No records means GRUB passed none, which is a real answer.
 #define QUERY_CMDLINE 49
+// What each live PROCESS costs -- private and shared memory, from a walk
+// of its page tables (kernel/proc/procmem_query.c). A LIST, one record
+// per process (threads are their leader's), pid in the record. Asked by
+// Task Manager and meminfo only: the walk is why it is not a proc_info
+// field, which every pid lookup in the kernel reads.
+#define QUERY_PROCMEM 50
 
 #define QUERY_REMOTE_SESSION  0 // a session opened or closed
 #define QUERY_REMOTE_COMMAND  1 // a command line the remote shell ran
@@ -598,6 +604,17 @@ struct query_syscall_stall {
 
 _Static_assert(sizeof(struct query_syscall_stall) <= 256,
                "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
+
+struct query_procmem {
+    int32_t  pid;
+    int32_t  pad;
+    // PRIVATE: its own frames, a copy-on-write one divided by how many
+    // share it (Linux's PSS), so summed over processes each frame counts
+    // once -- Task Manager's "Apps" row. SHARED: frames it maps that
+    // another owner holds (shm, the image cache, scanouts); not summed.
+    uint64_t private_bytes;
+    uint64_t shared_bytes;
+};
 
 struct query_procpath {
     int32_t pid;
@@ -821,6 +838,13 @@ struct query_meminfo {
     // Zero on a machine with no memory above 4 GiB. APPENDED, same
     // rule as the pair above.
     uint64_t frame_reserve_dma32;
+    // Two of Task Manager's composition rows, APPENDED: every shm
+    // object's frames (window buffers; allocated at creation, counted
+    // once however many processes map them), and the RAM held for the
+    // screen (display_graphics_bytes). Apps is the sum of every
+    // QUERY_PROCMEM record's private_bytes; Kernel is the rest.
+    uint64_t shm_bytes;
+    uint64_t graphics_bytes;
 };
 
 // QUERY_FSINFO's record.

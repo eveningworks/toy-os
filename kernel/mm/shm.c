@@ -186,6 +186,13 @@ int shm_creator(int idx) {
     return g_obj[idx].creator;
 }
 
+uint64_t shm_total_bytes(void) {
+    uint64_t pages = 0;
+    for (int i = 0; i < SHM_MAX; i++)
+        if (g_obj[i].refs) pages += g_obj[i].npages;
+    return pages * 4096;
+}
+
 uint64_t shm_npages(int idx) {
     if (idx < 0 || idx >= SHM_MAX) return 0;
     return g_obj[idx].refs ? g_obj[idx].npages : 0;

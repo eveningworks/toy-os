@@ -75,6 +75,11 @@ uint32_t intel_display_dotclock_khz(uint32_t port_khz, uint32_t link_m, uint32_t
     return (uint32_t)(((uint64_t)port_khz * link_m + link_n / 2) / link_n);
 }
 
+int intel_display_clock_agrees(uint32_t hw_khz, uint32_t edid_khz) {
+    uint32_t d = hw_khz > edid_khz ? hw_khz - edid_khz : edid_khz - hw_khz;
+    return edid_khz && d * 100 <= edid_khz;
+}
+
 int intel_display_timing_same(const struct edid_timing *a, const struct edid_timing *b) {
     return a->hactive == b->hactive && a->hblank == b->hblank &&
            a->hsync_off == b->hsync_off && a->hsync_w == b->hsync_w &&
@@ -181,8 +186,7 @@ void intel_readout_log(const struct display_edid *edid) {
     }
     const struct edid_timing *e = &edid->timing[0];
     int same = intel_display_timing_same(&hw, e);
-    uint32_t dk = hw.pixel_khz > e->pixel_khz ? hw.pixel_khz - e->pixel_khz : e->pixel_khz - hw.pixel_khz;
-    int clock_ok = e->pixel_khz && dk * 100 <= e->pixel_khz;   // within 1%
+    int clock_ok = intel_display_clock_agrees(hw.pixel_khz, e->pixel_khz);
     klog_printf("intel-display: firmware timing %s EDID timing 0, pixel clock %s (%u vs %u kHz)\n",
                 same ? "MATCHES" : "DIFFERS FROM", clock_ok ? "agrees" : "DISAGREES",
                 hw.pixel_khz, e->pixel_khz);

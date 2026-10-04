@@ -172,6 +172,8 @@ int gfx_height(void);
 uint64_t gfx_framebuffer_phys(void);
 uint32_t gfx_framebuffer_pitch(void);
 uint32_t gfx_framebuffer_bpp(void);
+// The console's back buffer, in bytes of RAM (0 without one).
+uint64_t gfx_back_buffer_bytes(void);
 
 // Pack 8-bit r/g/b into whatever pixel format the framebuffer actually uses.
 uint32_t gfx_rgb(uint8_t r, uint8_t g, uint8_t b);

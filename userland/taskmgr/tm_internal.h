@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include "rt/sys.h"
+#include "lib/umemcomp.h"
 
 struct uapp;
 struct uui_item;
@@ -38,7 +39,7 @@ struct tm_proc {
     unsigned state, wait;     // PROC_STATE_*, PROC_WAIT_*
     int threads;              // 1 + the threads folded into it
     unsigned long long cpu_ns;
-    unsigned long long mem_bytes;
+    unsigned long long private_bytes, shared_bytes;   // QUERY_PROCMEM's
     unsigned cpu_pm;          // per mille of the CPU over the last tick
     int group;                // TM_GROUP_*
     int app;                  // index into the desktop entries, or -1
@@ -54,6 +55,7 @@ extern int g_nproc;
 extern int g_desktop_pid;          // the compositor's pid, or 0
 extern unsigned g_cpu_pm;          // the whole machine, per mille
 extern unsigned long long g_mem_used, g_mem_total;
+extern struct umem_comp g_mem_comp;  // where g_mem_used is, in four rows
 extern int g_threads;              // every thread, the processes' included
 
 int tm_proc_row(int pid);          // g_proc index of `pid`, or -1

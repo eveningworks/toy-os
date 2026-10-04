@@ -141,6 +141,7 @@ static struct display_driver virtio_gpu_display = {
     .mode_at = virtio_drv_mode_at,
     .set_mode = virtio_drv_set_mode,
     .read_edid = virtio_drv_read_edid,
+    .ram_bytes = virtio_gpu_ram_bytes,
 };
 
 void virtio_gpu_display_register(void) {

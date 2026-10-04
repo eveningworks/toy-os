@@ -465,6 +465,12 @@ int virtio_gpu_set_mode(uint32_t w, uint32_t h, struct display_surface *out) {
 
 int virtio_gpu_scanout_count(void) { return g_res_id ? 1 + g_extra : 0; }
 
+uint64_t virtio_gpu_ram_bytes(void) {
+    uint64_t pages = g_res_id ? g_fb_frames * (uint64_t)(1 + g_extra) : 0;
+    if (g_cursor_phys) pages += (GPU_CURSOR_BYTES + 4095) / 4096;
+    return pages * 4096;
+}
+
 static uint32_t resource_at(int index) {
     return (index >= 1 && index <= g_extra) ? g_res_extra[index - 1] : g_res_id;
 }

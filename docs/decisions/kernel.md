@@ -597,6 +597,12 @@ input routing), and they meet at a registered `struct win_server_ops`
 
 ## A window's pixels are a NAMELESS shared-memory object
 
+**Superseded (stages 5a/5b, 2026-09-08):** a window buffer is now a
+NAMED object the CLIENT creates (`WIN_BUF_NAME_FMT`, abi/win_proto.h),
+safe because an object belongs to its creator unless granted
+(`SHM_PUBLIC`, abi/syscall_abi.h); `shm_create_anon()` has no callers
+left. The fragmentation argument below still holds.
+
 `create_window()` took its frames from `pmm_alloc_contiguous()`. Nothing
 needed them adjacent -- the client's mapping and the compositor's are
 both built a page at a time -- and the demand was itself the failure
@@ -8927,3 +8933,50 @@ asks for the same address first (INIT-REBOOT).
 read half and a write half moves as one piece, so `ifconfig`'s listing
 became `netctl status` and its address-setting `netctl address`, and its
 page went the same day.
+
+## Task Manager's memory is a page-table walk on request, not a counter kept at map time
+
+Task Manager's per-process figure was `mem_bytes`, a count kept as
+pages are mapped: every present user PTE, whoever owns the frame. That
+counted a window buffer in its app AND in the compositor, the scanouts
+in the compositor, and the kernel in nobody, so the rows summed to
+neither the machine's "in use" nor anything else.
+
+**What real systems do.** Windows' Task Manager shows the PRIVATE
+working set, computed by the memory manager from its page lists. Linux
+keeps RSS as counters (`MM_FILEPAGES`, `MM_ANONPAGES`, `MM_SHMEMPAGES`)
+but computes PSS -- a shared page divided by its mappers -- only on
+request, by walking the page tables (`/proc/<pid>/smaps_rollup`),
+because a page's share changes whenever ANOTHER process maps or unmaps
+it, which no counter in this process sees.
+
+**toy-os does Linux's PSS walk.** `vmm_audit_space()` already walked a
+space for `meminfo --audit`; it now also sums `private_bytes` (owned
+managed frames, a copy-on-write one as 4096 / refs) and `shared_bytes`
+(borrowed managed frames). Its own fact, `QUERY_PROCMEM`, runs it per
+process under the preemption guard, which on a uniprocessor kernel is
+what keeps the owner from editing the tables mid-walk. NOT a
+`proc_info` field: `scheduler_proc_info()` is read by signal delivery,
+the connection log and every pid lookup, none of which should pay a
+walk with preemption off, and `SYS_PROC_INFO` copies a fixed size with
+no length from the caller, so growing its struct would overrun an
+older binary's buffer. A query record carries the caller's size. The obvious alternative, a
+private counter beside `mem_bytes`, cannot be right: fork raises a
+frame's refcount in BOTH spaces without touching the parent's mapping
+count, and a COW break lowers it from the other side. PSS is chosen
+over "private = refs 1 only" because it makes the column SUM -- each
+frame once over all processes -- which is the property the rows exist
+for.
+
+**The machine's rows are the walk's sum plus two facts and a
+remainder.** Apps is the sum of `private_bytes`; Shared is every shm
+object's frames (allocated at creation, so counted whether or not
+faulted in); Graphics is what the display driver says it holds in RAM
+(`display_driver.ram_bytes`) plus the console's back buffer; Kernel is
+`used` minus the three. A remainder rather than a count because the
+frame allocator has no owner tags and adding them to every allocation
+site is a much larger job; the cost is that Kernel silently absorbs any
+category the others miss (the /lib image cache and the block cache are
+in it on purpose, as Linux counts buff/cache apart from processes). The
+walk costs a few microseconds per process per Task Manager refresh;
+`proc_info.mem_bytes` stays, unchanged, for `ps`.

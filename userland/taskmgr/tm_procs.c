@@ -63,20 +63,53 @@ static const char *const VIEW_NAMES[] = { "Grouped", "Tree", "List" };
 static int *g_rows;   // g_proc index per table row; g_proc_cap of them
 static int g_nrows;
 static int g_group_count[TM_GROUPS];
-static int g_sel_pid;              // the selection, by pid; 0 = none
+static int g_sel_pid;              // the selection, by pid; 0 = none, < 0 a kind row
 static int g_view = VIEW_GROUPED;
 
 // Folded parents, by pid, for the same reason the selection is a pid.
 static int *g_folded;   // g_proc_cap of them
 static int g_nfolded;
 
+// THE KIND ROWS: what no process owns -- the kernel, the screen's
+// buffers and shared memory -- as rows under System, so the Private
+// column sums to the memory in use (macOS's kernel_task row; Windows'
+// System process). A NEGATIVE pid and a negative g_rows entry name one,
+// so nothing that acts on a pid can reach it: every verb, the details
+// pane and the trace charts check `pid <= 0` first.
+enum { KIND_KERNEL, KIND_GRAPHICS, KIND_SHARED, KINDS };
+static struct tm_proc g_kind[KINDS];
+static const char *const KIND_NAME[KINDS] = { "Kernel", "Graphics", "Shared memory" };
+// The Status cell's (short enough for its column) and the details pane's.
+static const char *const KIND_NOTE[KINDS] = { "drivers and caches", "screen buffers", "window buffers" };
+static const char *const KIND_DETAIL[KINDS] = {
+    "heap, page tables, drivers, caches", "scanouts and the console's back buffer",
+    "shm objects, each counted once",
+};
+
+static void fill_kinds(void) {
+    const unsigned long long bytes[KINDS] = { g_mem_comp.kernel, g_mem_comp.graphics,
+                                             g_mem_comp.shared };
+    for (int k = 0; k < KINDS; k++) {
+        struct tm_proc *p = &g_kind[k];
+        memset(p, 0, sizeof *p);
+        p->pid = -1 - k;
+        p->group = TM_GROUP_SYSTEM;
+        p->app = -1;
+        p->private_bytes = bytes[k];
+        strlcpy(p->name, KIND_NAME[k], sizeof p->name);
+        strlcpy(p->title, KIND_NAME[k], sizeof p->title);
+    }
+}
+
 static struct tm_proc *row_proc(int row) {
-    return (row >= 0 && row < g_nrows) ? &g_proc[g_rows[row]] : 0;
+    if (row < 0 || row >= g_nrows) return 0;
+    int i = g_rows[row];
+    return i < 0 ? &g_kind[-1 - i] : &g_proc[i];
 }
 
 static int row_of_pid(int pid) {
     for (int r = 0; r < g_nrows; r++)
-        if (g_proc[g_rows[r]].pid == pid) return r;
+        if (row_proc(r)->pid == pid) return r;
     return -1;
 }
 
@@ -93,7 +126,7 @@ static void toggle_fold(int pid) {
 
 // --- the table ----------------------------------------------------------
 
-enum { COL_NAME = 0, COL_PID, COL_STATUS, COL_CPU, COL_MEM };
+enum { COL_NAME = 0, COL_PID, COL_STATUS, COL_CPU, COL_PRIVATE, COL_SHARED };
 // The machine's totals are the status bar's, not the headers': a title
 // that grows a digit when the load does is clipped by the sort arrow.
 static const struct uui_table_column COLUMNS[] = {
@@ -101,7 +134,10 @@ static const struct uui_table_column COLUMNS[] = {
     { "PID",    6, UUI_TALIGN_RIGHT },
     { "Status", 18, UUI_TALIGN_LEFT },
     { "CPU",    7, UUI_TALIGN_RIGHT },
-    { "Memory", 10, UUI_TALIGN_RIGHT },
+    // PRIVATE sums to the memory in use; SHARED is what it maps that
+    // another owner holds (abi/proc_info.h), so it is not summed.
+    { "Private", 10, UUI_TALIGN_RIGHT },
+    { "Shared", 10, UUI_TALIGN_RIGHT },
 };
 #define COL_COUNT ((int)(sizeof COLUMNS / sizeof COLUMNS[0]))
 
@@ -112,6 +148,12 @@ static void cell(void *ctx, int row, int col, char *out, int cap) {
     const struct tm_proc *p = row_proc(row);
     out[0] = '\0';
     if (!p) return;
+    if (p->pid <= 0) {   // a kind row: a name, a note and an amount
+        if (col == COL_NAME) strlcpy(out, p->title, (size_t)cap);
+        else if (col == COL_STATUS) strlcpy(out, KIND_NOTE[-1 - p->pid], (size_t)cap);
+        else if (col == COL_PRIVATE) human_size_iec(out, cap, p->private_bytes);
+        return;
+    }
     switch (col) {
     case COL_NAME:   strlcpy(out, p->title[0] ? p->title : "(unnamed)", (size_t)cap); break;
     case COL_PID:    snprintf(out, (size_t)cap, "%d", p->pid); break;
@@ -123,7 +165,8 @@ static void cell(void *ctx, int row, int col, char *out, int cap) {
         else snprintf(out, (size_t)cap, "%u%%", p->cpu_pm / 10);
         unum_localize(out, (unsigned long)cap, 0);
         break;
-    case COL_MEM:    human_size_iec(out, cap, p->mem_bytes); break;
+    case COL_PRIVATE:    human_size_iec(out, cap, p->private_bytes); break;
+    case COL_SHARED: human_size_iec(out, cap, p->shared_bytes); break;
     default: break;
     }
 }
@@ -132,16 +175,26 @@ static void cell(void *ctx, int row, int col, char *out, int cap) {
 static int compare_rows(void *ctx, int a, int b, int col) {
     (void)ctx;
     const struct tm_proc *x = row_proc(a), *y = row_proc(b);
+    // KIND ROWS SORT LAST, in a fixed order, whatever the column or
+    // direction: the table multiplies by sort_dir, so this does first.
+    if (x->pid <= 0 || y->pid <= 0) {
+        int kx = x->pid <= 0 ? -x->pid : 0, ky = y->pid <= 0 ? -y->pid : 0;
+        int c = (kx && ky) ? kx - ky : kx ? 1 : -1;
+        return c * g_table.sort_dir;
+    }
     switch (col) {
     case COL_NAME:   return strcasecmp(x->title, y->title);
     case COL_PID:    return x->pid - y->pid;
     case COL_STATUS: return strcmp(tm_status_text(x), tm_status_text(y));
     case COL_CPU:    return (int)x->cpu_pm - (int)y->cpu_pm;
-    case COL_MEM:
+    case COL_PRIVATE:
         // NOT a subtraction: a difference that does not fit an int makes
         // the order depend on how far apart two values happen to be.
-        if (x->mem_bytes < y->mem_bytes) return -1;
-        return x->mem_bytes > y->mem_bytes ? 1 : 0;
+        if (x->private_bytes < y->private_bytes) return -1;
+        return x->private_bytes > y->private_bytes ? 1 : 0;
+    case COL_SHARED:
+        if (x->shared_bytes < y->shared_bytes) return -1;
+        return x->shared_bytes > y->shared_bytes ? 1 : 0;
     default:         return 0;
     }
 }
@@ -173,8 +226,8 @@ static int heat_of(void *ctx, int row, int col) {
         unsigned pm = p->cpu_pm;
         return pm < 5 ? 0 : pm < 50 ? 60 : pm < 150 ? 120 : pm < 400 ? 180 : 255;
     }
-    if (col == COL_MEM && g_mem_total) {
-        unsigned long long pm = p->mem_bytes * 1000ULL / g_mem_total;
+    if (col == COL_PRIVATE && g_mem_total) {
+        unsigned long long pm = p->private_bytes * 1000ULL / g_mem_total;
         return pm < 2 ? 0 : pm < 10 ? 60 : pm < 30 ? 120 : pm < 100 ? 180 : 255;
     }
     return 0;
@@ -208,20 +261,21 @@ static void set_labels(void) {
     // Stopping the desktop, init or this window would leave nothing on
     // screen that can continue it.
     int self = p && (p->pid == (int)sys_getpid() || p->pid == g_desktop_pid || p->pid == 1);
-    g_btn_stop.disabled  = !p || self;
-    g_btn_close.disabled = !p;
-    g_btn_kill.disabled  = !p;
+    int kind = p && p->pid <= 0;
+    g_btn_stop.disabled  = !p || self || kind;
+    g_btn_close.disabled = !p || kind;
+    g_btn_kill.disabled  = !p || kind;
 }
 
 // --- the details pane ------------------------------------------------------
 
-#define DETAIL_ROWS 8
+#define DETAIL_ROWS 9
 static struct uui_label g_d_title, g_d_sub;
 static struct uui_label g_d_key[DETAIL_ROWS], g_d_val[DETAIL_ROWS];
 static char g_d_title_text[TM_NAME_MAX], g_d_sub_text[48];
 static char g_d_val_text[DETAIL_ROWS][TM_PATH_MAX];
 static const char *const DETAIL_KEYS[DETAIL_ROWS] = {
-    "Path", "Parent", "Group", "Threads", "Status", "CPU time", "Memory", "Service",
+    "Path", "Parent", "Group", "Threads", "Status", "CPU time", "Private", "Shared", "Service",
 };
 static struct uui_chart g_pcpu, g_pmem;
 static int g_tracked;   // the pid the two charts are for
@@ -263,6 +317,12 @@ static void fill_details(void) {
         return;
     }
     strlcpy(g_d_title_text, p->title, sizeof g_d_title_text);
+    if (p->pid <= 0) {
+        strlcpy(g_d_sub_text, KIND_DETAIL[-1 - p->pid], sizeof g_d_sub_text);
+        for (int i = 0; i < DETAIL_ROWS; i++) strlcpy(g_d_val_text[i], "-", TM_PATH_MAX);
+        human_size_iec(g_d_val_text[6], TM_PATH_MAX, p->private_bytes);
+        return;
+    }
     snprintf(g_d_sub_text, sizeof g_d_sub_text, "%s, pid %d", p->name, p->pid);
     strlcpy(g_d_val_text[0], p->path[0] ? p->path : "-", TM_PATH_MAX);
     int pr = tm_proc_row(p->ppid);
@@ -274,9 +334,10 @@ static void fill_details(void) {
     unsigned long long ms = p->cpu_ns / 1000000ULL;
     snprintf(g_d_val_text[5], TM_PATH_MAX, "%llu.%02llu s", ms / 1000, (ms % 1000) / 10);
     unum_localize(g_d_val_text[5], TM_PATH_MAX, 0);
-    human_size_iec(g_d_val_text[6], TM_PATH_MAX, p->mem_bytes);
+    human_size_iec(g_d_val_text[6], TM_PATH_MAX, p->private_bytes);
+    human_size_iec(g_d_val_text[7], TM_PATH_MAX, p->shared_bytes);
     int s = tm_service_of_pid(p->pid);
-    strlcpy(g_d_val_text[7], s >= 0 ? g_svc[s].name : "-", TM_PATH_MAX);
+    strlcpy(g_d_val_text[8], s >= 0 ? g_svc[s].name : "-", TM_PATH_MAX);
 }
 
 // --- the status bar --------------------------------------------------------
@@ -359,6 +420,12 @@ static void rebuild_rows(void) {
     const char *needle = uui_textbox_text(&g_search);
     g_nrows = 0;
     for (int g = 0; g < TM_GROUPS; g++) g_group_count[g] = 0;
+    // The kind rows FIRST in source order, so the table's row cap drops a
+    // process rather than them (they still SORT last, compare_rows), and
+    // out of the caption's count, which counts processes.
+    fill_kinds();
+    for (int k = 0; k < KINDS; k++)
+        if (matches(&g_kind[k], needle)) g_rows[g_nrows++] = -1 - k;
     for (int i = 0; i < g_nproc; i++) {
         if (!matches(&g_proc[i], needle)) continue;
         g_rows[g_nrows++] = i;
@@ -406,6 +473,7 @@ static void select_pid(int pid) {
 static void act(struct uapp *a, int cmd) {
     const struct tm_proc *p = row_proc(row_of_pid(g_sel_pid));
     if (!p) { ulogf("taskmgr: no row selected\n"); return; }
+    if (p->pid <= 0) return;   // a kind row: nothing to signal
     int pid = p->pid;
     switch (cmd) {
     case CMD_STOP:
@@ -438,7 +506,7 @@ static void act(struct uapp *a, int cmd) {
 
 // Press-then-commit for the two that end something.
 static void arm_or_commit(struct uapp *a, int id) {
-    if (!g_sel_pid) return;
+    if (g_sel_pid <= 0) return;
     if (g_armed != id) {
         g_armed = id;
         ulogf("taskmgr: armed %s pid %d\n", id == ID_KILL ? "kill" : "end", g_sel_pid);
@@ -463,7 +531,7 @@ static const struct uui_menu_item CTX_ITEMS[] = {
 
 static unsigned ctx_flags(int code) {
     const struct tm_proc *p = row_proc(row_of_pid(g_sel_pid));
-    if (!p) return UUI_MI_DISABLED;
+    if (!p || p->pid <= 0) return UUI_MI_DISABLED;
     int self = p->pid == (int)sys_getpid() || p->pid == g_desktop_pid || p->pid == 1;
     switch (code) {
     case CMD_STOP:     return (self || p->state == PROC_STATE_STOPPED) ? UUI_MI_DISABLED : 0;
@@ -598,7 +666,7 @@ static void tick(struct uapp *a, int shown) {
     if (p) {
         // Per mille, so a process under 1% still draws a trace.
         uui_chart_push(&g_pcpu, p->cpu_pm);
-        uui_chart_push(&g_pmem, (uint32_t)(p->mem_bytes >> 10));
+        uui_chart_push(&g_pmem, (uint32_t)(p->private_bytes >> 10));
         uint32_t pk = peak_of(&g_pcpu);
         char cur[16], top_pct[16];
         snprintf(cur, sizeof cur, "%u.%u%%", p->cpu_pm / 10, p->cpu_pm % 10);
@@ -607,7 +675,7 @@ static void tick(struct uapp *a, int shown) {
         unum_localize(top_pct, sizeof top_pct, 0);
         snprintf(g_pcpu_val, sizeof g_pcpu_val, "%s, peak %s", cur, top_pct);
         char now[16], top[16];
-        human_size_iec(now, sizeof now, p->mem_bytes);
+        human_size_iec(now, sizeof now, p->private_bytes);
         human_size_iec(top, sizeof top, (unsigned long long)peak_of(&g_pmem) << 10);
         snprintf(g_pmem_val, sizeof g_pmem_val, "%s, peak %s", now, top);
     }
@@ -629,7 +697,7 @@ static int focusables(struct uui_focusable *out, int cap) {
 }
 
 void tm_procs_init(struct tm_page *page) {
-    g_rows = calloc((size_t)g_proc_cap, sizeof *g_rows);
+    g_rows = calloc((size_t)g_proc_cap + KINDS, sizeof *g_rows);
     g_folded = calloc((size_t)g_proc_cap, sizeof *g_folded);
     uui_table_init(&g_table, 0, 0, 100, 100, COLUMNS, COL_COUNT, cell, 0);
     uui_table_set_seek_col(&g_table, COL_NAME);

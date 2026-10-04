@@ -47,6 +47,7 @@
 | `uinitctl.h` | The control protocol between `/bin/service` and init, over uchan. |
 | `uline.h` | uline -- the PAINTING half of a ring-3 line-editing front end. |
 | `umd.h` | umd -- rendering Markdown as text for a terminal. |
+| `umemcomp.h` | Where the memory in use is, as four rows that SUM to it: Apps (every process's private bytes, QUERY_PROCMEM), Shared (shm objects, each once), Graphics (RAM held for the screen) and Kernel (the res... |
 | `unetctl.h` | The control protocol between /bin/netctl (and the desktop's network flyout) and /bin/netd, over uchan -- the initctl shape (lib/uinitctl.h). |
 | `unum.h` | A number written the way the LC_NUMERIC locale writes it: format it the C way ("1234567.89", "12.5%", "1.2 MiB") and pass the string through unum_localize(), which swaps in the decimal mark and, wi... |
 | `uopen.h` | uopen -- which program opens this file? |
@@ -133,6 +134,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_slider.h` | A slider with DISCRETE STOPS -- one per option, not a continuous range. |
 | `uui_spinbox.h` | A NUMBER YOU CAN TYPE OR STEP: a text field with up/down steppers, bounded by min/max and moved by `step`. |
 | `uui_splitter.h` | A DRAGGABLE DIVIDER between two things that share a run of space -- Qt's QSplitter, GTK's GtkPaned, Explorer's navigation-pane divider. |
+| `uui_stackbar.h` | A STACKED BAR WITH A LEGEND: how one whole splits into parts, each a coloured segment and a legend row (swatch, label, value). |
 | `uui_statusbar.h` | uui_statusbar -- the strip along the bottom of an application window, as Windows (the common control, `msctls_statusbar32`) and KDE (KStatusBar / QStatusBar) both have it. |
 | `uui_switch.h` | AN ON/OFF SWITCH -- a sliding knob in a capsule, with the state spelled beside it ("On"/"Off", Windows 11's shape; KDE and GNOME show the knob alone). |
 | `uui_table.h` | --- table: rows in columns, with a header --------------------------- |

@@ -235,7 +235,7 @@ static void draw_scaled(struct ugfx_surface *s, const uint32_t *px,
     for (int y = 0; y < dh; y++) {
         scale_row(px, y, dw, dh, g_row);
         // A row at a time rather than a whole scaled frame: a full one
-        // would be WIN_CLIENT_MAX_W * _MAX_H * 4 = 8 MB of buffer to
+        // would be up to WIN_CLIENT_MAX_W * _MAX_H * 4 bytes of buffer to
         // hold a copy of something that is about to be copied again.
         ugfx_blit(s, dx, dy + y, dw, 1, g_row, dw);
     }

@@ -67,6 +67,8 @@
 #define PLANE_CTL_FMT_MASK   (0xFu << 24)
 #define PLANE_CTL_XRGB8888   (0x4u << 24)
 #define PLANE_CTL_TILED_MASK (0x7u << 10)
+#define PLANE_CTL_ORDER_RGBX (1u << 20)   // XBGR: red and blue swapped
+#define PLANE_CTL_ROTATE_MASK 0x3u
 
 #define CURCNTR_MODE_MASK    0x3Fu
 #define CURCNTR_64_ARGB      0x27u

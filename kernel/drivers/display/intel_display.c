@@ -81,6 +81,10 @@ static uint32_t g_bl_max;
 static struct display_surface g_scanout[SCANOUTS];
 static uint32_t g_scanout_ggtt[SCANOUTS];
 static int g_scanouts = 1;
+// The extra scanouts' frames, as allocated -- not derived from
+// g_scanouts, which stays 1 when the SECOND extra fails after the first
+// succeeded and its frames are kept unused.
+static uint64_t g_scanout_ram_pages;
 
 static inline uint32_t rd(uint32_t off) { return *(volatile uint32_t *)(g_mmio + off); }
 static struct display_driver intel_driver;
@@ -134,7 +138,8 @@ int intel_display_plane_matches(int gen, uint32_t cntr, uint32_t stride, uint32_
         return (cntr & DSPCNTR_FMT_MASK) == DSPCNTR_BGRX8888 && stride == pitch;
     if (gen == 9)
         return (cntr & PLANE_CTL_FMT_MASK) == PLANE_CTL_XRGB8888 &&
-               (cntr & PLANE_CTL_TILED_MASK) == 0 && stride * 64 == pitch;
+               !(cntr & (PLANE_CTL_TILED_MASK | PLANE_CTL_ORDER_RGBX | PLANE_CTL_ROTATE_MASK)) &&
+               stride * 64 == pitch;
     return 0;
 }
 
@@ -186,9 +191,11 @@ static void log_readout(void) {
 // firmware holds it through the BIOS request register; the driver takes
 // its own request so the state no longer depends on that. A bounded
 // spin: this runs before the timer exists.
+// READ-MODIFY-WRITE: gen9's register holds a request bit per well (PW1,
+// MISC IO, each DDI's IO); writing bit 31 alone would drop the rest.
 static void setup_power_well(void) {
     uint32_t before = rd(HSW_PWR_WELL_CTL_DRIVER);
-    wr(HSW_PWR_WELL_CTL_DRIVER, PWR_WELL_REQUEST);
+    wr(HSW_PWR_WELL_CTL_DRIVER, before | PWR_WELL_REQUEST);
     uint32_t v = 0;
     for (int i = 0; i < 100000; i++) {
         v = rd(HSW_PWR_WELL_CTL_DRIVER);
@@ -202,8 +209,8 @@ static void setup_power_well(void) {
 
 int intel_display_power_well(int on) {
     if (!g_active) return 0;
-    if (on) wr(HSW_PWR_WELL_CTL_DRIVER, PWR_WELL_REQUEST);
-    else    wr(HSW_PWR_WELL_CTL_DRIVER, 0);
+    uint32_t was = rd(HSW_PWR_WELL_CTL_DRIVER);
+    wr(HSW_PWR_WELL_CTL_DRIVER, on ? was | PWR_WELL_REQUEST : was & ~PWR_WELL_REQUEST);
     uint32_t v = 0;
     for (int i = 0; i < 100000; i++) {
         v = rd(HSW_PWR_WELL_CTL_DRIVER);
@@ -237,7 +244,17 @@ static void setup_cursor(void) {
     ggtt_invalidate();
     g_cursor_phys = phys;
     g_cursor_ggtt = idx << 12;
-    if (g_gen == 9 && !intel_gen9_cursor_ddb(g_pipe)) return;
+    if (g_gen == 9 && !intel_gen9_cursor_ddb(g_pipe)) {
+        // No cursor plane after all: the slot back to what it held, the
+        // frames back to the allocator.
+        g_gtt[idx] = was;
+        for (int i = 1; i < CURSOR_PAGES; i++) g_gtt[idx + i] = 0;
+        ggtt_invalidate();
+        pmm_free_contiguous(phys, CURSOR_PAGES);
+        g_cursor_phys = 0;
+        g_cursor_ggtt = 0;
+        return;
+    }
     // Plane off until something defines a shape.
     wr(CURCNTR(g_pipe), 0);
     wr(CURBASE(g_pipe), g_cursor_ggtt);
@@ -347,6 +364,7 @@ static void setup_scanouts(void) {
         // Write-combining for the CPU side, exactly as display_probe()
         // does for the first surface; the ring-3 grant maps it WC.
         int wc = paging_set_write_combining(phys, bytes);
+        g_scanout_ram_pages += pages;
         g_scanout[b] = g_surface;
         g_scanout[b].addr = phys;
         g_scanout_ggtt[b] = idx << 12;
@@ -359,6 +377,14 @@ static void setup_scanouts(void) {
 }
 
 static int intel_scanout_count(void) { return g_scanouts; }
+
+// Scanout 0 is the firmware's, in stolen memory the allocator never
+// counted; the extras and the cursor image are RAM.
+static uint64_t intel_ram_bytes(void) {
+    // The cursor image by its allocation too: a gen9 claim with no DDB
+    // slice keeps the frames and leaves g_cursor_ok 0.
+    return ((g_cursor_phys ? CURSOR_PAGES : 0) + g_scanout_ram_pages) * 4096;
+}
 
 static void intel_scanout_at(int index, struct display_surface *out) {
     *out = g_scanout[(index >= 0 && index < g_scanouts) ? index : 0];
@@ -393,10 +419,11 @@ void intel_display_live_stats(unsigned long long *calls, unsigned long long *mis
 
 static int intel_scanout_live(void) {
     // The address is 31:12; gen9 reads 0x20 in the low bits even on a
-    // plane that is off.
-    uint32_t live = rd(DSPSURFLIVE(g_pipe)) & ~0xFFFu;
+    // plane that is off. The diagnostic keeps the register as read.
+    uint32_t raw = rd(DSPSURFLIVE(g_pipe));
+    uint32_t live = raw & ~0xFFFu;
     g_live_calls++;
-    g_live_last_raw = live;
+    g_live_last_raw = raw;
     for (int b = 0; b < g_scanouts; b++)
         if (g_scanout_ggtt[b] == live) return b;
     g_live_miss++;
@@ -666,6 +693,7 @@ static struct display_driver intel_driver = {
     .mode_at = intel_mode_at,
     .set_mode = intel_set_mode,
     .set_scaling = intel_set_scaling,
+    .ram_bytes = intel_ram_bytes,
 };
 
 void intel_display_register(void) {

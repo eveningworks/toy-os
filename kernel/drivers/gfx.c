@@ -1094,3 +1094,7 @@ uint64_t gfx_bench_scroll(int pixel_rows, int iterations) {
 }
 
 int gfx_double_buffered(void) { return double_buffered; }
+
+uint64_t gfx_back_buffer_bytes(void) {
+    return back_buffer ? ((uint64_t)back_buffer_pixels * 4 + 4095) / 4096 * 4096 : 0;
+}

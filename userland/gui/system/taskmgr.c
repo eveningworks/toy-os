@@ -46,6 +46,7 @@ int g_nproc;
 int g_desktop_pid;
 unsigned g_cpu_pm;
 unsigned long long g_mem_used, g_mem_total;
+struct umem_comp g_mem_comp;
 int g_threads;
 
 // Last tick's CPU totals, BY PID: rows move as processes come and go, so
@@ -176,7 +177,6 @@ static void refresh_model(void) {
         p->wait = in->wait_reason;
         p->threads = 1;
         p->cpu_ns = in->cpu_ns;
-        p->mem_bytes = in->mem_bytes;
         strlcpy(p->name, in->name, sizeof p->name);
     }
     g_nproc = n;
@@ -208,6 +208,14 @@ static void refresh_model(void) {
         int r = tm_proc_row(pp.pid);
         if (r >= 0) strlcpy(g_proc[r].path, pp.path, sizeof g_proc[r].path);
     }
+    // Memory per process: a page-table walk each, so its own fact.
+    unsigned long long apps = 0;
+    struct query_procmem pm;
+    QUERY_FOREACH(QUERY_PROCMEM, pm, mi_) {
+        apps += pm.private_bytes;
+        int r = tm_proc_row(pm.pid);
+        if (r >= 0) { g_proc[r].private_bytes = pm.private_bytes; g_proc[r].shared_bytes = pm.shared_bytes; }
+    }
     classify();
 
     // The machine: the CPU against the kernel's own idle, as the Overview
@@ -225,6 +233,7 @@ static void refresh_model(void) {
         g_mem_total = mi.frame_total * mi.frame_bytes;
         unsigned long long freeb = mi.frame_free * mi.frame_bytes;
         g_mem_used = g_mem_total > freeb ? g_mem_total - freeb : 0;
+        umem_comp_from(&mi, apps, &g_mem_comp);
     }
 }
 

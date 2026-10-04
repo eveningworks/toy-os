@@ -48,6 +48,9 @@ void shm_put(int idx);
 // How many pages the object holds, and the frame behind one page --
 // what mmap_fault_in() maps. 0 for an index or page that is not there.
 uint64_t shm_npages(int idx);
+// Every live object's frames, in bytes -- allocated at creation, so
+// this is RAM held whether or not anyone has faulted a page in.
+uint64_t shm_total_bytes(void);
 uint64_t shm_frame(int idx, uint64_t page);
 
 // The mapping table, so an address space's shares are dropped when it

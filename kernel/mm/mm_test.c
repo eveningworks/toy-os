@@ -645,3 +645,43 @@ KTEST("mm", "a region survives the list moving under it") {
     mmap_regions_reset(mm);
     kfree(mm);
 }
+
+// Task Manager's columns (struct vmm_audit's private/shared): an owned
+// page is private; a page shared copy-on-write is HALF private to each
+// side (PSS), so the two spaces' privates sum to each frame once; a
+// borrowed page is shared and nobody's private; MMIO is neither.
+KTEST("mm", "a space's private bytes count each frame once and shared ones are apart") {
+    uint64_t parent = vmm_create_address_space();
+    KTEST_ASSERT(parent != 0);
+    uint64_t va = UADDR_IMAGE_BASE;
+    uint64_t f_own = pmm_alloc_frame(PMM_ZONE_ANY), f_cow = pmm_alloc_frame(PMM_ZONE_ANY);
+    uint64_t f_lent = pmm_alloc_frame(PMM_ZONE_ANY);
+    KTEST_ASSERT(f_own && f_cow && f_lent);
+    KTEST_ASSERT(vmm_map_user_page(parent, va, f_cow));
+    KTEST_ASSERT(vmm_map_user_borrowed(parent, va + 4096, f_lent, 1, 0, 0));
+
+    struct vmm_audit a;
+    vmm_audit_space(parent, &a);
+    KTEST_ASSERT_EQ(a.private_bytes, 4096u);
+    KTEST_ASSERT_EQ(a.shared_bytes, 4096u);
+
+    uint64_t child = vmm_fork_address_space(parent, 0);
+    KTEST_ASSERT(child != 0);
+    KTEST_ASSERT(vmm_map_user_page(parent, va + 8192, f_own));
+    struct vmm_audit c;
+    vmm_audit_space(parent, &a);
+    vmm_audit_space(child, &c);
+    // Parent: its own page whole and half the shared one; the child the
+    // other half -- so the two sum to each frame once. The lent page is
+    // shared in the parent only: fork repeats a borrowed mapping only
+    // where the caller vouches for it (vmm_fork_opts.inherit_borrowed).
+    KTEST_ASSERT_EQ(a.private_bytes, 4096u + 2048u);
+    KTEST_ASSERT_EQ(c.private_bytes, 2048u);
+    KTEST_ASSERT_EQ(a.private_bytes + c.private_bytes, 2u * 4096u);   // f_own + f_cow
+    KTEST_ASSERT_EQ(a.shared_bytes, 4096u);
+    KTEST_ASSERT_EQ(c.shared_bytes, 0u);
+
+    vmm_destroy_address_space(child);
+    vmm_destroy_address_space(parent);
+    pmm_free_frame(f_lent);   // borrowed: no space owned it
+}

@@ -17,6 +17,8 @@
 #include "string.h"
 #include <stddef.h>
 #include "initcall.h"
+#include "shm.h"
+#include "display.h"
 
 static int meminfo_count(void) { return 1; }
 
@@ -33,6 +35,8 @@ static int meminfo_fill(int index, void *out) {
     m->frame_total_high = pmm_zone_total_frames(PMM_ZONE_ANY);
     m->frame_free_high  = pmm_zone_free_frames(PMM_ZONE_ANY);
     m->frame_reserve_dma32 = pmm_dma32_reserve_frames();
+    m->shm_bytes        = shm_total_bytes();
+    m->graphics_bytes   = display_graphics_bytes();
     return 1;
 }
 
@@ -53,6 +57,8 @@ static const struct query_field meminfo_fields[] = {
     QUERY_FIELD(struct query_meminfo, frame_total_high, QUERY_TYPE_U64),
     QUERY_FIELD(struct query_meminfo, frame_free_high,  QUERY_TYPE_U64),
     QUERY_FIELD(struct query_meminfo, frame_reserve_dma32, QUERY_TYPE_U64),
+    QUERY_FIELD(struct query_meminfo, shm_bytes,        QUERY_TYPE_BYTES),
+    QUERY_FIELD(struct query_meminfo, graphics_bytes,   QUERY_TYPE_BYTES),
 };
 
 static const struct query_provider meminfo_provider = {

@@ -114,21 +114,26 @@ void intel_gen9_readout_log(void) {
 #define CURSOR_WM0   (WM_ENABLE | WM_LINES(1) | 8)
 
 int intel_gen9_cursor_ddb(int p) {
+    uint32_t plane = intel_rd(PLANE_BUF_CFG(p));
+    uint32_t start = plane & 0x3FF, end = (plane >> 16) & 0x3FF;
+    // A slice already there is trusted only when it is clear of the
+    // plane's and has a watermark: a warm reboot can hand the plane back
+    // its whole range and leave our old cursor slice inside it.
     uint32_t have = intel_rd(CUR_BUF_CFG(p));
-    if (have) {
+    uint32_t hs = have & 0x3FF, he = (have >> 16) & 0x3FF;
+    if (have && (he < start || hs > end) && (intel_rd(CUR_WM(p, 0)) & WM_ENABLE)) {
         klog_printf("intel-gen9: cursor already has ddb %#x\n", have);
         return 1;
     }
-    uint32_t plane = intel_rd(PLANE_BUF_CFG(p));
-    uint32_t start = plane & 0x3FF, end = (plane >> 16) & 0x3FF;
     if (end < start + 4 * CURSOR_DDB_BLOCKS) {
         klog_printf("intel-gen9: plane ddb %#x too small to share -- no cursor plane\n", plane);
         return 0;
     }
     uint32_t plane_end = end - CURSOR_DDB_BLOCKS;
-    // Every enabled level of the plane must still fit what it keeps.
-    for (int lvl = 0; lvl < 8; lvl++) {
-        uint32_t wm = intel_rd(PLANE_WM(p, lvl));
+    // Every enabled level of the plane -- and its transition watermark,
+    // level 8 here -- must still fit what it keeps.
+    for (int lvl = 0; lvl < 9; lvl++) {
+        uint32_t wm = intel_rd(lvl < 8 ? PLANE_WM(p, lvl) : PLANE_WM_TRANS(p));
         if ((wm & WM_ENABLE) && (wm & WM_BLOCKS) > plane_end - start) {
             klog_printf("intel-gen9: plane wm%d %#x needs more than %u blocks -- no cursor plane\n",
                         lvl, wm, plane_end - start);
@@ -184,9 +189,9 @@ static void timing_log(int p, const struct display_edid *e) {
     if (!e || !e->timing_count) return;
     int same = intel_display_timing_same(&t, &e->timing[0]);
     uint32_t want = e->timing[0].pixel_khz;
-    int clk = t.pixel_khz + 10 >= want && t.pixel_khz <= want + 10;
     klog_printf("intel-gen9: firmware timing %s EDID timing 0, pixel clock %s (%u vs %u kHz)\n",
-                same ? "MATCHES" : "DIFFERS FROM", clk ? "agrees" : "DIFFERS", t.pixel_khz, want);
+                same ? "MATCHES" : "DIFFERS FROM",
+                intel_display_clock_agrees(t.pixel_khz, want) ? "agrees" : "DISAGREES", t.pixel_khz, want);
 }
 
 static uint8_t g_edid[EDID_BLOCK];

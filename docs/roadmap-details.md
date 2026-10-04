@@ -6006,6 +6006,18 @@ a private column (frames with one mapper and no shm object), a Shared
 row (shm and granted frames, counted once), a Kernel row (used frames
 minus both), so the rows sum to "in use". Mock up before building.
 
+BUILT 2026-10-04, mockups M1 + M2 chosen, with Graphics as its own row:
+`struct vmm_audit` gained `private_bytes` (PSS for copy-on-write) and
+`shared_bytes` (borrowed, managed), reported per process by a new
+fact, `QUERY_PROCMEM`; `QUERY_MEMINFO` gained `shm_bytes` and `graphics_bytes`
+(a display driver's new `ram_bytes` op plus gfx.c's back buffer);
+`lib/umemcomp.h` makes the four rows; Performance › Memory draws them
+in `uui_stackbar`, Processes shows Private and Shared columns with
+Kernel, Graphics and Shared memory rows under System, and `meminfo`
+prints them. Measured in QEMU: apps 17.0M, shared 7.4M, graphics 3.5M,
+kernel 38.3M of 66.3M -- the kernel row is mostly the 9 MB image, the
+RAM-sized process table, stacks, page tables and the caches.
+
 ### Intel gen9 on the Kaby Lake desktop over HDMI: readout, adopt (cursor + flip), GMBUS EDID, scaler modes, an HDMI modeset
 
 The third test machine (a Lenovo desktop, HD 630 `8086:5912`, one
@@ -6042,7 +6054,10 @@ Adapter until the vendor driver loads. The stages, one flash each:
    DPLL1 decoded to 241.5 MHz -- MATCHES its preferred timing to the kHz.
 4. **3, scaler modes**: the ladder below native through `PS_CTRL`,
    keeping the HDMI timing -- runtime `config set resolution` as the
-   laptops have it.
+   laptops have it. FIRST, fold the scattered `g_gen == 8/9` checks in
+   `intel_display.c` into a per-generation ops table chosen in
+   `find_gpu()` (raised in review, 2026-10-04): a third set of gen9
+   paths added as more `if`s is how a gen8 write reaches gen9 unnoticed.
 5. **4, an HDMI modeset**: a DPLL in HDMI mode from the pixel clock
    (`skl_ddi_calculate_wrpll`), the DDI buffer translations, the
    transcoder in HDMI mode, the timings from the EDID.

@@ -102,6 +102,9 @@ def layout(dbg):
         m = re.search(r"taskmgr: layout (\w+)\.(col|slot) (\d+) (-?\d+) (-?\d+) (\d+) (\d+)", line)
         if m:
             out[f"{m.group(1)}.{m.group(2)}{m.group(3)}"] = tuple(int(v) for v in m.groups()[3:])
+        m = re.search(r"taskmgr: layout memcomp\.seg (\d+) (-?\d+) (-?\d+) (\d+) (\d+)", line)
+        if m:
+            out[f"memcomp.seg{m.group(1)}"] = tuple(int(v) for v in m.groups()[1:])
         m = re.search(r"taskmgr: rows (\d+)", line)
         if m:
             out["rows"] = int(m.group(1))
@@ -111,7 +114,10 @@ def layout(dbg):
             out["viewmode"] = m.group(3)
         m = re.search(r"taskmgr: order (.*)$", line)
         if m:
-            out["order"] = [int(v) for v in m.group(1).split() if v.strip().isdigit()]
+            # NEGATIVE ids too: the kind rows (Kernel, Graphics, Shared
+            # memory) are rows on screen, and dropping them would shift
+            # every row index below them.
+            out["order"] = [int(v) for v in m.group(1).split() if re.fullmatch(r"-?\d+", v)]
         m = re.search(r"taskmgr: page (\d+)", line)
         if m:
             out["page"] = int(m.group(1))
@@ -143,6 +149,21 @@ def wait_log(dbg, needle, timeout=4.0):
             return True
         time.sleep(0.05)
     return False
+
+
+def meminfo_kinds(dbg):
+    """meminfo's "used" and its four kinds, in bytes, and the raw text."""
+    mi = dbg.send("sh meminfo") or ""
+    mult = {"K": 1 << 10, "M": 1 << 20, "G": 1 << 30}
+
+    def size(t):
+        return float(t[:-1]) * mult[t[-1]] if t[-1] in mult else float(t)
+    m = re.search(r"used:\s+\d+\s+([\d.]+[KMG]?)", mi)
+    if not m:
+        return None, None, mi
+    kinds = {k: size(v) for k, v in re.findall(r"^\s+(apps|shared|graphics|kernel):\s+(\S+)",
+                                                mi, re.M)}
+    return size(m.group(1)), kinds, mi
 
 
 def mark():
@@ -250,12 +271,17 @@ def main():
     click((pid_col[0] + pid_col[2] // 2, hdr_y))
     lay = wait_layout(dbg, lambda l: l.get("sort") == (1, 1))
     asc = lay.get("order", [])
-    check("clicking PID sorts by it, ascending", lay.get("sort") == (1, 1) and asc == sorted(asc),
-          f"sort={lay.get('sort')} order={asc}")
+    # The kind rows (negative ids) trail in EITHER direction; the
+    # processes before them are what the sort orders.
+    procs = [p for p in asc if p > 0]
+    tail = asc[len(procs):]
+    check("clicking PID sorts by it, ascending", lay.get("sort") == (1, 1) and procs == sorted(procs)
+          and asc[:len(procs)] == procs, f"sort={lay.get('sort')} order={asc}")
     click((pid_col[0] + pid_col[2] // 2, hdr_y))
     lay = wait_layout(dbg, lambda l: l.get("sort") == (1, -1))
     desc = lay.get("order", [])
-    check("clicking it again REVERSES it", lay.get("sort") == (1, -1) and desc == sorted(asc, reverse=True),
+    check("clicking it again REVERSES it", lay.get("sort") == (1, -1)
+          and desc == sorted(procs, reverse=True) + tail,
           f"sort={lay.get('sort')} order={desc}")
 
     # The arrow must not sit ON the right-aligned PID title: measured
@@ -332,7 +358,10 @@ def main():
     win = window(dbg)
     before = _layout["table"]
     grip = (win["x"] + win["w"] - 1 + 4, win["y"] + win["h"] - 1 + 4)
-    grow_x, grow_y = 120, 160
+    # As far as the screen allows: a window that opens wide has less room.
+    scr = dbg.state()["screen"]
+    grow_x = max(40, min(120, scr["w"] - (win["x"] + win["w"]) - 8))
+    grow_y = max(40, min(160, scr["h"] - (win["y"] + win["h"]) - 60))
     dbg.send("gui drag %d %d %d %d" % (grip[0], grip[1], grip[0] + grow_x, grip[1] + grow_y))
     dbg.settle()
     after = wait_layout(dbg, lambda l: l["table"][2] - before[2] >= grow_x * 0.6
@@ -434,6 +463,47 @@ def main():
     else:
         check("netd is listed, to go to its service", False, f"netd={netd}")
 
+    # --- memory that adds up -------------------------------------------------
+    # The text oracle first: meminfo's four kinds must sum to its "used".
+    used, kinds, mi = meminfo_kinds(dbg)
+    check("meminfo lists four kinds of memory in use", kinds and len(kinds) == 4, mi[-300:])
+    if used and kinds and len(kinds) == 4:
+        # Kernel is the remainder, so "they sum to used" would hold by
+        # construction. These can fail: each names memory a broken count
+        # would misplace.
+        scr = dbg.state()["screen"]
+        driver = re.search(r"Driver:\s+(\S+)", dbg.send("sh lsdisplay") or "")
+        if driver and driver.group(1) == "bochs":
+            # bochs holds no RAM of its own: Graphics is the console's
+            # back buffer, to the page.
+            back = (scr["w"] * scr["h"] * 4 + 4095) // 4096 * 4096
+            check("Graphics is exactly the console's back buffer (bochs)",
+                  abs(kinds["graphics"] - back) < 64 << 10,
+                  f"graphics {kinds['graphics']:.0f} back buffer {back}")
+        tm = window(dbg)
+        if tm:
+            bufs = 2 * tm["content"]["w"] * tm["content"]["h"] * 4
+            check("Shared holds at least Task Manager's own two window buffers",
+                  kinds["shared"] >= bufs * 0.98, f"shared {kinds['shared']:.0f} buffers {bufs}")
+        check("...with the apps and the kernel both non-zero",
+              kinds["apps"] > 0 and kinds["kernel"] > 0, str(kinds))
+
+    # The kind rows: listed, selectable, and beyond every verb.
+    lay = set_view(2, "List")
+    order = wait_layout(dbg, lambda l: -1 in l.get("order", [])).get("order", [])
+    check("Processes lists Kernel, Graphics and Shared memory as rows",
+          all(k in order for k in (-1, -2, -3)), f"order={order}")
+    if -1 in order and "btn_kill" in _layout:
+        mark()
+        click((_layout["table"][0] + 60, row_y(order.index(-1))))
+        check("the Kernel row can be selected", wait_log(dbg, "selected pid -1", 2.0))
+        mark()
+        click(centre(_layout["btn_kill"]))
+        click(centre(_layout["btn_kill"]))
+        time.sleep(0.5)
+        armed = wait_log(dbg, "armed kill pid -1", 0.5) or wait_log(dbg, "killed pid -1", 0.5)
+        check("Force Quit does nothing to a kind row", not armed)
+
     # --- Performance -------------------------------------------------------
     rail = _layout.get("rail")
     rh = _layout.get("rail.row_h")
@@ -445,6 +515,26 @@ def main():
         check("it lists CPU, Memory, Disk and at least one network card", n >= 4, f"{n} devices")
         if n >= 4:
             dv, ih = _layout["devices"], _layout["devices.item_h"]
+            # Memory: the composition bar, held against meminfo's numbers.
+            click((dv[0] + dv[2] // 2, dv[1] + ih + ih // 2))
+            lay = wait_layout(dbg, lambda l: l.get("device", (0,))[0] == 1 and "memcomp.seg3" in l)
+            segs = [lay.get(f"memcomp.seg{i}") for i in range(4)]
+            if check("Memory shows a four-part composition bar", all(segs) and "memcomp" in lay,
+                     f"segs={segs}"):
+                bar = lay["memcomp"]
+                widths = [sg[2] for sg in segs]
+                check("...whose parts fill the bar edge to edge",
+                      segs[0][0] == bar[0] + 1 and segs[3][0] + segs[3][2] == bar[0] + bar[2] - 1,
+                      f"bar={bar} segs={segs}")
+                # Read again NOW: the numbers drift while the test runs.
+                _, kinds, _ = meminfo_kinds(dbg)
+                if kinds and len(kinds) == 4:
+                    vals = [kinds[k] for k in ("apps", "shared", "graphics", "kernel")]
+                    inner = bar[2] - 2
+                    want = [inner * v / sum(vals) for v in vals]
+                    check("...in meminfo's proportions (each part within 4 px)",
+                          all(abs(w - x) <= 4 for w, x in zip(widths, want)),
+                          f"widths={widths} want={[round(x) for x in want]}")
             click((dv[0] + dv[2] // 2, dv[1] + 3 * ih + ih // 2))
             lay = wait_layout(dbg, lambda l: l.get("device", (0,))[0] == 3 and "connlog" in l)
             check("selecting the card shows Ethernet and its connection log",

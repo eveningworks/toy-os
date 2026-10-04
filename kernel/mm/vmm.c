@@ -689,10 +689,19 @@ static void audit_pt(uint64_t pt_phys, uint64_t base_va, struct audit_ctx *c) {
             // framebuffer is the usual one. Not pmm's to account for,
             // so there is nothing to compare against.
             a->unmanaged++;
-        } else if (!pmm_frame_is_used(frame)) {
+            continue;
+        }
+        if (!pmm_frame_is_used(frame)) {
+            // Dangling: reported, and in neither total -- the frame is
+            // nobody's, or whoever pmm hands it to next.
             if (!a->dangling) { a->first_bad_va = va; a->first_bad_frame = frame; }
             a->dangling++;
             if (c->cb) c->cb(va, frame, c->ctx);
+        } else if (pt[i] & PAGE_BORROWED) {
+            a->shared_bytes += 4096;
+        } else {
+            unsigned refs = pmm_frame_refs(frame);
+            a->private_bytes += refs > 1 ? 4096 / refs : 4096;
         }
     }
 }
