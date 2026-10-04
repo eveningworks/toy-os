@@ -55,7 +55,7 @@
 
 static const char *const DDI_MODE[8] = { "HDMI", "DVI", "DP-SST", "DP-MST", "FDI", "?5", "?6", "?7" };
 
-void intel_gen9_readout_log(void) {
+static void gen9_readout_log(void) {
     for (int p = 0; p < 3; p++) {
         uint32_t ctl = intel_rd(DSPCNTR(p));
         klog_printf("intel-gen9: pipe %c conf %#x src %#x | plane ctl %#x (fmt %u tiling %u) stride %u surf %#x live %#x pos %#x size %#x offset %#x\n",
@@ -113,7 +113,7 @@ void intel_gen9_readout_log(void) {
 // times over and leaves the levels a low-power state needs disabled.
 #define CURSOR_WM0   (WM_ENABLE | WM_LINES(1) | 8)
 
-int intel_gen9_cursor_ddb(int p) {
+static int gen9_cursor_ddb(int p) {
     uint32_t plane = intel_rd(PLANE_BUF_CFG(p));
     uint32_t start = plane & 0x3FF, end = (plane >> 16) & 0x3FF;
     // A slice already there is trusted only when it is clear of the
@@ -197,7 +197,7 @@ static void timing_log(int p, const struct display_edid *e) {
 static uint8_t g_edid[EDID_BLOCK];
 static int g_edid_len = -1;   // -1 until read once
 
-int intel_gen9_read_edid(int p, uint8_t *out, int cap) {
+static int gen9_read_edid(int p, uint8_t *out, int cap) {
     if (g_edid_len < 0) {
         int port = ddi_of_pipe(p);
         int pin = intel_gmbus_pin_for_port(port);
@@ -211,3 +211,32 @@ int intel_gen9_read_edid(int p, uint8_t *out, int cap) {
     if (n > 0) k_memcpy(out, g_edid, (size_t)n);
     return n > 0 ? n : 0;
 }
+
+// Kaby Lake, i915's INTEL_KBL_IDS.
+static const uint16_t KBL_IDS[] = {
+    0x5902, 0x5906, 0x5908, 0x590A, 0x590B, 0x590E,
+    0x5912, 0x5913, 0x5915, 0x5916, 0x5917, 0x591A, 0x591B, 0x591C,
+    0x591D, 0x591E, 0x5921, 0x5923, 0x5926, 0x5927, 0x593B,
+};
+
+// GMS in 32 MiB units, plus 4 MiB steps from 0xF0 (Linux's gen9_stolen_size).
+static uint64_t gen9_stolen_bytes(uint32_t gms) {
+    return gms >= 0xF0 ? (uint64_t)(gms - 0xF0 + 1) << 22 : (uint64_t)gms << 25;
+}
+
+static int gen9_plane_matches(uint32_t cntr, uint32_t stride, uint32_t pitch) {
+    return intel_display_plane_matches(9, cntr, stride, pitch);
+}
+
+const struct intel_gen_ops intel_gen9_ops = {
+    .gen = 9,
+    .ids = KBL_IDS,
+    .nids = (int)(sizeof KBL_IDS / sizeof KBL_IDS[0]),
+    .stolen_bytes = gen9_stolen_bytes,
+    .readout_log = gen9_readout_log,
+    .plane_matches = gen9_plane_matches,
+    .cursor_prepare = gen9_cursor_ddb,
+    // A linear surface scans only from 256 KiB (i915's skl_plane_min_alignment).
+    .scanout_align_pages = 64,
+    .read_edid = gen9_read_edid,
+};

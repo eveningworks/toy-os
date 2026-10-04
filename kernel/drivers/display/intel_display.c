@@ -31,7 +31,7 @@
 #include "timer.h"  // coarse_ticks -- rate-limiting the live-scanout probe
 #include "intel_internal.h"
 
-DRIVER_DECLARE("intel-display", "display", "Intel gen8/gen9 display engine: eDP modeset (gen8), cursor plane, page flip, backlight");
+DRIVER_DECLARE("intel-display", "display", "Intel gen8/gen9 display engine: modeset, cursor plane, page flip, backlight (gen8)");
 
 // --- PCI ------------------------------------------------------------
 #define INTEL_VENDOR 0x8086
@@ -95,9 +95,8 @@ uint32_t intel_rd(uint32_t off) { return rd(off); }
 void intel_wr(uint32_t off, uint32_t v) { wr(off, v); }
 int intel_display_pipe(void) { return g_active ? g_pipe : -1; }
 
-// Broadwell device ids, GT1..GT3, mobile and desktop. Only gen8 is
-// claimed: the register map below is that generation's, and the one
-// machine this was written against is a GT1 (8086:161e).
+// Broadwell device ids, GT1..GT3, mobile and desktop; the machine this
+// was written against is a GT1 (8086:161e).
 static const uint16_t BDW_IDS[] = {
     0x1602, 0x1606, 0x160A, 0x160B, 0x160D, 0x160E,
     0x1612, 0x1616, 0x161A, 0x161B, 0x161D, 0x161E,
@@ -105,29 +104,15 @@ static const uint16_t BDW_IDS[] = {
     0x1632, 0x1636, 0x163A, 0x163B, 0x163D, 0x163E,
 };
 
-// Kaby Lake (gen9), i915's INTEL_KBL_IDS: claimed at the firmware's
-// mode for the cursor plane and the flip only. The plane's fields, the
-// stride's units and the display buffer differ from gen8 (intel_gen9.c);
-// the eDP modeset, the fitter, AUX and the backlight are gen8's alone.
-static const uint16_t KBL_IDS[] = {
-    0x5902, 0x5906, 0x5908, 0x590A, 0x590B, 0x590E,
-    0x5912, 0x5913, 0x5915, 0x5916, 0x5917, 0x591A, 0x591B, 0x591C,
-    0x591D, 0x591E, 0x5921, 0x5923, 0x5926, 0x5927, 0x593B,
-};
+static const struct intel_gen_ops *const GENS[] = { &intel_gen8_ops, &intel_gen9_ops };
+static const struct intel_gen_ops *g_ops;   // the claimed device's; set by find_gpu()
 
-static int in_table(const uint16_t *t, unsigned n, uint16_t id) {
-    for (unsigned i = 0; i < n; i++)
-        if (t[i] == id) return 1;
+static const struct intel_gen_ops *gen_of(uint16_t id) {
+    for (unsigned g = 0; g < sizeof GENS / sizeof GENS[0]; g++)
+        for (int i = 0; i < GENS[g]->nids; i++)
+            if (GENS[g]->ids[i] == id) return GENS[g];
     return 0;
 }
-
-// 8, 9, or 0 for a generation this driver has no register map for.
-static int gen_of(uint16_t id) {
-    if (in_table(BDW_IDS, sizeof BDW_IDS / sizeof BDW_IDS[0], id)) return 8;
-    if (in_table(KBL_IDS, sizeof KBL_IDS / sizeof KBL_IDS[0], id)) return 9;
-    return 0;
-}
-static int g_gen;
 
 // The firmware's plane, as each generation encodes it: gen8 has the
 // format in 29:26 and the stride in bytes; gen9 the format in 27:24,
@@ -148,8 +133,8 @@ static const struct pci_device *find_gpu(void) {
         const struct pci_device *d = pci_device_at(i);
         if (!d || d->vendor_id != INTEL_VENDOR) continue;
         if (d->class_code != 0x03) continue;
-        g_gen = gen_of(d->device_id);
-        if (!g_gen) {
+        g_ops = gen_of(d->device_id);
+        if (!g_ops) {
             klog_printf("intel-display: %04x:%04x is not gen8 or gen9 -- not claimed\n",
                         d->vendor_id, d->device_id);
             return 0;
@@ -244,7 +229,7 @@ static void setup_cursor(void) {
     ggtt_invalidate();
     g_cursor_phys = phys;
     g_cursor_ggtt = idx << 12;
-    if (g_gen == 9 && !intel_gen9_cursor_ddb(g_pipe)) {
+    if (g_ops->cursor_prepare && !g_ops->cursor_prepare(g_pipe)) {
         // No cursor plane after all: the slot back to what it held, the
         // frames back to the allocator.
         g_gtt[idx] = was;
@@ -344,9 +329,7 @@ static void setup_scanouts(void) {
     if (!g_cursor_ok) return;   // no GGTT slot discipline without it
     uint64_t bytes = (uint64_t)g_surface.pitch * g_surface.height;
     uint32_t pages = (uint32_t)((bytes + 4095) / 4096);
-    // Gen9 scans a linear surface only from a 256 KiB-aligned GGTT
-    // offset (i915's skl_plane_min_alignment); gen8's layout is kept.
-    uint32_t align = g_gen == 9 ? 64 : 1;
+    uint32_t align = g_ops->scanout_align_pages ? g_ops->scanout_align_pages : 1;
     uint32_t idx = (g_cursor_ggtt >> 12) + CURSOR_PAGES;
     for (int b = 1; b < SCANOUTS; b++) {
         idx = (idx + align - 1) / align * align;
@@ -511,10 +494,7 @@ static int intel_probe(void) {
     uint32_t ggms = (gmch >> 6) & 3;
     uint64_t gtt_bytes = ggms ? ((uint64_t)1 << ggms) << 20 : 0;
     g_gtt_entries = (uint32_t)(gtt_bytes / 8);
-    uint32_t gms = (gmch >> 8) & 0xFF;
-    g_stolen_size = (uint64_t)gms << 25;
-    // Gen9 adds 4 MiB steps above 0xF0 (Linux's gen9_stolen_size).
-    if (g_gen == 9 && gms >= 0xF0) g_stolen_size = (uint64_t)(gms - 0xF0 + 1) << 22;
+    g_stolen_size = g_ops->stolen_bytes((gmch >> 8) & 0xFF);
     g_stolen_base = hb ? (pci_config_read32(hb, GMCH_BSM) & 0xFFF00000u) : 0;
     klog_printf("intel-display: %04x:%04x mmio %#llx/%lluM aperture %#llx/%lluM gtt %u entries stolen %#llx/%lluM cmd %#x\n",
                 g_dev->vendor_id, g_dev->device_id,
@@ -523,8 +503,7 @@ static int intel_probe(void) {
                 g_gtt_entries, (unsigned long long)g_stolen_base,
                 (unsigned long long)(g_stolen_size >> 20),
                 pci_config_read16(g_dev, 0x04));
-    if (g_gen == 9) intel_gen9_readout_log();
-    else            log_readout();
+    g_ops->readout_log();
 
     // GRUB's framebuffer must be inside the aperture: the plane's
     // DSPSURF is a GGTT offset, and the aperture is that offset seen
@@ -541,7 +520,7 @@ static int intel_probe(void) {
     uint32_t want_surf = (uint32_t)(cur.addr - g_aperture);
     for (int p = 0; p < 3; p++) {
         if (rd(DSPSURF(p)) != want_surf) continue;
-        if (!intel_display_plane_matches(g_gen, rd(DSPCNTR(p)), rd(DSPSTRIDE(p)), cur.pitch))
+        if (!g_ops->plane_matches(rd(DSPCNTR(p)), rd(DSPSTRIDE(p)), cur.pitch))
             continue;
         g_pipe = p;
         break;
@@ -567,20 +546,18 @@ static int intel_probe(void) {
     setup_scanouts();
     g_native_w = g_surface.width;
     g_native_h = g_surface.height;
-    if (g_gen != 8) return 1;   // gen9: the cursor and the flip, nothing more
-    setup_backlight();
-    intel_aux_init();
-    // MODESET and SCALING: the native mode is what the firmware lit, the
-    // smaller ones are the fitter's, and the buffer never moves.
-    intel_driver.caps |= DISPLAY_CAP_MODESET | DISPLAY_CAP_SCALING;
+    if (g_ops->claimed) g_ops->claimed();
+    // MODESET and SCALING where the generation can: the native mode is
+    // what the firmware lit, the smaller ones are scaled, and the buffer
+    // never moves.
+    intel_driver.caps |= g_ops->caps;
     return 1;
 }
 
 static void intel_get_surface(struct display_surface *out) { *out = g_surface; }
 
-// Gen8's panel answers on DDI A's AUX channel; gen9's monitor on GMBUS.
 static int intel_read_edid(uint8_t *out, int cap) {
-    return g_gen == 8 ? intel_aux_read_edid(out, cap) : intel_gen9_read_edid(g_pipe, out, cap);
+    return g_ops && g_ops->read_edid ? g_ops->read_edid(g_pipe, out, cap) : 0;
 }
 
 // Modes: the panel's native size (what the firmware lit, index 0) and
@@ -647,7 +624,7 @@ void intel_display_fit_window(int scaling, uint32_t w, uint32_t h, uint32_t pw, 
 static int fit_current(uint32_t w, uint32_t h) {
     uint32_t x, y, ww, wh;
     intel_display_fit_window(display_scaling(), w, h, g_native_w, g_native_h, &x, &y, &ww, &wh);
-    if (!intel_modeset_fit(w, h, x, y, ww, wh)) return 0;
+    if (!g_ops->fit || !g_ops->fit(w, h, x, y, ww, wh)) return 0;
     g_surface.width = w;
     g_surface.height = h;
     for (int b = 0; b < SCANOUTS; b++) { g_scanout[b].width = w; g_scanout[b].height = h; }
@@ -701,9 +678,45 @@ void intel_display_register(void) {
 }
 
 int intel_display_active(void) { return g_active; }
-int intel_display_gen(void) { return g_active ? g_gen : 0; }
+int intel_display_gen(void) { return g_active ? g_ops->gen : 0; }
 
-// The eDP modeset is gen8's register map; gen9 never reaches it.
-int intel_display_pipe_cycle(void) { return g_active && g_gen == 8 ? intel_modeset_pipe_cycle() : 0; }
-int intel_display_link_retrain(void) { return g_active && g_gen == 8 ? intel_modeset_link_retrain() : 0; }
-int intel_display_native(void) { return g_active && g_gen == 8 ? intel_modeset_native() : 0; }
+// Each generation's own mechanisms, or refused where it has none.
+int intel_display_pipe_cycle(void) { return g_active && g_ops->pipe_cycle ? g_ops->pipe_cycle() : 0; }
+int intel_display_link_retrain(void) { return g_active && g_ops->link_retrain ? g_ops->link_retrain() : 0; }
+int intel_display_native(void) { return g_active && g_ops->native ? g_ops->native() : 0; }
+
+// --- Broadwell's table ---------------------------------------------------
+
+static uint64_t gen8_stolen_bytes(uint32_t gms) { return (uint64_t)gms << 25; }   // 32 MiB units
+
+static int gen8_plane_matches(uint32_t cntr, uint32_t stride, uint32_t pitch) {
+    return intel_display_plane_matches(8, cntr, stride, pitch);
+}
+
+static void gen8_claimed(void) {
+    setup_backlight();
+    intel_aux_init();
+}
+
+// The eDP panel answers on DDI A's AUX channel, whatever the pipe.
+static int gen8_read_edid(int pipe, uint8_t *out, int cap) {
+    (void)pipe;
+    return intel_aux_read_edid(out, cap);
+}
+
+const struct intel_gen_ops intel_gen8_ops = {
+    .gen = 8,
+    .ids = BDW_IDS,
+    .nids = (int)(sizeof BDW_IDS / sizeof BDW_IDS[0]),
+    .stolen_bytes = gen8_stolen_bytes,
+    .readout_log = log_readout,
+    .plane_matches = gen8_plane_matches,
+    .scanout_align_pages = 1,   // gen8's layout, packed after the cursor
+    .claimed = gen8_claimed,
+    .read_edid = gen8_read_edid,
+    .caps = DISPLAY_CAP_MODESET | DISPLAY_CAP_SCALING,
+    .fit = intel_modeset_fit,
+    .pipe_cycle = intel_modeset_pipe_cycle,
+    .link_retrain = intel_modeset_link_retrain,
+    .native = intel_modeset_native,
+};

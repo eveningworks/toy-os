@@ -101,6 +101,34 @@
 #define TRANS_DDI_FUNC_ENABLE (1u << 31)
 
 
+// --- what differs between generations -------------------------------------
+//
+// ONE TABLE PER GENERATION, chosen by device id in find_gpu(); every
+// generation-specific path goes through it. Scattered `if (gen == 9)`
+// checks were how a gen8 register write could reach gen9 unnoticed: a
+// missing slot here is a NULL the caller checks, not a wrong write.
+struct intel_gen_ops {
+    int gen;
+    const uint16_t *ids;
+    int nids;
+    uint64_t (*stolen_bytes)(uint32_t gms);   // GMCH_CTRL's GMS field, decoded
+    void (*readout_log)(void);                // the firmware's state, logged at probe
+    int  (*plane_matches)(uint32_t cntr, uint32_t stride, uint32_t pitch);
+    int  (*cursor_prepare)(int pipe);         // NULL: the common setup is enough
+    uint32_t scanout_align_pages;             // a scanout's GGTT alignment
+    void (*claimed)(void);                    // after the common setup; NULL for none
+    int  (*read_edid)(int pipe, uint8_t *out, int cap);
+    uint32_t caps;                            // DISPLAY_CAP_MODESET/SCALING it supports
+    // A mode at the native timing, scaled: source w x h shown in the
+    // window at x,y of ww x wh. Required with DISPLAY_CAP_MODESET.
+    int  (*fit)(uint32_t w, uint32_t h, uint32_t x, uint32_t y, uint32_t ww, uint32_t wh);
+    // kernel.intel_cycle's mechanisms; NULL where a generation has none.
+    int  (*pipe_cycle)(void);
+    int  (*link_retrain)(void);
+    int  (*native)(void);
+};
+extern const struct intel_gen_ops intel_gen8_ops, intel_gen9_ops;
+
 uint32_t intel_rd(uint32_t off);
 void     intel_wr(uint32_t off, uint32_t v);
 int      intel_display_pipe(void);   // the pipe scanning the framebuffer, or -1
@@ -111,13 +139,7 @@ int  intel_aux_read_edid(uint8_t *out, int cap);   // display_driver.read_edid
 int  intel_aux_native_read(uint32_t addr, uint8_t *buf, int len); // DPCD; bytes or -1
 int  intel_aux_native_write(uint32_t addr, const uint8_t *buf, int len);
 
-// intel_gen9.c -- Kaby Lake's firmware state, logged; and the cursor's
-// slice of the display buffer, carved from the end of the plane's.
-void intel_gen9_readout_log(void);
-int  intel_gen9_cursor_ddb(int pipe);
-// The monitor's EDID over GMBUS on the pin pair the pipe's DDI uses,
-// read once and cached; logs the firmware's timing against it.
-int  intel_gen9_read_edid(int pipe, uint8_t *out, int cap);
+// intel_gen9.c -- Kaby Lake: intel_gen9_ops and what it points at.
 
 // intel_gmbus.c -- the display engine's I2C, for an HDMI/DVI EDID.
 int  intel_gmbus_pin_for_port(int port);   // 0 when the DDI has none
