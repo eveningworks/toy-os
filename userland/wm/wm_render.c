@@ -2024,6 +2024,7 @@ static int verify_reported; // report each distinct failure once, not per frame
 // full repaint even if the previous session left state behind.
 void wm_render_reset(void) {
     first_frame = 1;
+    wm_overlay_reset();
     prev_cursor_x = prev_cursor_y = -1;
     prev_cursor_box_w = prev_cursor_box_h = 0;
 }
@@ -2171,6 +2172,11 @@ void wm_render_frame(int mx, int my) {
     unsigned long long t0_cyc = __builtin_ia32_rdtsc();
 
     compute_window_damage();
+    // OVERLAYS DAMAGE THEIR OWN RECTS while open; a close is damaged by
+    // the registry, which also says which still cost a full frame
+    // (wm_overlay.h's `repaint`). Before damage_cursor() below, which adds
+    // the pointer only to a frame that already has damage.
+    int overlay_full = wm_overlay_frame_begin();
 
     // The FIRST frame of a GUI session is always a full repaint, never
     // damage-limited. wm_run() polls the debug console (and anything
@@ -2184,14 +2190,11 @@ void wm_render_frame(int mx, int my) {
         first_frame = 0;
         damage_reset();
     }
+    if (overlay_full) damage_reset();
     // Only when something else already reported damage: with no damage
     // the frame is a full repaint anyway, and adding a rect here would
     // narrow it -- the same trap tray_init() hit (see wm_tray.c).
     if (damage_x1 > damage_x0) damage_cursor(mx, my);
-
-    // OVERLAYS DAMAGE THEIR OWN RECTS; the registry says which of them
-    // still cost a full frame, and when (wm_overlay.h's `repaint`).
-    if (wm_overlay_full_repaint()) damage_reset();
 
     // Clip this pass to the accumulated damage region, if any was
     // reported. No damage this frame (menus, dialogs, the clock tick,

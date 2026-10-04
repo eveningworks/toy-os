@@ -344,6 +344,8 @@ static void layout_log_flush(int src);
 static void wmap_sync(struct uapp *a);
 static int wmchan_send(uint32_t type, uint32_t window,
                        int aa, int bb, int cc, const char *text);
+// `text` and `dmg` share the message's one payload field: AT MOST ONE of
+// them, and a call naming both is refused (returns 0, nothing sent).
 static int wmchan_send_damage(uint32_t type, uint32_t window, int aa, int bb, int cc,
                               const char *text, const struct win_damage *dmg);
 
@@ -893,6 +895,7 @@ static int comp_pid(void) {
 // The payload rides the text union: a string, or a present's damage.
 static int wmchan_send_damage(uint32_t type, uint32_t window, int aa, int bb, int cc,
                               const char *text, const struct win_damage *dmg) {
+    if (text && dmg) return 0;   // one union, one payload (see the prototype)
     if (!wmchan()) return 0;
     struct wmchan_msg m;
     memset(&m, 0, sizeof m);

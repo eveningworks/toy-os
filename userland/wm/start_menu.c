@@ -1093,8 +1093,7 @@ void start_menu_close(void) {
     start_menu_open = 0;
     flash_row = -1;
     hover_token = 0;
-    start_menu_damage(); // the rows it just vacated
-    damage_start_button();
+    damage_start_button();   // the menu's own rect is the core's (wm_overlay.h)
     redraw_pending = 1;
 }
 

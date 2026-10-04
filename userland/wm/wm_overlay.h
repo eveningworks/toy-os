@@ -192,17 +192,20 @@ struct wm_overlay {
     // one full frame after it closes, for whatever its action changed
     // without declaring damage. WHILE_OPEN: every frame while it is up,
     // being the whole screen, and one after. Read through
-    // wm_overlay_full_repaint().
+    // wm_overlay_frame_begin().
     int repaint;
 };
 
 #define WM_OVERLAY_REPAINT_ON_CLOSE  1
 #define WM_OVERLAY_REPAINT_WHILE_OPEN 2
 
-// Does this frame have to be a full repaint for an overlay's sake (see
-// `repaint`)? Called ONCE a frame, before the damage is final: it is
-// what notices a close, and a second call in the same frame would not.
-int wm_overlay_full_repaint(void);
+// Once a frame, before its damage is final: damages the last drawn rect
+// of every overlay that has CLOSED since it was drawn -- so no overlay
+// damages its own close -- and returns 1 when the frame must be a full
+// repaint for an overlay's sake (see `repaint`).
+int wm_overlay_frame_begin(void);
+// A new GUI session: nothing is open and nothing has been drawn.
+void wm_overlay_reset(void);
 
 // Draws every open overlay, least modal first. Called once per frame
 // from wm_render.c, in place of six named calls. ALSO records where

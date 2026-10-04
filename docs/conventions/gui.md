@@ -5227,8 +5227,12 @@ for DAMAGE. **EVERY ROW SAYS WHEN IT COSTS A FULL FRAME** (`repaint`,
 the last column): `WM_OVERLAY_REPAINT_ON_CLOSE` for one whose action
 may change the scene undeclared (the context menu, the confirm dialog),
 `WHILE_OPEN` for one that IS the screen (the Leave page), 0 for the
-rest. A submenu or panel that closes damages its WINDOW rect, shadow
-included -- `wm_damage_window_rect()`, never `wm_damage_rect()`.
+rest. **A CLOSE IS THE CORE'S TO DAMAGE**: `wm_overlay_frame_begin()`
+damages the last drawn rect, shadow included, of every overlay that
+closed since it was drawn -- whoever closed it -- so a close path
+damages nothing itself. Only the context menu, which has no `rect`,
+damages its own levels, and a submenu closing under it its WINDOW rect
+(`wm_damage_window_rect()`, never `wm_damage_rect()`).
 
 **The core records the rect after it DRAWS each overlay**, so "where
 was it" is bookkeeping nobody has to remember. `wm_render.c` already

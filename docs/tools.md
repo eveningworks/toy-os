@@ -2737,10 +2737,13 @@ window without going through it will find its layout polls timing out.
   window as opaque reddens the verifier -- NOT the pixel, which the
   previous frame's pixels in the back buffer can still satisfy. Also two
   damage checks: a desktop-menu submenu closed by hover leaves no shadow
-  band past its far edge (darker while open is the control), and
-  re-setting `system.timezone` to its own value -- every client
-  re-presents an identical frame -- counts as `presents_unchanged` and
-  costs no full-screen frame.
+  band past its far edge (darker while open is the control); the
+  calendar, closed by opening the network flyout, leaves its rect
+  wallpaper again; and re-setting `system.timezone` to its own value --
+  every client re-presents an identical frame -- counts as
+  `presents_unchanged`, with no present charged a full frame
+  (`presents_full`, not the global full-frame count, which debug
+  commands move).
 
 - **`smooth_scroll_test.py`** -- smooth scrolling (`ui/uui_scrollanim.h`)
   in the File Manager's icon grid, and the `desktop.smooth_scroll`

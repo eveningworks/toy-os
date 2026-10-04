@@ -119,18 +119,6 @@ int wm_overlay_modal_open(void) {
     return 0;
 }
 
-int wm_overlay_full_repaint(void) {
-    static int was[OVERLAY_COUNT];
-    int full = 0;
-    for (int i = 0; i < OVERLAY_COUNT; i++) {
-        int now = g_overlays[i].is_open();
-        int r = g_overlays[i].repaint;
-        if ((r == WM_OVERLAY_REPAINT_WHILE_OPEN && now) || (r && was[i] && !now)) full = 1;
-        was[i] = now;
-    }
-    return full;
-}
-
 int wm_overlay_any_open(void) {
     for (int i = 0; i < OVERLAY_COUNT; i++)
         if (!g_overlays[i].passive && g_overlays[i].is_open()) return 1;
@@ -170,8 +158,8 @@ void wm_overlay_draw(int mx, int my) {
             wm_logf("wm: overlay %s %s\n", o->name, open ? "opened" : "closed");
         g_was_open[i] = open;
         if (!open) {
-            // Its closing damage has already covered where it was, so
-            // the record has done its job; keeping it would damage a
+            // wm_overlay_frame_begin() damaged where it was this frame,
+            // so the record has done its job; keeping it would damage a
             // dead rect on every later call.
             g_drawn[i].w = 0;
             continue;
@@ -180,6 +168,32 @@ void wm_overlay_draw(int mx, int my) {
         int x, y, w, h;
         if (o->rect && o->rect(&x, &y, &w, &h))
             g_drawn[i] = (typeof(g_drawn[0])){ x, y, w, h };
+    }
+}
+
+// THE CLOSE IS THE CORE'S TO DAMAGE: an overlay that was drawn last frame
+// and is shut now has its last drawn rect, shadow included, damaged here
+// -- whoever closed it, by whatever path. Before the frame's damage is
+// final, so after input and before wm_overlay_draw() clears the record.
+int wm_overlay_frame_begin(void) {
+    int full = 0;
+    for (int i = 0; i < OVERLAY_COUNT; i++) {
+        int now = g_overlays[i].is_open();
+        int r = g_overlays[i].repaint;
+        if (g_was_open[i] && !now) {
+            if (g_drawn[i].w > 0)
+                wm_damage_window_rect(g_drawn[i].x, g_drawn[i].y, g_drawn[i].w, g_drawn[i].h);
+            if (r) full = 1;
+        }
+        if (r == WM_OVERLAY_REPAINT_WHILE_OPEN && now) full = 1;
+    }
+    return full;
+}
+
+void wm_overlay_reset(void) {
+    for (int i = 0; i < OVERLAY_COUNT; i++) {
+        g_was_open[i] = 0;
+        g_drawn[i].w = 0;
     }
 }
 
@@ -274,9 +288,8 @@ int wm_overlay_hover(int mx, int my, uint8_t buttons) {
                                               parent ? -1 : my) : 0;
         if (want == g_hover[i]) continue;
         g_hover[i] = want;
-        // Damaged only while it is up: a closing overlay damages its
-        // own rect on the way out, and doing it again from here would
-        // ask for a repaint of a panel nothing is drawing.
+        // Damaged only while it is up: a closed overlay's rect is the
+        // core's to damage (wm_overlay_frame_begin()).
         if (o->is_open()) o->damage();
         changed = 1;
     }

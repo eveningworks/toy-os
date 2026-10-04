@@ -189,8 +189,7 @@ static void remote_open_now(void) {
 
 void remote_close(void) {
     if (!remote_open) return;
-    remote_damage();         // before the flag drops, as every flyout does
-    remote_open = 0;
+    remote_open = 0;   // where it was drawn is damaged by the core (wm_overlay.h)
     g_hover = 0;
 }
 

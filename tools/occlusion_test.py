@@ -23,9 +23,12 @@ And two about what is damaged rather than drawn:
   - SUBMENU SHADOW: the desktop menu's Icon size submenu, opened and then
     closed by hover, leaves no shadow band beyond its far edge (the
     control: the band IS darker while it is open).
+  - CLOSED BY ANOTHER: the calendar, closed by opening the network
+    flyout, leaves its rect wallpaper again -- the core damages a closed
+    overlay's last rect itself.
   - UNCHANGED PRESENT: re-setting `system.timezone` to its own value makes
     every client re-present an identical frame; each must be counted as
-    unchanged and none may cost a full-screen frame.
+    unchanged, and no present may ask for a full frame (`presents_full`).
 
     python3 tools/vm.py start
     python3 tools/occlusion_test.py
@@ -119,7 +122,11 @@ def submenu_shadow(dbg, qmp, tmp, res):
     right = sub["x"] > m["x"]
     q = (sub["x"] + sub["w"] + 4 if right else sub["x"] - 5, sub["y"] + 12)
     opened = shot(qmp, tmp, "sub_open").getpixel(q)
-    dbg.warp_cursor(qmp, *dbg.ctxmenu_row("Refresh"))
+    refresh = dbg.ctxmenu_row("Refresh")
+    if not res.check("the desktop menu offers Refresh", refresh is not None):
+        dbg.key("0x1b")
+        return
+    dbg.warp_cursor(qmp, *refresh)
     dbg.settle(1.0)
     closed_ok = dbg.ctxmenu().get("sub") is None
     after = shot(qmp, tmp, "sub_closed").getpixel(q)
@@ -139,14 +146,66 @@ def submenu_shadow(dbg, qmp, tmp, res):
               "; ".join(bugs)[:400])
 
 
+def calendar_closed_by_flyout(dbg, qmp, tmp, res):
+    """An overlay closed by ANOTHER opening is repainted where it was --
+    the core damages a closed overlay's last rect, whoever closed it.
+    Open the calendar from the tray clock, then the network flyout (which
+    closes it), and sample the calendar's former rect away from the
+    flyout: the wallpaper's own pixels again, where while it was open they
+    were the panel's (the control)."""
+    g = dbg.json("gui calendar --json")
+    n = dbg.json("gui network --json")
+    if not res.check("the tray has a clock and a network item to click",
+                     g.get("clock") and n.get("tray", {}).get("w", 0) > 0, str(n.get("tray"))):
+        return
+    sw = dbg.state()["screen"]["w"]
+    dbg.warp_cursor(qmp, sw // 2, 40)
+    dbg.settle()
+    before = shot(qmp, tmp, "cal_before")
+    dbg.send(f"gui click {g['clock']['cx']} {g['clock']['cy']}")
+    dbg.settle(1.0)
+    g = dbg.json("gui calendar --json")
+    if not res.check("clicking the clock opened the calendar", g.get("open")):
+        return
+    opened = shot(qmp, tmp, "cal_open")
+    dbg.send(f"gui click {n['tray']['cx']} {n['tray']['cy']}")
+    dbg.settle(1.0)
+    n = dbg.json("gui network --json")
+    shut = not dbg.json("gui calendar --json").get("open")
+    res.check("opening the network flyout closed the calendar", shut and n.get("open"),
+              f"calendar closed={shut} network open={n.get('open')}")
+    dbg.warp_cursor(qmp, sw // 2, 40)   # no tooltip from the tray icon over the probes
+    dbg.settle(1.0)
+    after = shot(qmp, tmp, "cal_closed")
+    m = 40   # clear of the flyout and its shadow
+    pts = [(x, y) for x in range(g["x"] + 8, g["x"] + g["w"] - 8, 16)
+           for y in range(g["y"] + 8, g["y"] + g["h"] - 8, 16)
+           if not (n["x"] - m <= x < n["x"] + n["w"] + m and n["y"] - m <= y < n["y"] + n["h"] + m)]
+    differ_open = sum(1 for p in pts if opened.getpixel(p) != before.getpixel(p))
+    stale = [p for p in pts if max(abs(a - b) for a, b in
+                                   zip(after.getpixel(p), before.getpixel(p))) > 1]
+    res.check("the open calendar covered the probes (the control)",
+              pts and differ_open >= len(pts) // 2, f"{differ_open} of {len(pts)} differed")
+    res.check("...and once the flyout closed it, its rect is wallpaper again",
+              pts and not stale, f"{len(stale)} of {len(pts)} stale, first {stale[:1]}")
+    dbg.send(f"gui click {n['tray']['cx']} {n['tray']['cy']}")   # close the flyout
+    dbg.settle()
+    bugs = dbg.damage_bugs()
+    res.check("...and the verifier saw nothing stale as it closed", bugs == [],
+              "; ".join(bugs)[:400])
+
+
 def unchanged_present(dbg, res):
     """A present that changed nothing draws NO frame. Every client re-presents
     on a setting notice (uapp redraws on WIN_EV_SETTING), almost always an
     identical frame; with the damage list empty, the compositor must not
-    turn it into a full-screen repaint."""
+    turn it into a full-screen repaint. Judged by the compositor's own
+    attribution (`presents_full`: presents that asked for a frame with no
+    damage recorded), not by the global full-frame count, which a debug
+    command may move for its own reasons."""
     def counts():
-        c = dbg.json("gui compositor --json")
-        return c["frame_full"]["n"], c["windows"]["presents_unchanged"]
+        c = dbg.json("gui compositor --json")["windows"]
+        return c["presents_full"], c["presents_unchanged"]
     tz = (dbg.send("sh config get system.timezone") or "").strip().splitlines()
     tz = tz[-1].split()[-1] if tz else "UTC"
     dbg.settle(1.0)
@@ -157,13 +216,14 @@ def unchanged_present(dbg, res):
     full1, same1 = counts()
     res.check("an unchanged re-present is recognised as unchanged",
               same1 - same0 >= 2, f"presents_unchanged {same0} -> {same1}")
-    res.check("...and costs no full-screen frame",
-              full1 == full0, f"full frames {full0} -> {full1}")
+    res.check("...and no present asked for a full-screen frame",
+              full1 == full0, f"presents_full {full0} -> {full1}")
 
 
 def run(dbg, qmp, tmp, res):
     try:
-        submenu_shadow(dbg, qmp, tmp, res)
+        submenu_shadow(dbg, qmp, tmp, res)   # turns the verifier on
+        calendar_closed_by_flyout(dbg, qmp, tmp, res)
     finally:
         dbg.damage_verify(False)
     for _ in range(2):

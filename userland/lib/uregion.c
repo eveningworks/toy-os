@@ -117,9 +117,9 @@ int uregion_contains(const struct uregion *g, int x, int y) {
 
 // Equal rows, eight bytes at a time, stopping at the first difference.
 // The loads go through memcpy because a row of an odd width is only
-// four-byte aligned. This is at memory bandwidth on the host: a wider,
-// vectorisable compare and a variant returning the first differing
-// pixel both measured SLOWER (1280x720, ~0.14 ms a present).
+// four-byte aligned. It runs at memory bandwidth; a wider, vectorisable
+// compare and a variant returning the first differing pixel were both
+// measured slower.
 static int row_eq(const uint32_t *a, const uint32_t *b, int w) {
     int i = 0;
     for (; i + 2 <= w; i += 2) {

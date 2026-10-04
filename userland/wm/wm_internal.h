@@ -518,6 +518,9 @@ void wm_cull_stats(struct wm_cull_stats *out);
 // Client presents whose damage list named nothing on screen, since boot
 // (wm_client.c): each drew NO frame.
 unsigned wm_client_presents_unchanged(void);
+// ...and presents that asked for a frame with no damage recorded, i.e. a
+// full repaint charged to a present. None should.
+unsigned wm_client_presents_full(void);
 
 // Damage verification (debug): render every frame twice and report any
 // pixel the damage-limited pass got wrong. See wm_render.c's own

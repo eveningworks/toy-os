@@ -355,10 +355,7 @@ static void network_open_now(void) {
 
 void network_close(void) {
     if (!network_open) return;
-    // Damaged BEFORE the flag drops, or the rect is computed for a
-    // panel the frame is no longer drawing.
-    network_damage();
-    network_open = 0;
+    network_open = 0;   // where it was drawn is damaged by the core (wm_overlay.h)
     g_hover = 0;
 }
 
