@@ -204,6 +204,28 @@ int dg_start(int argc, char **argv) {
 
 void dg_tick(void) { doomgeneric_Tick(); }
 
+extern boolean sendpause;   // g_game.c's, in no header
+
+static int g_held_pause;    // dg_hold() asked for the pause in force
+
+void dg_hold(int on) {
+    if (on) {
+        if (!paused && !sendpause && gamestate == GS_LEVEL && !menuactive &&
+            !demoplayback && !netgame) {
+            sendpause = true;   // what the Pause key sets: taken on the next tic
+            g_held_pause = 1;
+        }
+        return;
+    }
+    if (!g_held_pause) return;
+    g_held_pause = 0;
+    if (sendpause) sendpause = false;   // not taken yet: withdrawn
+    else if (paused) sendpause = true;
+}
+
+int dg_paused(void) { return paused; }
+int dg_menu_active(void) { return menuactive; }
+
 void dg_message(const char *text) {
     players[consoleplayer].message = (char *)text;
     message_dontfuckwithme = true;

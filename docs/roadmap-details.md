@@ -2946,9 +2946,12 @@ pointer grab TWS does not have), and resizing.
 **What a port still has to decide or build:**
 
 - **The WAD.** Doom will not run without an IWAD. The shareware
-  `doom1.wad` is ~4 MB; Freedoom is BSD-licensed and ~11 MB. Where it
-  lives (in the repo, fetched at build time, or supplied by the user)
-  is a licensing question as much as a size one.
+  `doom1.wad` is ~4 MB; Freedoom Phase 1 is BSD-licensed, a 23 MB zip
+  holding a 28 MB `freedoom1.wad`. Where it lives (in the repo, fetched
+  at build time, or supplied by the user) is a licensing question as
+  much as a size one. **Settled:** fetched at build time only with
+  `EXTRAS=1`, or by DOOM's own game-data card at the user's request,
+  pinned by SHA-256 (`docs/decisions/gui.md`).
 - **The backend**, `DG_Init`/`DG_DrawFrame`/`DG_SleepMs`/`DG_GetTicksMs`/
   `DG_GetKey` over `uapp`, plus a palette-to-RGB conversion and an
   integer scale from 320x200.

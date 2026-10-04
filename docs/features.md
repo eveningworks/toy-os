@@ -199,6 +199,14 @@ the shutter leaves a card in the corner with the picture and Open / Copy
 / Folder / Save as (the shared chooser; a copy, as .qoi or .png). `/bin/screenshot` does the same
 from a shell.
 
+**DOOM fetches its own game data**: with no IWAD its window offers
+Freedoom (free, BSD) or id's shareware episode, downloads the one chosen
+-- following GitHub's redirect, unpacking Freedoom's zip -- and refuses
+anything that does not match its pinned SHA-256; "Use a file..." takes
+one you have. A launcher page shows the data's own title picture, Start
+and the keys, and **F1 in a level** puts the same key sheet over the
+paused game; F1 again is DOOM's own help.
+
 **Notepad** is a tabbed editor in Kate's and Windows 11 Notepad's shape:
 a colour-coded command bar, a line-number gutter with the caret's line
 tinted, find with every hit highlighted, a live Markdown preview beside

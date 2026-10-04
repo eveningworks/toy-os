@@ -78,6 +78,13 @@ int dg_start(int argc, char **argv);
 // One frame of game. Called from the app's on_tick.
 void dg_tick(void);
 
+// The app's own sheet is over the game: pause a level in progress the
+// way the Pause key does -- the music stops too -- and on 0 unpause it
+// only if this paused it. A menu, a demo or the title loop is left alone.
+void dg_hold(int on);
+int dg_paused(void);        // the game is paused (by anyone)
+int dg_menu_active(void);   // a menu -- or DOOM's own help -- is up
+
 // Puts `text` on the game's message line, as F5's "High detail" does --
 // shown with messages switched off too, and only while a level is up.
 // Kept by pointer: `text` must outlive the message.

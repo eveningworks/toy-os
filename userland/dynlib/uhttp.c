@@ -131,7 +131,24 @@ struct hdr_scan {
     int  line_len;
     unsigned long content_length;   // 0 = the server did not say
     int gzip;                       // Content-Encoding: gzip
+    // Location, kept WHOLE when a redirect may be followed: unlike the
+    // names above it is a value of any length, so it is gathered beside
+    // the line rather than in it. Heap; the scan's owner frees it.
+    int want_loc, in_loc, loc_over;
+    char *loc;
+    size_t loc_len;
 };
+
+// Longer than any redirect a real server sends; a longer one is refused.
+#define UHTTP_LOCATION_MAX 4096
+
+static void loc_add(struct hdr_scan *s, char c) {
+    if (s->loc_over) return;
+    if (!s->loc && !(s->loc = malloc(UHTTP_LOCATION_MAX))) { s->loc_over = 1; return; }
+    if (s->loc_len + 1 >= UHTTP_LOCATION_MAX) { s->loc_over = 1; return; }
+    s->loc[s->loc_len++] = c;
+    s->loc[s->loc_len] = 0;
+}
 
 static int hdr_prefix(const char *line, const char *name) {
     while (*name) {
@@ -186,9 +203,19 @@ static long find_body(struct hdr_scan *s, const char *buf, size_t n) {
         s->tail[2] = c;
         if (s->have < 3) s->have++;
 
-        if (c == '\n') hdr_line(s);
-        else if (c != '\r' && s->line_len < (int)sizeof s->line - 1)
-            s->line[s->line_len++] = c;
+        if (c == '\n') {
+            s->in_loc = 0;
+            hdr_line(s);
+        } else if (c != '\r') {
+            if (s->line_len < (int)sizeof s->line - 1) s->line[s->line_len++] = c;
+            if (s->in_loc) {
+                loc_add(s, c);
+            } else if (s->want_loc && s->line_len == 9 && hdr_prefix(s->line, "location:")) {
+                s->in_loc = 1;   // a second Location replaces the first
+                s->loc_len = 0;
+                s->loc_over = 0;
+            }
+        }
 
         if (crlf || lflf) {
             s->done = 1;
@@ -231,14 +258,24 @@ static void fail(struct uhttp_request *r, const char *fmt, ...) {
 // over http, because falling back on a TLS or certificate failure would
 // turn "this server's identity is wrong" into "let us use plaintext
 // instead" -- the downgrade HSTS exists to stop.
-enum attempt { ATTEMPT_OK, ATTEMPT_NO_CONNECT, ATTEMPT_FAILED };
+// REDIRECT hands `*location` (heap) to the caller, which follows it.
+enum attempt { ATTEMPT_OK, ATTEMPT_NO_CONNECT, ATTEMPT_FAILED, ATTEMPT_REDIRECT };
+
+static int is_redirect(int status) {
+    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+}
 
 static enum attempt attempt_fetch(struct uhttp_request *req,
-                                  const struct uhttp_url *up, uint32_t ip) {
-    const struct uhttp_url u = *up;
+                                  const struct uhttp_url *up, uint32_t ip, char **location) {
+    // By pointer: the URL is over 2 KiB, which a copy would put on the stack.
+    const struct uhttp_url *u = up;
 
     req->status = 0;
     req->body_bytes = 0;
+    char *reqbuf = NULL;
+    struct hdr_scan scan;
+    memset(&scan, 0, sizeof scan);
+    scan.want_loc = req->max_redirects > 0;
 
     // The compressed body, when there is one. Declared here so every
     // `goto done_err` can release it.
@@ -252,18 +289,18 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
         return ATTEMPT_FAILED;
     }
 
-    if (sys_connect(t.fd, ip, u.port, 0) < 0) {
+    if (sys_connect(t.fd, ip, u->port, 0) < 0) {
         // The REASON, as wget and curl print it: refused and timed out
         // are different faults with different fixes.
-        fail(req, "cannot connect to %s port %u: %s", u.host, (unsigned)u.port,
+        fail(req, "cannot connect to %s port %u: %s", u->host, (unsigned)u->port,
              strerror(errno));
         close(t.fd);
         return ATTEMPT_NO_CONNECT;
     }
 
-    if (u.tls) {
+    if (u->tls) {
         struct utls_config cfg = {
-            .hostname = u.host,
+            .hostname = u->host,
             .ca_dir   = req->ca_dir,
             .insecure = req->insecure,
             .entropy  = req->allow_weak_entropy ? UTLS_ENTROPY_ALLOW_WEAK
@@ -291,15 +328,20 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
     // arithmetic. The Host header is sent anyway -- it is 1.1's, but
     // name-based virtual hosting is universal and a server given no
     // name serves the wrong site.
-    char reqbuf[UHTTP_PATH_MAX + UHTTP_HOST_MAX + 128];
-    int n = snprintf(reqbuf, sizeof reqbuf,
+    size_t reqcap = UHTTP_PATH_MAX + UHTTP_HOST_MAX + 128;
+    reqbuf = malloc(reqcap);
+    if (!reqbuf) {
+        fail(req, "out of memory for the request");
+        goto done_err;
+    }
+    int n = snprintf(reqbuf, reqcap,
                      "GET %s HTTP/1.0\r\nHost: %s\r\n"
                      "User-Agent: toy-os/uhttp\r\n"
                      "Accept-Encoding: gzip\r\n"
                      "Connection: close\r\n\r\n",
-                     u.path, u.host);
-    if (n <= 0 || (size_t)n >= sizeof reqbuf) {
-        fail(req, "the request does not fit in %zu bytes", sizeof reqbuf);
+                     u->path, u->host);
+    if (n <= 0 || (size_t)n >= reqcap) {
+        fail(req, "the request does not fit in %zu bytes", reqcap);
         goto done_err;
     }
     if (write_all(&t, reqbuf, (size_t)n) != 0) {
@@ -307,7 +349,6 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
         goto done_err;
     }
 
-    struct hdr_scan scan = { .have = 0, .done = 0 };
     static char buf[4096]; // static: ring 3 warns above a 2 KiB frame
     int saw_status = 0;
 
@@ -332,6 +373,15 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
             long body = find_body(&scan, buf, (size_t)got);
             if (body < 0) continue; // still in the headers
             off = (size_t)body;
+            // A redirect to follow: its body is a page nobody reads.
+            if (scan.want_loc && is_redirect(req->status) && scan.loc_len && !scan.loc_over) {
+                *location = scan.loc;
+                scan.loc = NULL;
+                free(reqbuf);
+                if (t.tls) utls_close(t.tls);
+                close(t.fd);
+                return ATTEMPT_REDIRECT;
+            }
             if (req->on_headers)
                 req->on_headers(req->sink_ctx, req->status, scan.content_length);
         }
@@ -398,6 +448,8 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
         req->body_bytes = (unsigned long)out_len;
     }
     free(gz);
+    free(scan.loc);
+    free(reqbuf);
 
     if (t.tls) utls_close(t.tls);
     close(t.fd);
@@ -405,9 +457,51 @@ static enum attempt attempt_fetch(struct uhttp_request *req,
 
 done_err:
     free(gz);
+    free(scan.loc);
+    free(reqbuf);
     if (t.tls) utls_close(t.tls);
     close(t.fd);
     return ATTEMPT_FAILED;
+}
+
+// Where a redirect points, from where it came from: an absolute URL, a
+// scheme-relative "//host/path", or a path on the same server. Anything
+// else ("page.html" relative to a directory) is refused, not guessed.
+static int next_url(const struct uhttp_url *cur, const char *loc, struct uhttp_url *out) {
+    while (*loc == ' ' || *loc == '\t') loc++;
+    if (!strncmp(loc, "http://", 7) || !strncmp(loc, "https://", 8))
+        return uhttp_parse_url(loc, out);
+    if (loc[0] == '/' && loc[1] == '/') {
+        size_t n = strlen(loc) + 8;
+        char *full = malloc(n);
+        if (!full) return -1;
+        snprintf(full, n, "%s:%s", cur->tls ? "https" : "http", loc);
+        int rc = uhttp_parse_url(full, out);
+        free(full);
+        return rc;
+    }
+    if (loc[0] == '/') {
+        if (strlen(loc) >= sizeof out->path) return -1;
+        *out = *cur;
+        strlcpy(out->path, loc, sizeof out->path);
+        return 0;
+    }
+    return -1;
+}
+
+// Resolved per hop: a redirect may name another host.
+static int resolve_host(struct uhttp_request *req, const char *host, uint32_t *ip) {
+    if (uresolv_parse_ip(host, ip)) return 0;   // 1 = it was a dotted quad already
+    int rc = uresolv_lookup(host, 0, ip);
+    if (rc == -ENODEV) {
+        fail(req, "no nameserver configured -- run `netd`, or set one in /etc/resolv.conf");
+        return -1;
+    }
+    if (rc != 0) {
+        fail(req, "%s: not found", host);
+        return -1;
+    }
+    return 0;
 }
 
 int uhttp_fetch(struct uhttp_request *req) {
@@ -417,49 +511,70 @@ int uhttp_fetch(struct uhttp_request *req) {
     req->body_bytes = 0;
     req->used_tls = 0;
 
-    struct uhttp_url u;
-    if (uhttp_parse_url(req->url, &u) != 0) {
-        fail(req, "cannot parse '%s' as a URL", req->url);
+    // Two URLs, the current and the next hop, on the heap: each is over
+    // 2 KiB (UHTTP_PATH_MAX).
+    struct uhttp_url *u = malloc(2 * sizeof *u);
+    if (!u) {
+        fail(req, "out of memory for the URL");
         return -1;
     }
+    struct uhttp_url *nx = u + 1;
+    int rc = -1;
+    if (uhttp_parse_url(req->url, u) != 0) {
+        fail(req, "cannot parse '%s' as a URL", req->url);
+        goto out;
+    }
 
-    if (u.tls && !utls_available()) {
-        if (u.scheme_given) {
+    if (u->tls && !utls_available()) {
+        if (u->scheme_given) {
             fail(req, "this build has no TLS, so https is not available");
-            return -1;
+            goto out;
         }
-        u.tls = 0; // guessed https on a build without it; http is the answer
-        if (!u.port_given) u.port = 80;
+        u->tls = 0; // guessed https on a build without it; http is the answer
+        if (!u->port_given) u->port = 80;
     }
 
-    // Resolved ONCE. The fallback changes the scheme and the port, never
-    // the host, so a second lookup would ask a question already answered
-    // -- and could answer it differently, which is worse than slow.
-    uint32_t ip = 0;
-    if (!uresolv_parse_ip(u.host, &ip)) { // 1 = it was a dotted quad already
-        int rc = uresolv_lookup(u.host, 0, &ip);
-        if (rc == -ENODEV) {
-            fail(req, "no nameserver configured -- run `netd`, or set one in /etc/resolv.conf");
-            return -1;
+    for (int hop = 0;; hop++) {
+        // Resolved ONCE per host. The fallback changes the scheme and the
+        // port, never the host, so a second lookup would ask a question
+        // already answered -- and could answer it differently.
+        uint32_t ip = 0;
+        if (resolve_host(req, u->host, &ip) != 0) goto out;
+
+        char *loc = NULL;
+        enum attempt r = attempt_fetch(req, u, ip, &loc);
+
+        // THE FALLBACK, and its three conditions are all necessary. Only
+        // a GUESSED scheme may be downgraded (an explicit https:// that
+        // will not connect is an error, not an invitation); only from
+        // https; and only when the port did not answer at all.
+        if (r == ATTEMPT_NO_CONNECT && hop == 0 && !u->scheme_given && u->tls) {
+            if (req->on_fallback) req->on_fallback(req->sink_ctx, u->host);
+            u->tls = 0;
+            if (!u->port_given) u->port = 80;
+            r = attempt_fetch(req, u, ip, &loc);
         }
-        if (rc != 0) {
-            fail(req, "%s: not found", u.host);
-            return -1;
+        if (r != ATTEMPT_REDIRECT) {
+            rc = r == ATTEMPT_OK ? 0 : -1;
+            goto out;
         }
+        int bad = next_url(u, loc, nx) != 0;
+        free(loc);
+        if (bad) {
+            fail(req, "the server redirected to an address this cannot follow");
+            goto out;
+        }
+        if (u->tls && !nx->tls) {
+            fail(req, "refused a redirect from https to plain http");
+            goto out;
+        }
+        if (hop + 1 > req->max_redirects) {
+            fail(req, "more than %d redirects", req->max_redirects);
+            goto out;
+        }
+        struct uhttp_url *t = u; u = nx; nx = t;
     }
-
-    enum attempt r = attempt_fetch(req, &u, ip);
-
-    // THE FALLBACK, and its three conditions are all necessary. Only a
-    // GUESSED scheme may be downgraded (an explicit https:// that will
-    // not connect is an error, not an invitation); only from https; and
-    // only when the port did not answer at all.
-    if (r == ATTEMPT_NO_CONNECT && !u.scheme_given && u.tls) {
-        if (req->on_fallback) req->on_fallback(req->sink_ctx, u.host);
-        u.tls = 0;
-        if (!u.port_given) u.port = 80;
-        r = attempt_fetch(req, &u, ip);
-    }
-
-    return r == ATTEMPT_OK ? 0 : -1;
+out:
+    free(u < nx ? u : nx);   // the one allocation, whichever slot is first
+    return rc;
 }

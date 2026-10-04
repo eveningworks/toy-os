@@ -444,6 +444,11 @@ TESTS = [
     # subsampling and quality) is tools/uimg_hostcheck.py's job; this one
     # proves the same .c file works on this heap, in a real process.
     ("uimg_test", 0, None, None),
+    # One member of a .zip out to a file (lib/uzip.h) -- DOOM's Freedoom
+    # download unpacks through it. The archive is Python zipfile's, so the
+    # reader is checked against another implementation's writer; then a
+    # flipped byte, a stop and a missing member must all leave no file.
+    ("uzip_test", 0, None, None),
     # The screensaver option descriptors, against the ones this image
     # actually ships -- a saver's options are a contract between a data
     # file and two programs that never see each other, and a parser

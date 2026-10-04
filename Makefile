@@ -977,7 +977,9 @@ DOOM_PORT_OBJS = $(patsubst userland/%.c,%,$(DOOM_PORT_SRCS))
 # rule the rest of userland/ already follows.
 DOOM_BACKEND_SRCS = $(shell find userland/backends/doom -name '*.c' 2>/dev/null | sort)
 DOOM_BACKEND_OBJS = $(patsubst userland/%.c,%,$(DOOM_BACKEND_SRCS))
-EXTRA_OBJS_doom = $(DOOM_BACKEND_OBJS) $(DOOM_PORT_OBJS)
+# The app's own parts -- its game data and front end (userland/doom/),
+# outside USERLAND_PROGRAM_DIRS for the reason fm/ is -- then the game.
+EXTRA_OBJS_doom = doom/doom_wad doom/doom_front $(DOOM_BACKEND_OBJS) $(DOOM_PORT_OBJS)
 
 # VENDORED CODE IS COMPILED WITH ITS WARNINGS OFF, on purpose.
 #
@@ -1189,11 +1191,15 @@ uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
 # programs use it.
 ULIB_SO_sum = $(BUILD)/lib/libhash.so
 ULIB_SO_properties = $(BUILD)/lib/libhash.so
-ULIB_SO_wget = $(LIBHTTP_SO) $(LIBSSL_SO)
-ULIB_SO_speedtest = $(LIBHTTP_SO) $(LIBSSL_SO)
-ULIB_SO_hwdata = $(LIBHTTP_SO) $(LIBSSL_SO)
+# libhttp NEEDS libhash (uhttp_download's SHA-256), and a program's link
+# must name it too for ld to resolve libhttp's references.
+ULIB_SO_wget = $(LIBHTTP_SO) $(LIBSSL_SO) $(BUILD)/lib/libhash.so
+ULIB_SO_speedtest = $(LIBHTTP_SO) $(LIBSSL_SO) $(BUILD)/lib/libhash.so
+ULIB_SO_hwdata = $(LIBHTTP_SO) $(LIBSSL_SO) $(BUILD)/lib/libhash.so
 ULIB_SO_update = $(LIBHTTP_SO) $(LIBSSL_SO) $(BUILD)/lib/libhash.so
 ULIB_SO_sysupdate = $(LIBHTTP_SO) $(LIBSSL_SO) $(BUILD)/lib/libhash.so
+# DOOM downloads its game data (userland/doom/doom_front.c).
+ULIB_SO_doom = $(LIBHTTP_SO) $(LIBSSL_SO) $(BUILD)/lib/libhash.so
 
 ulibso = $(ULIB_SO_$(notdir $(1)))
 
@@ -1504,10 +1510,12 @@ $(LIBSSL_SO): $(MBEDTLS_OBJS) $(MBEDTLS_BACKEND_OBJS) $(LIBC_SO)
 # that directory is globbed wholesale into libuapp, so putting it there
 # would give every binary in the system a dependency on mbedTLS.
 LIBHTTP_SO = $(BUILD)/lib/libhttp.so
-$(LIBHTTP_SO): $(BUILD)/userland/dynlib/uhttp.o $(LIBSSL_SO) $(LIBUAPP_SO) $(LIBC_SO)
+$(LIBHTTP_SO): $(BUILD)/userland/dynlib/uhttp.o $(BUILD)/userland/dynlib/uhttp_download.o \
+               $(LIBSSL_SO) $(BUILD)/lib/libhash.so $(LIBUAPP_SO) $(LIBC_SO)
 	@mkdir -p $(dir $@)
 	$(LD) -shared --hash-style=sysv -z max-page-size=4096 -soname libhttp.so -o $@ \
-	      $(BUILD)/userland/dynlib/uhttp.o $(LIBSSL_SO) $(LIBUAPP_SO) $(LIBC_SO)
+	      $(BUILD)/userland/dynlib/uhttp.o $(BUILD)/userland/dynlib/uhttp_download.o \
+	      $(LIBSSL_SO) $(BUILD)/lib/libhash.so $(LIBUAPP_SO) $(LIBC_SO)
 
 # The one test with its own link line: a DYNAMIC executable.
 # link-dyn.ld adds the .interp/.dynamic/GOT/PLT homes the static script

@@ -411,7 +411,7 @@ static void print_result(const char *label, double mbps) {
 // --- --url ----------------------------------------------------------------
 
 static int url_mode(const char *url, int streams, int secs) {
-    struct uhttp_url u;
+    static struct uhttp_url u;   // static: over 2 KiB, the ring-3 frame budget
     if (uhttp_parse_url(url, &u) != 0 || u.tls || !u.scheme_given) {
         printf("speedtest: --url takes an http:// URL (the streams do not speak TLS)\n");
         return 1;

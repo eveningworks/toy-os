@@ -40,13 +40,10 @@
 #include "win_proto.h"  // WIN_CLIENT_MAX_W -- the scratch row's bound
 #include "backends/doom/dg_toyos.h"
 #include "input_keys.h"   // INPUT_KEY_ENTER -- a key by position
-
-// WHERE THE IWAD LIVES. A name, not a search path: `d_iwad.c` can hunt
-// through a list of directories and several filenames, and on an OS with
-// exactly one place for read-only game data that is machinery with
-// nothing to do. docs/filesystem-layout.md owns this path.
-#define WAD_DIR  "/usr/share/doom"
-#define WAD_PATH WAD_DIR "/doom1.wad"
+// The front end -- launcher, game data, F1 sheet -- and which IWAD
+// (userland/doom/). WHERE AN IWAD LIVES is one directory, not d_iwad.c's
+// search path: docs/filesystem-layout.md owns DOOM_WAD_DIR.
+#include "doom/doom_internal.h"
 
 // WHERE SAVEGAMES GO, and why this is done with chdir() of all things.
 //
@@ -87,7 +84,6 @@ static struct doom_state g_st;
 // Alt+C and kept in /etc/doom.conf. A scanline closes each of DOOM's own
 // rows however tall the window makes them, and the picture is scaled
 // into g_pic and composed from there: a SCANOUT surface is never read.
-#define DOOM_CONF  "/etc/doom.conf"
 #define DOOM_LINES (DOOM_RESY / 2)   // doomgeneric draws 320x200 doubled
 
 static const char *const EFFECT_WORDS[] = { "off", "subtle", "classic", "curved" };
@@ -268,31 +264,46 @@ static int draw_effect(struct ugfx_surface *s, const uint32_t *px,
     return rc == 0 ? 0 : -1;
 }
 
+// THE FRONT END AND THE KEY SHEET BLEND, and blending reads the
+// destination -- which a SCANOUT surface must never be (ui/uapp.h). So
+// they are drawn here and copied over in one write-only blit.
+static uint32_t *g_off;
+static int g_off_w, g_off_h;
+
+static struct ugfx_surface *offscreen(int w, int h) {
+    static struct ugfx_surface o;
+    if (w != g_off_w || h != g_off_h) {
+        free(g_off);
+        g_off = malloc((size_t)w * h * 4);
+        g_off_w = g_off ? w : 0;
+        g_off_h = g_off ? h : 0;
+    }
+    if (!g_off) return NULL;
+    o = ugfx_surface_for_pixels(g_off, w, h);
+    return &o;
+}
+
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     struct doom_state *st = uapp_state(a);
-    struct ugfx_surface *s = uapp_surface(d);
+    struct ugfx_surface *win = uapp_surface(d), *s = win;
+    if (doom_front_up() || doom_help_up()) {
+        struct ugfx_surface *o = offscreen(win->w, win->h);   // the buffer's size, not the request's
+        if (o) s = o;
+    }
 
+    if (doom_front_up()) {
+        doom_front_draw(a, s);
+        if (s != win) ugfx_blit(win, 0, 0, g_off_w, g_off_h, g_off, g_off_w);
+        return;
+    }
     const uint32_t *px = dg_frame_pixels();
     if (!px) {
-        // Before the first frame, or after a failed start. Say why, in
-        // the window, rather than showing black: a black window is
-        // indistinguishable from a crashed client, and the commonest
-        // reason to be here is a missing WAD, which is a thing the
-        // person can fix.
+        // Between Start and the first frame: say so rather than show
+        // black, which is indistinguishable from a crashed client.
         ugfx_fill(s, ugfx_rgb(0, 0, 0));
-        int y = uapp_height(a) / 2 - ugfx_char_h() * 2;
-        const char *lines[] = {
-            st->failed ? "No IWAD found." : "Loading...",
-            st->failed ? "Put doom1.wad in " WAD_DIR : "",
-            st->failed ? "and start DOOM again." : "",
-        };
-        for (unsigned i = 0; i < sizeof lines / sizeof lines[0]; i++) {
-            if (!lines[i][0]) continue;
-            int w = ugfx_text_width(lines[i]);
-            ugfx_draw_string(s, (uapp_width(a) - w) / 2, y,
-                              lines[i], ugfx_rgb(200, 40, 40), UGFX_TRANSPARENT);
-            y += ugfx_char_h() * 3 / 2;
-        }
+        const char *t = st->failed ? "DOOM could not start." : "Loading...";
+        ugfx_draw_string(s, (uapp_width(a) - ugfx_text_width(t)) / 2, uapp_height(a) / 2,
+                         t, ugfx_rgb(200, 40, 40), UGFX_TRANSPARENT);
         return;
     }
 
@@ -325,6 +336,8 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     } else {
         draw_scaled(s, px, dx, dy, dw, dh);
     }
+    doom_help_draw(a, s);   // F1's sheet over the paused game, if it is up
+    if (s != win) ugfx_blit(win, 0, 0, g_off_w, g_off_h, g_off, g_off_w);
 }
 
 // --- input --------------------------------------------------------------
@@ -344,13 +357,38 @@ static int is_fullscreen_toggle(int key, unsigned mods) {
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
-    if (is_fullscreen_toggle(key, mods)) uapp_set_fullscreen(a, !uapp_fullscreen(a));
+    if (is_fullscreen_toggle(key, mods)) {
+        uapp_set_fullscreen(a, !uapp_fullscreen(a));
+        return;
+    }
+    if (doom_front_up()) doom_front_key(a, key, mods);
+}
+
+// F1 is the KEY SHEET's, and F1 on the sheet is DOOM's own help: the
+// game's HELP1/HELP2 pages stay one key further on, never lost. While
+// the sheet is up nothing else reaches the game; Esc or Enter closes it.
+static void sheet_key(struct uapp *a, int keycode, int down) {
+    if (!down) return;
+    if (keycode == INPUT_KEY_F1) {
+        doom_help_close(a);
+        dg_push_key(INPUT_KEY_F1, 1);
+        dg_push_key(INPUT_KEY_F1, 0);
+    } else if (keycode == INPUT_KEY_ESC || keycode == INPUT_KEY_ENTER ||
+               keycode == INPUT_KEY_KPENTER) {
+        doom_help_close(a);
+    }
 }
 
 static void on_phys_key(struct uapp *a, int keycode, int down, unsigned mods) {
     if ((keycode == INPUT_KEY_ENTER || keycode == INPUT_KEY_KPENTER) &&
         (mods & KEY_MOD_ALT))
         return;
+    if (doom_front_up()) return;            // the front end reads on_key
+    if (doom_help_up()) { sheet_key(a, keycode, down); return; }
+    if (keycode == INPUT_KEY_F1 && !(mods & (KEY_MOD_ALT | KEY_MOD_CTRL))) {
+        if (down) doom_help_open(a);
+        return;
+    }
     // Alt+C cycles the screen effect, kept from the game as Alt+Enter is.
     // By position, both edges: on_key's translated Alt+C is not one code.
     if (keycode == INPUT_KEY_C && (mods & KEY_MOD_ALT)) {
@@ -375,8 +413,20 @@ static void on_focus(struct uapp *a, int focused) {
 // so arming a TWS timer on top would be two clocks fighting.
 static int on_tick(struct uapp *a) {
     struct doom_state *st = uapp_state(a);
-    if (!st->started || st->failed) return 0;
+    if (!st->started || st->failed) {
+        // The front end is up: nothing ticks, so sleep rather than spin
+        // -- tick_ms 0 polls, and a poll with no game is a busy loop.
+        sys_sleep_ms(20);
+        return 0;
+    }
     dg_tick();
+    // DOOM's own menu opening and closing, said once each -- the one
+    // way a test can tell F1-on-the-sheet reached the game's help.
+    static int menu_was;
+    if (dg_menu_active() != menu_was) {
+        menu_was = dg_menu_active();
+        ulogf("doom: menu %s\n", menu_was ? "open" : "closed");
+    }
     // 0: the repaint is on_frame_ready's business, and returning 1 here
     // would ask for one per tick whether a frame was produced or not.
     return 0;
@@ -386,23 +436,20 @@ void dg_title_changed(const char *title) {
     if (g_st.app) uapp_set_title(g_st.app, title);
 }
 
-static void on_open(struct uapp *a) {
-    struct doom_state *st = uapp_state(a);
-    st->app = a;
-    dg_set_frame_ready(on_frame_ready, st);
-    ucrt_init(&g_crt);
-    g_crt.bezel = ugfx_rgb(0, 0, 0);
-    effect_load();
+static void on_press(struct uapp *a, int x, int y, unsigned mods) {
+    if (doom_front_up() || doom_help_up()) doom_front_press(a, x, y, mods);
+}
+static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
+    if (doom_front_up() || doom_help_up()) doom_front_motion(a, x, y, buttons);
+}
+static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
+    if (doom_front_up() || doom_help_up()) doom_front_release(a, x, y, buttons);
+}
 
-    // CHECKED BEFORE STARTING, so a missing WAD is a message in a window
-    // rather than doomgeneric's own I_Error taking the process down. The
-    // app is the only layer that can say it politely -- I_Error exits.
-    if (access(WAD_PATH, F_OK) != 0) {
-        ulogf("doom: no IWAD at %s\n", WAD_PATH);
-        st->failed = 1;
-        uapp_redraw(a);
-        return;
-    }
+void doom_start_game(struct uapp *a, const struct doom_iwad *w) {
+    struct doom_state *st = uapp_state(a);
+    doom_front_leave();
+    if (st->started) return;
 
     // The savegame directory, made and entered before the game starts.
     // Each level of the path in turn, because SYS_MKDIR creates ONE
@@ -421,7 +468,7 @@ static void on_open(struct uapp *a) {
     }
 
     // argv, as Doom expects it. `-iwad <path>` rather than letting
-    // d_iwad.c search: see WAD_PATH above.
+    // d_iwad.c search: see DOOM_WAD_DIR.
     //
     // ANYTHING THIS PROGRAM WAS GIVEN IS APPENDED, so Doom's own
     // switches work: `gui spawn /bin/wm/apps/doom -nomusic`, `-nosfx`,
@@ -430,19 +477,37 @@ static void on_open(struct uapp *a) {
     // continuous to bursts, which no single boot can show.
     static char arg0[] = "doom";
     static char arg1[] = "-iwad";
-    static char arg2[] = WAD_PATH;
+    static char wad[160];
     static char *argv[DOOM_MAXARGS];
+    doom_iwad_path(w, wad, sizeof wad);
     int n = 0;
     argv[n++] = arg0;
     argv[n++] = arg1;
-    argv[n++] = arg2;
+    argv[n++] = wad;
     for (int i = 1; i < g_argc && n < DOOM_MAXARGS - 1; i++) argv[n++] = g_argv[i];
     argv[n] = 0;
 
-    ulogf("doom: starting with %s (%d arg(s))\n", WAD_PATH, n - 3);
-    dg_start(n, argv);
+    ulogf("doom: starting with %s (%d arg(s))\n", wad, n - 3);
     st->started = 1;
+    uapp_redraw(a);
+    uapp_flush(a);   // "Loading..." on screen while the WAD loads
+    dg_start(n, argv);
     ulog("doom: ready\n");
+}
+
+static void on_open(struct uapp *a) {
+    struct doom_state *st = uapp_state(a);
+    st->app = a;
+    dg_set_frame_ready(on_frame_ready, st);
+    ucrt_init(&g_crt);
+    g_crt.bezel = ugfx_rgb(0, 0, 0);
+    effect_load();
+
+    // CHECKED BEFORE STARTING, so a missing WAD is the game-data card
+    // rather than doomgeneric's own I_Error taking the process down.
+    // Arguments ask for a particular start, so they skip the launcher.
+    if (doom_front_open(a, g_argc > 1)) doom_start_game(a, doom_iwad_chosen());
+    uapp_redraw(a);
 }
 
 int main(int argc, char **argv) {
@@ -477,6 +542,10 @@ int main(int argc, char **argv) {
         .on_phys_key = on_phys_key,
         .on_focus    = on_focus,
         .on_tick    = on_tick,
+        .on_press   = on_press,
+        .on_motion  = on_motion,
+        .on_release = on_release,
+        .on_user    = doom_front_user,
     };
     return uapp_run(&desc);
 }

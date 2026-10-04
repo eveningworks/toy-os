@@ -4595,7 +4595,9 @@ window without going through it will find its layout polls timing out.
   build rewrites, so a 4 MB download placed there survives until the
   next `make clean` and then silently vanishes.
   The shareware `doom1.wad` by default; `--from` takes a local
-  `freedoom1.wad` or a retail `DOOM.WAD` you already own.
+  `freedoom1.wad` or a retail `DOOM.WAD` you already own. `--freedoom`
+  also fetches Freedoom's release zip to `data/doom/`, checked against
+  the SHA-256 its release signs, for `doom_data_test.py` to serve.
 
   **It validates before it writes**, and that is the whole reason it is
   a script rather than a `curl` line in a README: a download that returns
@@ -4603,6 +4605,21 @@ window without going through it will find its layout polls timing out.
   `doom1.wad` fails much later and much more confusingly than it should.
   It checks the `IWAD` magic and a plausible size, and refuses a PWAD
   with its own message (a patch is not a game).
+
+- **`doom_data_test.py`** -- DOOM's front end (`userland/doom/`): with
+  no IWAD the game-data card, a download, the launcher page, and F1's key
+  sheet over a level. **The download never leaves the machine**: the
+  guest's `/etc/doom.conf` gets `mirror=` aimed at a server the tool runs
+  on loopback, serving `data/doom/doom1.wad` and (when `fetch_wad.py
+  --freedoom` has run) Freedoom's zip behind a 302 to a 1100-character
+  URL, GitHub's shape. **The control runs first**: a `doom1.wad` with one
+  byte flipped must be refused on its SHA-256 and leave nothing in
+  `/usr/share/doom`. Then the real file, its hash read back with `sum`
+  outside the app, the sheet by pixel against the frame before it, F1 on
+  the sheet reaching DOOM's own help (`doom: menu open`), and the pause
+  under it (`key sheet closed, the game was paused`). Without the host's
+  WAD only the card and the control run, and it says so. In
+  `gui_regress.py`.
 
 - **`keyup_test.py`** -- key RELEASES reaching a ring-3 client, across
   all five layers that carry one: the driver's transition queue, the

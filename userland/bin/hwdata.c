@@ -281,7 +281,7 @@ int main(int argc, char **argv) {
         const struct target *t = &TARGETS[i];
         if (strcmp(which, "all") && strcmp(which, t->name)) continue;
 
-        char url[UHTTP_PATH_MAX];
+        static char url[UHTTP_PATH_MAX];   // static: 2 KiB, the ring-3 frame budget
         if (from) {
             snprintf(url, sizeof url, "%s", from);
         } else if (!have_conf ||

@@ -27,7 +27,9 @@
 // and sizing it like one ties two unrelated limits together (the shell
 // conventions make the same point about a command line).
 #define UHTTP_HOST_MAX 128
-#define UHTTP_PATH_MAX 512
+// 2 KiB: a release-asset redirect (GitHub's) carries a signed query of
+// over 1 KiB. Keep struct uhttp_url off a 2 KiB ring-3 stack frame.
+#define UHTTP_PATH_MAX 2048
 #define UHTTP_ERR_MAX  192
 
 struct uhttp_url {
@@ -71,6 +73,11 @@ struct uhttp_request {
     int allow_weak_entropy;
 
     const char *ca_dir; // NULL = UTLS_DEFAULT_CA_DIR
+    // How many 301/302/303/307/308 hops to follow -- 0, the default,
+    // follows none and hands the redirect to the caller as its status
+    // (curl without -L). Never from https to http: a downgrade the
+    // first URL did not ask for.
+    int max_redirects;
 
     // Called once, after the connection is up and before the body, so a
     // caller can print what it connected to. `tls_version` is NULL on a
@@ -104,6 +111,31 @@ struct uhttp_request {
 // the body of an error page is usually the explanation, and deciding
 // what to do about it is the caller's.
 int uhttp_fetch(struct uhttp_request *req);
+
+// A URL into a FILE, checked -- curl -o, plus what a game-data or
+// package fetch needs: the body lands in `<path>.part` and is renamed
+// over `path` only when the status is 200 and, if `sha256` is given, the
+// bytes hash to it. Anything else leaves nothing behind. The SHA-256 is
+// what makes `insecure` reasonable for a public file: a substitute fails
+// the hash. Links /lib/libhash.so.
+struct uhttp_download {
+    // --- in ---
+    const char *url;
+    const char *path;
+    const char *sha256;            // 64 hex digits, or NULL for unchecked
+    int insecure, allow_weak_entropy, max_redirects;   // as uhttp_request's
+    // Bytes so far and the size the server gave (0 if none), as they
+    // arrive. Called from the fetching thread.
+    void (*progress)(void *ctx, unsigned long got, unsigned long total);
+    int (*cancelled)(void *ctx);   // non-zero stops it
+    void *ctx;
+    // --- out ---
+    int status;
+    unsigned long bytes;
+    char err[UHTTP_ERR_MAX];
+};
+// 0, or -1 with `err` a sentence.
+int uhttp_download(struct uhttp_download *d);
 
 // Is this build able to speak https at all? Lets a caller say "no TLS
 // in this build" rather than failing at connect time.

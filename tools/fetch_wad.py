@@ -26,6 +26,7 @@ for: if you own Doom, point this at your copy rather than downloading
 anything.
 
     python3 tools/fetch_wad.py                 # fetch the shareware WAD
+    python3 tools/fetch_wad.py --freedoom      # ...and Freedoom's release zip
     python3 tools/fetch_wad.py --from ~/DOOM.WAD
     make iso                                   # seeds it onto disk.img
 
@@ -40,6 +41,7 @@ Doom cannot start from one.
 """
 
 import argparse
+import hashlib
 import os
 import shutil
 import sys
@@ -56,10 +58,19 @@ DEST = os.path.join(DEST_DIR, "doom1.wad")
 
 # Ordered; the first that yields something WAD-shaped wins. Mirrors of
 # the shareware episode, which id has allowed to circulate since 1993.
+# (ibiblio's slitaz copy answered 404 on 2026-10-04 and was dropped.)
 MIRRORS = [
-    "https://github.com/Akbar30Bill/DOOM_wads/raw/master/doom1.wad",
-    "https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad",
+    "https://raw.githubusercontent.com/Akbar30Bill/DOOM_wads/master/doom1.wad",
 ]
+
+# --freedoom: the release zip DOOM's own downloader fetches, for
+# tools/doom_data_test.py to serve on loopback. Pinned by the SHA-256 the
+# release signs (freedoom-0.13.0-CHECKSUM); userland/doom/doom_wad.c pins
+# the same, so a bump changes both.
+FREEDOOM_URL = ("https://github.com/freedoom/freedoom/releases/download/"
+                "v0.13.0/freedoom-0.13.0.zip")
+FREEDOOM_SHA = "3f9b264f3e3ce503b4fb7f6bdcb1f419d93c7b546f4df3e874dd878db9688f59"
+FREEDOOM_DEST = os.path.join(DEST_DIR, "freedoom-0.13.0.zip")
 
 MIN_BYTES = 1_000_000
 
@@ -79,6 +90,24 @@ def looks_like_iwad(blob):
     return True, ""
 
 
+def fetch_freedoom(force):
+    if os.path.exists(FREEDOOM_DEST) and not force:
+        print(f"fetch_wad: {FREEDOOM_DEST} already exists")
+        return 0
+    os.makedirs(DEST_DIR, exist_ok=True)
+    print(f"fetch_wad: fetching {FREEDOOM_URL}")
+    with urllib.request.urlopen(FREEDOOM_URL, timeout=120) as r:
+        blob = r.read()
+    got = hashlib.sha256(blob).hexdigest()
+    if got != FREEDOOM_SHA:
+        print(f"fetch_wad: SHA-256 {got} is not the release's {FREEDOOM_SHA}", file=sys.stderr)
+        return 1
+    with open(FREEDOOM_DEST, "wb") as f:
+        f.write(blob)
+    print(f"fetch_wad: wrote {FREEDOOM_DEST} ({len(blob)} bytes), checksum matches")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -86,7 +115,12 @@ def main():
                     help="copy this local WAD instead of downloading one")
     ap.add_argument("--force", action="store_true",
                     help="overwrite an existing WAD")
+    ap.add_argument("--freedoom", action="store_true",
+                    help="also fetch Freedoom's release zip, for doom_data_test.py")
     args = ap.parse_args()
+
+    if args.freedoom and fetch_freedoom(args.force):
+        return 1
 
     if os.path.exists(DEST) and not args.force:
         print(f"fetch_wad: {DEST} already exists ({os.path.getsize(DEST)} bytes)")

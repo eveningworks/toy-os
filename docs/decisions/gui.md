@@ -9957,6 +9957,48 @@ picture is scaled into a buffer of the app's and composed from there
 write-combining scanout buffer, which must never be read.
 
 
+
+## DOOM fetches its own game data, pinned by SHA-256 rather than trusted by certificate
+
+With no IWAD, DOOM's window offers Freedoom and id's shareware episode
+and downloads the one chosen (mockups W1/H3/H1, chosen 2026-10-04).
+Debian's game-data-packager is the shape: it fetches `doom1.wad` from
+mirrors and believes the file only when it matches a known checksum.
+**The SHA-256 is the authority, not TLS.** The default image has no CA
+bundle (it is `EXTRAS=1` material), so a verified https fetch could not
+work out of the box; with the hash pinned in `doom_wad.c` a substituted
+or truncated file fails anyway, so the fetch runs `insecure` and accepts
+weak entropy -- nothing about a public file needs secrecy -- and the
+card says the file is checked. apt over plain http with signed hashes
+is the same argument. **A `mirror=` in `/etc/doom.conf` replaces all but
+the file name** for the same reason: any server will do when the bytes
+are checked, which is also how the test serves them from loopback.
+
+**Freedoom is offered first on an empty machine** (it is free to
+redistribute; Debian's DOOM engines depend on it), while the play order
+when several are present still prefers id's data, as before. Fetching at
+the user's request on their own machine is not distributing (the
+`EXTRAS=1` entry in `docs/decisions/build.md`): the image itself never
+carries a WAD it did not before.
+
+**Redirects are followed only when a caller asks** (`max_redirects`,
+curl's `-L`): GitHub serves every release asset through a 302, but
+`/bin/update` and wget keep seeing a redirect as a status. A Location is
+gathered whole beside the header line -- GitHub's is over a kilobyte,
+which is why `UHTTP_PATH_MAX` is 2 KiB -- and https never redirects to
+plain http.
+
+**F1 opens the key sheet, F1 on the sheet opens DOOM's own help.**
+Vanilla binds F1 to its HELP1/HELP2 pages; taking the key outright would
+hide them, a second key would be one nobody finds. **The sheet pauses
+the game with the game's own pause** (`sendpause`, music included)
+rather than by not ticking: a stopped tick makes DOOM run every missed
+tic on resume, with no input, which can kill the player. The front end
+and the sheet are drawn into a buffer of the app's and copied over,
+because DOOM's surface may be the write-only scanout buffer. The sheet
+itself is `uui_keysheet`, GtkShortcutsWindow's shape, so another app
+can give F1 the same.
+
 ## The CRT effect's passes are SSE2, written with GCC's vector types
 
 `ucrt` was 3x too slow for DOOM on the ASUS (2026-10-03: Classic 28.5 ms

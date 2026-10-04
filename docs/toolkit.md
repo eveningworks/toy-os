@@ -70,6 +70,7 @@
 | `utmppath.h` | A SCRATCH PATH IN ONE EXPRESSION, for ring 3. |
 | `utween.h` | An integer that moves from one value to another over a fixed time, eased -- the one interpolator the desktop has, shared by the toolkit (a scroll that glides) and the window manager (an effect that... |
 | `uwmchan.h` | TWP over a channel: a client's request reaching the compositor DIRECTLY instead of through the kernel. |
+| `uzip.h` | Reading ONE member out of a .zip archive into a file -- PKWARE's APPNOTE, the subset every archiver writes: stored (method 0) and deflated (method 8) members, no encryption, no zip64. |
 
 Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal.h`.
 
@@ -105,6 +106,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_gallery.h` | uui_gallery -- one choice out of a few, each shown as a CARD: a picture the caller paints and a label under it. |
 | `uui_image.h` | A decoded picture, in a layout. |
 | `uui_keycapture.h` | A CONTROL THAT RECORDS A KEY COMBINATION BY HAVING YOU PRESS IT. |
+| `uui_keysheet.h` | keysheet -- an app's keyboard shortcuts as a sheet: groups of rows, each an action on the left and its keys on the right, drawn as caps. |
 | `uui_label.h` | A line of text the LAYOUT knows about. |
 | `uui_layout.h` | uui_layout -- places widgets so apps stop doing coordinate arithmetic. |
 | `uui_listbox.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |

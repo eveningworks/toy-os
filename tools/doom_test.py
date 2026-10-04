@@ -167,8 +167,9 @@ def scanline_dips(img, lines=200):
 
 def run(dbg, qmp, tmp, res):
     # The screen effect starts OFF: a previous run, or a person, may have
-    # left /etc/doom.conf behind.
-    dbg.send("sh rm /etc/doom.conf")
+    # left /etc/doom.conf behind. And no launcher page: this tool is about
+    # the game (doom_data_test.py has the page).
+    dbg.write_lines("/etc/doom.conf", ["show_page=off"])
     dbg.send(f"gui spawn {EXEC}")
 
     win = None
