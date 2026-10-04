@@ -92,6 +92,10 @@ TOOLS = [
     # an argument, so nothing here needs a guest.
     ("utween_host", "utween_hostcheck.py",     "the easing tween lands, is monotonic, eases out", False,
      None,                                                                                   False),
+    # The compositor's visible-region arithmetic against a bitmap, and
+    # that an overflow errs LARGE. Host-only, gcc alone.
+    ("uregion_host", "uregion_hostcheck.py",   "visible regions are exact, or a superset on overflow", False,
+     None,                                                                                   False),
     # The CRT effect's vectorised passes against a plain integer model,
     # within 1 per channel. Host-only, gcc alone, under -ffreestanding.
     ("ucrt_host",   "ucrt_hostcheck.py",       "the CRT effect's passes match their integer model", False,

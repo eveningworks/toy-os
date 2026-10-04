@@ -2722,6 +2722,21 @@ window without going through it will find its layout polls timing out.
   controls (dropping the damage growth, the menu painter, or the
   popup flag) each redden exactly the matching check.
 
+- **`occlusion_test.py`** -- the compositor's VISIBLE REGIONS
+  (`userland/wm/wm_render.c`): two Notepads, A under B. With B
+  maximized over all of A, a burst of frames whose damage lands on A
+  must show A CULLED and never drawn -- read from `gui compositor
+  --json`'s `windows` counters (`culled_total >= 1` is the control that
+  the burst reached A; `drawn_total <= frames` is the check). Then B,
+  restored and set over A's title bar with every window Clear glass,
+  must show A through its body: a pixel against the same pixel with A
+  elsewhere, and pure white with transparency off. Runs under the
+  damage verifier, whose reference render culls nothing, so a window
+  wrongly left out is a reported miss. Positive controls (`mutate.py`):
+  disabling the cull reddens the counters; counting a see-through
+  window as opaque reddens the verifier -- NOT the pixel, which the
+  previous frame's pixels in the back buffer can still satisfy.
+
 - **`smooth_scroll_test.py`** -- smooth scrolling (`ui/uui_scrollanim.h`)
   in the File Manager's icon grid, and the `desktop.smooth_scroll`
   setting. One wheel notch with the setting ON must draw SEVERAL frames
@@ -5583,6 +5598,20 @@ runs first**: a `doom1.wad` with one
   so `WIN_DEBUG_F_UNKNOWN` never arrived and `gui nosuchthing` printed
   nothing on the serial console either. A check asserting only that
   known commands answer would not have seen it.
+
+- **`uregion_hostcheck.py`** -- compiles `userland/lib/uregion.c`, the
+  rect-list region the compositor clips each window to once the opaque
+  windows above it are subtracted, with the host gcc, and replays every
+  operation on a Python pixel set: the rects must be disjoint, EXACTLY
+  the bitmap when nothing overflowed, and a SUPERSET of it when the
+  32-rect bound was hit (a clip may err large, never small). Seeded
+  random sequences plus the shape the compositor actually cuts -- a
+  stack of equal windows with rounded-corner holes. Also `uregion_diff()`,
+  which uapp measures a present's damage with: every changed pixel
+  covered, at most `max` disjoint bands, none for equal buffers, tight
+  when nothing was folded. `--positive-control subtract` drops the band
+  below a cut, `--positive-control diff` stops a band widening right;
+  each must fail. Needs only gcc.
 
 - **`utween_hostcheck.py`** -- compiles `userland/lib/utween.c`, the
   desktop's one easing tween, with the host gcc and checks the

@@ -4545,7 +4545,7 @@ guess.*
 
 - [ ] **The CRT effect fullscreen at 1080p.** Measured 2026-10-03 on the ASUS, DOOM fullscreen (a 1440x1080 picture): Subtle 26.3 ms a frame (31 fps), Classic 54.9 (16.7 fps), Curved 55.9 (16.4), against 70 fps with it off. The host does 1440x1080 Classic in 10.9 ms, in proportion to its 2.0 ms at 640x480, so the effect has no pathological case -- the ASUS needs about 2x more. NOT ESTABLISHED why the ASUS scales worse than the host; the likely reason is that the buffers at that size (the scaled picture, the warp's map and composed copy, the surface: several MB each) outgrow its cache, which a band-at-a-time version would test. The levers, all fewer passes over memory: fold the glow's 2x2 average into the app's own scale (DOOM's picture is nearest-scaled from 320x200, so it could build the half image from the source), compose and warp a band of rows at a time while it is cached, or run the warp only where the curve moves a pixel.
 
-- [ ] Full dirty-rect compositor -- mostly done, see the commit that added it: window move/resize/open/close/minimize/ z-order and desktop icon drag now clip repaints to a computed damage region instead of always touching the full screen, and (Phase 3) a window whose rect doesn't intersect the damage region is skipped entirely -- its chrome/`on_draw()`/resize-grip calls never run, not just have their pixels clipped away. Still open: menu/taskbar-content-click/dialog redraws -- and the taskbar/tray (including the clock tick) itself -- still fall back to a full-screen repaint (imprecise but safe, never worse than before). An initial attempt at scoping the tray/clock tick to just the taskbar strip shipped and was reverted the same day -- see `docs/decisions.md`'s notification-area entry for the two real bugs that caused (a poisoned first frame, and losing an implicit once-a-second full-repaint safety net the mouse cursor turned out to depend on). Also still open in part: **giving each overlay a real damage rect of its own.** Half of this landed with the overlay registry (`userland/wm/wm_overlay.h`): every overlay now supplies a `damage()` op, and the Start menu, context menu, calendar and volume flyout damage only their own rect -- the calendar in particular stopped forcing a full-screen repaint on every mouse move while open. The two MODAL overlays (file picker, confirm dialog) still answer `damage()` with a whole-frame repaint, because neither reports its geometry and inventing one there would be a second source of truth for where the dialog is. That is what is left.
+- [ ] Full dirty-rect compositor -- mostly done, see the commit that added it: window move/resize/open/close/minimize/ z-order and desktop icon drag now clip repaints to a computed damage region instead of always touching the full screen, and (Phase 3) a window whose rect doesn't intersect the damage region is skipped entirely -- its chrome/`on_draw()`/resize-grip calls never run, not just have their pixels clipped away. Still open: menu/taskbar-content-click/dialog redraws -- and the taskbar/tray (including the clock tick) itself -- still fall back to a full-screen repaint (imprecise but safe, never worse than before). An initial attempt at scoping the tray/clock tick to just the taskbar strip shipped and was reverted the same day -- see `docs/decisions.md`'s notification-area entry for the two real bugs that caused (a poisoned first frame, and losing an implicit once-a-second full-repaint safety net the mouse cursor turned out to depend on). Also still open in part: **giving each overlay a real damage rect of its own.** Half of this landed with the overlay registry (`userland/wm/wm_overlay.h`): every overlay now supplies a `damage()` op, and the Start menu, context menu, calendar and volume flyout damage only their own rect -- the calendar in particular stopped forcing a full-screen repaint on every mouse move while open. The confirm dialog reports its rect too since 2026-10-04 (the file picker became a client's dialog), so only the full-screen Leave page still repaints everything. Windows are also drawn only inside their visible region now, and a client's present damages only what changed (`docs/decisions.md`, "A window is drawn only where it can be seen").
 
 - [x] ~~Taskbar notification area (tray)~~ -- done, see the commit that added it: a dynamic `tray_register()`/ `tray_set_text()`/`tray_unregister()` API (`apps/wm/wm.h`), with the taskbar clock as its first item (`apps/wm/wm_tray.c`). No other GUI app registers a tray item yet -- the API is there for one to use next time a feature calls for it (an async job's progress, a background download, etc).
 
@@ -6319,13 +6319,14 @@ finding.
 
 ## Four overlays still opt out of damage tracking
 
-The context menu, the calendar popup, the file picker and the confirm
-dialog each force a full-screen repaint every frame while they are open.
-The Start menu was converted and the three steps are the same: track the
-hovered row rather than deriving it from `(mx, my)` inside the draw,
-damage only the overlay's own rect when that row changes, and stop
-setting `redraw_pending` unconditionally. See `start_menu.c`'s own
-comment for the worked example and the measurement that motivated it.
+DONE 2026-10-04. The context menu (a rect per open level), the calendar
+and the confirm dialog damage their own rects on open, close, hover and
+click, as the Start menu already did; the file picker is a client's
+dialog now and never was one of the panel's overlays. The Leave page
+still repaints the whole screen, which it is, and one full frame follows
+any of the others closing, for whatever the menu ran. With fifteen
+windows open on the laptop the full repaints had cost 100-119 ms a
+frame for as long as a menu was up.
 
 ## `Terminal=true` on a `.desktop` entry
 

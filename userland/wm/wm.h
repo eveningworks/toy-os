@@ -180,6 +180,10 @@ struct window {
     uint32_t  client_seq[WIN_CLIENT_BUFS];     // the present that last made it front
     int client_mapped[WIN_CLIENT_BUFS];        // client_px[b] may legitimately be 0
     int client_front;
+    // A PRESENT WAS DROPPED (its buffer would not map), so the next one's
+    // damage list is relative to a frame this compositor never showed:
+    // that present repaints the whole content instead.
+    int client_damage_all;
     // THE FRONT BUFFER'S SIZE, which is the size of the pixels on
     // screen. A client that has accepted a new size has not necessarily
     // DRAWN it yet; this follows the frames, adopted in the present

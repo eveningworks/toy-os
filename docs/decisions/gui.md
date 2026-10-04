@@ -2590,6 +2590,11 @@ repeatedly via taskbar clicks, confirmed both titlebar tints updated
 correctly on every swap
 (`screenshots/2026-08-12/compositor-phase3-focus-tint-fixed.png`).
 
+The "redraw everything inside the box, back to front" half of this was
+narrowed on 2026-10-04: a window is now drawn only inside its VISIBLE
+REGION within the box -- see "A window is drawn only where it can be
+seen". The box itself is unchanged.
+
 ## The taskbar/tray falls back to full-screen repaint on purpose, not as an oversight
 
 `userland/wm/wm_tray.c`'s `tray_damage()` deliberately does NOT call
@@ -5290,9 +5295,15 @@ a per-window shape mask consulted by damage tracking, hit testing and
 the blit; that is Wayland's `wl_surface.set_opaque_region` and X11's
 SHAPE extension, and it touches every path that thinks a window is a
 rectangle. What was built instead leans on one property this
-compositor already has: it repaints everything inside the damage box
-back to front, with no occlusion culling. So the backdrop under a
-corner is on the surface the moment a window starts to paint. The
+compositor keeps: it paints back to front, and what a window above
+covers is subtracted from the windows below only where it is OPAQUE --
+its rect LESS its four r x r corner squares (see "A window is drawn
+only where it can be seen"). So whatever is beneath a corner, desktop
+or window, is painted this frame and on the surface the moment a
+window starts to paint. (Until 2026-10-04 there was no occlusion
+culling at all and this held trivially; a cull that treated a rounded
+window as its full rect would leave last frame's pixels under every
+corner.) The
 renderer copies those few pixels aside, lets the window paint its
 rectangle, then blends them back by a quarter-disc's coverage. No
 other code learns that a corner is transparent. Hit testing stays
@@ -10281,3 +10292,85 @@ sleeps with no window and freezes the screen as it is then -- in Screen
 mode simply taking the shot, otherwise showing the overlay again, which
 is how the Snipping Tool's delay works.
 
+
+## A window is drawn only where it can be seen, and a client's damage is measured
+
+Measured on the bare-metal ASUS (2026-10-04, `guictl compositor`): a
+window drag cost 14 ms a frame with one Notepad visible, 40 ms with
+seven and 76 ms with fifteen (about 11 fps); fifteen processes with
+fourteen windows MINIMIZED cost 9 ms, so the cost was per DRAWN window,
+not per process. Three things made it so. `render_scene()` painted
+every window bottom to top inside the frame's damage box, skipping only
+windows outside the box or under a fullscreen one -- fourteen Notepads
+stacked on one rect were each drawn whole, shadow, chrome and content,
+for the top one to cover. A present damaged the client's WHOLE content
+rect, so a caret blink repainted a window-sized area through every
+window beneath it (45 ms every 500 ms). And while the context menu, the
+calendar, the confirm dialog or the Leave page was up, every frame was
+a full-screen repaint (100-119 ms with fifteen windows).
+
+**What real compositors do.** wlroots' scene graph and Weston give each
+view a visible region -- its box less the OPAQUE regions of everything
+above, as pixman regions -- and draw only inside it; Mutter's culling
+(`MetaCullable`) does the same with cairo regions; DWM skips a window
+whose rect is covered outright. Wayland makes opacity the CLIENT's
+declaration (`wl_surface.set_opaque_region`) and damage too
+(`wl_surface.damage_buffer`), and GTK and Qt can declare damage because
+they repaint only what was invalidated.
+
+**What toy-os does, and where it differs.**
+
+- **Visible regions, as wlroots does them** (`wm_render.c`,
+  `lib/uregion.h`). Each window is drawn inside its rect plus shadow,
+  cut to the damage box, minus the opaque part of every window above;
+  an empty region skips the window, and the desktop is cut the same
+  way. A region is a bounded list of disjoint rects (32), and a
+  subtraction that would not fit is skipped, so the region errs LARGE
+  -- drawing a pixel that something opaque covers later costs time,
+  missing one leaves a stale pixel. The window is then painted once per
+  rect (at most 16; more becomes one pass over their bounding box), and
+  the passes must be disjoint because a rounded corner re-blends what
+  it saved from beneath.
+- **Opacity is DERIVED, not declared.** The chrome is the compositor's
+  and a client buffer is blitted opaque, so the compositor knows better
+  than any client what is solid: a window's rect less its rounded
+  corner squares (the corner is blended over whatever is beneath, which
+  must therefore be drawn -- see "Window corners are rounded..."), less
+  a glass title bar. A see-through window, a popup and a fullscreen one
+  count as no opaque area at all. Small is only slower.
+- **Anything that reads beneath itself across its own rect is drawn in
+  ONE pass under the damage box** -- frosted glass blurs neighbours and
+  clamps at the clip, a see-through window saves its whole rect, an
+  in-WM app's `on_draw()` must run once. Cutting those into passes
+  would change their pixels, not just where they land.
+- **Damage is MEASURED by the client's toolkit, not declared.** uapp
+  repaints the whole buffer every frame and keeps no invalidation
+  record, so a declared rect would be a claim nothing checks -- one
+  forgotten call and the compositor keeps a stale pixel. Instead a
+  present row-compares the new buffer with the one last presented (the
+  frame on screen, which nothing draws into) and sends up to three
+  bands of difference (`uregion_diff()`); TigerVNC's comparing update
+  tracker does the same to correct over-declared damage. It costs one
+  read of two buffers per present on the client, less than the repaint
+  it follows. The list rides the present's 32-byte `text` field, so
+  the hot-path message did not grow, and a zeroed field -- every older
+  client -- still means the whole surface. A toolkit that learns to
+  repaint only what changed can declare instead and skip the diff.
+- **Overlays damage their own rects**; only the Leave page, which is
+  the whole screen, still repaints everything -- plus ONE full frame
+  after one of them closes, because what a menu ran (a desktop sort, a
+  Force Quit) may change the scene without declaring damage.
+
+**Rejected: culling only windows covered OUTRIGHT** (DWM's shape). It
+fixes the laptop's identical stack and nothing else -- in a cascade
+every window is partly visible and was still drawn whole -- and it
+leaves the wallpaper painted under every window.
+
+**The check.** `gui damage verify on` renders its reference frame with
+culling OFF, so a window wrongly left out is reported like a missed
+damage rect; `tools/occlusion_test.py` asserts the cull through `gui
+compositor --json`'s window counters and that a glass window still
+shows the one beneath. Measured under KVM at 1280x720 (ms a frame,
+before -> after): fifteen stacked Notepads, drag 11.8 -> 3.3, caret
+blink 5.2 -> 1.1, context menu open 8.2 -> 2.1; fifteen cascaded,
+drag 12.8 -> 3.2. The laptop has not been re-measured.

@@ -515,7 +515,7 @@ static void send_release(struct window *win, int b) {
 }
 
 static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
-                              int w, int h, uint32_t seq) {
+                              int w, int h, uint32_t seq, const struct win_damage *dmg) {
     int idx = find_client_window(pid, id);
     if (idx < 0) return;
     wm_scanout_client_presented(pid);   // a present from its OWN buffer
@@ -535,7 +535,7 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     // would be this process blitting an object nobody is drawing into.
     // A failed open leaves the last good frame on screen -- see
     // map_buf() on why the size is checked by mapping it.
-    if (!map_buf(win, front, gen, w, h)) return;
+    if (!map_buf(win, front, gen, w, h)) { win->client_damage_all = 1; return; }
     int old = win->client_front;
     win->client_front = front;
     win->client_buf = win->client_px[front];
@@ -571,11 +571,27 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     // chrome, corners, shadow -- is drawn before its first present
     // (draw_one_window), so that is when all of it appears; the damage
     // its creation declared was spent on a frame that drew none of it.
-    if (first)
+    // AND ONLY WHAT THE CLIENT SAYS CHANGED, when it says (abi/win_proto.h's
+    // struct win_damage): a caret blink repaints a caret, not a window
+    // through every window under it. Clipped to the content, so a client
+    // cannot damage its way over its neighbours.
+    if (first) {
         wm_damage_window_rect(win->x, win->y, win->w, win->h);
-    else
+    } else if (dmg && (dmg->flags & WIN_DAMAGE_LIST) && !win->client_damage_all) {
+        int cx = window_content_x(win), cy = window_content_y(win);
+        int cw = window_content_w(win), ch = window_content_h(win);
+        for (int k = 0; k < dmg->n && k < WIN_DAMAGE_MAX; k++) {
+            int x0 = dmg->r[k].x, y0 = dmg->r[k].y;
+            int x1 = x0 + dmg->r[k].w, y1 = y0 + dmg->r[k].h;
+            if (x1 > cw) x1 = cw;
+            if (y1 > ch) y1 = ch;
+            if (x1 > x0 && y1 > y0) wm_damage_rect(cx + x0, cy + y0, x1 - x0, y1 - y0);
+        }
+    } else {
         wm_damage_rect(window_content_x(win), window_content_y(win),
                         window_content_w(win), window_content_h(win));
+    }
+    win->client_damage_all = 0;
     if (first) wm_anim_open(idx);
     redraw_pending = 1;
     wm_resize_shown(idx, 0);
@@ -1121,7 +1137,7 @@ static void req_present(int from, struct wmchan_msg *m) {
     on_window_present(from, m->window, WIN_PRESENT_BUF(m->a),
                       WIN_PRESENT_GEN(m->a),
                       WIN_PRESENT_W((uint32_t)m->b),
-                      WIN_PRESENT_H((uint32_t)m->b), (uint32_t)m->c);
+                      WIN_PRESENT_H((uint32_t)m->b), (uint32_t)m->c, &m->damage);
 }
 
 static void req_popup(int from, struct wmchan_msg *m) {

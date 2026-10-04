@@ -98,9 +98,10 @@ struct wm_overlay {
     // for the panel's own overlays, and Weston spells it
     // weston_view_damage_below().
     //
-    // NULL for an overlay whose damage is genuinely not one rect: the
-    // context menu damages a rect per open submenu, and the confirm
-    // dialog asks for a full repaint on purpose. Those keep damage().
+    // NULL for an overlay whose damage is genuinely not one rect -- the
+    // context menu damages a rect per open submenu -- or that is the
+    // whole screen (the Leave page). Those keep damage(). An open
+    // overlay buys no full repaint: one that damages nothing is not drawn.
     int (*rect)(int *x, int *y, int *w, int *h);
 
     // Live press tracking, every tick, for a control that can be

@@ -54,6 +54,7 @@
 | `upager.h` | The pager: show a block of text one screenful at a time, on whichever of fd 0 and fd 1 is a terminal. |
 | `upath.h` | PATH lookup for a ring-3 program that has to RUN another one. |
 | `uprogress.h` | A one-line transfer meter, redrawn in place with `\r`. |
+| `uregion.h` | A REGION: a bounded list of disjoint rectangles, cut by subtraction -- what the compositor draws each window inside once the opaque windows above it are taken away (pixman's region32, which wlroots... |
 | `uresolv.h` | Turning a name into an address: DNS over UDP, in ring 3. |
 | `usaver.h` | Where the savers are. |
 | `usetting.h` | One setting, by qualified name, for a ring-3 program: the GET and SET halves of `SYS_SETTING` with the message built here rather than in every caller. |

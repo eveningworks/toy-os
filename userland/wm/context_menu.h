@@ -132,6 +132,9 @@ int context_menu_row_disabled(int level, int index);
 // Any open level's rect and rows (0 the menu, 1 its submenu, 2 the one
 // below that), for `gui ctxmenu`'s "sub2". 0 rows when that level is shut.
 int context_menu_level_rows(int level, int *x, int *y, int *w);
+// An open level's whole panel, 0 when that level is shut -- what frosted
+// glass grows the damage over (wm_glass_frosted_rects()).
+int context_menu_level_rect(int level, int *x, int *y, int *w, int *h);
 const char *context_menu_level_label(int level, int index);
 int context_menu_sub_row_top(int index);
 

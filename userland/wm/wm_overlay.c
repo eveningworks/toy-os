@@ -45,6 +45,7 @@ static int open_tooltip(void) { return wm_tooltip_open; }
 static int tooltip_click(int mx, int my) { (void)mx; (void)my; return 0; }
 
 static int open_peek(void) { return wm_peek_open; }
+static int confirm_covers(int mx, int my) { (void)mx; (void)my; return confirm_dialog_open; }
 
 static const struct wm_overlay g_overlays[] = {
     // FIRST, so it is PAINTED LAST and lands on top of everything --
@@ -59,8 +60,11 @@ static const struct wm_overlay g_overlays[] = {
     // it lands outside the card.
     { "peek",     open_peek,     wm_peek_draw,     wm_peek_click,
       wm_peek_hover_at,          wm_peek_damage,          wm_peek_rect, 0, 0, 0, wm_peek_close, 0, 0, 0, 0 },
+    // MODAL, so it covers the whole screen for input (confirm_covers)
+    // while it damages only its own rect.
     { "confirm",  open_confirm,  draw_confirm,     confirm_dialog_handle_click,
-      confirm_dialog_hover_at,   confirm_dialog_damage,   0 /* a full repaint, on purpose */, confirm_dialog_update_press, 0, 0, 0, 0, 0, 0, 1 },
+      confirm_dialog_hover_at,   confirm_dialog_damage,   confirm_dialog_rect, confirm_dialog_update_press, 0, 0, 0, 0,
+      confirm_covers, 0, 1 },
     { "context",  open_context,  context_menu_draw, context_menu_handle_click,
       context_menu_hover_at,     context_menu_damage,     0 /* a rect per submenu level */, 0, 0, context_menu_key, context_menu_close, 0,
       context_menu_contains, 0, 0 },

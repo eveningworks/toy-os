@@ -28,7 +28,8 @@
 //              client cannot name its buffers until it has a slot --
 //              except it already did, which is why it PROPOSES one.
 //   ACTIVATE   no inputs. REPLIES 1 (a twin was raised) or 0.
-//   PRESENT    a = WIN_PRESENT_B(buf, gen), b = WIN_PRESENT_SIZE(w, h).
+//   PRESENT    a = WIN_PRESENT_B(buf, gen), b = WIN_PRESENT_SIZE(w, h);
+//              `damage` = what changed (struct win_damage; zeroed: all).
 //   DESTROY    window.
 //   TITLE / HINTS / CURSOR / TIMER / PONG / CLOSE_PID -- as before.
 //   POPUP      window = the proposed slot; a/b = w/h; c = the parent
@@ -92,8 +93,12 @@ struct wmchan_msg {
         char text[WIN_TITLE_LEN];   // TITLE, and CREATE's app_id
         struct win_popup_pos pos;   // POPUP's positioner
         struct win_shot shot;       // SCREENSHOT's rect, in and out
+        struct win_damage damage;   // PRESENT's changed rects
     };
 };
+
+_Static_assert(sizeof(struct win_damage) <= WIN_TITLE_LEN,
+               "a present's damage rides the text field and must fit it");
 
 _Static_assert(sizeof(struct win_popup_pos) <= WIN_TITLE_LEN,
                "the positioner rides the text field and must fit it");

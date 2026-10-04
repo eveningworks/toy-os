@@ -108,6 +108,7 @@ int context_menu_showing(const struct context_menu_item *items) {
 }
 
 void context_menu_open_at(int x, int y, const struct context_menu_item *items, int count) {
+    if (context_menu_open) context_menu_damage();   // reopened elsewhere: where it was
     int n = build(items, count);
 
     uui_menubar_init(&g_menu, 0, 0);   // no bar strip: a context menu is level 0 alone
@@ -125,7 +126,9 @@ void context_menu_open_at(int x, int y, const struct context_menu_item *items, i
 
     wm_overlay_close_others("context");
     context_menu_open = 1;
-    redraw_pending = 1;
+    // ITS OWN RECTS, NOT A FULL FRAME: the compositor repaints only the
+    // damage, so a menu that opened without saying where would not appear.
+    context_menu_damage();
 }
 
 int context_menu_geometry(int *x, int *y, int *w, int *item_h_out) {
@@ -191,6 +194,11 @@ int context_menu_level_rows(int level, int *x, int *y, int *w) {
 }
 
 const char *context_menu_level_label(int level, int index) { return row_label(level, index); }
+
+int context_menu_level_rect(int level, int *x, int *y, int *w, int *h) {
+    if (!context_menu_open || level >= uui_menubar_depth(&g_menu)) return 0;
+    return uui_menubar_popup_rect(&g_menu, level, x, y, w, h);
+}
 
 int context_menu_row_disabled(int level, int index) {
     if (!context_menu_open || level >= uui_menubar_depth(&g_menu)) return 0;
@@ -271,6 +279,7 @@ int context_menu_handle_click(int mx, int my) {
     // panel's own drawing used to close on a separator.
     context_menu_open = uui_menubar_is_open(&g_menu);
     if (!context_menu_open) wm_overlay_set_parent(0);
+    context_menu_damage();   // a submenu the press opened
     redraw_pending = 1;
     return 1;
 }

@@ -99,5 +99,8 @@ void confirm_dialog_update_press(int mx, int my, uint8_t buttons);
 // adopts it, since the buttons draw from their own `hovered` flag.
 int confirm_dialog_hover_at(int mx, int my);
 void confirm_dialog_damage(void);
+// Where it is while open -- the registry's `rect` op, which is what lets
+// it damage its own rect instead of the whole screen.
+int confirm_dialog_rect(int *x, int *y, int *w, int *h);
 
 #endif

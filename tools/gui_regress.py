@@ -166,6 +166,7 @@ TOOLS = [
     ("smooth", "smooth_scroll_test.py", "smooth scrolling glides, and desktop.smooth_scroll turns it off"),
     ("shadow", "shadow_test.py", "drop shadows under windows and menus, and desktop.shadows turns them off"),
     ("glass", "glass_test.py", "transparency: clear/frosted/wallpaper glass on the taskbar, Start, menus and windows"),
+    ("occlusion", "occlusion_test.py", "a window under an opaque one is not drawn; under glass it still shows"),
     ("anim", "animation_test.py", "open/close/minimize/restore ghosts, and desktop.animations turns them off"),
     ("idle", "idle_desktop_test.py", "nothing paints over an idle desktop"),
     ("halfframe", "half_frame_test.py", "no half-painted window frame while scrolling"),

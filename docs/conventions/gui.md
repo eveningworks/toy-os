@@ -2468,6 +2468,36 @@ real scanout hardware does. Do not write a pixel assertion for one.
   PEELING rather than breaking. The kick is bounded
   (`SHATTER_KICK_PCT`) precisely so the damage margin can be.
 
+- **A WINDOW IS DRAWN ONLY IN ITS VISIBLE REGION, AND OPAQUE IS WHAT THE
+  COMPOSITOR CAN PROVE.** `render_scene()` (`userland/wm/wm_render.c`)
+  cuts each window's rect-plus-shadow to the damage box and subtracts
+  `window_opaque_rects()` of every window above: the rect less its
+  rounded corner squares, less a glass title bar, and NOTHING for a
+  see-through window, a popup or a fullscreen one. Three rules for
+  whoever touches it. **A new way for a window to show what is beneath
+  it must make `window_opaque_rects()` say so**, or the window under it
+  is culled and the see-through pixels show last frame. **A new reason
+  `draw_one_window()` skips a window goes in `window_shown()`**, which
+  the occluder walk shares -- an undrawn window must hide nothing.
+  **Anything that reads beneath itself across its rect** (a blur, a
+  saved backdrop, an `on_draw()` with side effects) is drawn in ONE pass
+  under the damage box, never once per region rect. `gui damage verify
+  on`'s reference render culls nothing, so a wrong cull is a reported
+  miss; `gui compositor --json` counts windows drawn and culled;
+  `tools/occlusion_test.py` is the check (`docs/decisions/gui.md`, "A
+  window is drawn only where it can be seen").
+
+- **A PRESENT CARRIES ITS DAMAGE, AND UAPP MEASURES IT.** `struct
+  win_damage` rides the present's `text` field (`abi/win_proto.h`);
+  `WIN_DAMAGE_LIST` unset -- any zeroed message -- means the whole
+  surface. uapp row-compares the new buffer with the last presented one
+  (`uregion_diff()`) rather than trusting a declaration, because the
+  toolkit repaints the whole buffer and keeps no invalidation record.
+  **A client that sets `WIN_DAMAGE_LIST` promises nothing outside the
+  rects changed** -- the compositor keeps its last composite there. A
+  present whose buffer would not map sets `client_damage_all`, so the
+  next one repaints the whole content.
+
 - **A WINDOW'S DAMAGE IS ITS OUTER RECT -- THE FRAME PLUS ITS SHADOW --
   AND `wm_damage_window_rect()` IS HOW IT IS DAMAGED.** The compositor
   paints a drop shadow outside every toplevel and popup
@@ -5186,8 +5216,14 @@ vacated holding the old frame.
 **`damage()` SHOULD BE ONE LINE**: `void volume_damage(void) {
 wm_overlay_damage("volume"); }`. Keep a hand-written one only where the
 damage is genuinely not one rect -- the context menu damages a rect per
-open submenu, the confirm dialog asks for a full repaint on purpose --
-and those two pass `rect = 0`.
+open submenu and passes `rect = 0` (and lists each open level in
+`wm_glass_frosted_rects()`, since it is glass). **AN OPEN OVERLAY NO
+LONGER BUYS A FULL REPAINT**: one that appears without damaging its
+rect simply does not appear. The modal confirm dialog has a `rect` and
+a `contains` that answers yes everywhere -- modal for INPUT, one rect
+for DAMAGE. Only the Leave page repaints everything, being the screen,
+plus one full frame after the context menu, calendar or confirm dialog
+CLOSES (`wm_render_frame()`, for what the menu ran).
 
 **The core records the rect after it DRAWS each overlay**, so "where
 was it" is bookkeeping nobody has to remember. `wm_render.c` already

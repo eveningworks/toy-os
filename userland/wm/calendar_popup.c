@@ -203,11 +203,13 @@ void calendar_open_now(void) {
     go_today();
     wm_overlay_close_others("calendar");   // the popups are mutually exclusive
     calendar_open = 1;
-    redraw_pending = 1;
+    // Its own rect, not a full frame (wm_render.c repaints only damage).
+    calendar_damage();
 }
 
 void calendar_close(void) {
     if (!calendar_open) return;
+    calendar_damage();   // where it was drawn, which the core remembers
     calendar_open = 0;
     redraw_pending = 1;
 }
@@ -216,7 +218,7 @@ static void page_month(int delta) {
     view_month += delta;
     while (view_month < 1)  { view_month += 12; view_year--; }
     while (view_month > 12) { view_month -= 12; view_year++; }
-    redraw_pending = 1;
+    calendar_damage();   // six rows or five: the panel's height can change
 }
 
 void calendar_poll_config(void) {
@@ -226,7 +228,7 @@ void calendar_poll_config(void) {
     int want = nl_langinfo(_NL_TIME_FIRST_WEEKDAY)[0] != 1;
     if (want == week_start_monday) return;
     week_start_monday = want;
-    if (calendar_open) redraw_pending = 1;
+    if (calendar_open) calendar_damage();
 }
 
 // ---------------------------------------------------------------------
@@ -431,7 +433,7 @@ int calendar_handle_click(int mx, int my) {
     if (uui_hit(g.next_x, g.next_y, g.next_w, g.next_h, mx, my)) { page_month(+1); return 1; }
     if (uui_hit(g.title_x, g.title_y, g.title_w, g.title_h, mx, my)) {
         go_today();
-        redraw_pending = 1;
+        calendar_damage();
         return 1;
     }
     // The link opens System Settings on the page that carries the

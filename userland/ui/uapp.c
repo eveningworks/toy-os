@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include "lib/uchan.h"
 #include "lib/uwmchan.h"
+#include "lib/uregion.h"    // a present's damage, measured
 #include "ui/uui_route.h"
 #include "ui/uui_popup.h"   // the popup-surface provider, installed at open
 #include "ui/uui_focus.h"   // desc.focus -- keyboard focus ring
@@ -343,6 +344,32 @@ static void layout_log_flush(int src);
 static void wmap_sync(struct uapp *a);
 static int wmchan_send(uint32_t type, uint32_t window,
                        int aa, int bb, int cc, const char *text);
+static int wmchan_send_present(uint32_t window, int aa, int bb, int cc,
+                               const struct win_damage *dmg);
+
+// WHAT THIS FRAME CHANGED, against the frame the compositor shows now --
+// the buffer last presented, which nothing draws into. The toolkit
+// repaints the whole buffer every frame and keeps no invalidation record,
+// so the damage is MEASURED rather than declared: a row compare of the
+// two buffers (uregion_diff()), which cannot miss a change the way a
+// forgotten uapp_redraw_rect() would. A caret blink is then a caret-sized
+// present, not a window-sized one. A buffer of another size, or the
+// front itself (a single-buffered window), damages everything.
+static void present_damage(const struct uapp_surf *s, int shown, struct win_damage *d) {
+    memset(d, 0, sizeof *d);
+    int f = s->front;
+    if (f == shown || !s->px[f] || s->px_w[f] != s->w || s->px_h[f] != s->h ||
+        s->px_w[shown] != s->w || s->px_h[shown] != s->h) return;
+    struct uregion g;
+    uregion_diff(&g, (const uint32_t *)s->px[shown], (const uint32_t *)s->px[f],
+                 s->w, s->h, s->w, WIN_DAMAGE_MAX, 16);
+    d->flags = WIN_DAMAGE_LIST;
+    d->n = (uint16_t)g.n;
+    for (int i = 0; i < g.n; i++) {
+        d->r[i].x = (uint16_t)g.r[i].x; d->r[i].y = (uint16_t)g.r[i].y;
+        d->r[i].w = (uint16_t)g.r[i].w; d->r[i].h = (uint16_t)g.r[i].h;
+    }
+}
 
 // **THE FRAME NAMES ITSELF.** A present says which buffer holds the
 // finished pixels, which OBJECT is behind it, and how big it is -- so
@@ -365,9 +392,11 @@ static int surf_present(struct uapp_surf *s) {
     // this buffer cannot free it while the compositor shows this one.
     unsigned long long seq = g_present_seq + 1;
     if ((uint32_t)seq == 0) seq++;   // 0 means "no sequence" on the wire
-    if (!wmchan_send(WIN_REQ_PRESENT, (uint32_t)slot_of(s),
-                     WIN_PRESENT_B(shown, s->px_gen[shown]),
-                     (int)WIN_PRESENT_SIZE(s->w, s->h), (int)(uint32_t)seq, 0)) return 0;
+    struct win_damage dmg;
+    present_damage(s, shown, &dmg);
+    if (!wmchan_send_present((uint32_t)slot_of(s), WIN_PRESENT_B(shown, s->px_gen[shown]),
+                             (int)WIN_PRESENT_SIZE(s->w, s->h), (int)(uint32_t)seq,
+                             &dmg)) return 0;
 
     g_present_seq = seq;
     s->front = shown;
@@ -869,6 +898,18 @@ static int wmchan_send(uint32_t type, uint32_t window,
     m.window = window;
     m.a = aa; m.b = bb; m.c = cc;
     if (text) snprintf(m.text, sizeof m.text, "%s", text);
+    return uchan_send(&g_wmchan, &m, sizeof m) == 0;
+}
+
+static int wmchan_send_present(uint32_t window, int aa, int bb, int cc,
+                               const struct win_damage *dmg) {
+    if (!wmchan()) return 0;
+    struct wmchan_msg m;
+    memset(&m, 0, sizeof m);
+    m.type = WIN_REQ_PRESENT;
+    m.window = window;
+    m.a = aa; m.b = bb; m.c = cc;
+    m.damage = *dmg;
     return uchan_send(&g_wmchan, &m, sizeof m) == 0;
 }
 

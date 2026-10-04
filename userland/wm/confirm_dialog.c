@@ -1,6 +1,7 @@
 // See confirm_dialog.h for the design writeup.
 #include "confirm_dialog.h"
 #include "wm_internal.h"
+#include "wm_overlay.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"
 #include "kapi.h"
@@ -71,10 +72,11 @@ static void open_common(const char *message, void (*on_yes)(void), void (*on_no)
     uui_button_group_init(&g_group, g_btns, 2);
 
     confirm_dialog_open = 1;
-    redraw_pending = 1;
+    confirm_dialog_damage();   // here, and wherever a dialog it replaced was drawn
 }
 
 static void close_dialog(void) {
+    confirm_dialog_damage();   // the core remembers where it was drawn
     confirm_dialog_open = 0;
     redraw_pending = 1;
 }
@@ -116,7 +118,7 @@ void confirm_dialog_update_press(int mx, int my, uint8_t buttons) {
     if (buttons & 0x1) {
         // Re-hit-tested every tick, so dragging off a button visibly
         // un-presses it and dragging back re-presses.
-        if (uui_button_group_press(&g_group, mx, my)) redraw_pending = 1;
+        if (uui_button_group_press(&g_group, mx, my)) confirm_dialog_damage();
         return;
     }
 
@@ -142,11 +144,14 @@ int confirm_dialog_hover_at(int mx, int my) {
     return 0;
 }
 
-void confirm_dialog_damage(void) {
-    // A full repaint, as this dialog has always taken: its rect is not
-    // reported as damage anywhere (see wm_render.c), and inventing one
-    // here would be a second source of truth for where it is.
-    redraw_pending = 1;
+// Its rect, and the core adds where it was last drawn (wm_overlay.h). It
+// casts no shadow, so the window rect's margin is only slack.
+void confirm_dialog_damage(void) { wm_overlay_damage("confirm"); }
+
+int confirm_dialog_rect(int *x, int *y, int *w, int *h) {
+    if (!confirm_dialog_open) return 0;
+    *x = g_x; *y = g_y; *w = g_w; *h = g_h;
+    return 1;
 }
 
 

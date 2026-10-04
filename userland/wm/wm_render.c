@@ -32,6 +32,7 @@
 #include "ui/utheme.h"
 #include "kapi.h"
 #include "wm/wm_log.h"
+#include "lib/uregion.h"
 
 // The one screen this process composites into -- see wm_internal.h.
 struct ugfx_screen g_wm_screen;
@@ -960,10 +961,25 @@ static int corner_in_clip(int x, int y) {
     return x >= s->clip_x0 && x < s->clip_x1 && y >= s->clip_y0 && y < s->clip_y1;
 }
 
+// Does (x, y, w, h) meet the clip? A window drawn in several clipped
+// passes (render_scene's visible region) misses most of its corners and
+// often its title bar in each, and both cost far more than a test.
+static int clip_meets(int x, int y, int w, int h) {
+    const struct ugfx_surface *s = wm_surface();
+    if (!s->clip_active) return 1;
+    return x < s->clip_x1 && x + w > s->clip_x0 && y < s->clip_y1 && y + h > s->clip_y0;
+}
+
+static int corner_square_in_clip(const struct window *win, int c, int r) {
+    return clip_meets((c & 1) ? win->x + win->w - r : win->x,
+                      (c & 2) ? win->y + win->h - r : win->y, r, r);
+}
+
 static void corners_save(const struct window *win) {
     int r = corner_radius(win);
     if (!r) return;
     for (int c = 0; c < 4; c++)
+        if (corner_square_in_clip(win, c, r))
         for (int py = 0; py < r; py++)
             for (int px = 0; px < r; px++) {
                 int x, y;
@@ -980,11 +996,23 @@ static void corners_round(const struct window *win) {
     // has, read off the middle of its top edge.
     uint32_t outline = win->popup
         ? ugfx_get_pixel(wm_surface(), win->x + win->w / 2, win->y) : FRAME_OUTLINE;
-    for (int c = 0; c < 4; c++)
+    // The arc's coverage, once per radius rather than per pixel per pass.
+    static uint8_t cov_r[CORNER_MAX_R * CORNER_MAX_R], cov_in[CORNER_MAX_R * CORNER_MAX_R];
+    static int cov_for;
+    if (cov_for != r) {
         for (int py = 0; py < r; py++)
             for (int px = 0; px < r; px++) {
-                uint8_t cov   = corner_coverage(r, r, px, py);
-                uint8_t inner = corner_coverage(r, r - 1, px, py);
+                cov_r[py * r + px]  = corner_coverage(r, r, px, py);
+                cov_in[py * r + px] = corner_coverage(r, r - 1, px, py);
+            }
+        cov_for = r;
+    }
+    for (int c = 0; c < 4; c++)
+        if (corner_square_in_clip(win, c, r))
+        for (int py = 0; py < r; py++)
+            for (int px = 0; px < r; px++) {
+                uint8_t cov   = cov_r[py * r + px];
+                uint8_t inner = cov_in[py * r + px];
                 if (cov == 255 && inner == 255) continue;
                 int x, y;
                 corner_pixel(win, c, px, py, &x, &y);
@@ -1027,6 +1055,8 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
 
     if (!glass)
         ugfx_fill_rect(wm_surface(), win->x + 1, win->y + 1, win->w - 2, WM_TITLEBAR_H, titlebar);
+    // Everything below is in the title bar: a pass clipped away from it is done.
+    if (!clip_meets(win->x, win->y, win->w, 1 + WM_TITLEBAR_H)) return;
 
     struct btn_rects r = title_buttons(win);
 
@@ -1442,11 +1472,8 @@ static int client_content_rects(struct ugfx_skip_rect *out, int max) {
 // anything outside the active clip -- see gfx_set_clip_rect()). See
 // docs/decisions.md for the overall design and why window geometry
 // changes are handled precisely here (comparing each window's
-// last-rendered rect to its current one, below) while most other
-// redraw_pending sources (menus, taskbar, dialogs, the once-a-second
-// clock) still fall back to a full-screen repaint for now -- a
-// deliberately scoped first cut, not the final word; see the roadmap's
-// Milestone 12 entry for what's still open.
+// last-rendered rect to its current one, below). A frame that reports
+// no damage at all is a full-screen repaint.
 static int damage_x0, damage_y0, damage_x1, damage_y1;
 
 // A TEST LEVER: for the next `n` rendered frames every WINDOW damage
@@ -1602,8 +1629,17 @@ void wm_debug_damage(int *out_x, int *out_y, int *out_w, int *out_h) {
 // Re-applies whatever clip the current frame's scene should be drawn
 // under -- the accumulated damage box, or none. Paired with
 // clip_to_window_content() below, which narrows it temporarily.
+// A PASS narrows it further: one rect of the visible region a window or
+// the desktop is being drawn in (render_scene()). While it is set, it is
+// the scene clip -- an app's content clip intersects it and restoring
+// returns to it, never out to the whole damage box.
+static struct urect g_pass;
+static int g_pass_on;
+
 static void apply_scene_clip(int has_damage) {
-    if (has_damage) {
+    if (g_pass_on) {
+        ugfx_set_clip_rect(wm_surface(), g_pass.x, g_pass.y, g_pass.w, g_pass.h);
+    } else if (has_damage) {
         ugfx_set_clip_rect(wm_surface(), damage_x0, damage_y0, damage_x1 - damage_x0, damage_y1 - damage_y0);
     } else {
         ugfx_clear_clip_rect(wm_surface());
@@ -1630,7 +1666,12 @@ static void clip_to_window_content(const struct window *w, int has_damage) {
     int x0 = window_content_x(w), y0 = window_content_y(w);
     int x1 = x0 + window_content_w(w), y1 = y0 + window_content_h(w);
 
-    if (has_damage) {
+    if (g_pass_on) {
+        if (g_pass.x > x0) x0 = g_pass.x;
+        if (g_pass.y > y0) y0 = g_pass.y;
+        if (g_pass.x + g_pass.w < x1) x1 = g_pass.x + g_pass.w;
+        if (g_pass.y + g_pass.h < y1) y1 = g_pass.y + g_pass.h;
+    } else if (has_damage) {
         if (damage_x0 > x0) x0 = damage_x0;
         if (damage_y0 > y0) y0 = damage_y0;
         if (damage_x1 < x1) x1 = damage_x1;
@@ -1681,26 +1722,94 @@ int wm_top_covers_screen(void) {
     return w->fullscreen && w->x == 0 && w->y == 0 && w->w >= screen_w && w->h >= screen_h;
 }
 
-// ONE WINDOW OF THE SCENE, with its shadow, chrome, content and grip --
-// the body of render_scene()'s back-to-front walk, and called once more
-// for the window taskbar peek lifts above the dim (wm_peek.h).
-static void draw_one_window(int i, int focus, int covered, int has_damage, int lifted) {
+// Is window i painted at all this frame? Every reason draw_one_window()
+// skips one, in one place, because the OCCLUDER walk below must agree:
+// a window that is not drawn hides nothing.
+static int window_shown(int i, int focus, int covered, int lifted) {
+    const struct window *w = &windows[i];
     // `lifted`: the peek highlight draws this window above the dim
     // whatever its state -- a minimized one included, where it would be.
-    if (windows[i].state == WIN_MINIMIZED && !lifted) return;
-    if (wm_render_hidden_pid() &&
-        wm_client_is_client_window(&windows[i]) &&
-        windows[i].client_pid == wm_render_hidden_pid()) return;
-    if (wm_anim_hides(&windows[i])) return;   // its ghost is on screen instead (wm_anim.h)
-    if (has_damage && !window_intersects_damage(&windows[i])) return;
-    if (covered && i < focus && !windows[i].popup) return; // under the fullscreen window
+    if (w->state == WIN_MINIMIZED && !lifted) return 0;
+    if (wm_render_hidden_pid() && wm_client_is_client_window(w) &&
+        w->client_pid == wm_render_hidden_pid()) return 0;
+    if (wm_anim_hides(w)) return 0;   // its ghost is on screen instead (wm_anim.h)
+    if (covered && i < focus && !w->popup) return 0; // under the fullscreen window
+    // NOTHING UNTIL THE CLIENT'S FIRST PRESENT, popup or toplevel: the
+    // buffer opened at create is whatever the client has drawn so far --
+    // nothing, or whatever the pages came up as -- and compositing it
+    // flashes a black menu or a black window in full chrome. Wayland's
+    // map-on-first-commit.
+    if ((w->popup || w->fullscreen || wm_client_is_client_window(w)) &&
+        w->client_gen[w->client_front] == 0) return 0;
+    return 1;
+}
+
+// ---- visible regions -----------------------------------------------------
+//
+// A window is drawn only inside its VISIBLE REGION: its rect and shadow,
+// cut to the frame's damage, minus the OPAQUE part of every window above
+// it -- wlroots' scene graph and Mutter clip the same way, and DWM skips
+// a covered window outright. A window whose region is empty is not drawn
+// at all, which is what a stack of equal windows needs: fifteen Notepads
+// cost fifteen windows a frame before this, and the fourteen under the
+// top one showed nothing but the edge of their shadows.
+//
+// OPAQUE IS CONSERVATIVE (window_opaque_rects()): the rect less its
+// rounded corner squares, which the window above blends over what is
+// beneath (corners_round()); less a glass title bar; nothing at all for
+// a see-through window, a popup or a fullscreen one. Erring small is
+// only slower. A region too fragmented to keep (uregion.h) errs large.
+//
+// `gui damage verify` renders its reference frame with the culling OFF
+// (g_cull_off), so a window wrongly culled is a reported damage bug.
+static int g_cull_off;
+static unsigned g_win_drawn, g_win_culled;        // this frame's
+static struct wm_cull_stats g_cull;              // reported (wm_internal.h)
+
+#define PASS_MAX 16       // more rects than this: one pass over their bbox
+
+// The opaque part of window j, in at most three rects: the middle
+// column full height, and the two side strips between its corner
+// squares.
+static int window_opaque_rects(int j, int focus, struct urect out[3]) {
+    const struct window *w = &windows[j];
+    if (w->popup || w->fullscreen || wm_glass_window_alpha(j, focus) < 255) return 0;
+    int top = w->y;
+    if (wm_glass_titlebars() && window_has_chrome(w)) top = w->y + 1 + WM_TITLEBAR_H;
+    int r = corner_radius(w);
+    int bot = w->y + w->h;
+    if (bot - r <= top || w->w <= 2 * r) return 0;
+    out[0] = (struct urect){ w->x + r, top, w->w - 2 * r, bot - top };
+    if (!r) return 1;
+    // A glass bar already takes the top corners; only the bottom pair cuts.
+    int side_top = top > w->y ? top : w->y + r;
+    out[1] = (struct urect){ w->x, side_top, r, bot - r - side_top };
+    out[2] = (struct urect){ w->x + w->w - r, side_top, r, bot - r - side_top };
+    return 3;
+}
+
+// Subtracts from `g` the opaque part of every window above `below`.
+static void subtract_occluders(struct uregion *g, int below, int focus, int covered) {
+    for (int j = below + 1; j < window_count && !uregion_is_empty(g); j++) {
+        if (!window_shown(j, focus, covered, 0)) continue;
+        struct urect o[3];
+        int n = window_opaque_rects(j, focus, o);
+        for (int k = 0; k < n; k++) uregion_subtract_rect(g, o[k].x, o[k].y, o[k].w, o[k].h);
+    }
+}
+
+// The frame's damage box, or the screen when the frame is a full one.
+static void scene_box(int has_damage, struct urect *out) {
+    if (has_damage) *out = (struct urect){ damage_x0, damage_y0, damage_x1 - damage_x0,
+                                           damage_y1 - damage_y0 };
+    else *out = (struct urect){ 0, 0, screen_w, screen_h };
+}
+
+// THE WINDOW'S PIXELS, under whatever clip is set: shadow, chrome,
+// content, grip and corners. draw_one_window() decides where.
+static void paint_window(int i, int focus, int has_damage) {
     if (windows[i].popup || windows[i].fullscreen) {
-        // NO CHROME, NO CORNERS, NO GRIP -- and nothing at all until
-        // the client's first present: the buffer opened at create is
-        // whatever the client has drawn so far, which for one frame
-        // is nothing, and a menu that flashes black before it
-        // appears is the flash Wayland's map-on-first-commit avoids.
-        if (windows[i].client_gen[windows[i].client_front] == 0) return;
+        // NO CHROME, NO CORNERS, NO GRIP.
         // A menu's small shadow, under it (wm_shadow.h); a fullscreen
         // window has nothing beside it to shadow.
         if (windows[i].popup) {
@@ -1721,20 +1830,10 @@ static void draw_one_window(int i, int focus, int covered, int has_damage, int l
             apply_scene_clip(has_damage);
         }
         if (windows[i].popup) corners_round(&windows[i]);
-        wm_shadow_cover(windows[i].x, windows[i].y, windows[i].w, windows[i].h);
+        // A shadow cleared the record under the body itself (wm_shadow.h).
+        else wm_shadow_cover(windows[i].x, windows[i].y, windows[i].w, windows[i].h);
         return;
     }
-    // NOTHING UNTIL THE CLIENT'S FIRST PRESENT -- for a TOPLEVEL as
-    // well, which is the half this guard was missing. The buffer
-    // opened at create is whatever the client has drawn, and for a
-    // client that never gets to present it is whatever the pages
-    // came up as: compositing it painted a window of solid BLACK
-    // with full chrome around it, which reads as a broken app
-    // rather than as a compositor that ran out of something.
-    // Wayland's map-on-first-commit, the same rule the popup branch
-    // above already followed.
-    if (wm_client_is_client_window(&windows[i]) &&
-        windows[i].client_gen[windows[i].client_front] == 0) return;
     // The shadow FIRST, so corners_save() below sees it beneath the
     // corners and the rounded cut reveals shadow, not desktop. None
     // for a maximized window: nothing beside it to fall on.
@@ -1773,9 +1872,80 @@ static void draw_one_window(int i, int focus, int covered, int has_damage, int l
         wm_glass_window_end(windows[i].x, windows[i].y, windows[i].w, windows[i].h, alpha);
     corners_round(&windows[i]);    // last: the arc cuts chrome, content and grip alike
     // A maximized window cast no shadow, so nothing cleared the record
-    // under it (wm_shadow.h).
-    wm_shadow_cover(windows[i].x, windows[i].y, windows[i].w, windows[i].h);
+    // under it (wm_shadow.h); a shadow cleared it already.
+    if (windows[i].state == WIN_MAXIMIZED)
+        wm_shadow_cover(windows[i].x, windows[i].y, windows[i].w, windows[i].h);
 }
+
+// ONE WINDOW OF THE SCENE -- the body of render_scene()'s back-to-front
+// walk, and called once more for the window taskbar peek lifts above the
+// dim (wm_peek.h) -- drawn only inside its visible region.
+static void draw_one_window(int i, int focus, int covered, int has_damage, int lifted) {
+    if (!window_shown(i, focus, covered, lifted)) return;
+    if (has_damage && !window_intersects_damage(&windows[i])) return;
+    const struct window *w = &windows[i];
+    int m = wm_shadow_enabled() ? wm_shadow_margin() : 0;
+    struct urect box;
+    scene_box(has_damage, &box);
+    struct uregion vis;
+    uregion_init_rect(&vis, w->x - m, w->y - m, w->w + 2 * m, w->h + 2 * m);
+    uregion_intersect_rect(&vis, box.x, box.y, box.w, box.h);
+    if (!g_cull_off && !lifted && wm_peek_highlight_index() < 0)
+        subtract_occluders(&vis, i, focus, covered);
+    if (uregion_is_empty(&vis)) { g_win_culled++; return; }
+    g_win_drawn++;
+
+    // ONE PASS UNDER THE SCENE CLIP for anything that reads what is
+    // beneath it across its own rect -- frosted glass blurs neighbours,
+    // a see-through window saves its whole rect -- and for an in-WM
+    // app, whose on_draw() must run once. Cutting those into passes
+    // would change their pixels, not just where they land.
+    if (w->popup || w->fullscreen || wm_glass_titlebars() || (w->app && w->app->on_draw) ||
+        wm_glass_window_alpha(i, focus) < 255) {
+        paint_window(i, focus, has_damage);
+        return;
+    }
+    if (vis.n > PASS_MAX) {
+        uregion_bbox(&vis, &vis.r[0]);
+        vis.n = 1;
+    }
+    // THE PASSES ARE DISJOINT, and must be: corners_round() re-blends what
+    // corners_save() read, and a pixel painted twice would blend twice.
+    for (int k = 0; k < vis.n; k++) {
+        g_pass = vis.r[k];
+        g_pass_on = 1;
+        apply_scene_clip(has_damage);
+        paint_window(i, focus, has_damage);
+    }
+    g_pass_on = 0;
+    apply_scene_clip(has_damage);
+}
+
+// The wallpaper and the icons, where no opaque window covers them --
+// in passes as a window is, but with fewer: every pass draws every icon.
+#define DESKTOP_PASS_MAX 4
+static void draw_desktop_visible(int focus, int covered, int has_damage) {
+    struct urect box;
+    scene_box(has_damage, &box);
+    struct uregion vis;
+    uregion_init_rect(&vis, box.x, box.y, box.w, box.h);
+    if (!g_cull_off && wm_peek_highlight_index() < 0) subtract_occluders(&vis, -1, focus, covered);
+    if (uregion_is_empty(&vis)) return;
+    if (vis.n > DESKTOP_PASS_MAX) {
+        uregion_bbox(&vis, &vis.r[0]);
+        vis.n = 1;
+    }
+    for (int k = 0; k < vis.n; k++) {
+        g_pass = vis.r[k];
+        g_pass_on = 1;
+        apply_scene_clip(has_damage);
+        desktop_draw();   // background + icon grid, see desktop.h
+    }
+    g_pass_on = 0;
+    apply_scene_clip(has_damage);
+}
+
+void wm_cull_stats(struct wm_cull_stats *out) { *out = g_cull; }
 
 static void render_scene(int mx, int my, int has_damage) {
     apply_scene_clip(has_damage);
@@ -1785,7 +1955,6 @@ static void render_scene(int mx, int my, int has_damage) {
     wm_shadow_cover(0, 0, screen_w, screen_h);
     // UNDER THE LEAVE PAGE'S SNAPSHOT nothing of the scene shows: skip it.
     int under_page = leave_page_covers();
-    if (!covered && !under_page) desktop_draw(); // background + icon grid, see desktop.h
 
     // Phase 3: a window whose rect doesn't overlap this frame's damage
     // box gets skipped entirely -- not just clipped. Its chrome and
@@ -1812,6 +1981,8 @@ static void render_scene(int mx, int my, int has_damage) {
             break;
         }
     }
+    g_win_drawn = g_win_culled = 0;
+    if (!covered && !under_page) draw_desktop_visible(focus, covered, has_damage);
     // TASKBAR PEEK'S HIGHLIGHT: every other window, then a dim over the
     // desktop, then the lifted one on top (wm_peek.h). The dim is drawn
     // under the current clip like everything else, so a damage rect
@@ -1862,7 +2033,7 @@ static void render_scene(int mx, int my, int has_damage) {
 // twice and costs a full-screen buffer); `gui damage verify on` enables
 // it -- see apps/wm/wm_debug.c.
 static int first_frame = 1;
-static int overlay_was_open;  // an overlay was up last frame -- see wm_render_frame()
+static unsigned overlay_was_open;  // which overlays were up last frame -- see wm_render_frame()
 static int prev_cursor_x = -1, prev_cursor_y = -1;
 // The box the cursor was last DRAWN in, recorded beside the position
 // because a themed shape's extent is not derivable from a position
@@ -2005,6 +2176,8 @@ void wm_frame_stats_reset(void) {
     struct frame_stats z = { 0, 0, 0, 0, 0, 0 };
     g_frame_full = z;
     g_frame_partial = z;
+    struct wm_cull_stats c = { 0, 0, 0, 0, 0 };
+    g_cull = c;
 }
 
 uint32_t wm_scene_frames(void) { return g_scene_frames; }
@@ -2041,53 +2214,18 @@ void wm_render_frame(int mx, int my) {
     // narrow it -- the same trap tray_init() hit (see wm_tray.c).
     if (damage_x1 > damage_x0) damage_cursor(mx, my);
 
-    // Overlays (Start menu, context menu, file picker, confirm dialog)
-    // draw OUTSIDE any window's rect and declare no damage of their own
-    // -- the design note above calls that "falls back to a full-screen
-    // repaint", and for a long time it was true by accident: an overlay
-    // frame usually had nothing else reporting damage, so the frame was
-    // unrestricted anyway.
-    //
-    // It stops being true the moment something else declares damage in
-    // the SAME frame, and then the fallback silently inverts: the frame
-    // becomes damage-limited, the overlay is clipped away, and whatever
-    // was on screen before it stays there. Found by
-    // tools/damage_sweep.py's random walk (seed 1, step 22): a click
-    // that both raised a window and opened Notepad's file picker
-    // reported "114932 px changed outside the damage rect, first at
-    // (590,173)" -- the damage box was exactly the raised window's rect
-    // and the picker was wholly outside it.
-    //
-    // So make the documented fallback actually hold: while an overlay is
-    // up, discard the damage box and repaint the frame in full. That is
-    // the correct-by-construction option rather than the fast one, and
-    // it is what the compositor's scoped first cut always intended.
-    // Giving each overlay a real damage rect of its own is the better
-    // end state and needs geometry each of them doesn't expose yet --
-    // see docs/roadmap.md's Milestone 12 entry.
-    // ...and for one frame AFTER it closes, because the frame that
-    // dismisses an overlay has already cleared its `_open` flag by the
-    // time this runs, and nothing damages the region the overlay just
-    // vacated. That one hid behind a coincidence too: the damage box on
-    // such a frame is usually the full-width taskbar strip unioned with
-    // the cursor, which covers most of a Start menu sitting just above
-    // the taskbar. Dismissing it with a click low on the screen left
-    // exactly the rows above that union stale -- "300 px changed
-    // outside the damage rect, first at (4,448)", (4,448) being the
-    // menu's own top-left corner and 300 being its top two rows.
-    //
-    // THE START MENU IS NOT IN THIS LIST ANY MORE. It declares its own
-    // damage -- its rect when it opens, when it closes, when a click
-    // flashes a row and when the hovered row changes (start_menu.c) --
-    // so it no longer costs a full-screen repaint per frame for as long
-    // as it is up, which is what made the cursor crawl while it was
-    // open. The others still opt out, and converting each is the same
-    // three steps: track the hover instead of deriving it in the draw,
-    // damage the rect on every state change, drop it from here.
-    int overlay_now = context_menu_open || calendar_open || confirm_dialog_open || leave_page_open;
-    if (overlay_now || overlay_was_open) {
-        damage_reset();
-    }
+    // OVERLAYS DAMAGE THEIR OWN RECTS -- Start, the context menu (a rect
+    // per open level), the calendar, the confirm dialog -- on open, close,
+    // hover and click (wm_overlay.h). Two cases still repaint everything:
+    //  - while the LEAVE PAGE is up, which is the whole screen;
+    //  - for ONE frame after one of these CLOSES. What it ran -- a desktop
+    //    sort, a Force Quit -- may change the scene without declaring
+    //    damage, and the full repaint they all used to take every frame
+    //    covered for that. One frame per close is cheap; every frame
+    //    while open cost 100 ms with fifteen windows on the laptop.
+    unsigned overlay_now = (context_menu_open ? 1u : 0u) | (calendar_open ? 2u : 0u) |
+                           (confirm_dialog_open ? 4u : 0u) | (leave_page_open ? 8u : 0u);
+    if ((overlay_now & 8u) || (overlay_was_open & ~overlay_now)) damage_reset();
     overlay_was_open = overlay_now;
 
     // Clip this pass to the accumulated damage region, if any was
@@ -2097,12 +2235,19 @@ void wm_render_frame(int mx, int my) {
     int has_damage = damage_x1 > damage_x0;
 
     render_scene(mx, my, has_damage);
+    g_cull.drawn = g_win_drawn;
+    g_cull.culled = g_win_culled;
+    g_cull.drawn_total += g_win_drawn;
+    g_cull.culled_total += g_win_culled;
+    g_cull.frames++;
 
-    if (verify_enabled && has_damage) {
-        // Compare against an unrestricted render of the same frame.
-        // Only meaningful when damage WAS reported -- an unrestricted
-        // frame is trivially equal to itself.
+    if (verify_enabled && (has_damage || g_win_culled)) {
+        // Compare against an unrestricted render of the same frame:
+        // no damage limit and NO OCCLUSION CULLING, so a window wrongly
+        // left out of a visible region is reported like a missed rect.
+        // A full frame that culled nothing is trivially equal to itself.
         if (ugfx_verify_snapshot(&g_wm_screen)) {
+            g_cull_off = 1;
             render_scene(mx, my, 0);
             // MASK OUT CLIENT CONTENT, per pixel. Those pixels come from
             // another process's memory and can differ between two
@@ -2207,6 +2352,7 @@ void wm_render_frame(int mx, int my) {
             // The unrestricted render is left in the back buffer on
             // purpose: it is the CORRECT frame, so verification also
             // repairs what it caught rather than presenting the bug.
+            g_cull_off = 0;
         }
     }
 

@@ -638,6 +638,7 @@ first before re-litigating it from scratch.
 - [An app's Options window is a dialog of pages, applied on OK](decisions/gui.md#an-apps-options-window-is-a-dialog-of-pages-applied-on-ok)
 - [Disk Mark draws the run, and keeps every run](decisions/gui.md#disk-mark-draws-the-run-and-keeps-every-run)
 - [Screenshot is an overlay over a frozen frame, and its card is the compositor's](decisions/gui.md#screenshot-is-an-overlay-over-a-frozen-frame-and-its-card-is-the-compositors)
+- [A window is drawn only where it can be seen, and a client's damage is measured](decisions/gui.md#a-window-is-drawn-only-where-it-can-be-seen-and-a-clients-damage-is-measured)
 
 **Shell, apps & console** -- [`decisions/shell.md`](decisions/shell.md) (36 entries)
 

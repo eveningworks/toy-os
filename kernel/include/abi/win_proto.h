@@ -1416,6 +1416,22 @@ struct win_request_msg {
 #define WIN_PRESENT_BUF(b)      ((int)((uint32_t)(b) & 3u))
 #define WIN_PRESENT_GEN(b)      ((uint32_t)(b) >> 2)
 
+// A PRESENT'S DAMAGE: where the new frame differs from the one it
+// replaces, in surface pixels -- wl_surface.damage_buffer. Rides the
+// present's `text` field (lib/uwmchan.h), so it costs the hot path no
+// bytes. WITHOUT WIN_DAMAGE_LIST in `flags` the whole surface is damaged,
+// which is what every client that zeroes its message -- so every client
+// written before this -- already says. With it, `n` rects (0: nothing
+// changed) and nothing outside them may differ: the compositor repaints
+// only those, and keeps its last composite everywhere else.
+#define WIN_DAMAGE_MAX  3
+#define WIN_DAMAGE_LIST 0x1u
+struct win_damage {
+    uint16_t flags;   // WIN_DAMAGE_LIST, or 0 for the whole surface
+    uint16_t n;       // <= WIN_DAMAGE_MAX
+    struct { uint16_t x, y, w, h; } r[WIN_DAMAGE_MAX];
+};
+
 
 // Where WIN_REQ_FONT maps the shared glyph data. A literal since the
 // window region it used to be derived from went away; it stays where it

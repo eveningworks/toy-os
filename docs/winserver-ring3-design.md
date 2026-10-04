@@ -486,7 +486,10 @@ existing thing explicit:
 - **A present carries the front index, its size AND its generation.**
   A compositor holding a different generation re-opens the name and gets
   the new object; the one it was reading stays alive under its own
-  mapping until it lets go.
+  mapping until it lets go. (Since 2026-10-04 it also carries what
+  CHANGED -- `struct win_damage` in the `text` field, a zeroed one
+  meaning the whole surface; `docs/decisions/gui.md`, "A window is drawn
+  only where it can be seen".)
 
 **That last property is not a lucky accident -- it is what `shm_unlink`
 already promises**: "an object somebody is still using survives its own

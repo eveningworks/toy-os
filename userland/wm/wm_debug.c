@@ -1627,6 +1627,8 @@ static void cmd_compositor(struct dbg_out *o, int json) {
     unsigned ff_n, fp_n;
     wm_frame_stats(1, &ff_last, &ff_max, &ff_avg, &ff_cyc, &ff_n);
     wm_frame_stats(0, &fp_last, &fp_max, &fp_avg, &fp_cyc, &fp_n);
+    struct wm_cull_stats cs;   // windows drawn and occlusion-culled (wm_render.c)
+    wm_cull_stats(&cs);
 
     if (json) {
         dbg_out_printf(o, "{\"pid\":%d,\"pending\":%d,\"dropped\":%d,"
@@ -1637,8 +1639,11 @@ static void cmd_compositor(struct dbg_out *o, int json) {
                           "\"us_avg\":%llu,\"cyc_avg\":%llu},",
                     ff_n, ff_last, ff_max, ff_avg, ff_cyc);
         dbg_out_printf(o, "\"frame_partial\":{\"n\":%u,\"us_last\":%llu,\"us_max\":%llu,"
-                          "\"us_avg\":%llu,\"cyc_avg\":%llu}}\r\n",
+                          "\"us_avg\":%llu,\"cyc_avg\":%llu},",
                     fp_n, fp_last, fp_max, fp_avg, fp_cyc);
+        dbg_out_printf(o, "\"windows\":{\"drawn\":%u,\"culled\":%u,\"drawn_total\":%u,"
+                          "\"culled_total\":%u,\"frames\":%u}}\r\n",
+                    cs.drawn, cs.culled, cs.drawn_total, cs.culled_total, cs.frames);
     } else if (!pid) {
         dbg_out_write(o, "compositor: none registered\r\n");
     } else {
@@ -1648,6 +1653,8 @@ static void cmd_compositor(struct dbg_out *o, int json) {
                     ff_last, ff_max, ff_avg, ff_n);
         dbg_out_printf(o, "            damage-limited: last %llu max %llu avg %llu over %u\r\n",
                     fp_last, fp_max, fp_avg, fp_n);
+        dbg_out_printf(o, "  windows drawn/culled: last frame %u/%u, %u/%u over %u frames\r\n",
+                    cs.drawn, cs.culled, cs.drawn_total, cs.culled_total, cs.frames);
     }
 }
 

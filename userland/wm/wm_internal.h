@@ -509,6 +509,13 @@ void wm_debug_damage(int *out_x, int *out_y, int *out_w, int *out_h);
 // "this input repainted something" from "the pointer sprite moved".
 uint32_t wm_scene_frames(void);
 
+// Windows DRAWN, and CULLED -- skipped because the opaque windows above
+// them left nothing of them visible in the frame's damage (wm_render.c's
+// visible regions) -- in the last scene frame and since `gui compositor
+// reset`, over `frames` frames. A window outside the damage is neither.
+struct wm_cull_stats { unsigned drawn, culled, drawn_total, culled_total, frames; };
+void wm_cull_stats(struct wm_cull_stats *out);
+
 // Damage verification (debug): render every frame twice and report any
 // pixel the damage-limited pass got wrong. See wm_render.c's own
 // comment for the bug class it exists to catch. Off by default.
