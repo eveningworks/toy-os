@@ -52,7 +52,8 @@ Checked against the tree before this was written, the same way
   comment says it belongs to a line discipline "and there is not one
   yet".
 - **There is exactly one input ring, and it carries modifiers.**
-  `ring_push()` stores `(mods << 16) | code` in a 256-entry ring. Three
+  `keyboard.c`'s push (`emit()` today) stores `(mods << 16) | code` in a
+  256-entry ring. Three
   consumers pop it: the ring-0 blocking readers, `sys_do_read_console()`
   for ring 3, and `win_input.c` for the compositor. They do not compete,
   because only one is live at a time -- `keyboard_blocking_suspended()`

@@ -77,7 +77,7 @@ this the obvious way), not from how much history it accumulated.
   the check; `docs/init-design.md`'s stage 4.
 - **RING 3 CAN READ THE CONSOLE -- fd 0, and it BLOCKS.**
   `sys_read(0, buf, n)` parks the caller on `SCHED_WAIT_KEY` and
-  `keyboard.c`'s `ring_push()` wakes it from the IRQ, the same
+  the console terminal's `tty_enqueue()` wakes it from the IRQ, the same
   park-and-return shape pipes, `waitpid` and `sleep` already use --
   nothing reopens the `sti`-in-the-handler hazard `SYS_READ_KEY`'s
   comment describes, because the handler does not wait, it RETURNS.

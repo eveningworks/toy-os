@@ -743,10 +743,8 @@ static void window_events(void (*script)(void)) {
     k_strlcpy(name, keyboard_layout_current(), sizeof name);
     k_memset(&g_ev, 0, sizeof g_ev);
     k_memset(&g_ph, 0, sizeof g_ph);
-    int pid = 0;
-    for (int p = SCHED_PID_MAX - 1; p > 0 && !pid; p--)   // a pid nobody holds
-        if (!scheduler_pid_valid(p)) pid = p;
-    if (!pid) return;                    // the caller's count assertion fails
+    int pid;
+    if (!ktest_spare_pids(&pid, 1)) return;   // the caller's count assertion fails
 
     scheduler_preempt_disable();
     win_server_set_compositor(pid, 0);   // attaches the keyboard, empties the queues

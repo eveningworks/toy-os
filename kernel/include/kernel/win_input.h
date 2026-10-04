@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "win_proto.h"
+#include "fswatch.h"   // FSWATCH_MAX: how many FSWATCH notices can be pending
 
 // The compositor's input path -- evdev's job: the kernel reads the
 // devices, queues what it read, and ONE process drains the queue. That
@@ -17,10 +18,13 @@
 // (userland/lib/uchan.h's inbox).
 //
 // What rides it besides raw input: the kernel's own notices to the
-// compositor -- WIN_EV_FONT, WIN_EV_SCREEN, window lifecycle -- and a
-// `gui` diagnostic command. Notices have their own queue, popped first,
-// so input pressure never costs one; in the input queue a release is
-// never shed (win_input.c says how).
+// compositor -- WIN_EV_FONT, WIN_EV_SCREEN, WIN_EV_SETTING, one
+// WIN_EV_FSWATCH per watch -- all in ARRIVAL ORDER with the input. Each
+// notice is idempotent and coalesces, so at most WIN_INPUT_NOTICE_RESERVE
+// are ever queued; input never holds more than the rest, so a notice is
+// never refused, and a release is never shed (win_input.c says how).
+#define WIN_INPUT_NOTICE_RESERVE (3 + FSWATCH_MAX)   // FONT, SCREEN, SETTING, the watches
+#define WIN_INPUT_MAX (WIN_EVENT_QUEUE_MAX - WIN_INPUT_NOTICE_RESERVE)
 
 // Polls the mouse and keyboard and queues WIN_EV_RAW_*. A no-op with no
 // compositor. Called from scheduler_idle(), the kernel's one owner of
@@ -30,17 +34,16 @@ void win_input_poll(void);
 // Queues `ev` for the compositor and wakes it (its wait channel and its
 // wakeword both). Returns 1 if queued, 0 with no compositor. Safe from
 // an interrupt handler: the wake only flips scheduler state. Motion
-// with the same buttons as the newest queued motion REPLACES it; a full
-// input queue drops its oldest event that is not a release, or refuses
-// the new one. A notice goes to the notice queue.
+// with the same buttons as the newest queued motion REPLACES it; input
+// past WIN_INPUT_MAX drops its oldest event that is not a release, or is
+// refused. A notice replaces an older copy of itself, moving to the end.
 int win_input_push(const struct win_event *ev);
 
 // win_input_poll()'s key half: the key and positional streams, in turn,
-// as far as the input queue has room. Exported for its KTEST.
+// as far as input's share of the queue allows. Exported for its KTEST.
 void win_input_drain_keys(void);
 
-// Pops the oldest notice, else the oldest input, into `out`; 1 if one
-// was waiting, 0 if empty.
+// Pops the oldest event into `out`; 1 if one was waiting, 0 if empty.
 int win_input_pop(struct win_event *out);
 
 // The wait channel the compositor parks on -- the queue's own address.

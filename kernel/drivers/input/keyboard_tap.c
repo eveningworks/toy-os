@@ -52,7 +52,7 @@ static uint32_t g_written;  // records retained, saturating at TAP_MAX
 static int g_enabled;
 
 // Where the record kbdtap_key() opened most recently lives, so
-// kbdtap_produced() can reach it without every one of ring_push()'s ~20
+// kbdtap_produced() can reach it without every one of emit()'s ~20
 // call sites having to carry it. The same shape as keyboard.c's
 // `emitting_keycode`, and safe for the same reason: both are set and
 // read inside one non-preemptible interrupt handler.

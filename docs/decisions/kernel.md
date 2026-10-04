@@ -3816,7 +3816,7 @@ keyboard IRQ landed with the handler still on the stack and clobbered
 `g_next_kernel_rsp` -- one keystroke, then a hang. Nothing here reopens
 that: the handler does not WAIT, it PARKS and returns, through
 `scheduler_block_current()`, exactly as the pipe, `waitpid` and `sleep`
-paths already do. The wake site is `keyboard.c`'s `ring_push()`, in the
+paths already do. The wake site is the terminal's `tty_enqueue()` (then `keyboard.c`'s `ring_push()`), in the
 IRQ, where all it may do is flip scheduler state and write an
 already-saved trapframe -- which is all `scheduler_wake()` does.
 
@@ -5522,12 +5522,12 @@ Four decisions inside it:
 
 Two scancode wrinkles worth knowing, both in `keyboard_feed_byte()`:
 
-- **Pause is six bytes and has no release.** `E1 1D 45 E1 9D C5`, and
-  nothing else uses the `E1` prefix -- so the press is reported when the
-  prefix arrives and the five bytes behind it are counted out. Since
-  2026-10-05 the parser also reports the release Pause never sends, at
-  once: a press with no release had cost a reserved slot in the key
-  streams and a stuck key in the positional one.
+- **Pause is six bytes and has no break code, so the parser reports its
+  release.** `E1 1D 45 E1 9D C5`, and nothing else uses the `E1` prefix
+  -- so the press is reported when the prefix arrives, the release at
+  once after it (8206972c; a press with no release had cost a reserved
+  slot in the key streams and a stuck key in the positional one), and
+  the five bytes behind it are counted out.
 - **The fake shifts around Print Screen are dropped.** A PS/2 keyboard
   brackets PrtSc with `E0 2A` / `E0 AA` so a DOS-era reader saw a
   shifted key. Taking those at face value would report a Shift nobody

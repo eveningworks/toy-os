@@ -246,8 +246,8 @@ static int tty_fd_write(struct syscall_ctx *c, struct open_file *f,
 // keystroke spin.
 //
 // Blocking here is safe for the reason the pipe path above is safe: the
-// handler does not WAIT, it PARKS and returns. keyboard.c's ring_push()
-// is the wake site.
+// handler does not WAIT, it PARKS and returns. tty_enqueue() is the
+// wake site.
 //
 // THREE THINGS THIS DELIBERATELY DOES NOT DO, all of them the TTY
 // milestone's job (docs/roadmap.md):

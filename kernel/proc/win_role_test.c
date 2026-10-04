@@ -11,19 +11,14 @@
 #include "scheduler.h"
 #include <stddef.h>
 
-// The pids are CHOSEN AT RUN TIME, not named: any number below
-// SCHED_PID_MAX may be a real process's, and pid 3 (what this file used to hardcode) is what toywm gets on an
-// ordinary boot: the fixture was creating and destroying windows on the
-// live desktop's own list.
+// The pids are CHOSEN AT RUN TIME (ktest_spare_pids()): pid 3, which
+// this file once hardcoded, is toywm's on an ordinary boot.
 static int spare_pids(int *client, int *comp) {
-    *client = *comp = 0;
-    for (int p = SCHED_PID_MAX - 1; p > 0; p--) {
-        if (scheduler_pid_valid(p)) continue; // valid counts a zombie, which is what we want
-        if (!*client) { *client = p; continue; }
-        *comp = p;
-        return 1;
-    }
-    return 0;
+    int p[2];
+    if (!ktest_spare_pids(p, 2)) return 0;
+    *client = p[0];
+    *comp = p[1];
+    return 1;
 }
 
 // THE COMPOSITOR ROLE IS ONE GLOBAL, SHARED WITH THE LIVE DESKTOP.

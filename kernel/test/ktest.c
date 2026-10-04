@@ -9,6 +9,7 @@
 // to decide whether `make test` passed. A klog_write() report would
 // always go to the serial log and never to the window the user typed in.
 #include "ktest.h"
+#include "scheduler.h" // ktest_spare_pids()
 #include "block.h"
 #include "kapi.h"
 #include "fault_inject.h"
@@ -191,4 +192,11 @@ int ktest_run_all(const char *suite_filter) {
         vga_write("ktest: no tests matched that suite name -- `ktest` alone lists them all\n");
     }
     return (int)failed;
+}
+
+int ktest_spare_pids(int *out, int n) {
+    int found = 0;
+    for (int p = SCHED_PID_MAX - 1; p > 0 && found < n; p--)
+        if (!scheduler_pid_valid(p)) out[found++] = p;
+    return found == n;
 }

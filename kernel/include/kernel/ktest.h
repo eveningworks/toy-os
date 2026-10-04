@@ -113,4 +113,10 @@ void ktest_fail_eq(struct ktest_ctx *ctx, const char *expr, int64_t got, int64_t
                     const char *file, int line);
 void ktest_skip(struct ktest_ctx *ctx, const char *reason);
 
+// Fills out[0..n-1] with distinct pids NO process holds (a zombie counts
+// as held), highest first, for a test that needs a pid to give a role
+// to; 1 if it found n. CHOSEN AT RUN TIME: any low pid may be a real
+// process's -- toywm's, on an ordinary boot.
+int ktest_spare_pids(int *out, int n);
+
 #endif

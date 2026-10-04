@@ -10,22 +10,13 @@
 #include "scheduler.h"
 #include "win_proto.h"
 
-static int spare_pids(int *a, int *b) {
-    *a = *b = 0;
-    for (int p = SCHED_PID_MAX - 1; p > 0; p--) {
-        if (scheduler_pid_valid(p)) continue;
-        if (!*a) { *a = p; continue; }
-        *b = p;
-        return 1;
-    }
-    return 0;
-}
 
 KTEST("winshare", "the framebuffer grant can be leased to one other process") {
     if (win_surface_holder()) KTEST_SKIP("a compositor holds the grant");
     if (!gfx_framebuffer_phys()) KTEST_SKIP("no framebuffer");
-    int holder, lessee;
-    if (!spare_pids(&holder, &lessee)) KTEST_SKIP("no spare pids");
+    int pids[2];
+    if (!ktest_spare_pids(pids, 2)) KTEST_SKIP("no spare pids");
+    int holder = pids[0], lessee = pids[1];
     uint64_t as1 = vmm_create_address_space(), as2 = vmm_create_address_space();
     KTEST_ASSERT(as1 && as2);
 

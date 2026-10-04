@@ -1708,11 +1708,12 @@ While a compositor is attached every press and release goes there and
 nowhere else, so never pair the console's ring with a second queue to
 rebuild the order -- that lost releases. A queued press always has room
 for its release; overflow refuses the newest press, whole. In the
-compositor's input queue (`kernel/proc/win_input.c`) a release -- a
-key's, a position's, a button's -- is marked and never evicted;
-`win_input_poll()` reads each source only while there is room, leaves
-the rest queued, and alternates which key stream goes first each poll.
-Notices have their own queue, popped first. The streams are emptied on EVERY compositor
+compositor's queue (`kernel/proc/win_input.c`, one queue in arrival
+order) a release -- a key's, a position's, a button's -- is marked and
+never evicted; notices coalesce and have slots reserved, so none is ever
+refused; `win_input_poll()` reads each source only while input's share
+has room, leaves the rest queued, and gives each slot to the key stream
+not served last. The streams are emptied on EVERY compositor
 role change (`keyboard_events_attach()`), and are touched only with
 interrupts off. docs/decisions/gui.md, "One ordered key stream", has why.
 
