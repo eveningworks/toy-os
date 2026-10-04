@@ -126,6 +126,9 @@ struct intel_gen_ops {
     // A REAL mode: the transcoder, port and PLL re-lit at timing `t`
     // (shown 1:1). NULL where only the native timing can be shown.
     int  (*set_timing)(const struct edid_timing *t);
+    // Whether set_timing can show `t` with what it leaves as the firmware
+    // set it; required with set_timing (no real mode without both).
+    int  (*timing_ok)(const struct edid_timing *t);
     // kernel.intel_cycle's mechanisms; NULL where a generation has none.
     int  (*pipe_cycle)(void);
     int  (*link_retrain)(void);
@@ -143,6 +146,30 @@ int  intel_aux_read_edid(uint8_t *out, int cap);   // display_driver.read_edid
 int  intel_aux_native_read(uint32_t addr, uint8_t *buf, int len); // DPCD; bytes or -1
 int  intel_aux_native_write(uint32_t addr, const uint8_t *buf, int len);
 
+// --- gen9 registers, shared by intel_gen9.c and intel_gen9_modeset.c ------
+#define TRANS_DDI_FUNC_CTL(t)  (0x60400 + (t) * PIPE_STRIDE)
+#define TRANS_HTOTAL(t)        (0x60000 + (t) * PIPE_STRIDE)
+#define TRANS_HBLANK(t)        (0x60004 + (t) * PIPE_STRIDE)
+#define TRANS_HSYNC(t)         (0x60008 + (t) * PIPE_STRIDE)
+#define TRANS_VTOTAL(t)        (0x6000C + (t) * PIPE_STRIDE)
+#define TRANS_VBLANK(t)        (0x60010 + (t) * PIPE_STRIDE)
+#define TRANS_VSYNC(t)         (0x60014 + (t) * PIPE_STRIDE)
+#define DDI_BUF_CTL(port)      (0x64000 + (port) * 0x100)
+#define DPLL_CTRL1             0x6C058
+#define DPLL_CTRL2             0x6C05C
+#define DPLL_STATUS            0x6C060
+#define DPLL_CFGCR1(n)         (0x6C040 + ((n) - 1) * 8)   // DPLL1..3
+#define DPLL_CFGCR2(n)         (0x6C044 + ((n) - 1) * 8)
+#define LCPLL1_CTL             0x46010
+#define LCPLL2_CTL             0x46014   // DPLL1's enable
+#define WRPLL1_CTL             0x46040   // DPLL2's
+#define WRPLL2_CTL             0x46060   // DPLL3's
+#define PLANE_SIZE(p)          (0x70190 + (p) * PIPE_STRIDE)
+
+// Bounded both ways: by the clocksource when it runs, by count when it
+// does not (the probe runs before the timer). intel_modeset.c's.
+void intel_udelay(uint32_t us);
+
 // intel_gen9.c -- Kaby Lake: intel_gen9_ops and what it points at.
 // The scaler half of a mode, for the modeset's use with the pipe off.
 int intel_gen9_fit(uint32_t w, uint32_t h, uint32_t x, uint32_t y, uint32_t ww, uint32_t wh);
@@ -152,7 +179,9 @@ int intel_gen9_cycle(int level, const struct edid_timing *t);
 
 // intel_gmbus.c -- the display engine's I2C, for an HDMI/DVI EDID.
 int  intel_gmbus_pin_for_port(int port);   // 0 when the DDI has none
-int  intel_gmbus_read_edid(int pin, uint8_t *out, int len);   // bytes, 0 on failure
+// `len` bytes from EDID offset `offset` (0, or 128 for the extension);
+// the count, or 0 on failure with `out` partly written.
+int  intel_gmbus_read_edid(int pin, int offset, uint8_t *out, int len);
 
 // intel_readout.c -- what the firmware programmed, decoded and compared.
 struct display_edid;

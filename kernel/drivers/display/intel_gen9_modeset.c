@@ -23,46 +23,21 @@
 #include "intel_internal.h"
 #include "intel_display.h"
 #include "edid.h"
-#include "clocksource.h"
 #include "barrier.h"
 #include "klog.h"
 #include "kfmt.h"
 
 // driver-none: part of intel-display (intel_display.c declares it)
 
-#define TRANS_DDI_FUNC_CTL(t)  (0x60400 + (t) * PIPE_STRIDE)
-#define TRANS_HTOTAL(t)        (0x60000 + (t) * PIPE_STRIDE)
-#define TRANS_HBLANK(t)        (0x60004 + (t) * PIPE_STRIDE)
-#define TRANS_HSYNC(t)         (0x60008 + (t) * PIPE_STRIDE)
-#define TRANS_VTOTAL(t)        (0x6000C + (t) * PIPE_STRIDE)
-#define TRANS_VBLANK(t)        (0x60010 + (t) * PIPE_STRIDE)
-#define TRANS_VSYNC(t)         (0x60014 + (t) * PIPE_STRIDE)
-#define DDI_BUF_CTL(port)      (0x64000 + (port) * 0x100)
 #define DDI_BUF_ENABLE         (1u << 31)
 #define DDI_BUF_IDLE           (1u << 7)
-#define DPLL_CTRL1             0x6C058
-#define DPLL_CTRL2             0x6C05C
-#define DPLL_STATUS            0x6C060
-#define DPLL_CFGCR1(n)         (0x6C040 + ((n) - 1) * 8)
-#define DPLL_CFGCR2(n)         (0x6C044 + ((n) - 1) * 8)
-#define PLANE_SIZE(p)          (0x70190 + (p) * PIPE_STRIDE)
-#define WM_LINETIME_REG(p)     (0x45270 + (p) * 4)
 #define FUNC_PORT_MASK         (7u << 28)
-#define FUNC_MODE_MASK         (7u << 24)
 #define FUNC_HSYNC_HIGH        (1u << 16)
 #define FUNC_VSYNC_HIGH        (1u << 17)
 #define STATE_SPINS            4000000
 
 // DPLL1..3's enable registers (DPLL0 is the DP/CDCLK one, never ours).
-static uint32_t pll_ctl(int n) { return n == 1 ? 0x46014u : n == 2 ? 0x46040u : 0x46060u; }
-
-static void udelay(uint32_t us) {
-    uint64_t t0 = clocksource_now_ns(), want = (uint64_t)us * 1000;
-    for (uint32_t i = 0; i < us * 4000u; i++) {
-        if (clocksource_now_ns() - t0 >= want) return;
-        cpu_relax();
-    }
-}
+static uint32_t pll_ctl(int n) { return n == 1 ? LCPLL2_CTL : n == 2 ? WRPLL1_CTL : WRPLL2_CTL; }
 
 static int wait_bits(uint32_t reg, uint32_t bits, int want) {
     uint32_t v = 0;
@@ -79,6 +54,7 @@ static int wait_bits(uint32_t reg, uint32_t bits, int want) {
 struct gen9_pipe_state {
     int pipe, port, pll;
     uint32_t func, ctl, surf, cur, curbase, buf, frame0;
+    uint32_t cfgcr1, cfgcr2;   // the PLL's dividers before the cycle: the rollback's
 };
 
 // The pipe drives an HDMI or DVI DDI from DPLL1..3, or nothing here
@@ -96,6 +72,8 @@ static int begin(struct gen9_pipe_state *st, const char *what) {
         return 0;
     }
     st->buf = intel_rd(DDI_BUF_CTL(st->port));
+    st->cfgcr1 = intel_rd(DPLL_CFGCR1(st->pll));
+    st->cfgcr2 = intel_rd(DPLL_CFGCR2(st->pll));
     klog_printf("intel-gen9: %s: pipe %c DDI %c DPLL%d -- transconf %#x func %#x buf %#x cfgcr %#x/%#x\n",
                 what, 'A' + st->pipe, 'A' + st->port, st->pll, intel_rd(PIPECONF(st->pipe)),
                 st->func, st->buf, intel_rd(DPLL_CFGCR1(st->pll)), intel_rd(DPLL_CFGCR2(st->pll)));
@@ -145,17 +123,15 @@ static void write_timing(int p, const struct edid_timing *t) {
     intel_wr(PLANE_SIZE(p), ((t->vactive - 1u) << 16) | (t->hactive - 1u));
     // The line time in 1/8 us (skl_wm_linetime), read by the watermarks.
     uint32_t lt = (uint32_t)(((uint64_t)ht * 8000 + t->pixel_khz / 2) / t->pixel_khz);
-    intel_wr(WM_LINETIME_REG(p), (intel_rd(WM_LINETIME_REG(p)) & ~0x1FFu) | (lt & 0x1FF));
+    intel_wr(WM_LINETIME(p), (intel_rd(WM_LINETIME(p)) & ~0x1FFu) | (lt & 0x1FF));
 }
 
-static int on(struct gen9_pipe_state *st, const struct edid_timing *t, int level) {
+// `c1`/`c2` are the PLL's dividers for level 2, worked out BEFORE off()
+// so a clock with none never gets as far as a dark screen.
+static int on(struct gen9_pipe_state *st, const struct edid_timing *t, int level,
+              uint32_t c1, uint32_t c2) {
     int p = st->pipe, ok = 1;
     if (level >= 2) {
-        uint32_t c1, c2;
-        if (!t || !intel_display_gen9_wrpll(t->pixel_khz, &c1, &c2)) {
-            klog_printf(KLOG_ERR "intel-gen9: no PLL dividers for %u kHz\n", t ? t->pixel_khz : 0);
-            return 0;
-        }
         // The PLL's DPLL_CTRL1 field: override, HDMI mode; the link
         // rate bits mean nothing in HDMI mode.
         uint32_t f = (1u << (st->pll * 6)) | (1u << (st->pll * 6 + 5));
@@ -184,7 +160,7 @@ static int on(struct gen9_pipe_state *st, const struct edid_timing *t, int level
     ok &= wait_bits(PIPECONF(p), PIPECONF_STATE, 1);
     if (level >= 1) {
         intel_wr(DDI_BUF_CTL(st->port), st->buf | DDI_BUF_ENABLE);
-        udelay(600);
+        intel_udelay(600);
         ok &= wait_bits(DDI_BUF_CTL(st->port), DDI_BUF_IDLE, 0);
     }
     intel_wr(DSPCNTR(p), st->ctl);
@@ -202,16 +178,30 @@ static int on(struct gen9_pipe_state *st, const struct edid_timing *t, int level
     return ok;
 }
 
-// One cycle at `level`, at timing `t` (NULL keeps the timing on the
-// transcoder; the PLL level needs one, for its clock).
+// One cycle at `level`, at timing `t`. NULL keeps the transcoder's own
+// timing, and at the PLL level re-derives the dividers from the clock
+// already running -- the same clock, recomputed.
 int intel_gen9_cycle(int level, const struct edid_timing *t) {
     static const char *const NAME[3] = { "pipe cycle", "port cycle", "pll cycle" };
     struct gen9_pipe_state st;
     if (level < 0 || level > 2 || !begin(&st, NAME[level])) return 0;
+    uint32_t c1 = st.cfgcr1, c2 = st.cfgcr2;
+    if (level >= 2) {
+        uint32_t khz = t ? t->pixel_khz : intel_display_gen9_hdmi_khz(st.cfgcr1, st.cfgcr2);
+        if (!intel_display_gen9_wrpll(khz, &c1, &c2)) {
+            klog_printf(KLOG_ERR "intel-gen9: no PLL dividers for %u kHz -- refused, nothing turned off\n", khz);
+            return 0;
+        }
+        if (!t)
+            klog_printf("intel-gen9: %u kHz recomputed to %#x/%#x (running %#x/%#x, %s)\n", khz, c1, c2,
+                        st.cfgcr1, st.cfgcr2, c1 == st.cfgcr1 && c2 == st.cfgcr2 ? "the same" : "DIFFERENT");
+    }
     if (!off(&st, level)) {
-        // Put back whatever went off, rather than leave the screen dark.
-        on(&st, 0, level >= 1 ? 1 : 0);
+        // Back exactly as it was: the same level, the saved dividers, the
+        // timing still on the transcoder -- never a level short of what
+        // off() turned off, which left the PLL and the port clock down.
+        on(&st, 0, level, st.cfgcr1, st.cfgcr2);
         return 0;
     }
-    return on(&st, t, level);
+    return on(&st, t, level, c1, c2);
 }

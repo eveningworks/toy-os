@@ -57,7 +57,7 @@ static const uint8_t MAX_PE_AT[3] = { 3, 2, 1 };
 
 // Bounded both ways: by time when the clock advances, by count when it
 // does not (see the header comment).
-static void udelay(uint32_t us) {
+void intel_udelay(uint32_t us) {
     uint64_t t0 = clocksource_now_ns(), want = (uint64_t)us * 1000;
     for (uint32_t i = 0; i < us * 4000u; i++) {
         if (clocksource_now_ns() - t0 >= want) return;
@@ -210,7 +210,7 @@ static int train(uint32_t buf, uint32_t tp, int lanes, uint8_t bw, int enhanced)
     intel_wr(DP_TP_CTL_A, tp_base | DP_TP_TRAIN_PAT1);
     int swing = 0, pe = 0;
     set_signal(buf | DDI_BUF_ENABLE, lanes, swing, pe);
-    udelay(600);
+    intel_udelay(600);
     uint8_t pat = 0x21;
     intel_aux_native_write(DPCD_TRAINING_PATTERN, &pat, 1);
     set_signal(buf | DDI_BUF_ENABLE, lanes, swing, pe);
@@ -218,7 +218,7 @@ static int train(uint32_t buf, uint32_t tp, int lanes, uint8_t bw, int enhanced)
     uint8_t st[3];
     int same = 0, tries = 0, ok = 0;
     for (tries = 0; tries < 10; tries++) {
-        udelay(100);
+        intel_udelay(100);
         if (intel_aux_native_read(DPCD_LANE0_1_STATUS, st, 2) != 2) break;
         if (cr_done(st, lanes)) { ok = 1; break; }
         int ns = swing, np = pe;
@@ -237,7 +237,7 @@ static int train(uint32_t buf, uint32_t tp, int lanes, uint8_t bw, int enhanced)
     intel_aux_native_write(DPCD_TRAINING_PATTERN, &pat, 1);
     ok = 0;
     for (tries = 0; tries < 5; tries++) {
-        udelay(400);
+        intel_udelay(400);
         if (intel_aux_native_read(DPCD_LANE0_1_STATUS, st, 3) != 3) break;
         if (!cr_done(st, lanes)) break;   // lost clock recovery: i915 restarts; we report
         if (eq_done(st, lanes)) { ok = 1; break; }
@@ -252,7 +252,7 @@ static int train(uint32_t buf, uint32_t tp, int lanes, uint8_t bw, int enhanced)
     pat = 0;
     intel_aux_native_write(DPCD_TRAINING_PATTERN, &pat, 1);
     intel_wr(DP_TP_CTL_A, tp_base | DP_TP_TRAIN_IDLE);
-    udelay(1000);
+    intel_udelay(1000);
     intel_wr(DP_TP_CTL_A, tp_base | DP_TP_TRAIN_NORMAL);
     return ok;
 }
@@ -276,7 +276,7 @@ int intel_modeset_link_retrain(void) {
     // (intel_disable_ddi_buf); port A has no idle bit, so 100 us.
     intel_wr(DDI_BUF_CTL_A, buf & ~DDI_BUF_ENABLE);
     intel_wr(DP_TP_CTL_A, (tp & ~(DP_TP_ENABLE | DP_TP_TRAIN_MASK)) | DP_TP_TRAIN_PAT1);
-    udelay(100);
+    intel_udelay(100);
     klog_printf("intel-display: link retrain: port down (buf ctl %#x tp ctl %#x)\n",
                 intel_rd(DDI_BUF_CTL_A), intel_rd(DP_TP_CTL_A));
 
@@ -318,7 +318,7 @@ static int wait_pp(uint32_t mask, uint32_t want) {
     for (int i = 0; i < 2000; i++) {
         v = intel_rd(PCH_PP_STATUS_R);
         if ((v & mask) == want) return 1;
-        udelay(1000);
+        intel_udelay(1000);
     }
     klog_printf("intel-display: panel power status %#x never reached %#x/%#x\n", v, mask, want);
     return 0;
@@ -392,7 +392,7 @@ int intel_modeset_native(void) {
     int off = pipe_off(&st);
     intel_wr(DDI_BUF_CTL_A, buf & ~DDI_BUF_ENABLE);
     intel_wr(DP_TP_CTL_A, (tp & ~(DP_TP_ENABLE | DP_TP_TRAIN_MASK)) | DP_TP_TRAIN_PAT1);
-    udelay(100);
+    intel_udelay(100);
     intel_wr(PCH_PP_CONTROL_R, pp_control() & ~(PP_ON | PP_RESET | PP_FORCE_VDD | PP_BLC_ENABLE));
     int pp_off = wait_pp(PP_STATUS_ON | PP_STATUS_SEQ, 0);
     intel_wr(PORT_CLK_SEL_A_R, PORT_CLK_NONE);
@@ -402,12 +402,12 @@ int intel_modeset_native(void) {
     // The sequencer's own power-cycle delay before the panel may come
     // back (T12); the status bit says while it runs.
     int cycled = wait_pp(PP_STATUS_CYCLE, 0);
-    udelay(20000);
+    intel_udelay(20000);
 
     // Up: port clock, panel power (VDD comes with it), the link, the
     // transcoder's registers, the pipe, the backlight.
     intel_wr(PORT_CLK_SEL_A_R, clk);
-    udelay(20);
+    intel_udelay(20);
     intel_wr(PCH_PP_CONTROL_R, pp_control() | PP_ON | PP_RESET);
     int pp_on = wait_pp(PP_STATUS_ON | PP_STATUS_SEQ, PP_STATUS_ON);
     // T3: the firmware left PP_ON_DELAYS at zero, so the sequencer says
@@ -416,7 +416,7 @@ int intel_modeset_native(void) {
     // observable is the DPCD answering, polled up to twice that.
     int aux_ready = 0, aux_ms = 0;
     for (; aux_ms < 420 && !aux_ready; aux_ms += 10) {
-        udelay(10000);
+        intel_udelay(10000);
         uint8_t rev = 0;
         aux_ready = intel_aux_native_read(0x000, &rev, 1) == 1;
     }
@@ -428,12 +428,12 @@ int intel_modeset_native(void) {
     // T1+T3 (210 ms by the spec) before it will train. Measured: the
     // DPCD block below survives the reset unchanged; rewriting it is
     // what i915 does and costs nothing, but the wait is the fix.
-    if (aux_ms < 210) udelay((uint32_t)(210 - aux_ms) * 1000);
+    if (aux_ms < 210) intel_udelay((uint32_t)(210 - aux_ms) * 1000);
     if (aux_ready) {
         uint8_t after[16] = { 0 }, pw = 0;
         read_link_config(after, &pw, "after power on");
         uint8_t d0 = 1;
-        for (int i = 0; i < 3 && intel_aux_native_write(0x600, &d0, 1) != 1; i++) udelay(1000);
+        for (int i = 0; i < 3 && intel_aux_native_write(0x600, &d0, 1) != 1; i++) intel_udelay(1000);
         if (have_cfg) {
             uint8_t restore[16];
             for (int i = 0; i < 16; i++) restore[i] = cfg[i];
@@ -458,7 +458,7 @@ int intel_modeset_native(void) {
     // PIPESRC and the fitter window are left as they are: they describe
     // the mode on screen, which may be a fitted one (intel_modeset_fit).
     int on = pipe_on(&st);
-    udelay(50000);   // T8, the backlight's own delay, also zero in PP_ON_DELAYS here
+    intel_udelay(50000);   // T8, the backlight's own delay, also zero in PP_ON_DELAYS here
     intel_wr(PCH_PP_CONTROL_R, pp_control() | PP_BLC_ENABLE);
     klog_printf("intel-display: native modeset: %s (pipe off %d, panel off %d, cycled %d, panel on %d, trained %d, pipe on %d)\n",
                 off && pp_off && pp_on && trained && on ? "done" : "INCOMPLETE",

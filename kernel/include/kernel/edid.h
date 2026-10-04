@@ -32,8 +32,9 @@ struct edid_timing {
 };
 
 // A mode the monitor LISTS by size and refresh -- the established
-// bitmap and the standard timings -- with no timing of its own: a
-// driver that wants to set one looks the timing up (edid_dmt_timing()).
+// bitmap, the standard timings and a CEA extension's video descriptors
+// -- with no timing of its own: a driver that wants to set one looks the
+// timing up (edid_dmt_timing()).
 struct edid_mode {
     uint16_t w, h;
     uint8_t  hz;
@@ -51,9 +52,9 @@ struct display_edid {
     char     name[EDID_NAME_MAX];   // the monitor-name descriptor, or ""
     int      timing_count;          // detailed timings found, 0..4
     struct edid_timing timing[4];   // [0] is the preferred one
-    int      mode_count;            // established + standard, as listed
+    int      mode_count;            // established, standard, then CEA, as listed
     struct edid_mode mode[EDID_MODES_MAX];
-    uint8_t  extensions;            // blocks after this one (CEA etc.), unread
+    uint8_t  extensions;            // blocks after the base; a CEA one is parsed when given
 };
 
 // 1 and `out` filled, or 0 (bad header, short block, bad checksum) and

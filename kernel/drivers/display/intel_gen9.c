@@ -22,23 +22,10 @@
 
 // driver-none: part of intel-display (intel_display.c declares it)
 
-#define DPLL_CTRL1   0x6C058
-#define DPLL_CTRL2   0x6C05C
-#define DPLL_STATUS  0x6C060
-#define DPLL_CFGCR1(n) (0x6C040 + ((n) - 1) * 8)   // DPLL1..3
-#define DPLL_CFGCR2(n) (0x6C044 + ((n) - 1) * 8)
-#define LCPLL1_CTL   0x46010
-#define LCPLL2_CTL   0x46014
 #define CDCLK_CTL    0x46000
 #define SFUSE_STRAP  0xC2014
 #define DBUF_CTL     0x45008
 #define DC_STATE_EN  0x45504
-#define TRANS_DDI_FUNC_CTL(t) (0x60400 + (t) * PIPE_STRIDE)
-#define TRANS_HTOTAL(t)       (0x60000 + (t) * PIPE_STRIDE)
-#define TRANS_HSYNC(t)        (0x60008 + (t) * PIPE_STRIDE)
-#define TRANS_VTOTAL(t)       (0x6000C + (t) * PIPE_STRIDE)
-#define TRANS_VSYNC(t)        (0x60014 + (t) * PIPE_STRIDE)
-#define DDI_BUF_CTL(port)     (0x64000 + (port) * 0x100)
 #define PS_CTRL(p, id)        (0x68180 + (p) * 0x800 + (id) * 0x100)
 #define PS_WIN_POS(p, id)     (0x68170 + (p) * 0x800 + (id) * 0x100)
 #define PS_WIN_SZ(p, id)      (0x68174 + (p) * 0x800 + (id) * 0x100)
@@ -48,7 +35,6 @@
 #define PS_MODE_HQ            (1u << 28)   // one scaler on the pipe: both halves
 #define PS_PHASE_TRIP         1u
 #define PLANE_POS(p)          (0x7018C + (p) * PIPE_STRIDE)
-#define PLANE_SIZE(p)         (0x70190 + (p) * PIPE_STRIDE)
 #define PLANE_OFFSET(p)       (0x701A4 + (p) * PIPE_STRIDE)
 #define PLANE_WM(p, lvl)      (0x70240 + (p) * PIPE_STRIDE + (lvl) * 4)
 #define PLANE_WM_TRANS(p)     (0x70268 + (p) * PIPE_STRIDE)
@@ -183,7 +169,7 @@ int intel_display_gen9_wrpll(uint32_t pixel_khz, uint32_t *cfgcr1, uint32_t *cfg
     const struct { const uint8_t *d; int n; } LISTS[2] = {
         { EVEN, (int)sizeof EVEN }, { ODD, (int)sizeof ODD } };
     uint64_t afe = (uint64_t)pixel_khz * 1000 * 5;   // Hz
-    uint64_t best_dev = ~0ull, best_central = 0, best_dco = 0;
+    uint64_t best_dev = ~0ull, best_central = 0;
     unsigned best_p = 0;
     for (int l = 0; l < 2 && !best_p; l++) {
         for (int c = 0; c < 3 && best_dev; c++) {
@@ -192,7 +178,7 @@ int intel_display_gen9_wrpll(uint32_t pixel_khz, uint32_t *cfgcr1, uint32_t *cfg
                 uint64_t diff = dco > CENTRAL[c] ? dco - CENTRAL[c] : CENTRAL[c] - dco;
                 uint64_t dev = 10000 * diff / CENTRAL[c];
                 if (dev < (dco >= CENTRAL[c] ? 100u : 600u) && dev < best_dev) {
-                    best_dev = dev; best_central = CENTRAL[c]; best_dco = dco; best_p = LISTS[l].d[i];
+                    best_dev = dev; best_central = CENTRAL[c]; best_p = LISTS[l].d[i];
                 }
             }
         }
@@ -211,11 +197,10 @@ int intel_display_gen9_wrpll(uint32_t pixel_khz, uint32_t *cfgcr1, uint32_t *cfg
     else if (p == 15) { p0 = 3; p1 = 1; p2 = 5; }
     else if (p == 21) { p0 = 7; p1 = 1; p2 = 3; }
     else if (p == 35) { p0 = 7; p1 = 1; p2 = 5; }
-    uint32_t pdiv = p0 == 1 ? 0 : p0 == 2 ? 1 : p0 == 3 ? 2 : p0 == 7 ? 4 : 99;
+    uint32_t pdiv = p0 == 2 ? 1 : p0 == 3 ? 2 : p0 == 7 ? 4 : 99;   // the multipliers never make 1
     uint32_t kdiv = p2 == 5 ? 0 : p2 == 2 ? 1 : p2 == 3 ? 2 : p2 == 1 ? 3 : 99;
     if (pdiv == 99 || kdiv == 99) return 0;
     uint32_t central = best_central == 9600000000ull ? 0 : best_central == 9000000000ull ? 1 : 3;
-    (void)best_dco;
     uint64_t dco = (uint64_t)p0 * p1 * p2 * afe;
     const uint64_t REF = 24000;   // kHz, the non-SSC reference
     uint64_t integer = dco / (REF * 1000);
@@ -262,11 +247,13 @@ static int gen9_read_edid(int p, uint8_t *out, int cap) {
     if (g_edid_len < 0) {
         int port = ddi_of_pipe(p);
         int pin = intel_gmbus_pin_for_port(port);
-        g_edid_len = pin ? intel_gmbus_read_edid(pin, g_edid, EDID_BLOCK) : 0;
+        g_edid_len = pin ? intel_gmbus_read_edid(pin, 0, g_edid, EDID_BLOCK) : 0;
         // The CEA extension (where an HDMI monitor lists 1080p), when the
-        // base block says there is one: one read of both, from offset 0.
-        if (g_edid_len == EDID_BLOCK && g_edid[126])
-            g_edid_len = intel_gmbus_read_edid(pin, g_edid, EDID_MAX) == EDID_MAX ? EDID_MAX : EDID_BLOCK;
+        // base block says there is one: read on its own, into the second
+        // half, so a failed read cannot touch the block already checked.
+        if (g_edid_len == EDID_BLOCK && g_edid[126] &&
+            intel_gmbus_read_edid(pin, EDID_BLOCK, g_edid + EDID_BLOCK, EDID_BLOCK) == EDID_BLOCK)
+            g_edid_len = EDID_MAX;
         klog_printf("intel-gen9: EDID over GMBUS pin %d (DDI %c): %d bytes\n",
                     pin, port >= 0 ? 'A' + port : '-', g_edid_len);
         struct display_edid e;
@@ -286,11 +273,15 @@ static int gen9_read_edid(int p, uint8_t *out, int cap) {
 // pfit (intel_pipe_fastset()). The firmware leaves the scaler on at 1:1
 // with ITS coefficients loaded; the native mode puts that state back
 // exactly, and a scaled one switches to the built-in medium filter.
+static uint32_t g_fw_khz;   // the firmware's pixel clock, from its PLL at claim
 struct gen9_fw_scaler { uint32_t ctrl, vphase, hphase, pos, sz; int saved; };
 static struct gen9_fw_scaler g_fw;
 
 static void gen9_claimed(void) {
     int p = intel_display_pipe();
+    int port = ddi_of_pipe(p);
+    uint32_t sel = port > 0 ? (intel_rd(DPLL_CTRL2) >> (port * 3 + 1)) & 3 : 0;
+    g_fw_khz = sel ? intel_display_gen9_hdmi_khz(intel_rd(DPLL_CFGCR1(sel)), intel_rd(DPLL_CFGCR2(sel))) : 0;
     g_fw = (struct gen9_fw_scaler){ intel_rd(PS_CTRL(p, 0)), intel_rd(PS_VPHASE(p, 0)),
                                     intel_rd(PS_HPHASE(p, 0)), intel_rd(PS_WIN_POS(p, 0)),
                                     intel_rd(PS_WIN_SZ(p, 0)), 1 };
@@ -343,19 +334,21 @@ int intel_gen9_fit(uint32_t w, uint32_t h, uint32_t x, uint32_t y, uint32_t ww, 
 static int gen9_pipe_cycle(void) { return intel_gen9_cycle(0, 0); }
 static int gen9_port_cycle(void) { return intel_gen9_cycle(1, 0); }
 
-// The PLL level needs a clock: the monitor's preferred timing, which the
-// readout showed is what the firmware lit.
-static int gen9_native(void) {
-    const struct display_edid *e = display_edid();
-    if (!e || !e->timing_count) {
-        klog_write("intel-gen9: pll cycle: no EDID timing -- refused\n");
-        return 0;
-    }
-    return intel_gen9_cycle(2, &e->timing[0]);
-}
+// The PLL level at the CURRENT clock and timing, dividers recomputed:
+// a debug mechanism must not change the mode under the display layer.
+static int gen9_native(void) { return intel_gen9_cycle(2, 0); }
 
 static int gen9_set_timing(const struct edid_timing *t) {
     return intel_gen9_cycle(2, t);
+}
+
+// The re-modeset keeps the firmware's DDI translations, watermarks, DDB
+// and CDCLK (intel_gen9_modeset.c), so a timing is only safe at or below
+// the clock the FIRMWARE ran -- read from its PLL at claim, not assumed
+// to be the EDID's (g_fw_khz, set by gen9_claimed()).
+
+static int gen9_timing_ok(const struct edid_timing *t) {
+    return g_fw_khz && t->pixel_khz <= g_fw_khz;
 }
 
 // Kaby Lake, i915's INTEL_KBL_IDS.
@@ -389,6 +382,7 @@ const struct intel_gen_ops intel_gen9_ops = {
     .caps = DISPLAY_CAP_MODESET | DISPLAY_CAP_SCALING,
     .fit = intel_gen9_fit,
     .set_timing = gen9_set_timing,
+    .timing_ok = gen9_timing_ok,
     .pipe_cycle = gen9_pipe_cycle,
     .link_retrain = gen9_port_cycle,
     .native = gen9_native,

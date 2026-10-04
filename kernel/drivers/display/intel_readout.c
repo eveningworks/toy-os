@@ -19,17 +19,17 @@
 // Transcoder timing blocks: A/B/C at 0x60000 + n*0x1000, EDP at 0x6F000.
 #define TRANS_A_BASE   0x60000
 #define TRANS_EDP_BASE 0x6F000
-#define TRANS_HTOTAL   0x000
-#define TRANS_HBLANK   0x004
-#define TRANS_HSYNC    0x008
-#define TRANS_VTOTAL   0x00C
-#define TRANS_VBLANK   0x010
-#define TRANS_VSYNC    0x014
+#define TRANS_O_HTOTAL   0x000
+#define TRANS_O_HBLANK   0x004
+#define TRANS_O_HSYNC    0x008
+#define TRANS_O_VTOTAL   0x00C
+#define TRANS_O_VBLANK   0x010
+#define TRANS_O_VSYNC    0x014
 #define TRANS_DATA_M1  0x030
 #define TRANS_DATA_N1  0x034
 #define TRANS_LINK_M1  0x040
 #define TRANS_LINK_N1  0x044
-#define TRANS_DDI_FUNC_CTL 0x400
+#define TRANS_O_DDI_FUNC_CTL 0x400
 #define PIPEMISC(p)    (0x70030 + (p) * 0x1000)
 #define PORT_CLK_SEL_A 0x46100
 #define PCH_PP_ON_DELAYS  0xC7208
@@ -127,7 +127,7 @@ void intel_readout_planes_log(void) {
 void intel_readout_log(const struct display_edid *edid) {
     int pipe = intel_display_pipe();
     if (pipe < 0) return;
-    uint32_t edp_func = intel_rd(TRANS_EDP_BASE + TRANS_DDI_FUNC_CTL);
+    uint32_t edp_func = intel_rd(TRANS_EDP_BASE + TRANS_O_DDI_FUNC_CTL);
     // The EDP transcoder drives the panel when it is enabled and its
     // input select names our pipe (0 = A, 4/5/6 = A/B/C on-off).
     uint32_t edp_in = (edp_func >> 12) & 7;
@@ -136,11 +136,11 @@ void intel_readout_log(const struct display_edid *edid) {
     uint32_t base = on_edp ? TRANS_EDP_BASE : TRANS_A_BASE + (uint32_t)pipe * 0x1000;
 
     struct intel_trans_regs r = {
-        .htotal = intel_rd(base + TRANS_HTOTAL), .hblank = intel_rd(base + TRANS_HBLANK),
-        .hsync = intel_rd(base + TRANS_HSYNC),   .vtotal = intel_rd(base + TRANS_VTOTAL),
-        .vblank = intel_rd(base + TRANS_VBLANK), .vsync = intel_rd(base + TRANS_VSYNC),
+        .htotal = intel_rd(base + TRANS_O_HTOTAL), .hblank = intel_rd(base + TRANS_O_HBLANK),
+        .hsync = intel_rd(base + TRANS_O_HSYNC),   .vtotal = intel_rd(base + TRANS_O_VTOTAL),
+        .vblank = intel_rd(base + TRANS_O_VBLANK), .vsync = intel_rd(base + TRANS_O_VSYNC),
     };
-    uint32_t func = intel_rd(base + TRANS_DDI_FUNC_CTL);
+    uint32_t func = intel_rd(base + TRANS_O_DDI_FUNC_CTL);
     uint32_t src = intel_rd(PIPESRC(pipe));
     uint32_t data_m = intel_rd(base + TRANS_DATA_M1), data_n = intel_rd(base + TRANS_DATA_N1);
     uint32_t link_m = intel_rd(base + TRANS_LINK_M1), link_n = intel_rd(base + TRANS_LINK_N1);

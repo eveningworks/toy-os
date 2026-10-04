@@ -582,6 +582,7 @@ struct mode_entry { uint32_t w, h; int real; struct edid_timing t; };
 static struct mode_entry g_modes[MODES_MAX];
 static int g_nmodes;
 static int g_on_native = 1;   // the transcoder runs the native timing (no real mode up)
+static int g_cur;             // g_modes index on screen: 0, native, at the claim
 
 static int has_mode(uint32_t w, uint32_t h) {
     for (int i = 0; i < g_nmodes; i++) if (g_modes[i].w == w && g_modes[i].h == h) return 1;
@@ -592,7 +593,7 @@ static void build_modes(void) {
     if (g_nmodes) return;
     const struct display_edid *e = display_edid();
     g_modes[g_nmodes++] = (struct mode_entry){ g_native_w, g_native_h, 0, { 0 } };
-    if (g_ops->set_timing && e && e->timing_count &&
+    if (g_ops->set_timing && g_ops->timing_ok && e && e->timing_count &&
         e->timing[0].hactive == g_native_w && e->timing[0].vactive == g_native_h) {
         g_modes[0].real = 1;
         g_modes[0].t = e->timing[0];
@@ -600,8 +601,7 @@ static void build_modes(void) {
             struct edid_timing t;
             const struct edid_mode *m = &e->mode[i];
             if (m->w > g_native_w || m->h > g_native_h || has_mode(m->w, m->h)) continue;
-            if (!edid_dmt_timing(m->w, m->h, m->hz, &t)) continue;
-            if (t.pixel_khz > e->timing[0].pixel_khz) continue;   // see intel_gen9_modeset.c
+            if (!edid_dmt_timing(m->w, m->h, m->hz, &t) || !g_ops->timing_ok(&t)) continue;
             g_modes[g_nmodes++] = (struct mode_entry){ m->w, m->h, 1, t };
         }
     }
@@ -680,14 +680,9 @@ static int fit_current(uint32_t w, uint32_t h) {
 
 // A real mode re-lights the pipe at its timing; a scaled one (and the
 // native one) runs on the native timing, so a real mode is left first.
-static int intel_set_mode(const struct display_mode *m) {
-    if (!m || m->bpp != 32) return 0;
-    build_modes();
-    const struct mode_entry *e = 0;
-    for (int i = 0; i < g_nmodes && !e; i++)
-        if (g_modes[i].w == m->width && g_modes[i].h == m->height) e = &g_modes[i];
-    if (!e) return 0;
-    if (e->real && e != &g_modes[0]) {
+static int apply_mode(int i) {
+    const struct mode_entry *e = &g_modes[i];
+    if (e->real && i != 0) {
         if (!g_ops->set_timing(&e->t)) return 0;
         g_on_native = 0;
         surface_size(e->w, e->h);
@@ -696,8 +691,26 @@ static int intel_set_mode(const struct display_mode *m) {
     if (!g_on_native) {
         if (!g_ops->set_timing(&g_modes[0].t)) return 0;
         g_on_native = 1;
+        surface_size(g_native_w, g_native_h);
+        if (i == 0) return 1;   // native is shown 1:1 already: no second fit
     }
-    return fit_current(m->width, m->height);
+    return fit_current(e->w, e->h);
+}
+
+// ON FAILURE THE PREVIOUS MODE IS PUT BACK: a cycle that stopped part
+// way may have left the new timing on the transcoder, and the display
+// layer keeps the old size when this returns 0 -- the two must agree.
+static int intel_set_mode(const struct display_mode *m) {
+    if (!m || m->bpp != 32) return 0;
+    build_modes();
+    int i = 0;
+    while (i < g_nmodes && !(g_modes[i].w == m->width && g_modes[i].h == m->height)) i++;
+    if (i == g_nmodes) return 0;
+    if (apply_mode(i)) { g_cur = i; return 1; }
+    klog_printf(KLOG_ERR "intel-display: %ux%u failed -- putting %ux%u back\n",
+                g_modes[i].w, g_modes[i].h, g_modes[g_cur].w, g_modes[g_cur].h);
+    if (!apply_mode(g_cur)) klog_printf(KLOG_ERR "intel-display: and that failed too\n");
+    return 0;
 }
 
 static int intel_set_scaling(int mode) {

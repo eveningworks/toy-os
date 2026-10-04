@@ -43,12 +43,16 @@ static void copy_text(const uint8_t *d, char *out, int cap) {
 }
 
 // CEA-861 short video descriptors (the video data block, tag 2): a VIC
-// each, bit 7 the "native" flag for VICs 1-64. Only the VICs the DMT
-// table can time are kept -- the same timings under another name.
+// each, bit 7 the "native" flag for VICs 1-64. A VIC is kept when the
+// DMT table can time its size -- the same timing under another name --
+// so this table names sizes and edid_dmt_timing() decides.
 static void parse_cea(const uint8_t *x, struct display_edid *e) {
     static const struct { uint8_t vic; struct edid_mode m; } VIC[] = {
-        { 1, { 640, 480, 60 } }, { 4, { 1280, 720, 60 } }, { 16, { 1920, 1080, 60 } },
+        { 1, { 640, 480, 60 } }, { 2, { 720, 480, 60 } }, { 3, { 720, 480, 60 } },
+        { 4, { 1280, 720, 60 } }, { 16, { 1920, 1080, 60 } }, { 17, { 720, 576, 50 } },
+        { 18, { 720, 576, 50 } }, { 19, { 1280, 720, 50 } }, { 31, { 1920, 1080, 50 } },
     };
+    struct edid_timing scratch;
     uint8_t sum = 0;
     for (int i = 0; i < EDID_BLOCK; i++) sum = (uint8_t)(sum + x[i]);
     if (x[0] != 0x02 || sum != 0) return;
@@ -61,6 +65,7 @@ static void parse_cea(const uint8_t *x, struct display_edid *e) {
             uint8_t vic = (v & 0x80) && (v & 0x7F) <= 64 ? (uint8_t)(v & 0x7F) : v;
             for (unsigned k = 0; k < sizeof VIC / sizeof VIC[0]; k++) {
                 if (VIC[k].vic != vic || e->mode_count >= EDID_MODES_MAX) continue;
+                if (!edid_dmt_timing(VIC[k].m.w, VIC[k].m.h, VIC[k].m.hz, &scratch)) continue;
                 int dup = 0;
                 for (int m = 0; m < e->mode_count; m++)
                     dup |= e->mode[m].w == VIC[k].m.w && e->mode[m].h == VIC[k].m.h &&

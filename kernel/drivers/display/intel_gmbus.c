@@ -69,13 +69,13 @@ static void release(int failed) {
     intel_wr(GMBUS0, 0);
 }
 
-int intel_gmbus_read_edid(int pin, uint8_t *out, int len) {
-    if (pin <= 0 || !out || len <= 0 || len > 256) return 0;
+int intel_gmbus_read_edid(int pin, int offset, uint8_t *out, int len) {
+    if (pin <= 0 || !out || len <= 0 || len > 256 || offset < 0 || offset > 255) return 0;
     intel_wr(GMBUS0, GMBUS_RATE_100KHZ | (uint32_t)pin);
     intel_wr(GMBUS4, 0);
     intel_wr(GMBUS5, 0);
     intel_wr(GMBUS1, GMBUS_SW_RDY | GMBUS_CYCLE_INDEX | GMBUS_CYCLE_WAIT |
-                     GMBUS_BYTES(len) | GMBUS_INDEX(0) | GMBUS_READ_ADDR(DDC_ADDR));
+                     GMBUS_BYTES(len) | GMBUS_INDEX(offset) | GMBUS_READ_ADDR(DDC_ADDR));
     int got = 0;
     while (got < len) {
         uint32_t st = wait_status(GMBUS_HW_RDY | GMBUS_SATOER);
