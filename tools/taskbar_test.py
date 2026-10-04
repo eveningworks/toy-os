@@ -73,6 +73,7 @@ window list changes.
 
 import argparse
 import os
+import re
 import sys
 import time
 
@@ -693,8 +694,20 @@ def check_close_all_join(dbg, qmp, res):
 # Distinct in their FIRST characters: a window title is cut short, so a
 # suffix ("-0", "-1") would not tell the windows apart.
 LONG_NAMES = ["/tmp/n%d-close-all-notice-check-a-long-name.txt" % k for k in range(3)]
-# CLOSE_BATCH_WAIT_NS in userland/wm/close_batch.h -- keep the two equal.
-CLOSE_WAIT_S = 5.0
+
+
+def close_wait_s():
+    """CLOSE_BATCH_WAIT_NS, read from userland/wm/close_batch.h -- the WM's
+    wait, never a copy of it that could drift."""
+    hdr = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                       "userland", "wm", "close_batch.h")
+    m = re.search(r"#define\s+CLOSE_BATCH_WAIT_NS\s+(\d+)", open(hdr).read())
+    if not m:
+        raise SystemExit("taskbar_test: no CLOSE_BATCH_WAIT_NS in " + hdr)
+    return int(m.group(1)) / 1e9
+
+
+CLOSE_WAIT_S = close_wait_s()
 
 
 def check_stayed_sentence(dbg, qmp, res):
@@ -746,7 +759,7 @@ def check_stayed_sentence(dbg, qmp, res):
     if t_rep_done >= t_ask + CLOSE_WAIT_S:
         # A slow guest: the repeat may have landed after the wait, where
         # it starts a batch of its own and proves nothing either way.
-        print(f"  SKIP  a repeated Close all does not restart the wait -- {detail}")
+        res.skip("a repeated Close all does not restart the wait", detail)
     else:
         # Restarted, the card could not come before t_rep + the wait.
         res.check("a repeated Close all asks nobody and does not restart the wait",
@@ -813,8 +826,8 @@ def main():
         if "overflow" in only:
             run(dbg, qmp, res, args.pixels)
 
-    n_ok, n_bad = len(res.passes), len(res.fails)
-    print(f"\ntaskbar_test: {n_ok} passed, {n_bad} failed")
+    n_bad = len(res.fails)
+    print("\n" + res.summary("taskbar_test"))
     return 1 if n_bad else 0
 
 

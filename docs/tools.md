@@ -154,14 +154,16 @@ manual steps to be worth automating:
   safe direction.
 - **`harness.py`** -- what every test tool had written for itself: a
   results table (`Results`: `.check()`/`.ok()` returning the verdict,
-  `.passes`/`.fails`, `.rows`, `.failed()`, and `.finish(tool)` printing
-  the `<tool>: N passed, M failed` line `gui_regress.py` reads),
+  `.passes`/`.fails`, `.rows`, `.failed()`, `.skip(name, why)` for a
+  check a run could not judge (`.skips`, and `, K skipped` on the
+  summary), and `.finish(tool)` printing the `<tool>: N passed, M
+  failed` line `gui_regress.py` reads),
   `copy_disk(src, dst, cwd=None)` (the sparse, reflinked copy), and
   `BodyServer` (a threaded HTTP(S) server on this machine answering
   with one body or a route table, reached from a guest as 10.0.2.2).
   Moved in on 2026-09-30 from 67 tools' own tables, 40 `cp` lines and
   `hwdata_test`/`https_test`'s servers. **Only the part that did not
-  differ** (`dup_scan.py`'s rule): a table with `skip()` or `report()`,
+  differ** (`dup_scan.py`'s rule): a table with `report()`,
   `clipboard_test.py`'s `check(ok, what)` order, and `damage_hunt.py`'s
   copy with a plain-copy fallback keep their own. A new tool uses this.
 - **`hostcheck.py`** -- the build half of a `*_hostcheck.py`: `write()`
@@ -2436,9 +2438,10 @@ window without going through it will find its layout polls timing out.
   pair**: Calculator must be reported closed and its window gone,
   Notepad still open -- Cancel returns to Notepad, "Shut down anyway"
   acts, and "Restart into" lists the boot entries and restarts into the
-  one picked. **Every final action is a dry run** (`gui leave dry on`
-  makes it a `leave: would ...` log line), so nothing powers off. In
-  `gui_regress.py`.
+  one picked; last, Notepad with its Options dialog open is still asked
+  and the page moves on rather than hanging in its closing phase. **Every
+  final action is a dry run** (`gui leave dry on` makes it a `leave:
+  would ...` log line), so nothing powers off. In `gui_regress.py`.
 - **`dialog_test.py`** -- verifies the confirm dialog's buttons by
   PIXEL VALUE: hover moves the hovered button and leaves its neighbour
   alone, a press dragged off doesn't commit, No closes it. Opened with
@@ -2548,7 +2551,10 @@ window without going through it will find its layout polls timing out.
   interleaved with kernel log lines, so parsing it needs a strict
   entry-shaped regex rather than `split()[-1]`; and a reference
   screenshot must park the caret first, since `load_file()` resets the
-  cursor to 0 and a caret bar is a real pixel difference.
+  cursor to 0 and a caret bar is a real pixel difference. Last (or
+  alone, `--only second-close`): a window close while a TAB's save
+  prompt is up must not re-aim it -- two dirty tabs, Ctrl-W on the
+  second, Alt+F4, Don't Save, and the FILE's tab must be the one left.
 - **`clipboard_test.py`** -- drives the system TEXT clipboard across two
   apps, which is the claim that makes it a system clipboard rather than
   a feature of one: text copied in Notepad pastes into the GUI Terminal,

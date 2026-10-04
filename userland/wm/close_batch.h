@@ -35,8 +35,10 @@ int close_batch_add(struct close_batch *b, int idx);
 // it asked any; returns how many it asked. Once each: a second
 // WIN_EV_CLOSE to a window already asking to save would ask it again.
 // Once the wait is over the caller resets the batch, so a later Close
-// all asks again -- a window whose prompt was cancelled included, but
-// never one with a dialog still open (wm_dialog_blocker()).
+// all asks again -- a window whose prompt is STILL open included. The
+// WM cannot see an in-window prompt, so a repeated close is the
+// CLIENT's to absorb (notepad.c's on_close_cb()), as a Wayland client
+// absorbs a repeated xdg_toplevel.close.
 int close_batch_ask(struct close_batch *b);
 // Marks the entries whose window has closed. 1 when any changed.
 int close_batch_update(struct close_batch *b);

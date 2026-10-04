@@ -2020,7 +2020,14 @@ static void on_open_cb(struct uapp *a) {
 
 // The X, Alt+F4 and the window menu. Refusing is not returning 1 -- the
 // asks answer frames later and quit through run_pending().
+//
+// **A CLOSE WHILE A QUESTION IS UP CHANGES NOTHING.** close_all_step()
+// would switch_to() the first dirty tab before ask_discard()'s guard,
+// and the open prompt's Don't Save would then discard THAT tab, never
+// asked about. The WM may send this twice (a second Close all, Alt+F4
+// twice); the answer to the question already showing decides.
 static int on_close_cb(struct uapp *a) {
+    if (uui_dialog_is_open(&g_ask)) return 0;
     session_save();
     if (must_confirm_close()) { ask_close_all(a); return 0; }
     if (!any_dirty()) return 1;

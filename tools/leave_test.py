@@ -195,6 +195,42 @@ def run(dbg, qmp, tmp):
         if "untitled" in w["title"]:
             dbg.send(f"sh kill {w.get('client_pid', 0)}")
 
+    # --- 7. an app with a MODAL DIALOG open is still asked ------------
+    # A batch close that skipped windows behind a dialog asked nobody,
+    # never armed its wait, and left the page closing forever with only
+    # Cancel. Whatever Notepad answers, the page must move on: everything
+    # closed (the dry shutdown), or "did not close" and "...anyway".
+    deadline = time.time() + 6
+    while time.time() < deadline and any("untitled" in w["title"] for w in dbg.windows()):
+        time.sleep(0.3)
+    dbg.open_app("Notepad")
+    dbg.settle()
+    for k in ("0xA4", "0x96", "o"):   # F10, Right, o: Edit > Options...
+        dbg.send(f"gui key {k}")
+        dbg.settle(0.3)
+    deadline = time.time() + 12
+    while time.time() < deadline and not any("Notepad Options" in w["title"] for w in dbg.windows()):
+        time.sleep(0.3)
+    opts = any("Notepad Options" in w["title"] for w in dbg.windows())
+    check("Notepad with its Options dialog open", opts, str([w["title"] for w in dbg.windows()]))
+    open_from_start(dbg, "Shutdown")
+    dbg.logs("leave:", clear=True)
+    dbg.key("0x0a")   # Enter: Shut down
+    asked = wait_log(dbg, "asking", 5)
+    deadline = time.time() + 12
+    moved = None
+    while time.time() < deadline and not moved:
+        moved = wait_log(dbg, "did not close", 0.1) or wait_log(dbg, "would shut down", 0.1)
+    lv = leave(dbg)
+    check("...Shut down still asks it, and the page moves on",
+          bool(asked) and "asking 1 " in asked and bool(moved) and lv.get("phase") != "closing",
+          f"asked {asked!r}, then {moved!r}, phase {lv.get('phase')}")
+    if lv.get("phase") not in (None, "closed"):
+        press(dbg, "cancel")
+    for w in dbg.windows():
+        if w.get("client_pid") and ("untitled" in w["title"] or "Options" in w["title"]):
+            dbg.send(f"sh kill {w['client_pid']}")
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])

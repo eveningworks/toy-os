@@ -824,6 +824,77 @@ def markdown_checks(dbg, qmp, tmp, res):
               win2 is not None and not dbg.logs("notepad: layout markdown", clear=False))
 
 
+SECOND_CLOSE_FILE = "/tmp/np_second_close.txt"
+
+
+def poll(fn, timeout, step=0.2):
+    deadline = time.time() + timeout
+    while True:
+        v = fn()
+        if v or time.time() >= deadline:
+            return v
+        time.sleep(step)
+
+
+def second_close_checks(dbg, res):
+    """A WINDOW close while a TAB's save prompt is up must not re-aim the
+    prompt. Two dirty tabs -- a file, then an untitled one -- and Ctrl-W
+    on the second asks about it; Alt+F4 then used to walk the close to
+    the FIRST dirty tab (switch_to() before ask_discard()'s guard), so
+    "Don't Save" threw away the file's tab instead of the one asked
+    about. The tab left over is the evidence: the file, not "untitled"."""
+    dbg.send(f"sh write {SECOND_CLOSE_FILE} kept")
+    dbg.send(f"gui spawn {SPAWN_PATH} {SECOND_CLOSE_FILE}")
+    base = SECOND_CLOSE_FILE.rsplit("/", 1)[-1]
+    win = poll(lambda: find_window(dbg, base), SPAWN_TIMEOUT_S)
+    if not win:
+        res.check("second close: Notepad opens the file", False, f"no window for {base}")
+        return
+    dbg.settle()
+
+    def title():
+        w = find_window(dbg, base) or find_window(dbg, "untitled")
+        return w.get("title", "") if w else ""
+
+    def tabs():
+        for line in reversed(dbg.logs("notepad: layout tabcount", clear=False)):
+            n = line.split("tabcount")[1].split()
+            return int(n[0]), int(n[2])
+        return None
+
+    type_text(dbg, "x")
+    poll(lambda: title().startswith("*/") or title().startswith("*" + base), 6)
+    key(dbg, "0x0e")                          # Ctrl-N: tab 2
+    poll(lambda: tabs() == (2, 1), 6)
+    type_text(dbg, "y")
+    ready = poll(lambda: title() == "*untitled" and tabs() == (2, 1), 6)
+    key(dbg, "0x17")                          # Ctrl-W: asks about tab 2
+    btns = poll(lambda: len(dialog_buttons(dbg)) == 3 and dialog_buttons(dbg), 6)
+    res.check("second close: two dirty tabs, and closing the second asks",
+              bool(ready) and bool(btns), f"title {title()!r}, tabs {tabs()}, buttons {btns}")
+    if not btns:
+        return
+    dbg.send("gui key 0xa5 alt")              # Alt+F4 while that prompt is up
+    dbg.settle()
+    time.sleep(0.5)   # nothing to wait FOR: the fixed app does nothing visible
+    win = find_window(dbg, base) or find_window(dbg, "untitled")
+    btns = dialog_buttons(dbg)
+    if win and len(btns) == 3:
+        x, y, w, h = btns[1]                  # Don't Save
+        c = win["content"]
+        dbg.send(f"gui click {c['x'] + x + w // 2} {c['y'] + y + h // 2}")
+    left = poll(lambda: tabs() if tabs() and tabs()[0] == 1 else None, 6)
+    t = title()
+    res.check("second close: Don't Save discards the tab it asked about, not the other",
+              left is not None and t.lstrip("*").rsplit("/", 1)[-1] == base,
+              f"tabs {tabs()}, title {t!r}")
+    w = find_window(dbg, base) or find_window(dbg, "untitled")
+    if w and w.get("client_pid"):
+        dbg.send(f"sh kill {w['client_pid']}")
+    dbg.send(f"sh rm {SECOND_CLOSE_FILE}")
+    poll(lambda: not (find_window(dbg, base) or find_window(dbg, "untitled")), 6)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -831,6 +902,8 @@ def main():
     ap.add_argument("--in-gui", action="store_true")
     ap.add_argument("--shot", metavar="DIR")
     ap.add_argument("--tmp", default="/tmp")
+    ap.add_argument("--only", choices=("second-close",),
+                    help="run only this section")
     args = ap.parse_args()
     port_guard.resolve_instance(args, "notepad_client_test")
 
@@ -843,7 +916,9 @@ def main():
     dbg = DebugConsole(args.sock)
     res = Result()
     try:
-        run(dbg, qmp, args.tmp, args.shot, res)
+        if not args.only:
+            run(dbg, qmp, args.tmp, args.shot, res)
+        second_close_checks(dbg, res)
     finally:
         dbg.close()
 

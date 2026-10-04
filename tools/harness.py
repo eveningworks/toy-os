@@ -14,13 +14,14 @@ the same `cp` line and three their own `http.server`; a survey on
 formats for one idea. This is the part that does NOT differ between them
 (dup_scan.py's rule: share what is identical, never a loop whose
 differences become callbacks). A tool with a genuinely different table
--- `skip()`, a JSON report -- keeps its own.
+-- a JSON report -- keeps its own.
 
 `Results` is a superset of the shapes the tools used, so adopting it is
 a one-line change: `.check()`/`.ok()` (returns the verdict), `.passes`
-and `.fails` (names), `.rows` ((name, ok, detail)), `.failed()`. The
+and `.fails` (names), `.rows` ((name, ok, detail)), `.failed()`, and
+`.skip()` for a check that could not be judged this run (`.skips`). The
 summary line `finish()` prints is the one `gui_regress.py` reads:
-`<tool>: N passed, M failed`.
+`<tool>: N passed, M failed`, with `, K skipped` after it when any were.
 """
 import http.server
 import ssl
@@ -37,6 +38,7 @@ class Results:
         tree_lock.hold()
         self.rows = []                 # (name, ok, detail), in order
         self.passes, self.fails = [], []
+        self.skips = []                # (name, why): neither a pass nor a fail
 
     def check(self, name, ok, detail=""):
         ok = bool(ok)
@@ -48,12 +50,21 @@ class Results:
 
     ok = check
 
+    def skip(self, name, why):
+        """A check this run could not judge -- SAID, never silently dropped."""
+        self.skips.append((name, why))
+        print(f"  SKIP  {name}   {why}", flush=True)
+
+    def summary(self, tool):
+        s = f"{tool}: {len(self.passes)} passed, {len(self.fails)} failed"
+        return s + (f", {len(self.skips)} skipped" if self.skips else "")
+
     def failed(self):
         return [r for r in self.rows if not r[1]]
 
     def finish(self, tool):
         """Print the summary line; 0 when something ran and all of it passed."""
-        print(f"\n{tool}: {len(self.passes)} passed, {len(self.fails)} failed")
+        print("\n" + self.summary(tool))
         return 0 if self.rows and not self.fails else 1
 
 

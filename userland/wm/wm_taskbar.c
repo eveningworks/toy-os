@@ -666,7 +666,8 @@ int taskbar_layout(struct taskbar_button *out, int max) {
     // WHENEVER ANYTHING IS HIDDEN AND IT FITS, IT IS THERE, the buttons
     // giving way to it down to none -- every window keeps a handle. A
     // strip too narrow for it alone keeps the buttons that fit: some
-    // handles beat none.
+    // handles beat none. AN ACCEPTED LIMIT: the hidden windows then have
+    // no handle on the strip at all, at widths no real screen reaches.
     int fit = (avail + TB_GAP) / (w + TB_GAP);
     if (fit > max) fit = max;
     int ovf = 0;
