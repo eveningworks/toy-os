@@ -31,7 +31,8 @@
 #define UUI_CHART_MARKS 8
 #define UUI_CHART_SERIES 4
 
-// A labelled moment on the time axis -- "SEQ read" starting here.
+// A labelled moment on the time axis -- "SEQ read" starting here. Its
+// label sits in a strip ABOVE the plot, never under the trace.
 struct uui_chart_mark { int at; const char *label; };
 
 struct uui_chart {
@@ -90,6 +91,12 @@ struct uui_chart {
     int cur_series;
     struct uui_chart_mark marks[UUI_CHART_MARKS];
     int mark_n;
+    // **A LABELLED VALUE AXIS** (uui_chart_set_axis()): a left gutter of
+    // tick values, the top rounded up to a 1-2-5 step so every gridline
+    // sits on a printed number. A sample divided by `axis_div` is the
+    // printed value -- 1000 for a milli-unit series. NULL draws none.
+    const char *axis_unit;
+    uint32_t axis_div;
 };
 
 void uui_chart_init(struct uui_chart *c, const char *label);
@@ -111,6 +118,9 @@ void uui_chart_set_fit(struct uui_chart *c, int on);
 void uui_chart_set_series(struct uui_chart *c, int series);
 void uui_chart_add_mark(struct uui_chart *c, const char *label);
 void uui_chart_clear(struct uui_chart *c);
+// The value axis above: `unit` captions it ("MB/s"; not copied), a
+// sample / `div` is what a tick prints. NULL turns it off.
+void uui_chart_set_axis(struct uui_chart *c, const char *unit, uint32_t div);
 
 // One sample where `part` is a component of `total` -- kernel time
 // within CPU time. `part` is clamped to `total`: a component larger

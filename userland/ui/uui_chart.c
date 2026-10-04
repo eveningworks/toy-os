@@ -3,6 +3,7 @@
 #include "ui/utheme.h"
 #include "ui/uui_primitives.h"   // uui_hit -- the pointer is inside the plot
 #include "geom.h"   // enum geom_aa -- a line is drawn ALIASED here
+#include "lib/unum.h"
 #include <stdio.h>
 #include <stddef.h>
 
@@ -21,6 +22,8 @@ void uui_chart_init(struct uui_chart *c, const char *label) {
     c->bg = c->grid = c->line = c->fill = c->part = UUI_COLOR_UNSET;
     c->fit = 0;
     for (int i = 0; i < UUI_CHART_SERIES; i++) c->series_col[i] = UUI_COLOR_UNSET;
+    c->axis_unit = NULL;
+    c->axis_div = 1;
     uui_chart_clear(c);
 }
 
@@ -81,6 +84,10 @@ void uui_chart_add_mark(struct uui_chart *c, const char *label) {
 }
 
 void uui_chart_set_scale(struct uui_chart *c, uint32_t max) { c->scale_max = max; }
+void uui_chart_set_axis(struct uui_chart *c, const char *unit, uint32_t div) {
+    c->axis_unit = unit;
+    c->axis_div = div ? div : 1;
+}
 void uui_chart_set_interval(struct uui_chart *c, int ms)    { c->sample_ms = ms; }
 void uui_chart_set_value(struct uui_chart *c, const char *value) { c->value = value; }
 
@@ -170,35 +177,82 @@ static void span_text(const struct uui_chart *c, char *out, int cap) {
     else            snprintf(out, (unsigned)cap, "%lld s", sec);
 }
 
+// A 1-2-5 step giving about four intervals up to `peak`.
+static uint32_t nice_step(uint32_t peak) {
+    uint64_t want = peak / 4 ? peak / 4 : 1, mag = 1;
+    while (mag * 10 <= want) mag *= 10;
+    uint64_t step = mag >= want ? mag : 2 * mag >= want ? 2 * mag : 5 * mag >= want ? 5 * mag : 10 * mag;
+    return step > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)step;
+}
+
+// A tick's text: v / div with as many decimals as `step` needs.
+static void tick_text(const struct uui_chart *c, uint32_t v, uint32_t step, char *out, int cap) {
+    uint64_t div = c->axis_div, pow = 1;
+    int dec = 0;
+    while (dec < 3 && (step * pow) % div) { dec++; pow *= 10; }
+    if (!dec) snprintf(out, (unsigned)cap, "%llu", (unsigned long long)(v / div));
+    else snprintf(out, (unsigned)cap, "%llu.%0*llu", (unsigned long long)(v / div), dec,
+                  (unsigned long long)((v % div) * pow / div));
+    unum_localize(out, (unsigned long)cap, 0);
+}
+
+// WHERE THE PLOT IS -- one answer for drawing and for the pointer. Under
+// the caption row; under a strip for the mark labels and the axis unit
+// when either is shown, so no trace can cross a word; right of the tick
+// gutter when there is an axis.
+struct plot { int x0, w, top, bot, strip_y; uint32_t top_val, step; };
+static uint32_t scale_of(const struct uui_chart *c);
+static void plot_of(const struct uui_chart *c, struct plot *p) {
+    int ch = ugfx_char_h();
+    int axis = c->axis_unit && !c->compact;
+    p->x0 = c->x; p->w = c->w;
+    p->top = c->y + (c->compact ? 0 : ch + 2);
+    p->bot = c->y + c->h - 1 - (!c->compact && c->sample_ms ? ch + 1 : 0);
+    p->strip_y = -1;
+    if (!c->compact && ((c->fit && c->mark_n) || axis)) { p->strip_y = p->top; p->top += ch + 2; }
+    if (p->bot - p->top < 4) { p->top = c->y; p->bot = c->y + c->h - 1; p->strip_y = -1; }
+    p->top_val = scale_of(c);
+    p->step = 0;
+    if (!axis) return;
+    p->step = nice_step(p->top_val);
+    p->top_val = (p->top_val + p->step - 1) / p->step * p->step;
+    char t[24];
+    tick_text(c, p->top_val, p->step, t, sizeof t);
+    int gw = ugfx_text_width(t), uw = ugfx_text_width(c->axis_unit);
+    int gutter = (gw > uw ? gw : uw) + ch / 2 + 4;
+    if (gutter < c->w / 2) { p->x0 += gutter; p->w -= gutter; }
+}
+
 // The x of sample `i` in fit mode: the history spread over the plot.
-static int fit_x(const struct uui_chart *c, int i) {
+static int fit_x(const struct uui_chart *c, const struct plot *p, int i) {
     int span = c->count > 1 ? c->count - 1 : 1;
-    return c->x + 2 + (int)((int64_t)(c->w - 5) * i / span);
+    return p->x0 + 2 + (int)((int64_t)(p->w - 5) * i / span);
 }
 
 // FIT MODE: a polyline per series run, the marks as dividers with their
-// labels at the top of the plot.
+// labels in the strip above the plot.
 static void draw_fit(struct ugfx_surface *s, const struct uui_chart *c,
-                     int top, int bot, uint32_t bg, uint32_t line) {
-    int ph = bot - top;
-    uint32_t top_scale = scale_of(c);
+                     const struct plot *p, uint32_t bg, uint32_t line) {
+    int top = p->top, bot = p->bot, ph = bot - top;
     uint32_t sep = UUI_COLOR(c->grid, UTHEME_SEPARATOR);
     uint32_t dim = ugfx_blend(UTHEME_TEXT, bg, 120);
+    int rule_top = p->strip_y >= 0 ? p->strip_y : top;
+    int right = p->x0 + p->w - 2;
     for (int k = 0; k < c->mark_n; k++) {
-        int mx = c->count > 0 ? fit_x(c, c->marks[k].at) : c->x + 2;
-        if (c->marks[k].at >= c->count && c->count > 0) mx = fit_x(c, c->count - 1);
-        if (k > 0) ugfx_draw_line(s, mx, top, mx, bot, sep, GEOM_ALIASED);
-        int nx = k + 1 < c->mark_n ? fit_x(c, c->marks[k + 1].at) : c->x + c->w - 2;
-        if (c->marks[k].label && nx - mx > 8)
-            ugfx_draw_string_clipped(s, mx + 4, top + 1, nx - mx - 6, c->marks[k].label,
-                                     dim, bg);
+        int mx = c->count > 0 ? fit_x(c, p, c->marks[k].at) : p->x0 + 2;
+        if (c->marks[k].at >= c->count && c->count > 0) mx = fit_x(c, p, c->count - 1);
+        if (k > 0) ugfx_draw_line(s, mx, rule_top, mx, bot, sep, GEOM_ALIASED);
+        int nx = k + 1 < c->mark_n ? fit_x(c, p, c->marks[k + 1].at) : right;
+        if (c->marks[k].label && nx - mx > 8 && p->strip_y >= 0)
+            ugfx_draw_string_elided(s, mx + 4, p->strip_y + 1, nx - mx - 6, c->marks[k].label,
+                                    dim, bg);
     }
     int px = 0, py = 0;
     for (int i = 0; i < c->count; i++) {
         uint32_t v = c->samples[i];
-        if (v > top_scale) v = top_scale;
-        int x = fit_x(c, i);
-        int y = bot - 1 - (int)((uint64_t)(ph - 2) * v / top_scale);
+        if (v > p->top_val) v = p->top_val;
+        int x = fit_x(c, p, i);
+        int y = bot - 1 - (int)((uint64_t)(ph - 2) * v / p->top_val);
         int sr = c->series[i];
         uint32_t col = UUI_COLOR(c->series_col[sr], line);
         if (i > 0 && c->series[i - 1] == sr) {
@@ -212,6 +266,31 @@ static void draw_fit(struct ugfx_surface *s, const struct uui_chart *c,
     }
 }
 
+// The tick gutter: a value at each gridline, the unit above the top one.
+static void draw_axis(struct ugfx_surface *s, const struct uui_chart *c,
+                      const struct plot *p, uint32_t bg) {
+    int ch = ugfx_char_h();
+    int gw = p->x0 - c->x - ch / 4;
+    uint32_t dim = ugfx_blend(UTHEME_TEXT, bg, 140);
+    if (p->strip_y >= 0) {
+        int uw = ugfx_text_width(c->axis_unit);
+        ugfx_draw_string_clipped(s, c->x + gw - uw, p->strip_y + 1, uw + 1, c->axis_unit, dim, bg);
+    }
+    int ph = p->bot - p->top;
+    for (uint32_t v = 0; v <= p->top_val; v += p->step) {
+        int gy = p->bot - 1 - (int)((uint64_t)(ph - 2) * v / p->top_val);
+        char t[24];
+        tick_text(c, v, p->step, t, sizeof t);
+        int tw = ugfx_text_width(t);
+        // The top and bottom labels stay inside the plot's rows.
+        int ty = gy - ch / 2;
+        if (ty < p->top) ty = p->top;
+        if (ty + ch > p->bot) ty = p->bot - ch;
+        ugfx_draw_string_clipped(s, c->x + gw - tw, ty, tw + 1, t, dim, bg);
+        if (v + p->step < v) break;   // a step that would wrap
+    }
+}
+
 void uui_chart_draw(struct ugfx_surface *s, const struct uui_chart *c) {
     if (c->w <= 0 || c->h <= 0) return;
     uint32_t bg   = UUI_COLOR(c->bg, UTHEME_WHITE);
@@ -221,22 +300,28 @@ void uui_chart_draw(struct ugfx_surface *s, const struct uui_chart *c) {
     uint32_t edge = UUI_COLOR(c->grid, UTHEME_OUTLINE);
     uint32_t ink  = UUI_COLOR(c->fill, UTHEME_TEXT);
 
-    int ch = ugfx_char_h();
     // The plot sits below the caption row and above the axis row, so
     // neither can be painted over by a tall column.
-    int top = c->y + (c->compact ? 0 : ch + 2);
-    int bot = c->y + c->h - 1 - (!c->compact && c->sample_ms ? ch + 1 : 0);
-    int ph = bot - top;
-    if (ph < 4) { top = c->y; bot = c->y + c->h - 1; ph = bot - top; }
+    struct plot p;
+    plot_of(c, &p);
+    int top = p.top, bot = p.bot, ph = bot - top;
 
     ugfx_fill_rect(s, c->x, c->y, c->w, c->h, bg);
-    for (int q = 1; !c->compact && q < 4; q++) {
-        int gy = top + ph * q / 4;
-        ugfx_draw_line(s, c->x, gy, c->x + c->w - 1, gy, grid, GEOM_ALIASED);
+    if (p.step) {
+        for (uint32_t v = p.step; v <= p.top_val && v >= p.step; v += p.step) {
+            int gy = bot - 1 - (int)((uint64_t)(ph - 2) * v / p.top_val);
+            ugfx_draw_line(s, p.x0, gy, c->x + c->w - 1, gy, grid, GEOM_ALIASED);
+        }
+        draw_axis(s, c, &p, bg);
+    } else {
+        for (int q = 1; !c->compact && q < 4; q++) {
+            int gy = top + ph * q / 4;
+            ugfx_draw_line(s, c->x, gy, c->x + c->w - 1, gy, grid, GEOM_ALIASED);
+        }
     }
 
     if (c->fit) {
-        draw_fit(s, c, top, bot, bg, line);
+        draw_fit(s, c, &p, bg, line);
         goto frame;
     }
 
@@ -244,10 +329,11 @@ void uui_chart_draw(struct ugfx_surface *s, const struct uui_chart *c) {
     // the width would make the same history a different shape in a
     // resized window; the newest samples that fit are drawn and the
     // rest is empty, which is what every monitor does while filling.
-    uint32_t top_scale = scale_of(c);
+    uint32_t top_scale = p.top_val;
     int n = uui_chart_drawn(c);
+    if (n > p.w) n = p.w;   // the axis gutter's columns are not plot
     for (int i = 0; i < n; i++) {
-        int slot = drawn_slot(c, i);
+        int slot = drawn_slot(c, uui_chart_drawn(c) - n + i);
         uint32_t v = c->samples[slot];
         if (v > top_scale) v = top_scale;
         int x = c->x + c->w - n + i;
@@ -340,8 +426,10 @@ static int chart_motion_op(void *w, int cx, int cy, unsigned buttons) {
     if (!uui_hit(c->x, c->y, c->w, c->h, cx, cy)) {
         c->hover = -1;
     } else if (c->fit) {
+        struct plot p;
+        plot_of(c, &p);
         int span = c->count > 1 ? c->count - 1 : 1;
-        int i = c->w > 5 ? (int)((int64_t)(cx - c->x - 2) * span / (c->w - 5)) : -1;
+        int i = p.w > 5 ? (int)((int64_t)(cx - p.x0 - 2) * span / (p.w - 5)) : -1;
         c->hover = (c->count > 0 && i >= 0 && i < c->count) ? i : -1;
     } else {
         int n = uui_chart_drawn(c);

@@ -815,6 +815,7 @@ int main(void) {
     }
     uui_chart_init(&g_chart, "THROUGHPUT DURING THE RUN");
     uui_chart_set_scale(&g_chart, 0);
+    uui_chart_set_axis(&g_chart, "MB/s", 1000);   // samples are milli-MB/s
     uui_chart_set_fit(&g_chart, 1);
     g_chart.series_col[0] = utheme_action(UTHEME_ACT_NAV);
     g_chart.series_col[1] = utheme_action(UTHEME_ACT_ARRANGE);
