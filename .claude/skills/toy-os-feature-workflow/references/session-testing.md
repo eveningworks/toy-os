@@ -3046,3 +3046,17 @@ before/after comparisons could no longer see a command's output (fixed
 before it ran; the scrollbar check, at 18 units, did fail). When a default changes, grep the
 harness for the old value (`(0, 0, 0)`, `0xAA`, `menu == 1`) before
 reading the first failure.
+
+**2026-10-04 (the WM review fixes): TWO CONTROLS THAT MEASURED THE
+WRONG BUILD OR THE WRONG TIMING.** First: `fresh_disk.py --make` writes
+GRUB AND THE KERNEL onto the image, so `ktest_run.py --disk <fresh>`
+made before a `mutate.py` run boots the UNMUTATED kernel -- the control
+"did not fire" on a test that could see the break. Make the fresh image
+INSIDE the mutated command (as a wrapper that builds it and then boots
+does), or test against `disk.img`, which the mutated `make iso`
+re-seeds. Second: QMP commands sent back to back (`tap()`'s pipelining)
+still reach the guest across several `win_input_poll()` passes and
+several WM pumps, so a GUI check for "a press and a release drained in
+ONE pass keep their own positions" passed with either layer broken and
+was dropped; the kernel half is a KTEST instead. Ask whether the
+fixture can produce the state at all before trusting a green.
