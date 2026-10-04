@@ -18,19 +18,19 @@
 int brightness_open = 0;
 
 #define SCALING_SETTING "system.scaling"
-#define SEG_MAX 4
+#define CHOICE_MAX 4
 
 static struct tray_slider_popup g_popup;
 static int g_hover;
-#define HOVER_SEG(i)  (TRAY_SLIDER_HOVER_OWNER + (i))
-#define HOVER_BUTTON  (TRAY_SLIDER_HOVER_OWNER + SEG_MAX)
+#define HOVER_CHOICE(i) (TRAY_SLIDER_HOVER_OWNER + (i))
+#define HOVER_BUTTON    (TRAY_SLIDER_HOVER_OWNER + CHOICE_MAX)
 
 // What the header says, and the scaling choices: read on a settings
 // change and on opening, never per frame (a query and a registry walk).
 static char g_title[48], g_sub[64];
-static char g_seg_value[SEG_MAX][SETTING_ABI_VALUE_MAX];
-static char g_seg_label[SEG_MAX][SETTING_ABI_LABEL_MAX];
-static int g_seg_count, g_seg_selected;
+static char g_choice_value[CHOICE_MAX][SETTING_ABI_VALUE_MAX];
+static char g_choice_label[CHOICE_MAX][SETTING_ABI_LABEL_MAX];
+static int g_choice_count, g_choice_selected;
 
 static void reload_display(void) {
     struct query_display d;
@@ -48,22 +48,22 @@ static void reload_display(void) {
     }
 
     // SCALING only where the registry offers it as something to change.
-    g_seg_count = 0;
+    g_choice_count = 0;
     struct setting_msg m;
     int index = usetting_find(SCALING_SETTING, &m);
     if (index < 0 || m.unavailable[0]) return;
     char current[SETTING_ABI_VALUE_MAX] = "";
     usetting_get(SCALING_SETTING, current, sizeof current);
-    for (int c = 0; c < SEG_MAX; c++) {
+    for (int c = 0; c < CHOICE_MAX; c++) {
         k_memset(&m, 0, sizeof m);
         m.op = SETTING_OP_CHOICE;
         m.index = index;
         m.choice = c;
         if (usetting_dispatch(&m) != 0) break;
-        k_strlcpy(g_seg_value[c], m.value, sizeof g_seg_value[c]);
-        k_strlcpy(g_seg_label[c], m.label, sizeof g_seg_label[c]);
-        if (!k_strcmp(m.value, current)) g_seg_selected = c;
-        g_seg_count = c + 1;
+        k_strlcpy(g_choice_value[c], m.value, sizeof g_choice_value[c]);
+        k_strlcpy(g_choice_label[c], m.label, sizeof g_choice_label[c]);
+        if (!k_strcmp(m.value, current)) g_choice_selected = c;
+        g_choice_count = c + 1;
     }
 }
 
@@ -115,7 +115,12 @@ static void geometry(struct tray_slider_geom *s, struct brightness_geom *g) {
     // clipped; the slider alone wants the shared width.
     int want_w = available ? 0 : ugfx_text_width(g_popup.unavailable) + m.pad * 2;
     int extra_h = available ? 0 : ch + m.vpad;
-    if (g_seg_count) extra_h += 1 + m.vpad + m.cap_h + m.btn_h + 4 + ch + m.vpad;
+    // A RADIO LIST, not a segmented control: the labels are the
+    // registry's and long ("Centred, no scaling"), and the card keeps the
+    // shared width (docs/gui-guidelines.md, segmented = short choices).
+    int choice_h = ch + 12;
+    if (g_choice_count)
+        extra_h += 1 + m.vpad + m.cap_h + g_choice_count * choice_h + 4 + ch + m.vpad;
     tray_slider_geometry(&g_popup, want_w, extra_h, m.foot_h, s);
     if (!g) return;
 
@@ -129,16 +134,16 @@ static void geometry(struct tray_slider_geom *s, struct brightness_geom *g) {
     g->available = available;
 
     int y = s->below_y + (available ? 0 : ch + m.vpad);
-    g->seg_count = g_seg_count;
-    g->seg_selected = g_seg_selected;
-    if (g_seg_count) {
+    g->choice_count = g_choice_count;
+    g->choice_selected = g_choice_selected;
+    if (g_choice_count) {
         g->rule_y = y;
         g->cap_y = y + 1 + m.vpad;
-        g->seg_y = g->cap_y + m.cap_h;
-        g->seg_h = m.btn_h;
-        g->seg_x = s->x + m.pad;
-        g->seg_w = (s->w - 2 * m.pad) / g_seg_count;
-        g->note_y = g->seg_y + m.btn_h + 4;
+        g->choice_y = g->cap_y + m.cap_h;
+        g->choice_h = choice_h;
+        g->choice_x = s->x + m.pad - 6;   // the volume flyout's OUTPUT list
+        g->choice_w = s->w - 2 * (m.pad - 6);
+        g->note_y = g->choice_y + g_choice_count * choice_h + 4;
     }
     g->foot_y = s->foot_y;
     g->foot_h = s->foot_h;
@@ -175,9 +180,9 @@ int brightness_hover_at(int mx, int my) {
     if (g_hover == TRAY_SLIDER_HOVER_NONE && g_popup.open) {
         struct brightness_geom g;
         geometry(&s, &g);
-        for (int i = 0; i < g.seg_count; i++)
-            if (uui_hit(g.seg_x + i * g.seg_w, g.seg_y, g.seg_w, g.seg_h, mx, my))
-                g_hover = HOVER_SEG(i);
+        for (int i = 0; i < g.choice_count; i++)
+            if (uui_hit(g.choice_x, g.choice_y + i * g.choice_h, g.choice_w, g.choice_h, mx, my))
+                g_hover = HOVER_CHOICE(i);
         if (uui_hit(g.btn_x, g.btn_y, g.btn_w, g.btn_h, mx, my)) g_hover = HOVER_BUTTON;
     }
     return g_hover;
@@ -213,15 +218,15 @@ int brightness_handle_click(int mx, int my) {
     if (what == TRAY_SLIDER_CLICK_INSIDE) {
         struct brightness_geom g;
         geometry(&s, &g);
-        for (int i = 0; i < g.seg_count; i++)
-            if (uui_hit(g.seg_x + i * g.seg_w, g.seg_y, g.seg_w, g.seg_h, mx, my) &&
-                usetting_set(SCALING_SETTING, g_seg_value[i]) > 0) {
-                g_seg_selected = i;
+        for (int i = 0; i < g.choice_count; i++)
+            if (uui_hit(g.choice_x, g.choice_y + i * g.choice_h, g.choice_w, g.choice_h, mx, my) &&
+                usetting_set(SCALING_SETTING, g_choice_value[i]) > 0) {
+                g_choice_selected = i;
                 brightness_damage();
             }
         if (uui_hit(g.btn_x, g.btn_y, g.btn_w, g.btn_h, mx, my)) {
             brightness_close();
-            { int pid_ = sys_spawn("/bin/wm/system/settings", g.seg_count ? SCALING_SETTING : BRIGHTNESS_SETTING, -1); if (pid_ > 0) wm_track_launched(pid_); }   // reaped by the poll
+            { int pid_ = sys_spawn("/bin/wm/system/settings", g.choice_count ? SCALING_SETTING : BRIGHTNESS_SETTING, -1); if (pid_ > 0) wm_track_launched(pid_); }   // reaped by the poll
         }
     }
     return 1;
@@ -251,7 +256,6 @@ void brightness_draw(int mx, int my) {
     struct brightness_geom g;
     geometry(&s, &g);
     struct ugfx_surface *surf = wm_surface();
-    int ch = ugfx_char_h();
 
     tray_slider_draw(&g_popup, &s, "tray-brightness", 0);
 
@@ -259,29 +263,14 @@ void brightness_draw(int mx, int my) {
         ugfx_draw_string_clipped(surf, g.x + s.pad, s.below_y, g.w - 2 * s.pad,
                                  g_popup.unavailable, wm_flyout_dim(), wm_flyout_ink());
 
-    if (g.seg_count) {
+    if (g.choice_count) {
         wm_flyout_rule(g.x, g.rule_y, g.w);
-        wm_flyout_caption(g.seg_x, g.cap_y, g.w - 2 * s.pad, "SCALING");
-        // A SEGMENTED CONTROL: one track, the chosen segment raised on it.
-        int tw = g.seg_w * g.seg_count;
-        uui_fill_round_rect(surf, g.seg_x, g.seg_y, tw, g.seg_h, 6,
-                            ugfx_blend(wm_flyout_ground(), UTHEME_CHROME, 160));
-        for (int i = 0; i < g.seg_count; i++) {
-            int sx = g.seg_x + i * g.seg_w;
-            uint32_t face = ugfx_blend(wm_flyout_ground(), UTHEME_CHROME, 160);
-            if (i == g.seg_selected) {
-                face = UTHEME_WHITE;
-                uui_fill_round_rect(surf, sx + 3, g.seg_y + 3, g.seg_w - 6, g.seg_h - 6, 4, face);
-            } else if (g_hover == HOVER_SEG(i)) {
-                face = uui_state_bg(face, UUI_STATE_HOVER);
-                uui_fill_round_rect(surf, sx + 3, g.seg_y + 3, g.seg_w - 6, g.seg_h - 6, 4, face);
-            }
-            int lw = ugfx_text_width(g_seg_label[i]);
-            if (lw > g.seg_w - 8) lw = g.seg_w - 8;
-            ugfx_draw_string_clipped(surf, sx + (g.seg_w - lw) / 2, g.seg_y + (g.seg_h - ch) / 2,
-                                     g.seg_w - 8, g_seg_label[i], UTHEME_TEXT, face);
-        }
-        ugfx_draw_string_clipped(surf, g.seg_x, g.note_y, g.w - 2 * s.pad,
+        wm_flyout_caption(g.x + s.pad, g.cap_y, g.w - 2 * s.pad, "SCALING");
+        for (int i = 0; i < g.choice_count; i++)
+            wm_flyout_radio_row(g.choice_x, g.choice_y + i * g.choice_h, g.choice_w, g.choice_h - 2,
+                                i == g.choice_selected, g_hover == HOVER_CHOICE(i),
+                                g_choice_label[i], NULL);
+        ugfx_draw_string_clipped(surf, g.x + s.pad, g.note_y, g.w - 2 * s.pad,
                                  "How a smaller mode fills the panel", wm_flyout_dim(), wm_flyout_ink());
     }
 

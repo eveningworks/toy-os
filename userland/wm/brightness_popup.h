@@ -40,9 +40,10 @@ struct brightness_geom {
     int available;                    // 0 when the setting is unavailable
     int tray_x, tray_y, tray_w, tray_h;
     // The card's SCALING section (system.scaling), absent where the
-    // display cannot scale, and its footer (wm_flyout.h).
-    int seg_count, seg_x, seg_y, seg_w, seg_h;   // seg_w is ONE segment
-    int seg_selected;
+    // display cannot scale: a radio row per choice, row i at
+    // choice_y + i * choice_h. Then its footer (wm_flyout.h).
+    int choice_count, choice_x, choice_y, choice_w, choice_h;
+    int choice_selected;
     int rule_y, cap_y, note_y;
     int foot_y, foot_h, btn_x, btn_y, btn_w, btn_h;
 };
