@@ -84,7 +84,7 @@ HEX = {" ": "0x20", "/": "0x2f", ".": "0x2e", "-": "0x2d", "_": "0x5f",
 # Control codes, by the name of the key that produces them.
 CTRL = {c: f"0x{ord(c) - ord('a') + 1:02x}" for c in "abcdefghijklmnopqrstuvwxyz"}
 ESC, RET = "0x1b", "0x0d"
-PAGE_UP, PAGE_DOWN = "0x93", "0x94"    # api/keyboard.h
+PAGE_UP, PAGE_DOWN = "0xf793", "0xf794"    # api/keyboard.h
 
 # The default scheme's page (data/usr/share/terminal/slate.scheme's
 # Color0). A pixel within a few units of it is background.

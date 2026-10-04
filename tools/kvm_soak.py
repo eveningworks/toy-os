@@ -152,7 +152,7 @@ TREE_RE = re.compile(r"settings: layout tree (-?\d+) (-?\d+) (\d+) (\d+)")
 BUTTONS_RE = re.compile(r"settings: layout button apply (-?\d+) (-?\d+) (\d+) (\d+)")
 CONTROL_RE = re.compile(r"settings: control (\d+) (\S+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) "
                         r"rows (\d+) kind (radio|combo|slider|spin|text)")
-K_UP, K_DOWN, K_LEFT, K_RIGHT = "0x91", "0x92", "0x95", "0x96"
+K_UP, K_DOWN, K_LEFT, K_RIGHT = "0xf791", "0xf792", "0xf795", "0xf796"
 # The keys that CHANGE each kind of control (ui/uui_*.c key ops); a
 # closed dropdown ignores arrows on purpose, so `combo` is not driven.
 KEYS = {"spin": (K_UP, K_DOWN), "radio": (K_DOWN, K_UP), "slider": (K_RIGHT, K_LEFT)}

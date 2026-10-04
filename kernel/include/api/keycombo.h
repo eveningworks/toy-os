@@ -38,7 +38,7 @@
 // Modifier bits are api/keyboard.h's KEY_MOD_*; the key is one of its
 // KEY_* codes or a plain character.
 struct keycombo {
-    uint8_t key;   // 0 = unbound
+    uint16_t key;  // 0 = unbound; a KEY_* special is above 0xFF
     uint8_t mods;  // KEY_MOD_*
 };
 

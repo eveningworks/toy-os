@@ -845,7 +845,7 @@ def main():
                 # KEYBOARD, which is also the check that Tab reaches OK
                 # and Cancel: the ring is Pieces, Motion, OK, Cancel.
                 # HEX STRINGS: `gui key 9` types the DIGIT nine.
-                TAB, RIGHT, LEFT, ENTER = "0x09", "0x96", "0x95", "0x0a"
+                TAB, RIGHT, LEFT, ENTER = "0x09", "0xf796", "0xf795", "0x0a"
 
                 def open_opts():
                     for _ in range(2):

@@ -7,10 +7,11 @@
 int termkey_encode(int key, char *out, int cap) {
     if (!out || cap <= 0) return 0;
 
-    // An ordinary character is itself. That includes the control codes:
+    // An ordinary character is itself -- one byte of Latin-1, accented
+    // letters included. That includes the control codes:
     // Ctrl-A really is 0x01 on a terminal, and Alt-<key> really is ESC
     // then the key, so neither needs a table row.
-    if (key >= 0 && key < 0x80) { out[0] = (char)key; return 1; }
+    if (key >= 0 && key < 0x100) { out[0] = (char)key; return 1; }
 
     for (int i = 0; i < TERMKEY_CASE_COUNT; i++) {
         if (TERMKEY_CASES[i].key != key) continue;

@@ -10,7 +10,7 @@
 #include "keyboard.h"
 #include "string.h"
 
-static int parses_to(const char *text, uint8_t key, uint8_t mods) {
+static int parses_to(const char *text, uint16_t key, uint8_t mods) {
     struct keycombo c;
     if (!keycombo_parse(text, &c)) return 0;
     return c.key == key && c.mods == mods;

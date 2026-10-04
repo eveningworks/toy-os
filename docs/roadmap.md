@@ -297,9 +297,9 @@ Staged in `docs/dynlink-design.md`, including the case against.
 
 - [ ] UTF-8 decode/encode helpers in `string.c`
 - [ ] Console + `gfx_draw_string()` decoding multi-byte sequences
-- [ ] A font atlas keyed by codepoint rather than by byte -- `font_ttf_extra_codepoints` is `unsigned char`, so Latin-1 is the ceiling
+- [ ] A font atlas keyed by codepoint rather than by byte -- `font_ttf_slot()` maps ASCII then Latin-1 0xA0-0xFF, so Latin-1 is the ceiling
 - [ ] Box-drawing for `ps --tree`, which draws `pstree -A`'s ASCII because U+2500's block is unreachable -- the first concrete caller
-- [ ] Keyboard layout files emitting codepoints, not Latin-1 bytes
+- [ ] Keyboard layout files emitting codepoints, not Latin-1 bytes -- no Estonian; Polish/Romanian/Latvian lack AltGr letters
 - [ ] Filesystem path handling (both backends) audited for multi-byte names
 - [ ] A migration story for existing Latin-1 content on disk
 - [ ] Audit every `char`-sized assumption first
@@ -636,7 +636,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Load a TTF from disk at runtime, not only the glyphs `tools/genttf.py` bakes in~~ DONE 2026-08-20 -- `kernel/lib/ttf.c`
 - [x] ~~A real glyph cache, since rasterizing per frame is not viable~~ DONE 2026-08-20 -- an atlas per (face, size)
 - [x] ~~Per-glyph advance widths, instead of one fixed cell per character~~ DONE 2026-08-20 -- `gfx_char_advance()`/`ugfx_char_advance()`
-- [ ] The atlas is still the BAKED 101-glyph set, so a loaded face's other 3,000 glyphs are unreachable -- needs UTF-8
+- [ ] The atlas is still the BAKED 191-glyph set (ASCII + Latin-1), so a loaded face's other 3,000 glyphs are unreachable -- needs UTF-8
 - [x] ~~No weights: one face, one weight~~ DONE 2026-08-21 -- a `-bold` file is a weight of its family, synthesized where there is none
 - [ ] Hinting -- glyphs are rendered unhinted, which is visible below about 10px (the baked font was hinted offline)
 - [x] ~~Kerning pairs from the font's own tables~~ DONE 2026-08-21 -- format-0 `kern`, baked into the atlas as a dense slot matrix
@@ -815,7 +815,10 @@ run on, not by order.
 - [ ] A clocksource watchdog, cross-checking the TSC against a second source the way Linux does
 - [ ] MSI-X vectors per QUEUE rather than one per device -- wanted by multi-queue virtio and NVMe, worth it once a second CPU is online
 - [x] ~~Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table~~ DONE 2026-09-12
-- [ ] The on-screen keyboard should draw the CONFIGURED layout, not its own copy of US QWERTY
+- [x] ~~Every XKB layout Latin-1 can type, with dead keys and Shift+AltGr~~ DONE 2026-10-04 -- 24 in `tools/gen_kbs.py`'s `LAYOUTS`
+- [ ] Settings shows a picture of the chosen keyboard layout -- the layout data is in `/etc/kbs`; nothing draws it yet
+- [ ] Several layouts at once, switched with a shortcut and shown in the tray (Windows' Win+Space, GNOME's input sources)
+- [ ] The on-screen keyboard should draw the CONFIGURED layout, not its own copy of US QWERTY -- it still types US whatever is set
 - [ ] A virtual-keyboard protocol, so the on-screen keyboard can be a ring-3 app instead of compositor code
 
 - [ ] `settings_init()` as initcalls too -- the last hand list; its order is the Settings sidebar's, so it needs an explicit order first
@@ -1236,6 +1239,7 @@ Things this OS does not do yet, or does in a way worth improving --
 `docs/bugs.md`; the test is "is something broken?", not "would I like
 this to be better?".
 
+- [ ] Accents on CAPITALS are clipped at the top of the session font's squeezed cell -- A-acute and A-diaeresis look alike
 - [x] ~~About shows a processor COUNT, not a model~~ DONE (540dd6e5) -- `SYS_CPU_INFO` hands ring 3 the brand string and topology
 - [x] ~~Run the full gate over the About rewrite and the logo~~ DONE 2026-09-02 -- preflight and `gui_regress.py` green
 - [x] ~~A key event carries the translated code only, not the physical keycode~~ DONE 2026-09-29 -- `on_phys_key`

@@ -341,7 +341,7 @@ def run(dbg, qmp, tmp, res):
     # splits frames at the menu's line, and full screen has no menu.
     st = dbg.json("gui state --json")
     poll_logs(dbg)
-    dbg.key(0xB1)                         # F11
+    dbg.key(0xf7b1)                         # F11
     time.sleep(1.0)
     dbg.settle()
     win = dbg.window("Audio Player") or {}

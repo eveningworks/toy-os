@@ -78,55 +78,49 @@ and the commit for build 390 for the full writeup -- this was the
 first concrete milestone toward the TCP/IP prerequisites README.md's
 **Build 380** entry laid out.
 
-## Nordic keyboard/character support: Latin-1, not UTF-8; 3 remapped keys, not a full layout
+## Nordic keyboard/character support: Latin-1, not UTF-8
 
-Adding Å/Ä/Ö support (build 501) meant three separable choices, made
-the same way each time: keep the codebase's existing "1 char = 1 cell
-= 1 glyph" assumption intact rather than take on the much bigger
-UTF-8 rework it doesn't need yet.
+**A character is one byte of Latin-1 (ISO-8859-1): ASCII, plus the
+Latin-1 Supplement 0xA0-0xFF.** Every byte-buffer boundary in this
+kernel (`scrollback_cell`, file content, `SYS_WRITE`/`SYS_READ`'s
+buffer+length) assumes one byte is one character is one glyph cell, and
+Latin-1 keeps that true; UTF-8 would break it everywhere a multi-byte
+letter crossed one. It began (build 501) as six Nordic letters baked
+after ASCII; since 2026-10-04 the font carries the whole 0xA0-0xFF block
+and the keyboard layouts type all of it. The ceiling is the point to
+move past, and `docs/roadmap.md`'s UTF-8 migration is where that
+happens -- not by widening this further.
 
-**Encoding: Latin-1/ISO-8859-1 single bytes (Ä=0xC4, Ö=0xD6, Å=0xC5,
-ä=0xE4, ö=0xF6, å=0xE5), not UTF-8.** Every byte-buffer boundary in
-this kernel (`scrollback_cell`, `fs.h`'s file content, the syscall
-ABI's buffer+length `SYS_WRITE`/`SYS_READ`) already assumes one byte
-is one character is one glyph cell; UTF-8 would break that assumption
-everywhere a multi-byte Nordic letter crossed it, for a codebase that
-only needs 6 extra characters right now. `font_ttf.h`'s
-`FONT_TTF_EXTRA_COUNT` bakes exactly these 6 glyphs (see
-`tools/genttf.py`'s `EXTRA_CHARS`), not the full 0xA0-0xFF Latin-1
-Supplement block -- easy to extend later (append to that list and
-re-run the script) if more accented characters are ever needed.
+**The font's slots are arithmetic, not a table.** ASCII 32-126 is slots
+0-94 and Latin-1 0xA0-0xFF is 95-190 (`font_ttf_slot()` in the generated
+`api/font_ttf.h`). Both rings and every atlas (the baked tables, fontd's
+runtime faces, a client's private font) index the same way, so there is
+no codepoint list for two rings to keep in step -- the six-letter design
+had one (`font_ttf_extra_codepoints`), and ring 3 never learned to
+address it, so a Nordic letter drew as a space in every GUI app. NBSP
+draws blank; the soft hyphen draws as a hyphen, as on xterm and the
+Linux console, since nothing here hyphenates.
 
-**Keyboard layout: `keyboard <us|se>` remaps 3 scancodes, not a
-from-scratch Nordic layout.** `keyboard.c`'s `scancode_ascii_se[]`/
-`scancode_ascii_shift_se[]` are copies of the US tables with only
-scancodes 0x1A/0x27/0x28 (the physical keys under Å/Ä/Ö on a real
-Nordic keyboard) changed -- everything else, including AltGr-level
-symbols a real Nordic layout also remaps, stays US QWERTY, since this
-driver has no AltGr/dead-key handling at all (see keyboard.h's
-`IS_NORDIC_CHAR()` comment). Persisted the same way `timezone`/
-`fontsize` already are -- a `keyboard_layout=<us|se>` key in
-`/etc/toyos.conf`, loaded once at boot by `keyboard_config_init()`.
+**The KEY_* specials moved from 0x91-0xB9 to 0xF791-0xF7B9** -- the
+Latin-1 block they overlapped (AltGr+1 on Spanish is 0xA1, which was
+Shift+End). Above 0xFF because 41 codes do not fit in the C1 range;
+in Unicode's Private Use Area because that is where macOS puts its
+function keys (NSUpArrowFunctionKey, 0xF700) and because the UTF-8
+migration will carry codepoints in the same stream -- a special at
+0x100 would one day be a Latin Extended-A letter. The low byte is the
+old code, so a key truncated to a byte somewhere lands outside ASCII
+rather than on Ctrl-C. The console terminal's queue already had 16 bits
+of room; the byte-wide links (`tty_input()`, the release table,
+`struct keycombo`) were widened, and a terminal turns a special into ANSI
+before fd 0 sees it, so the byte-stream contract of `read()` held.
 
-**The actual bug that made this hard to verify: `char` is signed, and
-one gate had a differently-shaped filter the others didn't.** No
-`-funsigned-char` in this build's CFLAGS, so a codepoint >= 0x80 is
-negative as `char` -- `gfx_draw_char()`'s old `c < 32 || c > 126`
-range check and five `key >= 32 && key < 127`-shaped "is this a
-printable char" gates across `apps/` (terminal, notepad, widgets
-textfield, editor) and `userland/tests/echo.c` all
-silently rejected Nordic letters before this build. `keyboard.h`'s new
-`IS_PRINTABLE_KEY()` macro (and `font_ttf_glyph_index()` in gfx.c,
-which takes the codepoint as `int`/`unsigned char` rather than relying
-on `char`'s signedness) fixed all of them at once -- except
-`apps/shell.c`'s own `shell_read_line()`, which had a SIXTH,
-differently-worded gate (`c < 128`, not `key >= 32 && key < 127`) that
-a grep for the other five's exact phrasing missed entirely. Found only
-by QMP-testing actual keystrokes end-to-end and noticing the cursor
-didn't even advance -- not by code review -- which is the concrete
-argument for always verifying a "fixed every instance of X" claim by
-testing the behavior, not just re-grepping the pattern you already
-fixed. the commit for build 501 for the full writeup.
+**`char` is signed in this build** (no `-funsigned-char`), so a
+codepoint >= 0x80 is negative as a `char`. Build 501 found six gates
+written `key >= 32 && key < 127` and a seventh worded differently
+(`c < 128` in the kernel shell) that a grep for the first six missed;
+it was found only by typing. `IS_PRINTABLE_KEY()` (`api/keyboard.h`) is
+the one gate now, and a key is an `int` everywhere -- the layout's
+tables are `uint16_t` for the same reason.
 
 ## Keyboard layouts are data files (`/etc/kbs/<name>`) generated from Linux's own XKB data, not a compiled-in enum
 
@@ -141,13 +135,26 @@ compiler -- no X server needed) instead of anyone re-deriving a
 scancode chart by hand. Translation logic itself moved out of
 `keyboard.c` into a new `kernel/lib/keyboard_layout.c`, since owning
 per-region character tables was never really the driver's job (raw
-scancode/shift-state handling is). See the commit that added it for the full implementation, including the AltGr/dead-key scope
-limits (this driver has no AltGr handling at all, so those symbols
-were never reachable regardless of the table) and a real bug the
+scancode/shift-state handling is). See the commit that added it for the full implementation, and a real bug the
 generator's first cut had (omitting Escape/Backspace/Tab/Enter from
 its key list, which silently broke Enter the moment the shell started
 loading layouts from generated files instead of the old compiled-in
 ones -- found live, not by review).
+
+**Dead keys compose in the kernel, behind every keyboard driver** (since
+2026-10-04). That is the Linux console's shape -- an accent table the
+keyboard driver consults (`KDSKBDIACR`) -- rather than X11's, where a
+client-side input method composes. toy-os has no input method and the
+console must compose too, so the state lives in
+`kernel/lib/keyboard_layout.c` and every driver reaches it through
+`keyboard.c`'s `key_event()`. The table is per layout and inside the
+layout's own file (`dead:acute:e=0xE9`), generated from libX11's Compose
+data, because `/etc/kbs`'s listing IS the Settings choice list and a
+separate compose file there would appear as a layout. The behaviour is
+Windows': dead + Space is the accent alone (XKB gives an apostrophe for
+the acute), and dead + a key it does not compose with types the accent
+then the key. Level 4 (Shift+AltGr) is read too; the driver always knew
+both modifiers, only the tables lacked the column.
 
 ## GDB debugging: QEMU's stub under QEMU, the kernel's own stub on bare metal
 
@@ -879,7 +886,7 @@ this device get serviced?" being a different question per driver, and
 
 **`INPUT_KEY_*` is prefixed and `KEY_*` is not, deliberately.**
 `keyboard.h`'s `KEY_*` are the codes this kernel's key RING carries
-(`KEY_HOME` is 0x9B, chosen to sit outside ASCII); `INPUT_KEY_*` are
+(`KEY_HOME` is 0xF797, above every character); `INPUT_KEY_*` are
 what the wire carries before translation (`INPUT_KEY_HOME` is 102,
 Linux's number). Four collided outright when the header was first
 written -- a silent collision between two key vocabularies would have

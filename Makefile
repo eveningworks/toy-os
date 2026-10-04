@@ -1740,9 +1740,9 @@ $(DISK_IMG):
 # content-hash compare inside sync itself, not something make's own
 # mtime logic should try to shortcut.
 #
-# The /etc/kbs/us and /etc/kbs/se files are regenerated here (not
-# hand-maintained) via tools/gen_kbs.py -- see that script's top
-# comment. It needs `xkbcli` (Debian/Ubuntu: `apt-get install
+# The /etc/kbs layouts are regenerated here (not hand-maintained) by
+# tools/gen_kbs.py --all, whose LAYOUTS table is the one list -- see
+# that script's top comment. It needs `xkbcli` (Debian/Ubuntu: `apt-get install
 # libxkbcommon-tools`); if that's missing, this prints a warning and
 # skips regenerating them rather than failing the build -- whatever's
 # already in $(SEED_DIR)/sync/etc/kbs (nothing, on a machine that's
@@ -2044,8 +2044,7 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	# notices travel with them: an image that has /etc/kbs has
 	# /usr/share/licenses/xkeyboard-config.txt (see LICENSE).
 	@if command -v xkbcli >/dev/null 2>&1; then \
-		python3 tools/gen_kbs.py us --write; \
-		python3 tools/gen_kbs.py se --write; \
+		python3 tools/gen_kbs.py --all --write; \
 		mkdir -p $(SEED_DIR)/sync/usr/share/licenses; \
 		cp data/licenses/xkeyboard-config.txt $(SEED_DIR)/sync/usr/share/licenses/; \
 	else \

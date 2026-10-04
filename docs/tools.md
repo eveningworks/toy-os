@@ -10,10 +10,14 @@ That is the reasoning that produced every tool below. Add freely when it
 does — and add its entry here, which `tools/check_docs.py` verifies.
 
 Dev/build helper scripts, not compiled or shipped as part of the OS:
-`genttf.py` (font generation, pre-existing), `gen_kbs.py`
-(generates the `seed/sync/etc/kbs/<layout>` keyboard-layout data files
-from Linux's own XKB data -- see `docs/decisions.md` on layouts being
-data files, not a compiled-in enum), `qmp_test.py`
+`genttf.py` (font generation; `--font PATH` when JetBrains Mono is not
+installed -- the v2.304 release reproduces the committed tables byte for
+byte), `gen_kbs.py` (generates the `seed/sync/etc/kbs/<layout>`
+keyboard-layout data files, dead keys included, from Linux's own XKB
+data; `--all` for every layout in its `LAYOUTS` table, `--check` to
+re-measure that each still fits Latin-1, `--choices` for the Settings
+display names -- see `docs/decisions.md` on layouts being data files),
+`qmp_test.py`
 (QEMU/QMP GUI testing helpers — see `docs/testing.md`), `boot_smoke_test.py` (fast
 non-GUI boot check — see `docs/testing.md`), `gen_version.sh`/`set_version.sh`
 (versioning — see CLAUDE.md's `version.h`/`VERSION` bullets),

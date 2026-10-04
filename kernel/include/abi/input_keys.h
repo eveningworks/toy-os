@@ -9,7 +9,7 @@
 //
 // THE `INPUT_` PREFIX IS NOT DECORATION. api/keyboard.h's `KEY_*` family
 // means something else entirely -- the TRANSLATED codes a key ring
-// carries (KEY_HOME is 0x97, INPUT_KEY_HOME is 102). Four collided when
+// carries (KEY_HOME is 0xF797, INPUT_KEY_HOME is 102). Four collided when
 // the kernel's list was first written, and a silent collision between
 // two key vocabularies surfaces as "Home does something odd on one
 // keyboard".

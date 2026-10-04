@@ -255,11 +255,9 @@ static int tty_fd_write(struct syscall_ctx *c, struct open_file *f,
 //     mode, no editing and no echo, so the reader echoes what it reads.
 //     That is a program in raw mode, which is what a shell wanting its
 //     own editor asks for anyway.
-//   - No translation. One byte per key, exactly the code
-//     keyboard_try_getchar() returns -- every value this driver
-//     produces fits in a byte, specials (KEY_ARROW_* et al, 0x91-0xA6)
-//     included. An ANSI escape encoding belongs above a real TTY, not
-//     baked in here where it could not be turned off.
+//   - No translation here. The terminal below already made every key
+//     bytes -- a character is one Latin-1 byte, a special key an ANSI
+//     sequence (tty_input(), api/termkey.h).
 //   - No per-terminal queue. There is ONE console, so the first ring-3
 //     reader claims it (keyboard.h) and the kernel shell stands down
 //     until that process dies.

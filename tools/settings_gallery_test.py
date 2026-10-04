@@ -136,10 +136,10 @@ def run(dbg, qmp, tmp, res):
     res.check("a click on a card STAGES it, and nothing is written yet",
               staged(dbg.logs(clear=False)) == "amber" and stored(dbg) == before,
               f"staged={staged(dbg.logs(clear=False))} stored={stored(dbg)} before={before}")
-    dbg.key("0x96")                       # Right: the next card
+    dbg.key("0xf796")                       # Right: the next card
     time.sleep(0.5)
     right = staged(dbg.logs(clear=False))
-    dbg.key("0x95")                       # Left: back
+    dbg.key("0xf795")                       # Left: back
     time.sleep(0.5)
     res.check("the arrow keys move it like a radio group",
               right == "aurora" and staged(dbg.logs(clear=False)) == "amber", f"right={right}")

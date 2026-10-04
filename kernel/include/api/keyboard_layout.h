@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-// Data-driven keyboard scancode->character translation -- deliberately
+// Data-driven keyboard keycode->character translation -- deliberately
 // split out of kernel/drivers/keyboard.c (the driver): keyboard.c's job
 // is turning raw 8042 bytes into scancodes/shift-state/extended-prefix
 // handling, not owning per-region character tables. This file owns the
@@ -34,36 +34,64 @@ int keyboard_layout_load(const char *name);
 // NUL-terminated string.
 const char *keyboard_layout_current(void);
 
-// Translates one LINUX EVDEV KEYCODE under the given shift/AltGr state
-// to the character the active layout produces, or 0 if that combination
-// doesn't produce a character in this layout (an unmapped key -- same
-// "0 means nothing" convention keyboard.c's own tables always used).
+// A SYMBOL: what a key means on the active layout -- 0 for nothing, a
+// Latin-1 character 1..0xFF, or a DEAD KEY at KB_SYM_DEAD_BASE + n. An
+// int rather than a char: Latin-1 above 0x7F is negative in a `char`.
+#define KB_SYM_DEAD_BASE 0x100
+#define KB_SYM_DEAD(n)   (KB_SYM_DEAD_BASE + (n))
+#define KB_SYM_IS_DEAD(s) ((s) >= KB_SYM_DEAD_BASE)
+
+// Translates one LINUX EVDEV KEYCODE under the given Shift/AltGr state
+// to a symbol (above). A keycode, not an AT scancode: every non-PS/2
+// keyboard reports evdev natively, and the PS/2 driver translates its
+// wire once on the way in, as Linux's atkbd does (docs/decisions.md).
 //
-// **A KEYCODE, NOT AN AT SCANCODE.** evdev is what every non-PS/2
-// keyboard reports natively, so keying the layout on it means no driver
-// has to translate into a legacy encoding to be understood -- the PS/2
-// driver translates its wire ONCE, on the way in, exactly as `atkbd`
-// does on Linux. The two numberings happen to agree for the whole
-// primary block, which is why /etc/kbs's VALUES did not change when the
-// keying did, and why the old spelling looked right for years while the
-// evdev-to-scancode table it forced on virtio-input quietly had a hole
-// in it. See docs/decisions.md.
-// Values above ASCII are the same Latin-1 codepoints keyboard.h's
-// CHAR_A_RING/CHAR_A_DIAERESIS/etc already use. `altgr` takes priority
-// over `shift` when both are set (this is XKB "level 3" -- AltGr alone
-// -- not "level 4" -- Shift+AltGr, which isn't tracked as a separate
-// combination; a real Shift+AltGr press just reads as AltGr here,
-// same simplification tools/gen_kbs.py's generator makes on the data
-// side by only emitting levels 1-3, not 4). No AltGr entry for the
-// pressed key falls through to whatever shift/base would have
-// produced, exactly like an unmapped scancode always has.
-char keyboard_layout_translate(uint16_t keycode, int shift, int altgr);
+// Shift+AltGr is XKB level 4; a key with no level-4 symbol falls back to
+// level 3, and a key with no AltGr symbol at all falls through to
+// Shift/base -- so AltGr over an ordinary key still types it rather than
+// eating the keystroke.
+int keyboard_layout_translate(uint16_t keycode, int shift, int altgr);
 
 // The same, under CAPS LOCK: xkb's rule for an "alphabetic" key -- Caps
 // inverts Shift on a key whose unshifted symbol is a lowercase letter
-// and whose shifted one is that letter's capital. So digits and
-// punctuation are untouched and Caps+Shift types lowercase, as on
-// Windows and Linux; decided from the LAYOUT, so it holds for each one.
-char keyboard_layout_translate_caps(uint16_t keycode, int shift, int altgr, int caps);
+// and whose shifted one is its capital (ASCII or Latin-1, so e-acute
+// capitalises and sharp s does not). Digits and punctuation are
+// untouched and Caps+Shift types lowercase, as on Windows and Linux.
+int keyboard_layout_translate_caps(uint16_t keycode, int shift, int altgr, int caps);
+
+// --- dead keys -------------------------------------------------------
+//
+// **THE STATE LIVES HERE, BEHIND EVERY DRIVER.** PS/2, virtio-input and
+// USB HID all reach keyboard.c's key_event(), which is the one caller --
+// so a dead key typed on one keyboard composes with a letter typed on
+// another, as on Linux, where the console's accent table (KDSKBDIACR)
+// sits in the keyboard driver above every device.
+//
+// Feed each translated symbol through keyboard_layout_compose(); it
+// writes the 0, 1 or 2 characters to emit into `out`:
+//   dead key                  -> nothing; the accent is pending
+//   pending + composable char -> the composed character (dead acute, e)
+//   pending + Space           -> the accent alone
+//   pending + the same dead   -> the accent alone
+//   pending + another dead    -> the first accent; the second pends
+//   pending + Backspace/Esc   -> nothing; the accent is taken back
+//   pending + anything else   -> the accent, then the key (Windows)
+// Loading a layout drops a pending accent.
+int keyboard_layout_compose(int sym, uint8_t out[2]);
+
+// What a symbol types with no composition: a character is itself, a
+// dead key its accent alone (0 if the layout gave it none). For a key
+// pressed with Ctrl or Alt, which is a shortcut rather than text.
+int keyboard_layout_spacing(int sym);
+
+// The pending dead key's symbol, or 0; and a way to drop it. For tests.
+int keyboard_layout_dead_pending(void);
+void keyboard_layout_compose_reset(void);
+
+// Parses a layout from memory instead of /etc/kbs, replacing the active
+// tables; 1 if it mapped anything. For KTESTs, which restore the real
+// layout with keyboard_layout_load() afterwards. Does not change
+// keyboard_layout_current().
+int keyboard_layout_load_text(const char *data, uint32_t size);
 
 #endif

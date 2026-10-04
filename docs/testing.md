@@ -628,7 +628,7 @@ reason: no test could open a context menu at all, which is how its
 Close row went on destroying ring-3 windows without their close
 handshake while the X button beside it asked politely. Use
 `DebugConsole.ctxmenu_row("Close")` rather than deriving a row from
-`item_h`. And note `gui key` takes modifier words -- `gui key 0xa5 alt`
+`item_h`. And note `gui key` takes modifier words -- `gui key 0xf7a5 alt`
 is Alt+F4, which is the only way to close a window from a test now that
 Esc doesn't.
 

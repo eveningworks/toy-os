@@ -188,7 +188,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
     still_there = dbg.window(CLIENT_TITLE) is not None
     res.check("the window is still open for Alt+F4 to close",
               still_there, "an earlier route destroyed it instead of asking")
-    dbg.send("gui key 0xa5 alt")
+    dbg.send("gui key 0xf7a5 alt")
     dbg.settle()
 
     deadline = time.time() + SPAWN_TIMEOUT_S

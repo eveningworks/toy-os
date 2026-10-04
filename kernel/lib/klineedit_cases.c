@@ -14,7 +14,7 @@
 
 // Each array is the literal key stream a front end would feed in, in
 // the encoding keyboard.h defines: ASCII for printables and control
-// codes, 0x91-0xA6 for specials, and ESC-then-key for a Meta binding.
+// codes, KEY_* for specials, and ESC-then-key for a Meta binding.
 static const int k_insert_mid[]  = { 'h','e','l','o', KEY_ARROW_LEFT, 'l' };
 static const int k_home_end[]    = { 'a','b','c', KEY_HOME, 'x', KEY_END, 'y' };
 static const int k_ctrl_a_e[]    = { 'a','b','c', CTRL('a'), 'x', CTRL('e'), 'y' };

@@ -4466,7 +4466,7 @@ release).
 
 ### The modifier keys needed codes of their own
 
-`KEY_SHIFT`, `KEY_CTRL`, `KEY_ALT` and `KEY_ALTGR` (0xA7-0xAA) exist
+`KEY_SHIFT`, `KEY_CTRL`, `KEY_ALT` and `KEY_ALTGR` (0xF7A7-0xF7AA) exist
 **only on the transition path** and are never pushed into the byte
 stream -- pressing Shift must not put a byte in front of a shell, and
 `klineedit.c` would otherwise have to learn to ignore four new codes.

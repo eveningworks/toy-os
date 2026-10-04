@@ -1034,9 +1034,9 @@ void cmd_fontface(const char *args) {
     vga_write(".\n");
 }
 
-// Changes the active keyboard scancode layout -- any name with a
-// matching /etc/kbs/<name> file (see kernel/lib/keyboard_layout.c and
-// tools/gen_kbs.py; `us` and `se`/Finnish ship by default). `keyboard`
+// Changes the active keyboard layout -- any name with a matching
+// /etc/kbs/<name> file (see kernel/lib/keyboard_layout.c and
+// tools/gen_kbs.py, whose LAYOUTS table is what ships). `keyboard`
 // alone shows the current layout. Persists via keyboard_config_save()
 // so it survives a reboot -- same pattern as `fontsize`/`timezone`.
 void cmd_keyboard(const char *args) {

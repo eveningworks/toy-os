@@ -383,9 +383,9 @@ int upager_run_src(const char *text, int len, const char *label, int truncated,
         }
         if (top != last_top) { draw(&p, top); last_top = top; }
 
-        // A BLOCKING read of one byte. Specials arrive as 0x91-0xA6,
-        // which are reassembled below into the KEY_* codes the cases
-        // switch on -- what crosses a terminal is ANSI (api/termkey.h).
+        // A BLOCKING read of one byte. A special key arrives as an ANSI
+        // sequence (api/termkey.h), reassembled below into the KEY_*
+        // the cases switch on.
         unsigned char ch;
         int64_t n = read(key_fd, &ch, 1);
         // INTERRUPTED, NOT BROKEN: a resize lands here as EINTR, and

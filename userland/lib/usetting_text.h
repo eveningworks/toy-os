@@ -54,6 +54,8 @@
 //   Applies=now | reboot
 //   Advanced=1 | 0
 //   Order=<integer, lower first>
+//   Sort=label         -- list the choices alphabetically by display name
+//                         (an unordered set, like keyboard layouts)
 //   Choice.<value>=<display name>
 //
 // A PAGE (a category's group) has its own file, named
@@ -71,6 +73,7 @@
 #define SETTING_TEXT_KEY_ADVANCED "Advanced"
 #define SETTING_TEXT_KEY_ORDER    "Order"
 #define SETTING_TEXT_KEY_PREVIEW  "Preview"
+#define SETTING_TEXT_KEY_SORT     "Sort"
 #define SETTING_TEXT_KEY_LABEL    "Label"
 #define SETTING_TEXT_KEY_DEBUG    "Debug"
 #define SETTING_TEXT_CHOICE_PREFIX "Choice."

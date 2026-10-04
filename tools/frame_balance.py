@@ -71,7 +71,7 @@ def cycle_gui(con):
     con.send("gui spawn /bin/wm/apps/calculator")
     time.sleep(2.0)
     con.settle()
-    con.send("gui key 0xa5 alt")
+    con.send("gui key 0xf7a5 alt")
     time.sleep(2.0)
     con.settle()
 

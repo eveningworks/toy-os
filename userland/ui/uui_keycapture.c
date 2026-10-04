@@ -156,7 +156,7 @@ static int kc_key(void *w, int key, unsigned mods) {
         key == KEY_ALTGR || key == KEY_SUPER)
         return 1;
 
-    struct keycombo c = { .key = (uint8_t)key, .mods = (uint8_t)mods };
+    struct keycombo c = { .key = (uint16_t)key, .mods = (uint8_t)mods };
     char text[KEYCOMBO_TEXT_MAX];
     if (!keycombo_format(&c, text, sizeof text)) {
         // Nothing this grammar can spell -- keep listening rather than
@@ -169,7 +169,7 @@ static int kc_key(void *w, int key, unsigned mods) {
     // letter is recovered here -- the exact inverse of the fold
     // keycombo_matches() undoes on the way back in.
     if ((mods & KEY_MOD_CTRL) && key >= 1 && key <= 26) {
-        c.key = (uint8_t)('A' + key - 1);
+        c.key = (uint16_t)('A' + key - 1);
         if (!keycombo_format(&c, text, sizeof text)) return 1;
     }
 

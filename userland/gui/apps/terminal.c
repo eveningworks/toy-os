@@ -2598,7 +2598,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // sent, and Alt is readline's meta prefix, ESC then the key. A KEY_*
     // special is never prefixed.
     if (IS_PRINTABLE_KEY(key) && (mods & KEY_MOD_CTRL)) return;
-    if ((mods & KEY_MOD_ALT) && !(key >= KEY_ARROW_UP && key <= KEY_PRINT_SCREEN) &&
+    if ((mods & KEY_MOD_ALT) && !IS_SPECIAL_KEY(key) &&
         s->master >= 0)
         pty_send(s, "\x1b", 1);
     char seq[TERMKEY_MAX];

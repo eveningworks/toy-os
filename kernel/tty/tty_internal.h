@@ -101,7 +101,8 @@ void tty_ldisc_discard_line(struct tty *t);
 void tty_ldisc_release_line(struct tty *t);   // the partial line, made readable
 
 // tty.c's, called by ldisc.c.
-void tty_enqueue(struct tty *t, uint8_t byte, uint8_t mods);
+// A KEY, not a byte: a bypassed terminal queues KEY_* specials (16 bits).
+void tty_enqueue(struct tty *t, uint16_t key, uint8_t mods);
 void tty_enqueue_wake(struct tty *t);
 
 #endif // KERNEL_TTY_INTERNAL_H

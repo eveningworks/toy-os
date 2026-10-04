@@ -14,7 +14,7 @@
 // table for a key TESTER, where the width of a column matters and the
 // reader is looking at scancodes. Two audiences, two spellings; merging
 // them would make one of the two worse.
-static const struct { uint8_t key; const char *name; } NAMES[] = {
+static const struct { uint16_t key; const char *name; } NAMES[] = {
     { KEY_PRINT_SCREEN, "Print Screen" },
     { KEY_PAUSE,        "Pause" },
     { KEY_INSERT,       "Insert" },
@@ -80,7 +80,7 @@ static int eq_nocase(const char *a, const char *b, int n) {
 }
 
 // One `+`-separated token, with the surrounding blanks already gone.
-static int token_key(const char *tok, int len, uint8_t *out_key, uint8_t *out_mod) {
+static int token_key(const char *tok, int len, uint16_t *out_key, uint8_t *out_mod) {
     for (int i = 0; i < MOD_COUNT; i++) {
         if (eq_nocase(tok, MODS[i].name, len)) { *out_mod = MODS[i].bit; return 1; }
     }
@@ -91,7 +91,7 @@ static int token_key(const char *tok, int len, uint8_t *out_key, uint8_t *out_mo
     // stored form and the formatted form agree; matching lower-cases
     // both ends anyway (keycombo_matches).
     if (len == 1 && tok[0] > 32 && (unsigned char)tok[0] < 127) {
-        *out_key = (uint8_t)k_toupper((unsigned char)tok[0]);
+        *out_key = (uint16_t)k_toupper((unsigned char)tok[0]);
         return 1;
     }
     return 0;
@@ -119,7 +119,8 @@ int keycombo_parse(const char *text, struct keycombo *out) {
         while (len > 0 && (*start == ' ' || *start == '\t')) { start++; len--; }
         if (len <= 0) return 0;         // an empty token: "Ctrl++T", "A+"
 
-        uint8_t key = 0, mod = 0;
+        uint16_t key = 0;
+        uint8_t mod = 0;
         if (!token_key(start, len, &key, &mod)) return 0;
         if (mod) {
             if (seen_key) return 0;     // a modifier AFTER the key
@@ -144,6 +145,7 @@ int keycombo_format(const struct keycombo *c, char *out, size_t cap) {
     for (int i = 0; i < NAME_COUNT; i++)
         if (NAMES[i].key == c->key) { kname = NAMES[i].name; break; }
     if (!kname) {
+        if (c->key > 0xFF) return 0;   // a special with no name: unspellable
         one[0] = (char)k_toupper((unsigned char)c->key);
         one[1] = '\0';
         kname = one;
@@ -187,7 +189,7 @@ int keycombo_matches(const struct keycombo *c, int key, uint8_t mods) {
         // out here instead, which is what this did first, made every
         // Ctrl combination with a non-letter unmatchable: Ctrl+Shift+Esc
         // was a default that could never fire.
-        int lower = k_tolower((unsigned char)c->key);
+        int lower = c->key < 0x80 ? k_tolower((unsigned char)c->key) : 0;
         if (lower >= 'a' && lower <= 'z') return key == (lower - 'a' + 1);
         return key == c->key;
     }

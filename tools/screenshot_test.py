@@ -298,7 +298,7 @@ def rect_of(lay, name):
 def open_overlay(dbg, timeout=10.0):
     """PrtSc, and wait for the fullscreen overlay. Its content rect."""
     dbg.logs("screenshot:", clear=True)
-    dbg.send("gui key 0xb9")
+    dbg.send("gui key 0xf7b9")
     deadline = time.time() + timeout
     while time.time() < deadline:
         w = [x for x in dbg.windows() if x["title"] == "Screenshot"]

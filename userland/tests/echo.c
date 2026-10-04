@@ -9,12 +9,9 @@
 // Own copy of kernel/include/api/keyboard.h's IS_PRINTABLE_KEY() -- this
 // file is a freestanding ring-3 userland program built against no
 // kernel headers at all (see syscall_abi.h being the only include
-// above), so it can't share that macro directly. Keep the codepoint
-// list in sync with keyboard.h's CHAR_*/IS_NORDIC_CHAR() if it ever
-// changes. See docs/decisions.md's Nordic-keyboard entry.
-#define ECHO_IS_NORDIC_CHAR(k) ((k) == 0xC4 || (k) == 0xD6 || (k) == 0xC5 || \
-                                 (k) == 0xE4 || (k) == 0xF6 || (k) == 0xE5)
-#define ECHO_IS_PRINTABLE_KEY(k) (((k) >= 32 && (k) < 127) || ECHO_IS_NORDIC_CHAR(k))
+// above), so it can't share that macro directly: printable ASCII or
+// Latin-1 0xA0-0xFF. See docs/decisions/drivers.md's Nordic-keyboard entry.
+#define ECHO_IS_PRINTABLE_KEY(k) (((k) >= 32 && (k) < 127) || ((k) >= 0xA0 && (k) <= 0xFF))
 
 
 

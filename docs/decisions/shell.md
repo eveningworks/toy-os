@@ -80,11 +80,13 @@ Ctrl/Alt went the other way, to what a real terminal does:
    they *are* those keys, with no special-casing, exactly as in bash.
    Distinct key codes would have needed explicit aliases for all three
    to behave the way users expect.
-2. **No new code space, no truncation audit.** The existing `KEY_*`
-   codes occupy 0x91-0xA3 and the Nordic letters 0xC4-0xF6; a
+2. **No new code space, no truncation audit.** At the time the `KEY_*`
+   codes occupied 0x91-0xA3 and the Nordic letters 0xC4-0xF6; a
    `KEY_CTRL_*`/`KEY_ALT_*` block would have had to go above 0xFF,
    which means auditing every `(char)key` cast in the tree -- a bug
-   class this project has been bitten by before.
+   class this project has been bitten by before. (Full Latin-1 forced
+   that audit anyway on 2026-10-04: the specials are 0xF791-0xF7B9 now,
+   docs/decisions/drivers.md's Nordic-keyboard entry.)
 3. **The decoder is one a serial terminal would need anyway**, so the
    line editor's ESC handling isn't throwaway.
 
@@ -674,9 +676,10 @@ with `USERLAND_CFLAGS` into `libuapp.a`. It needed no change to
 sooner appears to be that nobody checked.
 
 **Why the raw fd-0 stream needs no translation.** `SYS_READ` on fd 0
-hands back one byte per key, with specials as 0x91-0xA6 -- which *are*
-the `KEY_*` codes `keyboard.h` defines and `kline_key()` already
-switches on. So a byte off the console goes straight in. That identity
+handed back one byte per key, with specials as 0x91-0xA6 -- which *were*
+the `KEY_*` codes `keyboard.h` defined and `kline_key()` already
+switched on. (Superseded: fd 0 carries ANSI now, decoded by
+`kline_feed()`, and the specials are above 0xFF.) So a byte off the console goes straight in. That identity
 is load-bearing: a translation layer between the two would be a third
 place for the keymap to drift.
 

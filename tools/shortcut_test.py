@@ -46,8 +46,8 @@ DEFAULTS = [
     ("file_manager", "Super+E",       "gui key e super",        "/bin/wm/apps/files"),
     ("terminal",     "Ctrl+Alt+T",    "gui key 0x14 ctrl alt",  "/bin/wm/apps/uterm"),
     ("screenshot",   "Shift+Super+S", "gui key S shift super",  "/bin/wm/apps/screenshot"),
-    ("screenshot",   "Print Screen",  "gui key 0xB9",           "/bin/wm/apps/screenshot"),
-    ("task_manager", "Ctrl+Alt+Del",  "gui key 0x99 ctrl alt",  "/bin/wm/system/taskmgr"),
+    ("screenshot",   "Print Screen",  "gui key 0xf7b9",           "/bin/wm/apps/screenshot"),
+    ("task_manager", "Ctrl+Alt+Del",  "gui key 0xf799 ctrl alt",  "/bin/wm/system/taskmgr"),
 ]
 
 
@@ -148,19 +148,19 @@ def run(dbg, qmp, res):
               not fired(dbg), "Super+Q is bound to nothing")
 
     # --- 3. Super alone is the Start menu; Super HELD is not ----------
-    dbg.send("gui key 0xA6"); dbg.send("gui key 0xA6 up"); time.sleep(1.5)
+    dbg.send("gui key 0xf7a6"); dbg.send("gui key 0xf7a6 up"); time.sleep(1.5)
     res.check("tapping Super opens the Start menu", menu_open(dbg) is True,
               f"start_menu={menu_open(dbg)}")
-    dbg.send("gui key 0xA6"); dbg.send("gui key 0xA6 up"); time.sleep(1.5)
+    dbg.send("gui key 0xf7a6"); dbg.send("gui key 0xf7a6 up"); time.sleep(1.5)
     res.check("...and tapping it again closes it", menu_open(dbg) is False,
               f"start_menu={menu_open(dbg)}")
 
     # **THE ONE THAT MAKES SUPER+E POSSIBLE AT ALL.** Super used to act
     # on the PRESS, so every Super shortcut would open the menu too.
     dbg.logs("wm: shortcut ->", clear=True)
-    dbg.send("gui key 0xA6")
+    dbg.send("gui key 0xf7a6")
     dbg.send("gui key e super")
-    dbg.send("gui key 0xA6 up")
+    dbg.send("gui key 0xf7a6 up")
     got = fired(dbg)
     res.check("Super HELD over another key does not open the Start menu",
               menu_open(dbg) is False and "/bin/wm/apps/files" in got,
@@ -262,7 +262,7 @@ def run_rebinding(dbg, qmp, res):
               "stored and reloaded but the key does nothing")
 
     dbg.logs("wm: shortcut ->", clear=True)
-    dbg.send("gui key 0x99 ctrl alt")
+    dbg.send("gui key 0xf799 ctrl alt")
     res.check("...and the OLD key no longer does", not fired(dbg),
               "Ctrl+Alt+Delete still launches the task manager")
 

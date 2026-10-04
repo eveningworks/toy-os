@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "ui/ugfx.h"
 #include "ui/uui_describe.h"
-#include "keyboard.h"   // KEY_MOD_*, IS_NORDIC_CHAR
+#include "keyboard.h"   // KEY_MOD_*, IS_PRINTABLE_KEY
 
 // uui_widget_ops -- the ONE table a widget exports to be handled
 // generically: laid out, drawn, hit-tested, focused.
@@ -263,7 +263,7 @@ extern const struct uui_widget_ops uui_custom_ops;
 // Qt and GTK draw the same line. AltGr is not Alt -- it picks characters.
 static inline int uui_key_is_shortcut(int key, unsigned mods) {
     return (mods & (KEY_MOD_CTRL | KEY_MOD_ALT)) &&
-           ((key >= 32 && key < 127) || IS_NORDIC_CHAR(key));
+           IS_PRINTABLE_KEY(key);
 }
 
 #endif

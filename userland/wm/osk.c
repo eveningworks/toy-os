@@ -39,8 +39,8 @@ static int g_pressed_row = -1, g_pressed_col = -1;
 struct osk_key {
     const char *cap;      // label; the shifted label is derived for a letter
     const char *cap_sh;   // label when shift is armed, or 0 for `cap`
-    short code;           // an ASCII character, or a KEY_* code
-    short code_sh;        // shifted, or 0 for `code`
+    int code;             // an ASCII character, or a KEY_* code (16 bits)
+    int code_sh;          // shifted, or 0 for `code`
     unsigned char mod;    // nonzero: a sticky modifier, and `code` is unused
     unsigned char span;
 };

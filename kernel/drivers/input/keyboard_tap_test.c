@@ -24,6 +24,7 @@
 #include "query.h"
 #include "scheduler.h"
 #include "ktest.h"
+#include "keyboard.h"
 
 // Comfortably more than the ring holds, so the wrap is forced rather
 // than hoped for. Not derived from TAP_MAX: that is private to
@@ -105,7 +106,7 @@ KTEST("kbdtap", "an extended key carries the prefix as a flag, not as a record")
     int was = tap_arm();
     int before = tap_records();
     kbdtap_key(0x48, 1, 103, 1, 0);      // Up: e0 48 -> INPUT_KEY_UP
-    kbdtap_produced(0x91);               // KEY_ARROW_UP
+    kbdtap_produced(KEY_ARROW_UP);
     int after = tap_records();
     struct query_kbdtap r;
     tap_read(after - 1, &r);

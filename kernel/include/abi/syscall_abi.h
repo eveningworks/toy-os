@@ -214,13 +214,10 @@
                       // a console has no end of file, and reporting one
                       // would tell a shell its input had closed.
                       //
-                      // Raw, one byte per key, exactly the code
-                      // keyboard.h's KEY_* namespace uses (specials are
-                      // 0x91-0xA6) -- no echo, no line editing, no
-                      // escape-sequence translation. All three are a
-                      // line discipline, which belongs above a real TTY
-                      // (docs/roadmap.md), so a reader echoes what it
-                      // reads and does its own editing.
+                      // Bytes from the console TERMINAL (kernel/tty/):
+                      // a character is one byte of Latin-1 and a special
+                      // key an ANSI sequence (api/termkey.h); what echo
+                      // and editing apply is that terminal's termios.
                       //
                       // THE FIRST fd-0 READ CLAIMS THE CONSOLE: the
                       // kernel shell stops taking keys until the

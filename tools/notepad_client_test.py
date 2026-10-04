@@ -205,7 +205,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
     # the caret still at the end would differ from the reopened render
     # by exactly one caret bar -- a real difference, but not one that
     # says anything about the round trip.
-    key(dbg, "0x97")  # Home
+    key(dbg, "0xf797")  # Home
     dbg.settle()
     time.sleep(0.5)
     typed = text_pixels(qmp, tmp, "np_typed.png", box)
@@ -495,7 +495,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
     dbg.settle()
     time.sleep(0.3)
 
-    dbg.send("gui key 0xa5 alt")
+    dbg.send("gui key 0xf7a5 alt")
     dbg.settle()
     time.sleep(0.8)
     res.check("Alt+F4 on a MODIFIED document does not close it",
@@ -638,7 +638,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
     type_text(dbg, "qq")
     dbg.settle()
     time.sleep(0.3)
-    dbg.send("gui key 0xa5 alt")
+    dbg.send("gui key 0xf7a5 alt")
     dbg.settle()
     time.sleep(0.8)
     btns = dialog_buttons(dbg)
@@ -662,7 +662,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
                   "cancelled")
 
     # Ask again, and take the other answer.
-    dbg.send("gui key 0xa5 alt")
+    dbg.send("gui key 0xf7a5 alt")
     dbg.settle()
     time.sleep(0.8)
     btns = dialog_buttons(dbg)
@@ -738,7 +738,7 @@ def history_and_find_checks(dbg, res):
     res.check("find counts every match", matches == 3, f"matches {matches}")
     key(dbg, ESC)
 
-    dbg.send("gui key 0xa5 alt")              # Alt+F4 -> ask -> Don't Save
+    dbg.send("gui key 0xf7a5 alt")              # Alt+F4 -> ask -> Don't Save
     dbg.settle()
     time.sleep(0.8)
     btns = dialog_buttons(dbg)

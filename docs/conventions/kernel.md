@@ -1681,6 +1681,25 @@ last given. And **an absolute device is not scaled by speed or
 acceleration**: those turn a relative device's counts into comfortable
 motion, while an absolute device is already saying where the pointer IS.
 
+## A KEY IS AN `int`: A CHARACTER IS ONE LATIN-1 BYTE, A `KEY_*` SPECIAL IS ABOVE 0xFF
+
+`api/keyboard.h`. What the keyboard delivers -- to the console's queue,
+in a `WIN_EV_KEY`, through a `struct keycombo` -- is either a character,
+0x01-0xFF in Latin-1, or a `KEY_*` special at 0xF791-0xF7B9. **Store it
+in an `int` or a `uint16_t`, never a `uint8_t` or a `char`**: a byte
+silently turns Home into the character 0x97, and a signed `char` makes
+every accented letter negative, so a `>= 32` gate drops it. Test with
+`IS_PRINTABLE_KEY()` (text) and `IS_SPECIAL_KEY()` (a special), never a
+hand-written range. Below a terminal it is bytes again -- a special is
+an ANSI sequence by then (`api/termkey.h`) -- so `read()` on fd 0 is
+still a byte stream. Why the specials moved: docs/decisions/drivers.md,
+the Nordic-keyboard entry.
+
+**A DEAD KEY TYPES NOTHING UNTIL THE NEXT KEY.** Composition is the
+layout's (`keyboard_layout_compose()`), behind every driver, so a test
+that presses a dead key and expects a character back on that press is
+wrong; one that switches layouts mid-accent loses the accent.
+
 ## THE KERNEL KEEPS A ROLLING LOG OF KEY EVENTS, AND `kbd` PRINTS IT
 
 `kernel/include/kernel/keyboard_tap.h`, read from ring 3 through

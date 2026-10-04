@@ -109,10 +109,9 @@ int main(void) {
     // --- 2. it runs what is typed ------------------------------------
     //
     // **NO `set -o emacs`, DELIBERATELY.** Editing is opt-in upstream,
-    // and /bin/dash's entry turns it on by default because this
-    // system's terminals send specials as raw 0x91-0xA6 bytes -- with
-    // no editor an arrow key types blanks into the line, which is how
-    // that was found. Sending `set -o emacs` here would test the shim
+    // and /bin/dash's entry turns it on by default: with no editor an
+    // arrow key lands in the line (once as blanks, which is how that
+    // was found). Sending `set -o emacs` here would test the shim
     // and leave the DEFAULT untested, and the default is what a person
     // meets.
     if (put(master, "echo alpha\n") < 0) return 4;

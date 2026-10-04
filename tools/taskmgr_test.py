@@ -56,8 +56,8 @@ TASKMGR = "/bin/wm/system/taskmgr"
 VICTIM = "/bin/wm/demos/uidemo"   # has a desktop entry, so it is an APP
 SERVICE = "ntpd"                  # idle unless system.ntp is on: safe to stop
 
-K_DOWN = "0x92"
-K_UP = "0x91"
+K_DOWN = "0xf792"
+K_UP = "0xf791"
 K_BACKSPACE = "0x08"
 
 

@@ -65,6 +65,8 @@ whenever a headline here tells you something you did not already know.
 - **INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event
   is evdev -- including `/etc/kbs`, so only the PS/2 driver ever sees a
   scancode**
+- **A KEY IS AN `int`: A CHARACTER IS ONE LATIN-1 BYTE, A `KEY_*` SPECIAL
+  IS ABOVE 0xFF**
 - **`kbd` PRINTS EVERY STAGE OF A KEYPRESS, AND ITS KERNEL LOG IS OFF BY
   DEFAULT**
 - **A LOG LINE'S LEVEL ARRIVES IN-BAND (`klog_printf(KLOG_ERR "...")`),

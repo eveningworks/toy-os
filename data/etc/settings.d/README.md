@@ -53,6 +53,7 @@ Choice.slow=Slow
 | `Applies` | `now` (default) or `reboot` — whether the change takes effect immediately. |
 | `Advanced` | `1` keeps it behind a disclosure in a UI that has one. |
 | `Order` | An integer, lower first, for where the setting sits on its page. Unordered settings follow. |
+| `Sort` | `label` lists an enum's choices A to Z by display name -- for an UNORDERED set whose registry order means nothing (`system.keyboard_layout`, whose order is `/etc/kbs`'s directory order). An ordered enum (off/low/high) never carries it. |
 | `Label` | **Group files only** (`group.<category>.<group>`), which carry a `Label` and a `Description` for the PAGE rather than for a setting. |
 
 A file named `group.<category>.<group>` describes the page itself —

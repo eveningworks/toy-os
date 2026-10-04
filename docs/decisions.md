@@ -316,7 +316,7 @@ first before re-litigating it from scratch.
 - [DMA needs PCI Bus Master Enable, not just a programmed descriptor](decisions/drivers.md#dma-needs-pci-bus-master-enable-not-just-a-programmed-descriptor)
 - [The DMA bounce buffer is 64KB because that's one PRD, not because 64KB benchmarked well](decisions/drivers.md#the-dma-bounce-buffer-is-64kb-because-thats-one-prd-not-because-64kb-benchmarked-well)
 - [PCI enumeration is a brute-force flat scan, not bridge-aware recursion](decisions/drivers.md#pci-enumeration-is-a-brute-force-flat-scan-not-bridge-aware-recursion)
-- [Nordic keyboard/character support: Latin-1, not UTF-8; 3 remapped keys, not a full layout](decisions/drivers.md#nordic-keyboardcharacter-support-latin-1-not-utf-8-3-remapped-keys-not-a-full-layout)
+- [Nordic keyboard/character support: Latin-1, not UTF-8](decisions/drivers.md#nordic-keyboardcharacter-support-latin-1-not-utf-8)
 - [Keyboard layouts are data files (`/etc/kbs/<name>`) generated from Linux's own XKB data, not a compiled-in enum](decisions/drivers.md#keyboard-layouts-are-data-files-etckbsname-generated-from-linuxs-own-xkb-data-not-a-compiled-in-enum)
 - [GDB debugging: QEMU's stub under QEMU, the kernel's own stub on bare metal](decisions/drivers.md#gdb-debugging-qemus-stub-under-qemu-the-kernels-own-stub-on-bare-metal)
 - [ATA's waits are bounded by wall-clock in one context and a spin count in the other](decisions/drivers.md#atas-waits-are-bounded-by-wall-clock-in-one-context-and-a-spin-count-in-the-other)

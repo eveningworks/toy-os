@@ -2,9 +2,9 @@
 // system's own line editor.
 //
 // TWO HALVES. `el_gets()` is a front end over kernel/lib/klineedit.c --
-// it reads bytes off fd 0, feeds them in as-is (specials arrive as the
-// 0x91-0xA6 KEY_* codes klineedit already switches on, which is what
-// makes a translation layer unnecessary) and paints with
+// it reads bytes off fd 0, feeds them to kline_feed() (which decodes a
+// special key's ANSI sequence into the KEY_* klineedit switches on) and
+// paints with
 // userland/lib/uline.c, the same paint /bin/tosh uses. The other half is
 // a history list, because `fc` walks one.
 //

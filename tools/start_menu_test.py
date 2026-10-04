@@ -89,17 +89,17 @@ import port_guard  # noqa: E402
 from qmp_test import QMPSession  # noqa: E402
 from gui_debug import DebugConsole, enter_gui  # noqa: E402
 
-KEY_SUPER = "0xA6"
+KEY_SUPER = "0xf7a6"
 KEY_ESC = "0x1b"
-KEY_DOWN = "0x92"
-KEY_UP = "0x91"
-KEY_RIGHT = "0x96"
+KEY_DOWN = "0xf792"
+KEY_UP = "0xf791"
+KEY_RIGHT = "0xf796"
 KEY_ENTER = "0x0a"
-KEY_F4 = "0xA5"
-KEY_HOME = "0x97"
-KEY_END = "0x98"
-KEY_LEFT = "0x95"
-KEY_SHIFT_RIGHT = "0x9D"
+KEY_F4 = "0xf7a5"
+KEY_HOME = "0xf797"
+KEY_END = "0xf798"
+KEY_LEFT = "0xf795"
+KEY_SHIFT_RIGHT = "0xf79d"
 
 class Result:
     def __init__(self):

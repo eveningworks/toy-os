@@ -173,11 +173,11 @@ def main():
     check("clicking a link opens its page", lay.get("here") == "kernel",
           f"here={lay.get('here')}")
     check("...and Back is now possible", lay.get("back") == 1)
-    dbg.key("0x95", mods="alt")
+    dbg.key("0xf795", mods="alt")
     lay = wait(dbg, lambda l: l.get("here") == HOME)
     check("Alt+Left goes back", lay.get("here") == HOME and lay.get("fwd") == 1,
           f"here={lay.get('here')} fwd={lay.get('fwd')}")
-    dbg.key("0x96", mods="alt")
+    dbg.key("0xf796", mods="alt")
     lay = wait(dbg, lambda l: l.get("here") == "kernel")
     check("Alt+Right goes forward", lay.get("here") == "kernel", f"here={lay.get('here')}")
     click(dbg, win, *centre(lay["tool2"]))
@@ -225,7 +225,7 @@ def main():
           lay["rows"] < rows_open and lay.get("sel") == "Getting started"
           and lay.get("here") == HOME,
           f"rows {rows_open} -> {lay['rows']} sel={lay.get('sel')} here={lay.get('here')}")
-    dbg.key("0x92")
+    dbg.key("0xf792")
     lay = wait(dbg, lambda l: l.get("here") not in (HOME, None))
     check("...and Down moves on from it", lay.get("here") not in (HOME, None),
           f"here={lay.get('here')}")
@@ -242,10 +242,10 @@ def main():
     check("a category heading opens its own page of links",
           len(lay["links"]) >= 3, f"here={cat} links {len(lay['links'])}")
     rows1 = lay["rows"]
-    dbg.key("0x96")
+    dbg.key("0xf796")
     lay = wait(dbg, lambda l: l["rows"] > rows1)
     check("Right expands it", lay["rows"] > rows1, f"rows {rows1} -> {lay['rows']}")
-    dbg.key("0x95")
+    dbg.key("0xf795")
     lay = wait(dbg, lambda l: l["rows"] == rows1)
     check("Left collapses it", lay["rows"] == rows1, f"rows -> {lay['rows']}")
     return finish()

@@ -57,8 +57,8 @@ static struct query_kbdtap g_batch[BATCH];
 // table cannot drift out of step with the header it is naming. Short
 // names on purpose: this is a column, and "SHIFT-LEFT" beside "'a'" in
 // the same column is what makes a log readable at a glance.
-#define KEY_NAME_BASE KEY_ARROW_UP     // 0x91, the lowest KEY_* code
-#define KEY_NAME_TOP  KEY_PRINT_SCREEN // 0xB9, the highest
+#define KEY_NAME_BASE KEY_ARROW_UP     // the lowest KEY_* code
+#define KEY_NAME_TOP  KEY_PRINT_SCREEN // the highest
 
 static const char *const g_key_names[KEY_NAME_TOP - KEY_NAME_BASE + 1] = {
     [KEY_ARROW_UP        - KEY_NAME_BASE] = "UP",
@@ -115,7 +115,7 @@ static const char *const g_key_names[KEY_NAME_TOP - KEY_NAME_BASE + 1] = {
 // it "^I" would suggest a distinction the wire does not carry.
 static void code_name(unsigned code, char *out, int cap) {
     if (code >= 32 && code < 127) { snprintf(out, cap, "'%c'", (char)code); return; }
-    if (IS_NORDIC_CHAR(code))     { snprintf(out, cap, "'%c'", (char)code); return; }
+    if (IS_LATIN1_CHAR(code))     { snprintf(out, cap, "'%c'", (char)code); return; }
     switch (code) {
     case 0x08: snprintf(out, cap, "BS");  return;
     case 0x09: snprintf(out, cap, "TAB"); return;

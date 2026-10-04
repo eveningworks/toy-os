@@ -937,7 +937,7 @@ def run(dbg, qmp, tmp, res):
     if fi:
         dbg.click(fi["x"] + fi["w"] // 2, fi["y"] + fi["w"] // 2)
         time.sleep(0.3)
-        dbg.key("0x99")   # Delete
+        dbg.key("0xf799")   # Delete
         time.sleep(0.5)
         reply = dbg.send("gui dialog --json") or ""
         start = reply.rfind('{"open"')

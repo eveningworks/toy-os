@@ -74,8 +74,8 @@ SPAWN_PATH = "/tests/winclient"
 SPAWN_TIMEOUT_S = 15.0
 
 # api/keyboard.h. The modifier codes exist ONLY on the transition path.
-KEY_CTRL = 0xA8
-KEY_SHIFT = 0xA7
+KEY_CTRL = 0xf7a8
+KEY_SHIFT = 0xf7a7
 KEY_MOD_CTRL, KEY_MOD_ALT = 0x02, 0x04   # api/keyboard.h
 
 
@@ -207,8 +207,8 @@ def run(dbg, qmp, res):
     for qcode, want, name in (
         ("kp_7", ord("7"), "keypad 7 types a 7"),
         ("kp_enter", ord("\n"), "keypad Enter is the same newline as Enter"),
-        ("f6", 0xAD, "F6 (quicksave in Doom) reports a code"),
-        ("insert", 0xB3, "Insert reports a code"),
+        ("f6", 0xf7ad, "F6 (quicksave in Doom) reports a code"),
+        ("insert", 0xf7b3, "Insert reports a code"),
     ):
         qmp.send_key(qcode)
         settle_input(dbg)

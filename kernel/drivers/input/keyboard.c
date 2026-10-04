@@ -86,10 +86,10 @@ static uint8_t current_mods(void) {
 // A key has been decoded. Hand it to the console terminal, which runs
 // the line discipline over it and queues what a reader should see.
 //
-// EVERY CODE THIS DRIVER PRODUCES FITS IN A BYTE -- the specials
-// included (KEY_ARROW_* and friends are 0x91-0xA6) -- which is what lets
-// a terminal be a byte stream and is the same fact SYS_READ's fd-0
-// contract already states.
+// EVERY CHARACTER THIS DRIVER PRODUCES FITS IN A BYTE (Latin-1); a
+// KEY_* special does not (api/keyboard.h), and the terminal turns it
+// into an ANSI sequence before it reaches fd 0 -- which is what lets a
+// terminal be a byte stream, as SYS_READ's fd-0 contract states.
 //
 // The wake that used to be here is tty_enqueue()'s now, for the same
 // reason and with the same restraint: this runs in the IRQ1 handler, so
@@ -111,7 +111,7 @@ static uint8_t current_mods(void) {
 // range-checked away rather than wrapped, because a driver reporting an
 // unexpected keycode must not be able to write past this array.
 #define KEY_DOWN_MAX 128
-static uint8_t down_code[KEY_DOWN_MAX];
+static uint16_t down_code[KEY_DOWN_MAX]; // a KEY_* special is 16 bits
 
 // Sized so it cannot realistically fill: a human cannot have 32 keys
 // down, and the compositor drains this every frame. On overflow the
@@ -219,14 +219,14 @@ static void ring_push(uint16_t c) {
     // ESC -- those two pushes share one keycode and one edge.
     if (emitting_keycode < KEY_DOWN_MAX &&
         (!down_code[emitting_keycode] || !first_push_done)) {
-        down_code[emitting_keycode] = (uint8_t)c;
+        down_code[emitting_keycode] = c;
     }
     first_push_done = 1;
     // The tap's view of the SAME push, so `kbd` can show a keycode and
     // the character it turned into on one line. Here rather than at the
     // ~20 call sites for the reason `emitting_keycode` is here.
     kbdtap_produced(c);
-    tty_input(tty_console(), (uint8_t)c, current_mods());
+    tty_input(tty_console(), c, current_mods());
 }
 
 // Defined below, beneath keyboard_key_event() which is its public face.
@@ -535,7 +535,20 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     default: break;
     }
 
-    char c = keyboard_layout_translate_caps(keycode, shift_pressed, altgr_pressed, caps_lock);
+    int sym = keyboard_layout_translate_caps(keycode, shift_pressed, altgr_pressed, caps_lock);
+    if (!sym) return;
+
+    // DEAD KEYS COMPOSE HERE, for every driver at once -- the state is the
+    // layout's (keyboard_layout.h). A key with Ctrl or Alt held is a
+    // shortcut, not text: it neither composes nor disturbs a pending
+    // accent, and a dead key under it is its accent alone.
+    if (!ctrl_pressed && !alt_pressed) {
+        uint8_t out[2];
+        int n = keyboard_layout_compose(sym, out);
+        for (int i = 0; i < n; i++) ring_push(out[i]);
+        return;
+    }
+    int c = keyboard_layout_spacing(sym);
     if (!c) return;
 
     // Ctrl folds a letter to its control code (Ctrl-A -> 0x01), which
@@ -552,13 +565,13 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     // else. Encoding it here reached windows too: Alt+Space in Doom was
     // an Esc press that never came up.
     if (ctrl_pressed) {
-        int lower = k_tolower((unsigned char)c);
+        int lower = c < 0x80 ? k_tolower((unsigned char)c) : c;
         if (lower >= 'a' && lower <= 'z') {
             ring_push((uint16_t)(lower - 'a' + 1));
             return;
         }
     }
-    ring_push((uint8_t)c);
+    ring_push((uint16_t)c);
 }
 
 // See keyboard.h. Not static state the shell can reach around: the
@@ -707,9 +720,8 @@ void keyboard_read_line(char *buf, unsigned int len) {
     for (;;) {
         int c = keyboard_getchar();
         // Ignore special keys (arrows, F2/F3, ...) in this simple reader,
-        // but let Nordic letters through -- they also live at codepoints
-        // >= 128, just not in the KEY_* range those special keys use.
-        if (c >= 128 && !IS_NORDIC_CHAR(c)) continue;
+        // but let Latin-1 letters through.
+        if (c >= 128 && !IS_LATIN1_CHAR(c)) continue;
 
         if (c == '\n') {
             vga_putc('\n');

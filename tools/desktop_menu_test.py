@@ -270,7 +270,7 @@ def check_rename(dbg, res):
         res.check("rename: the folder is on the desktop", False)
         return
     dbg.click(ic["x"] + ic["w"] // 2, ic["y"] + ic["w"] // 2)
-    dbg.key("0x9a")                       # F2
+    dbg.key("0xf79a")                       # F2
     res.check("F2 opens the caption for editing", (icon(dbg, "Rename me") or {}).get("renaming") is True)
     dbg.key("q")
     dbg.key("0x1b")
@@ -279,7 +279,7 @@ def check_rename(dbg, res):
               not any(i.get("renaming") for i in icons(dbg)))
     ic = icon(dbg, "Rename me")
     dbg.click(ic["x"] + ic["w"] // 2, ic["y"] + ic["w"] // 2)
-    dbg.key("0x9a")
+    dbg.key("0xf79a")
     for c in "Done":
         dbg.key(c)
     dbg.key("0x0a")
@@ -292,7 +292,7 @@ def check_rename(dbg, res):
     ic = icon(dbg, "Terminal")
     if ic:
         dbg.click(ic["x"] + ic["w"] // 2, ic["y"] + ic["w"] // 2)
-        dbg.key("0x9a")
+        dbg.key("0xf79a")
         for c in "Shell":
             dbg.key(c)
         dbg.key("0x0a")

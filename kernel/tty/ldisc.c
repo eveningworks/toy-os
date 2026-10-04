@@ -241,11 +241,10 @@ int tty_read_key(struct tty *t, uint8_t *out_mods) {
     uint32_t ev;
     if (!dequeue(t, &ev)) return -1;
     if (out_mods) *out_mods = (uint8_t)(ev >> 16);
-    // EVERY CODE THIS TERMINAL CARRIES FITS IN A BYTE, specials
-    // included (KEY_ARROW_* and friends are 0x91-0xA6) -- which is the
-    // same fact SYS_READ's fd-0 contract already states, and is what
-    // lets a terminal be a byte stream at all. What this adds over
-    // tty_read() is the MODIFIER word, which a byte cannot express and
-    // which the ring-0 GUI readers need to tell Shift-Tab from Tab.
-    return (int)(ev & 0xFF);
+    // THE WHOLE KEY: below the bypass everything queued is a byte, but a
+    // bypassed terminal queues KEY_* specials, which are 16 bits
+    // (api/keyboard.h). What this adds over tty_read() is that, and the
+    // MODIFIER word, which the ring-0 GUI readers need to tell Shift-Tab
+    // from Tab.
+    return (int)(ev & 0xFFFF);
 }

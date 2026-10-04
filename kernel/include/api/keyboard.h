@@ -3,19 +3,30 @@
 
 #include <stdint.h>
 
-// Special key codes pushed into the input stream alongside normal ASCII.
-// Chosen outside the 0-127 ASCII range so they can't collide with real chars.
-#define KEY_ARROW_UP    0x91
-#define KEY_ARROW_DOWN  0x92
-#define KEY_PAGE_UP     0x93
-#define KEY_PAGE_DOWN   0x94
-#define KEY_ARROW_LEFT  0x95
-#define KEY_ARROW_RIGHT 0x96
-#define KEY_HOME        0x97
-#define KEY_END         0x98
-#define KEY_DELETE      0x99
-#define KEY_F2          0x9A
-#define KEY_F3          0x9B
+// Special key codes pushed into the input stream alongside characters.
+//
+// **THEY LIVE AT 0xF791-0xF7B9, ABOVE EVERY CHARACTER THE KEYBOARD
+// TYPES**, in Unicode's Private Use Area -- the block macOS uses for its
+// function keys (NSUpArrowFunctionKey is 0xF700). They were 0x91-0xB9
+// until the layouts reached all of Latin-1, whose 0xA0-0xFF they
+// overlapped: AltGr+1 on a Spanish keyboard is 0xA1, which was Shift+End.
+// The low byte is the old code, so a key truncated to a byte somewhere
+// still lands outside ASCII rather than on Ctrl-C. A KEY IS AN `int` (or
+// at least a uint16_t) EVERYWHERE; a `uint8_t` key is a bug.
+#define KEY_SPECIAL_FIRST     KEY_ARROW_UP
+#define KEY_SPECIAL_LAST      KEY_PRINT_SCREEN
+#define IS_SPECIAL_KEY(k)     ((k) >= KEY_SPECIAL_FIRST && (k) <= KEY_SPECIAL_LAST)
+#define KEY_ARROW_UP    0xF791
+#define KEY_ARROW_DOWN  0xF792
+#define KEY_PAGE_UP     0xF793
+#define KEY_PAGE_DOWN   0xF794
+#define KEY_ARROW_LEFT  0xF795
+#define KEY_ARROW_RIGHT 0xF796
+#define KEY_HOME        0xF797
+#define KEY_END         0xF798
+#define KEY_DELETE      0xF799
+#define KEY_F2          0xF79A
+#define KEY_F3          0xF79B
 // Shift+arrow/Home/End -- distinct codes rather than a separate
 // "modifier held" query, so apps that want selection (Notepad) just
 // switch on one more case, and apps that don't (Terminal, the CLI
@@ -25,25 +36,25 @@
 // for a letter key), not derived later from some live "is shift down
 // right now" state an app would have to poll itself -- see
 // docs/decisions.md for why that timing matters.
-#define KEY_SHIFT_ARROW_LEFT  0x9C
-#define KEY_SHIFT_ARROW_RIGHT 0x9D
-#define KEY_SHIFT_ARROW_UP    0x9E
-#define KEY_SHIFT_ARROW_DOWN  0x9F
-#define KEY_SHIFT_HOME        0xA0
-#define KEY_SHIFT_END         0xA1
+#define KEY_SHIFT_ARROW_LEFT  0xF79C
+#define KEY_SHIFT_ARROW_RIGHT 0xF79D
+#define KEY_SHIFT_ARROW_UP    0xF79E
+#define KEY_SHIFT_ARROW_DOWN  0xF79F
+#define KEY_SHIFT_HOME        0xF7A0
+#define KEY_SHIFT_END         0xF7A1
 
 // Ctrl+Left/Right -- word motion in any readline-style line editor
 // (kernel/lib/klineedit.c). Distinct codes for the same reason the
 // Shift+arrow family above has them.
-#define KEY_CTRL_ARROW_LEFT   0xA2
-#define KEY_CTRL_ARROW_RIGHT  0xA3
+#define KEY_CTRL_ARROW_LEFT   0xF7A2
+#define KEY_CTRL_ARROW_RIGHT  0xF7A3
 
 // F10 -- focuses an application's menu bar (ui/uui_menubar.h), which is
 // what it does on Windows and in KDE. Alt+letter mnemonics are possible
 // now that Alt reaches a window as a bit (see "Ctrl and Alt" below) --
 // they were not while it was an ESC prefix -- but are not built; F10 is
 // the binding both of those desktops offer anyway.
-#define KEY_F10               0xA4
+#define KEY_F10               0xF7A4
 
 // F4 -- exists for Alt+F4, which CLOSES the focused window. That is a
 // window-manager shortcut (userland/wm/wm.c intercepts it before routing
@@ -52,7 +63,7 @@
 // given a combined KEY_ALT_F4 code the way the Shift+arrow family was:
 // nothing is folded for a function key, so the modifier bits are usable
 // here, and this generalises to a future Alt+F<n> for free.
-#define KEY_F4                0xA5
+#define KEY_F4                0xF7A5
 
 // Super (the Windows/Meta key). **IT IS BOTH A MODIFIER AND A KEY**,
 // which is the one place this driver reports a key twice over, and the
@@ -73,7 +84,7 @@
 //
 // Left and right Super send the SAME code. No desktop distinguishes
 // them, and the driver already makes that call for left/right Ctrl.
-#define KEY_SUPER             0xA6
+#define KEY_SUPER             0xF7A6
 
 // --- THE FOUR MODIFIER KEYS, AS KEYS ---------------------------------
 //
@@ -94,10 +105,10 @@
 // reason Super does not distinguish sides. AltGr stays separate from
 // Alt, which is the one distinction this driver has always made and the
 // one that matters on a Nordic layout.
-#define KEY_SHIFT             0xA7
-#define KEY_CTRL              0xA8
-#define KEY_ALT               0xA9 // LEFT Alt (Meta)
-#define KEY_ALTGR             0xAA
+#define KEY_SHIFT             0xF7A7
+#define KEY_CTRL              0xF7A8
+#define KEY_ALT               0xF7A9 // LEFT Alt (Meta)
+#define KEY_ALTGR             0xF7AA
 
 // --- THE REST OF THE FUNCTION ROW ------------------------------------
 //
@@ -113,14 +124,14 @@
 // the block reads as a row. F12 has no caller here and is included
 // anyway -- it is the one key whose absence from a complete-looking run
 // of F1-F11 would look like an oversight rather than a decision.
-#define KEY_F1                0xAB
-#define KEY_F5                0xAC
-#define KEY_F6                0xAD
-#define KEY_F7                0xAE
-#define KEY_F8                0xAF
-#define KEY_F9                0xB0
-#define KEY_F11               0xB1
-#define KEY_F12               0xB2
+#define KEY_F1                0xF7AB
+#define KEY_F5                0xF7AC
+#define KEY_F6                0xF7AD
+#define KEY_F7                0xF7AE
+#define KEY_F8                0xF7AF
+#define KEY_F9                0xF7B0
+#define KEY_F11               0xF7B1
+#define KEY_F12               0xF7B2
 
 // --- AND THE REST OF THE KEYBOARD ------------------------------------
 //
@@ -143,13 +154,13 @@
 // the keyboard layer keeps (keyboard.c): it capitalises letter keys and
 // lights the PS/2 keyboard's LED. Num Lock and Scroll Lock change
 // nothing -- the keypad is always numeric (keyboard.c says why).
-#define KEY_INSERT            0xB3
-#define KEY_MENU              0xB4 // the "context menu" key, right of AltGr
-#define KEY_CAPS_LOCK         0xB5
-#define KEY_NUM_LOCK          0xB6
-#define KEY_SCROLL_LOCK       0xB7
-#define KEY_PAUSE             0xB8
-#define KEY_PRINT_SCREEN      0xB9
+#define KEY_INSERT            0xF7B3
+#define KEY_MENU              0xF7B4 // the "context menu" key, right of AltGr
+#define KEY_CAPS_LOCK         0xF7B5
+#define KEY_NUM_LOCK          0xF7B6
+#define KEY_SCROLL_LOCK       0xF7B7
+#define KEY_PAUSE             0xF7B8
+#define KEY_PRINT_SCREEN      0xF7B9
 
 // ---- Ctrl and Alt ----
 //
@@ -189,39 +200,22 @@
 // by POSITION, untouched by any modifier, reads keyboard_try_get_physical()'s
 // stream through the compositor (abi/win_proto.h's WIN_EV_KEY_PHYS).
 
-// The six Latin-1 codepoints this build's font (font_ttf.h,
-// tools/genttf.py) and `se` keyboard layout (keyboard.c) support --
-// uppercase/lowercase Å/Ä/Ö. Comfortably clear of both the ASCII range
-// and the KEY_* codes above (0x91-0x9B), so they can travel through the
-// same uint16_t input stream as everything else with no collision.
-// See docs/decisions.md's Nordic-keyboard entry for why Latin-1 over
-// UTF-8, and why this is 6 specific codepoints rather than the full
-// 0xA0-0xFF Latin-1 Supplement block.
-#define CHAR_A_DIAERESIS      0xC4 // Ä
-#define CHAR_O_DIAERESIS      0xD6 // Ö
-#define CHAR_A_RING           0xC5 // Å
-#define CHAR_A_DIAERESIS_LC   0xE4 // ä
-#define CHAR_O_DIAERESIS_LC   0xF6 // ö
-#define CHAR_A_RING_LC        0xE5 // å
-
-// True if `k` is one of the six Nordic letters above. A plain
-// six-way OR rather than a range check, since these codepoints (0xC4,
-// 0xD6, 0xC5, 0xE4, 0xF6, 0xE5) aren't contiguous.
-#define IS_NORDIC_CHAR(k) ((k) == CHAR_A_DIAERESIS || (k) == CHAR_O_DIAERESIS || \
-                            (k) == CHAR_A_RING || (k) == CHAR_A_DIAERESIS_LC || \
-                            (k) == CHAR_O_DIAERESIS_LC || (k) == CHAR_A_RING_LC)
+// A typed character is ONE BYTE OF LATIN-1 (ISO-8859-1): ASCII, or the
+// Latin-1 Supplement 0xA0-0xFF, which is what the font draws
+// (font_ttf.h) and what /etc/kbs layouts produce. Not UTF-8 --
+// docs/decisions/drivers.md's Nordic-keyboard entry says why, and
+// docs/roadmap.md's UTF-8 migration is where that changes. 0x80-0x9F
+// (the C1 controls) are not characters.
+#define IS_LATIN1_CHAR(k) ((k) >= 0xA0 && (k) <= 0xFF)
 
 // True if `k` is a character that should be inserted into typed text --
-// printable ASCII (32-126) or one of the Nordic letters above. Every
-// "is this key a printable char, not a control/arrow/function key"
-// gate across apps/ (terminal, notepad, widgets textfield, editor)
-// should use this instead of a bare `key >= 32 && key < 127`, which
-// silently excludes Nordic letters (and, before this build, would also
-// have gone through `char`'s signedness as a landmine -- see
-// docs/decisions.md). userland/echo.c can't include this header (it's
-// a freestanding ring-3 program with no kernel headers) and keeps its
-// own copy of the same check.
-#define IS_PRINTABLE_KEY(k) (((k) >= 32 && (k) < 127) || IS_NORDIC_CHAR(k))
+// printable ASCII (32-126) or Latin-1 0xA0-0xFF. Every "is this key a
+// printable char, not a control/arrow/function key" gate should use
+// this rather than a bare `key >= 32 && key < 127`, which silently
+// drops every accented letter. Pass the key as an INT: a `char` above
+// 0x7F is negative in this build (docs/decisions/drivers.md).
+// userland/tests/echo.c cannot include this header and keeps a copy.
+#define IS_PRINTABLE_KEY(k) (((k) >= 32 && (k) < 127) || IS_LATIN1_CHAR(k))
 
 // Scancode->character translation itself lives in
 // kernel/include/api/keyboard_layout.h / kernel/lib/keyboard_layout.c now
@@ -294,8 +288,8 @@ int keyboard_wire_keycode(uint8_t sc, int extended, uint16_t *out);
 // gesture is.
 #define KEY_MOD_SUPER 0x10
 
-// Blocking read of a single byte from the input stream: either an ASCII
-// char or one of the KEY_* codes above.
+// Blocking read of one key from the input stream: a Latin-1 character
+// or one of the KEY_* codes above.
 int keyboard_getchar(void);
 
 // Same as keyboard_getchar but returns -1 immediately if nothing is
@@ -379,8 +373,9 @@ int keyboard_try_getchar_mods(uint8_t *out_mods);
 //
 // It is a SEPARATE queue rather than a flag on the existing one because
 // the existing one is a terminal's input (kernel/tty/), and a terminal
-// is a byte stream: `keyboard.c` states that every code it produces
-// fits in a byte, which is what lets fd 0 be read with read(). A
+// is a byte stream: every CHARACTER fits in a byte and a special key is
+// ANSI-encoded on the way to fd 0, which is what lets it be read with
+// read(). A
 // release is not a byte and a line discipline has no use for one --
 // nothing in `klineedit.c` would ever ask "has W come up?". Pushing
 // releases into that stream would put a byte in front of every shell in

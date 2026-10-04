@@ -117,7 +117,7 @@ const void *tty_wait_chan(const struct tty *t);
 // scheduler state and call the driver's output hook. Signal delivery
 // keeps to that too: signal_send_group() sets a bit and the kernel acts
 // on it on the way back to ring 3.
-void tty_input(struct tty *t, uint8_t byte, uint8_t mods);
+void tty_input(struct tty *t, uint16_t key, uint8_t mods);
 
 // Bytes the terminal should EMIT -- what a slave write does. Goes
 // through the driver's output hook.

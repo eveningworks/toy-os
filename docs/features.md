@@ -16,7 +16,10 @@ way" for anything here, and `docs/roadmap.md` says what is not built.
 long-mode transition done by hand. Linear RGB framebuffer falling back
 to 80×25 VGA text. PS/2 keyboard and mouse sharing the 8042 through one
 dispatcher, with keyboard layouts as *data files* generated from Linux's
-own XKB data. PIT, CMOS RTC, PC speaker, MBR/GPT partition parsing.
+own XKB data: 24 of them (every XKB layout Latin-1 can type), four levels
+with Shift+AltGr, and dead keys composed in the kernel behind every
+keyboard driver, Windows-style. Text is Latin-1 end to end -- the font
+carries 0xA0-0xFF in both rings. PIT, CMOS RTC, PC speaker, MBR/GPT partition parsing.
 The installed `grub.cfg` is edited from inside the OS by `bootcfg`
 (grubby's shape, plus a visudo-style `edit`), checked before it is saved
 -- unknown boot words, unclosed braces, a missing kernel -- with the old

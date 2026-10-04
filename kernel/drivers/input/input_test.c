@@ -64,14 +64,14 @@ KTEST("input", "Caps Lock capitalises a letter key and nothing else") {
     // one its capital, and the key that types '1'.
     int letter = -1, digit = -1;
     for (int kc = 1; kc < 256; kc++) {
-        char lo = keyboard_layout_translate((uint16_t)kc, 0, 0);
-        char up = keyboard_layout_translate((uint16_t)kc, 1, 0);
-        if (letter < 0 && lo >= 'a' && lo <= 'z' && up == (char)(lo - 'a' + 'A')) letter = kc;
+        int lo = keyboard_layout_translate((uint16_t)kc, 0, 0);
+        int up = keyboard_layout_translate((uint16_t)kc, 1, 0);
+        if (letter < 0 && lo >= 'a' && lo <= 'z' && up == lo - 'a' + 'A') letter = kc;
         if (digit < 0 && lo == '1') digit = kc;
     }
     KTEST_ASSERT(letter >= 0 && digit >= 0);
-    char lo = keyboard_layout_translate((uint16_t)letter, 0, 0);
-    char up = keyboard_layout_translate((uint16_t)letter, 1, 0);
+    int lo = keyboard_layout_translate((uint16_t)letter, 0, 0);
+    int up = keyboard_layout_translate((uint16_t)letter, 1, 0);
     KTEST_ASSERT_EQ((int)keyboard_layout_translate_caps((uint16_t)letter, 0, 0, 1), (int)up);
     // Caps+Shift is lowercase, as on Windows and Linux.
     KTEST_ASSERT_EQ((int)keyboard_layout_translate_caps((uint16_t)letter, 1, 0, 1), (int)lo);
@@ -85,11 +85,11 @@ KTEST("input", "Caps Lock capitalises a letter key and nothing else") {
 KTEST("input", "the Caps Lock key toggles on its press, not on a repeat of it") {
     int letter = -1;
     for (int kc = 1; kc < 84 && letter < 0; kc++) {   // <= 83: a PS/2 make code too
-        char lo = keyboard_layout_translate((uint16_t)kc, 0, 0);
+        int lo = keyboard_layout_translate((uint16_t)kc, 0, 0);
         if (lo >= 'a' && lo <= 'z') letter = kc;
     }
     KTEST_ASSERT(letter >= 0);
-    char lo = keyboard_layout_translate((uint16_t)letter, 0, 0);
+    int lo = keyboard_layout_translate((uint16_t)letter, 0, 0);
     uint8_t mods = 0;
 
     scheduler_preempt_disable();

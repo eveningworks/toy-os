@@ -231,7 +231,7 @@ int uui_edit_key(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
     // then inserting is the whole implementation, and doing it in this
     // order is what stops a replacement from being an insert next to
     // text the user thought they had just overwritten.
-    if (key >= 32 && key < 127) {
+    if (IS_PRINTABLE_KEY(key)) {   // ASCII or Latin-1, api/keyboard.h
         // Replacing a selection is ONE step: the erase and the insert.
         int replacing = uui_edit_has_selection(e);
         if (replacing && e->undo) uui_undo_begin(e->undo);

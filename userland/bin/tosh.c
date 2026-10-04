@@ -562,10 +562,7 @@ int main(int argc, char **argv) {
         if (n <= 0) break; // a console has no EOF; this is an error
 
         for (int64_t i = 0; i < n; i++) {
-            // Specials arrive as the same 0x91-0xA6 codes keyboard.h
-            // defines and klineedit already switches on, so a byte off
-            // fd 0 is fed in as-is. That identity is what makes the
-            // shared editor work with no translation layer.
+            // UNSIGNED: a Latin-1 letter is one byte above 0x7F.
             int key = (unsigned char)buf[i];
 
             // **DECODED, because fd 0 is a TERMINAL.** A special key

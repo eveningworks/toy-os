@@ -125,10 +125,10 @@ const void *tty_wait_chan(const struct tty *t) { return t; }
 
 // --- the queue -------------------------------------------------------
 
-void tty_enqueue(struct tty *t, uint8_t byte, uint8_t mods) {
+void tty_enqueue(struct tty *t, uint16_t key, uint8_t mods) {
     unsigned next = (t->in_head + 1) % TTY_INQ_MAX;
     if (next == t->in_tail) return; // full: drop, as the keyboard ring did
-    t->inq[t->in_head] = ((uint32_t)mods << 16) | byte;
+    t->inq[t->in_head] = ((uint32_t)mods << 16) | key;
     t->in_head = next;
     // Release anything parked in a read of this terminal. Runs in the
     // keyboard IRQ on tty0, so it may only flip scheduler state and
@@ -145,7 +145,7 @@ void tty_enqueue_wake(struct tty *t) {
     scheduler_wake(tty_wait_chan(t), SYS_RETRY);
 }
 
-void tty_input(struct tty *t, uint8_t byte, uint8_t mods) {
+void tty_input(struct tty *t, uint16_t key, uint8_t mods) {
     if (!t || !t->used) return;
 
     // **A COMPOSITOR HOLDING THE KEYBOARD GETS KEYSYMS; A TERMINAL GETS
@@ -164,7 +164,9 @@ void tty_input(struct tty *t, uint8_t byte, uint8_t mods) {
     // Encoding in the keyboard driver instead was tried and was wrong:
     // there is no separate keysym queue, so it reached the compositor
     // too and every GUI client started seeing escape sequences.
-    if (tty_bypassed(t)) { tty_ldisc_input(t, byte, mods); return; }
+    //
+    // Queued WHOLE: a KEY_* special does not fit the discipline's byte.
+    if (tty_bypassed(t)) { tty_enqueue(t, key, mods); return; }
 
     // **CTRL AND ALT ARE ENCODED HERE TOO, and only here** -- the keyboard
     // delivers the key with its modifier bit (api/keyboard.h, "Ctrl and
@@ -172,12 +174,12 @@ void tty_input(struct tty *t, uint8_t byte, uint8_t mods) {
     // a letter, so that is dropped; Alt is readline's meta prefix, ESC
     // then the key. Ctrl+letter arrives as its control code already, and
     // a KEY_* special (an arrow, Alt+F4's F4) is never prefixed.
-    if (IS_PRINTABLE_KEY(byte) && (mods & KEY_MOD_CTRL)) return;
-    if ((mods & KEY_MOD_ALT) && !(byte >= KEY_ARROW_UP && byte <= KEY_PRINT_SCREEN))
+    if (IS_PRINTABLE_KEY(key) && (mods & KEY_MOD_CTRL)) return;
+    if ((mods & KEY_MOD_ALT) && !IS_SPECIAL_KEY(key))
         tty_ldisc_input(t, 0x1B, mods);
 
     char seq[TERMKEY_MAX];
-    int n = termkey_encode(byte, seq, sizeof seq);
+    int n = termkey_encode(key, seq, sizeof seq);
     for (int i = 0; i < n; i++)
         tty_ldisc_input(t, (uint8_t)seq[i], mods);
 }

@@ -29,7 +29,7 @@ It encodes three things that cost real time to rediscover:
      and reads as a failing widget rather than a bad test. The
      dismiss-the-popup check hit this for real: at `x + 400` it was
      past the right edge of a ~406px-wide content area.
-  3. **Key codes go in as hex** (`gui key 0x92`), matching
+  3. **Key codes go in as hex** (`gui key 0xf792`), matching
      `api/keyboard.h`. That only works as of the `parse_int()` fix in
      the same change as this file; against an older kernel every key
      command comes back "bad or dropped key".
@@ -71,10 +71,10 @@ SPAWN_PATH = "/bin/wm/demos/uidemo"   # a ring-3 process since M41's stage 0
 SPAWN_TIMEOUT_S = 15.0
 
 # api/keyboard.h. Sent as hex, which is how that header writes them.
-K_UP, K_DOWN = "0x91", "0x92"
-K_PGUP, K_PGDN = "0x93", "0x94"
-K_HOME, K_END = "0x97", "0x98"
-K_LEFT, K_RIGHT = "0x95", "0x96"
+K_UP, K_DOWN = "0xf791", "0xf792"
+K_PGUP, K_PGDN = "0xf793", "0xf794"
+K_HOME, K_END = "0xf797", "0xf798"
+K_LEFT, K_RIGHT = "0xf795", "0xf796"
 K_ESC = "0x1b"
 # Tab is 0x09 with OR without Shift -- the modifier word is the only
 # thing that distinguishes them. See api/keyboard.h's "Modifier bits".

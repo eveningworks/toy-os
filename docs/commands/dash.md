@@ -40,10 +40,10 @@ history, the kill ring and the word motions all behave as they do
 everywhere else in this system, because they ARE the same code.
 
 Upstream leaves it OFF until `set -o emacs`; `/bin/dash` here passes
-`-E` for you (`userland/bin/dash.c`). That divergence is not taste: every
-terminal on this system sends specials as the single bytes 0x91-0xA6, so
-a shell reading a line canonically puts them straight into it and the
-screen fills with blanks -- an arrow key "types spaces". `set +E` turns
+`-E` for you (`userland/bin/dash.c`). That divergence is not taste: a
+shell reading a line canonically puts an arrow key's sequence straight
+into the line (it once filled the screen with blanks -- an arrow key
+"typed spaces"). `set +E` turns
 editing off if you want upstream's behaviour, and an explicit `-V` still
 selects vi mode, which gets the same editor because there is only one.
 

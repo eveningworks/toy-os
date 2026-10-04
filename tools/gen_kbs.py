@@ -1,141 +1,205 @@
 #!/usr/bin/env python3
 """tools/gen_kbs.py -- generates /etc/kbs/<layout> keyboard-layout data
-files (kernel/lib/keyboard_layout.c's on-disk format) from the Linux
-side's own XKB layout data, via `xkbcli compile-keymap` (part of
-libxkbcommon-tools -- `apt-get install libxkbcommon-tools` if missing;
-no X server needed, it's a pure keymap compiler).
+files (kernel/lib/keyboard_layout.c's on-disk format) from Linux's own
+XKB layout data, via `xkbcli compile-keymap` (libxkbcommon-tools --
+`apt-get install libxkbcommon-tools` if missing; no X server needed, it
+is a pure keymap compiler).
 
-Why generate instead of hand-typing 128 scancode/character pairs per
-layout: Linux already has a maintained, correct mapping for every
-layout XKB knows about (`ls /usr/share/X11/xkb/symbols/` for the full
-list) -- re-deriving that by hand is exactly the kind of error-prone
-busywork this project's tools/ directory exists to avoid (see
-CLAUDE.md's tools/ section). Adding a third layout later (say German)
-is `python3 tools/gen_kbs.py de` plus a re-seed, not an afternoon with
-a scancode chart.
+Why generate instead of hand-typing a table per layout: Linux already
+has a maintained, correct mapping for every layout XKB knows about, and
+re-deriving that by hand is exactly the busywork tools/ exists to avoid.
 
-WHAT THIS DOES NOT DO -- read before trusting a generated file blindly:
+THE SHIPPED SET IS `LAYOUTS` BELOW, AND IT IS THE ONLY LIST. `--all`
+generates every one of them (the Makefile's seed step calls that); the
+display names Settings shows live in data/etc/settings.d/
+system.keyboard_layout as `Choice.<name>=` lines, which `--choices`
+prints from the same table. A layout is in the set when everything its
+base and Shift levels type is Latin-1 (toy-os's encoding, see
+docs/decisions/drivers.md) -- `--check` re-measures that against the
+host's XKB data and names any key that breaks it.
 
-- Reads shift levels 1-3 (base, Shift, AltGr) out of each key's symbol
-  list -- level 4 (Shift+AltGr) is still ignored: keyboard.c's AltGr
-  handling only tracks "is AltGr down," not "is AltGr down at the same
-  time as Shift" as a distinct fourth state, so a level-4-only symbol
-  (rare in practice -- most real layouts, including Finnish/Swedish,
-  don't put anything meaningful there) would be unreachable even if
-  translated. A real Finnish/Swedish keyboard's @ # $ { } [ ] (all
-  level-3/AltGr on those layouts) ARE reachable now via `sc_XX_altgr`
-  entries below. Known partial limitation, not a bug in this script.
-- Only emits a character for keysyms this kernel's font can actually
-  render: ASCII 32-126, plus the six Nordic Latin-1 codepoints
-  kernel/drivers/font_ttf.c bakes (Ä Ö Å ä ö å -- see genttf.py's
-  EXTRA_CHARS). A keysym outside that set (e.g. Swedish TLDE's
-  section-sign/paragraph-mark) is silently skipped -- that scancode's
-  slot in the output file is simply absent, which keyboard_layout.c
-  treats the same as "no char at this scancode" (produces nothing when
-  pressed), matching how an unmapped slot already behaves today.
-- Dead keys (dead_acute, dead_grave, ...) aren't composed (no dead-key
-  state machine in this driver) -- mapped instead to the plain visible
-  character closest to what they'd produce undead (dead_acute -> ',
-  dead_grave -> `), same simplification XKB's own "nodeadkeys" layout
-  variants make for the same reason.
-- XKB key names -> Linux EVDEV KEYCODES: the keymap's `xkb_keycodes`
-  section gives each key an XKB keycode, and XKB keycodes are evdev
-  keycodes + 8 (a fixed, decades-old convention). So `keycode - 8`
-  below IS the evdev keycode, with no lookup table anywhere.
+WHAT A FILE CARRIES:
 
-  **THESE FILES USED TO BE KEYED ON AT SET-1 SCANCODES, and the switch
-  is the point rather than a rename.** evdev is what every non-PS/2
-  keyboard reports natively (virtio-input, and a USB keyboard when there
-  is one), so keying the layout on scancodes forced every such driver to
-  translate UPWARD into a legacy encoding -- a hand-kept table pointing
-  the wrong way, which duly grew a hole: KEY_102ND, the ISO key carrying
-  `|` on every Nordic layout, was missing, so a pipeline could be typed
-  on PS/2 and not on virtio. Keyed on evdev, there is no table to have a
-  hole in: the one translation left is set-1 -> keycode inside the PS/2
-  driver, which is exactly where Linux keeps it (`atkbd`).
-
-  It happens that evdev and set 1 AGREE for the whole primary block
-  (KEY_1 = 2 = 0x02, and so on up to KEY_F12 = 88 = 0x58), which is why
-  the values in these files did not change when the keying did -- and
-  also why the old naming looked right for years.
+- Four levels per key: base, Shift, AltGr (XKB level 3) and Shift+AltGr
+  (level 4) -- `kc_<k>=`, `kc_<k>_shift=`, `kc_<k>_altgr=`,
+  `kc_<k>_shift_altgr=`. Keyed by LINUX EVDEV KEYCODE: an XKB keycode is
+  evdev + 8, a fixed convention, so `keycode - 8` needs no table. evdev
+  is what virtio-input and USB report natively; only the PS/2 driver
+  translates, as Linux's atkbd does.
+- A character only when the font can draw it: ASCII 32-126 and Latin-1
+  0xA0-0xFF. Anything else (a Polish AltGr+a's U+0105) is left out and
+  listed in the file's trailing comment, and the key types nothing on
+  that level.
+- DEAD KEYS, with their compositions IN THE SAME FILE, so a layout is
+  self-contained and /etc/kbs holds layouts and nothing else (its
+  listing IS the Settings choice list):
+      kc_26=dead:acute        the key is a dead acute on that level
+      dead:acute=0xB4         what it types alone (dead + Space, or twice)
+      dead:acute:e=0xE9       dead acute then e -> e-acute
+  The pairs come from libX11's Compose table (COMPOSE_FILE), keeping
+  only `<dead_X> <key>` whose result is Latin-1; without that file they
+  fall back to Python's unicodedata, which agrees for Latin-1. A dead
+  key with no Latin-1 spacing form and no Latin-1 composition (caron,
+  ogonek, breve...) is unrepresentable and skipped like any other
+  non-Latin-1 symbol. The spacing form is Windows' (dead acute + Space
+  is the acute accent, not XKB's apostrophe).
+- Values are a literal byte for printable ASCII, else `0x<hex>`.
 
 Usage:
-    python3 tools/gen_kbs.py us > seed/sync/etc/kbs/us
-    python3 tools/gen_kbs.py se > seed/sync/etc/kbs/se
-    python3 tools/gen_kbs.py se --write   # writes seed/sync/etc/kbs/se directly
+    python3 tools/gen_kbs.py de              # one layout to stdout
+    python3 tools/gen_kbs.py de --write      # into seed/sync/etc/kbs/de
+    python3 tools/gen_kbs.py --all --write   # every layout in LAYOUTS
+    python3 tools/gen_kbs.py --check         # does each still fit Latin-1?
+    python3 tools/gen_kbs.py --choices       # the Choice.<name>= lines
 
-Written under seed/sync/ (not seed/once/) deliberately: these files
-are pure build output of this generator, the same as an ELF binary
-under seed/sync/bin/ -- every `make iso` should make disk.img's copy
-match the repo's exactly, the same content-hash-synced policy the
-existing `bin` binaries already get (see tools/tfs3_writer.py's
-`sync` docstring / CLAUDE.md's tools/ section for the once/ vs sync/
-split). seed/once/ is for content a session/user might have
-legitimately changed on the emulated disk since -- not the case here.
+Written under seed/sync/ deliberately: these files are pure build output,
+like an ELF under seed/sync/bin/, so every `make iso` makes disk.img's
+copy match the generator's.
 """
 
+import os
 import re
 import subprocess
 import sys
+import unicodedata
 
-# XKB keysym name -> the character it produces, restricted to what
-# this kernel can actually print (ASCII 32-126 + the six Nordic Latin-1
-# codepoints -- see the module docstring). Letters/digits aren't listed
-# here: a single-char lowercase-letter or digit keysym name IS the
-# character (XKB names them literally, e.g. keysym "q" means 'q').
-KEYSYM_TABLE = {
-    "exclam": "!", "at": "@", "numbersign": "#", "dollar": "$",
-    "percent": "%", "asciicircum": "^", "ampersand": "&",
-    "asterisk": "*", "parenleft": "(", "parenright": ")",
-    "minus": "-", "underscore": "_", "equal": "=", "plus": "+",
-    "bracketleft": "[", "braceleft": "{", "bracketright": "]",
-    "braceright": "}", "backslash": "\\", "bar": "|",
-    "semicolon": ";", "colon": ":", "apostrophe": "'",
-    "quotedbl": '"', "comma": ",", "less": "<", "period": ".",
-    "greater": ">", "slash": "/", "question": "?", "grave": "`",
-    "asciitilde": "~", "space": " ",
-    # Nordic letters -- Latin-1 codepoints, matching
-    # kernel/include/api/keyboard.h's CHAR_A_RING/CHAR_A_DIAERESIS/etc.
-    "aring": "å", "Aring": "Å",
-    "adiaeresis": "ä", "Adiaeresis": "Ä",
-    "odiaeresis": "ö", "Odiaeresis": "Ö",
-    # Dead keys: not composed (see module docstring) -- substituted
-    # with the plain undead glyph, same simplification XKB's own
-    # "nodeadkeys" layout variants make.
-    "dead_acute": "'", "dead_grave": "`",
-    # Control keys -- same identical to every layout (Escape/Backspace/
-    # Tab/Enter don't move or change meaning between US and SE/FI
-    # physical keyboards), but still have to go through this table:
-    # keyboard.c's old compiled-in scancode_ascii[] included these
-    # (scancode 0x01/0x0E/0x0F/0x1C), and a layout file that omits them
-    # means that key produces nothing at all -- not a fallback to some
-    # other behavior, just silently dead. Caught live: an early version
-    # of this script left these out of KEY_ORDER entirely, and Enter
-    # stopped working the moment the shell switched from keyboard.c's
-    # compiled-in tables to loading a generated file.
-    "Escape": chr(27), "BackSpace": "\b", "Tab": "\t", "Return": "\n",
+# The shipped layouts: XKB name -> the display name Settings shows. ONE
+# place; keep data/etc/settings.d/system.keyboard_layout in step
+# (`--choices` prints its lines). NOT here, measured by --check: `ee`
+# (Estonian), whose unshifted TLDE is a dead caron -- s/z with caron are
+# not Latin-1, so a key on its base level would type nothing.
+LAYOUTS = {
+    "al": "Albanian",
+    "at": "German (Austria)",
+    "be": "Belgian",
+    "br": "Portuguese (Brazil)",
+    "ca": "French (Canada)",
+    "ch": "German (Switzerland)",
+    "de": "German",
+    "dk": "Danish",
+    "es": "Spanish",
+    "fi": "Finnish",
+    "fo": "Faroese",
+    "fr": "French",
+    "gb": "English (UK)",
+    "is": "Icelandic",
+    "it": "Italian",
+    "latam": "Spanish (Latin America)",
+    "lv": "Latvian",
+    "nl": "Dutch",
+    "no": "Norwegian",
+    "pl": "Polish",
+    "pt": "Portuguese",
+    "ro": "Romanian",
+    "se": "Swedish",
+    "us": "English (US)",
 }
 
-# The physical alphanumeric-block key names this matters for -- XKB
-# also defines names for modifiers, function keys, the numpad, etc,
-# none of which this generator (or keyboard.c's ASCII tables) cares
-# about. Order here is just for readable output; doesn't affect
-# correctness.
+COMPOSE_FILE = "/usr/share/X11/locale/en_US.UTF-8/Compose"
+
+# X11 keysym names whose value is a Latin-1 codepoint (keysymdef.h: a
+# keysym in 0x20-0x7E or 0xA0-0xFF IS that codepoint), embedded so the
+# generator needs no X11 headers. A single letter or digit names itself
+# and is not listed.
+LATIN1_KEYSYMS = {
+    "space": 0x20, "exclam": 0x21, "quotedbl": 0x22, "numbersign": 0x23,
+    "dollar": 0x24, "percent": 0x25, "ampersand": 0x26, "apostrophe": 0x27,
+    "quoteright": 0x27, "parenleft": 0x28, "parenright": 0x29,
+    "asterisk": 0x2A, "plus": 0x2B, "comma": 0x2C, "minus": 0x2D,
+    "period": 0x2E, "slash": 0x2F, "colon": 0x3A, "semicolon": 0x3B,
+    "less": 0x3C, "equal": 0x3D, "greater": 0x3E, "question": 0x3F,
+    "at": 0x40, "bracketleft": 0x5B, "backslash": 0x5C, "bracketright": 0x5D,
+    "asciicircum": 0x5E, "underscore": 0x5F, "grave": 0x60, "quoteleft": 0x60,
+    "braceleft": 0x7B, "bar": 0x7C, "braceright": 0x7D, "asciitilde": 0x7E,
+    "nobreakspace": 0xA0, "exclamdown": 0xA1, "cent": 0xA2, "sterling": 0xA3,
+    "currency": 0xA4, "yen": 0xA5, "brokenbar": 0xA6, "section": 0xA7,
+    "diaeresis": 0xA8, "copyright": 0xA9, "ordfeminine": 0xAA,
+    "guillemetleft": 0xAB, "guillemotleft": 0xAB, "notsign": 0xAC,
+    "hyphen": 0xAD, "registered": 0xAE, "macron": 0xAF, "degree": 0xB0,
+    "plusminus": 0xB1, "twosuperior": 0xB2, "threesuperior": 0xB3,
+    "acute": 0xB4, "mu": 0xB5, "paragraph": 0xB6, "periodcentered": 0xB7,
+    "cedilla": 0xB8, "onesuperior": 0xB9, "ordmasculine": 0xBA,
+    "masculine": 0xBA, "guillemetright": 0xBB, "guillemotright": 0xBB,
+    "onequarter": 0xBC, "onehalf": 0xBD, "threequarters": 0xBE,
+    "questiondown": 0xBF, "Agrave": 0xC0, "Aacute": 0xC1, "Acircumflex": 0xC2,
+    "Atilde": 0xC3, "Adiaeresis": 0xC4, "Aring": 0xC5, "AE": 0xC6,
+    "Ccedilla": 0xC7, "Egrave": 0xC8, "Eacute": 0xC9, "Ecircumflex": 0xCA,
+    "Ediaeresis": 0xCB, "Igrave": 0xCC, "Iacute": 0xCD, "Icircumflex": 0xCE,
+    "Idiaeresis": 0xCF, "ETH": 0xD0, "Eth": 0xD0, "Ntilde": 0xD1,
+    "Ograve": 0xD2, "Oacute": 0xD3, "Ocircumflex": 0xD4, "Otilde": 0xD5,
+    "Odiaeresis": 0xD6, "multiply": 0xD7, "Oslash": 0xD8, "Ooblique": 0xD8,
+    "Ugrave": 0xD9, "Uacute": 0xDA, "Ucircumflex": 0xDB, "Udiaeresis": 0xDC,
+    "Yacute": 0xDD, "THORN": 0xDE, "Thorn": 0xDE, "ssharp": 0xDF,
+    "agrave": 0xE0, "aacute": 0xE1, "acircumflex": 0xE2, "atilde": 0xE3,
+    "adiaeresis": 0xE4, "aring": 0xE5, "ae": 0xE6, "ccedilla": 0xE7,
+    "egrave": 0xE8, "eacute": 0xE9, "ecircumflex": 0xEA, "ediaeresis": 0xEB,
+    "igrave": 0xEC, "iacute": 0xED, "icircumflex": 0xEE, "idiaeresis": 0xEF,
+    "eth": 0xF0, "ntilde": 0xF1, "ograve": 0xF2, "oacute": 0xF3,
+    "ocircumflex": 0xF4, "otilde": 0xF5, "odiaeresis": 0xF6, "division": 0xF7,
+    "oslash": 0xF8, "ooblique": 0xF8, "ugrave": 0xF9, "uacute": 0xFA,
+    "ucircumflex": 0xFB, "udiaeresis": 0xFC, "yacute": 0xFD, "thorn": 0xFE,
+    "ydiaeresis": 0xFF,
+    # Control keys: the same on every layout, but a file that omits them
+    # leaves Enter dead (an early version of this script did).
+    "Escape": 0x1B, "BackSpace": 0x08, "Tab": 0x09, "Return": 0x0A,
+    "ISO_Left_Tab": 0x09,   # Shift+Tab: Tab, with Shift in the key's mods
+}
+
+# The dead keys Latin-1 can express: name -> (spacing form, the
+# combining mark unicodedata decomposes to). The spacing form is what
+# Windows types for dead + Space; XKB's Compose agrees for `dead dead`.
+DEAD_KEYS = {
+    "grave": (0x60, "̀"),
+    "acute": (0xB4, "́"),
+    "circumflex": (0x5E, "̂"),
+    "tilde": (0x7E, "̃"),
+    "macron": (0xAF, "̄"),
+    "diaeresis": (0xA8, "̈"),
+    "abovering": (0xB0, "̊"),
+    "cedilla": (0xB8, "̧"),
+}
+
+# The physical alphanumeric block, plus AB11 (the Brazilian ABNT2 key
+# beside right Shift). Order is for readable output only.
 KEY_ORDER = (
     ["ESC"] +
     ["TLDE"] + [f"AE{i:02d}" for i in range(1, 13)] + ["BKSP"] +
     ["TAB"] + [f"AD{i:02d}" for i in range(1, 13)] +
     [f"AC{i:02d}" for i in range(1, 12)] + ["RTRN"] +
     ["BKSL"] +
-    [f"AB{i:02d}" for i in range(1, 11)] +
+    [f"AB{i:02d}" for i in range(1, 12)] +
     ["LSGT", "SPCE"]
 )
 
+LEVEL_SUFFIX = ("", "_shift", "_altgr", "_shift_altgr")
 
-def keysym_to_char(name):
-    if len(name) == 1 and (name.isalpha() or name.isdigit()):
-        return name
-    return KEYSYM_TABLE.get(name)
+
+def keysym_cp(name):
+    """A keysym's Latin-1 codepoint, or None."""
+    if len(name) == 1 and name.isascii() and name.isalnum():
+        return ord(name)
+    if name in LATIN1_KEYSYMS:
+        return LATIN1_KEYSYMS[name]
+    m = re.fullmatch(r"U([0-9A-Fa-f]{4,6})", name)          # U00E9
+    if m:
+        cp = int(m.group(1), 16)
+    else:
+        m = re.fullmatch(r"0x0*1([0-9A-Fa-f]{6})", name)    # 0x010000e9
+        if not m:
+            return None
+        cp = int(m.group(1), 16)
+    return cp if (32 <= cp <= 126 or 0xA0 <= cp <= 0xFF) else None
+
+
+def fmt(cp):
+    """A value as the file writes it: literal when that cannot be
+    misread (ASCII alphanumerics and punctuation other than the
+    separators), else 0x<hex>."""
+    if 33 <= cp <= 126 and chr(cp) not in "=:#":
+        return chr(cp)
+    if cp == 32:
+        return " "
+    return f"0x{cp:02X}"
 
 
 def compile_keymap(layout):
@@ -148,93 +212,159 @@ def compile_keymap(layout):
 
 def parse_keycodes(keymap_text):
     """name -> XKB keycode, e.g. {'AE01': 10, ...}."""
-    codes = {}
-    for m in re.finditer(r"<(\w+)>\s*=\s*(\d+);", keymap_text):
-        codes[m.group(1)] = int(m.group(2))
-    return codes
+    return {m.group(1): int(m.group(2))
+            for m in re.finditer(r"<(\w+)>\s*=\s*(\d+);", keymap_text)}
 
 
 def parse_key_symbols(keymap_text):
-    """name -> [level1_keysym, level2_keysym, ...] from the compiled
-    xkb_symbols section's `key <NAME> { [ sym, sym, ... ] };` lines."""
+    """name -> [level1, level2, ...] keysyms. A key block is either
+    `{ [ a, A ] }` or `{ type= "...", symbols[1]= [ ... ] }` -- the
+    second shape (German AE11's ss/?/backslash) is easy to miss."""
     syms = {}
-    for m in re.finditer(r"key\s*<(\w+)>\s*\{\s*\[([^\]]*)\]", keymap_text):
-        name = m.group(1)
-        levels = [s.strip() for s in m.group(2).split(",")]
-        syms[name] = levels
+    sym = keymap_text[keymap_text.index("xkb_symbols"):]
+    for m in re.finditer(r"key\s*<(\w+)>\s*\{(.*?)\};", sym, re.S):
+        body = m.group(2)
+        g = re.search(r"symbols\[1\]\s*=\s*\[([^\]]*)\]", body) or \
+            re.match(r"\s*\[([^\]]*)\]", body)
+        if g:
+            syms[m.group(1)] = [s.strip() for s in g.group(1).split(",")]
     return syms
 
 
+def compose_pairs():
+    """dead name -> {base cp: result cp}, Latin-1 both sides."""
+    pairs = {name: {} for name in DEAD_KEYS}
+    try:
+        with open(COMPOSE_FILE, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        text = None
+    if text is not None:
+        for m in re.finditer(r'^<dead_(\w+)>\s*<(\w+)>\s*:\s*"([^"\\]|\\.)"',
+                             text, re.M):
+            dead, base, res = m.group(1), m.group(2), m.group(3)
+            if dead not in pairs or base == "space" or base.startswith("dead_"):
+                continue
+            bcp = keysym_cp(base)
+            rcp = ord(res[-1]) if len(res) == 1 else None
+            if bcp is None or rcp is None or not 0xA0 <= rcp <= 0xFF:
+                continue
+            pairs[dead][bcp] = rcp
+        return pairs
+    print(f"gen_kbs: {COMPOSE_FILE} not found -- composing from unicodedata",
+          file=sys.stderr)
+    for cp in range(0xC0, 0x100):
+        d = unicodedata.normalize("NFD", chr(cp))
+        if len(d) != 2:
+            continue
+        for name, (_sp, mark) in DEAD_KEYS.items():
+            if d[1] == mark:
+                pairs[name][ord(d[0])] = cp
+    return pairs
+
+
 def generate(layout):
+    """(file text, problems) -- a problem is a base/Shift symbol on the
+    alphanumeric block that Latin-1 cannot express."""
     text = compile_keymap(layout)
     keycodes = parse_keycodes(text)
     key_syms = parse_key_symbols(text)
+    pairs = compose_pairs()
 
     lines = [
-        f"# toy-os keyboard layout: {layout}",
-        f"# Generated by tools/gen_kbs.py from Linux's own XKB '{layout}' layout --",
-        "# do not hand-edit without re-running the generator (see that script's",
-        "# top comment for what it does and doesn't translate: AltGr level 3 only",
-        "# (no Shift+AltGr level 4), no dead keys, only the 6 baked Nordic glyphs).",
-        "# Format: name=value, one 'kc_<decimal evdev keycode>=<char>' /",
-        "# 'kc_<keycode>_shift=<char>' / 'kc_<keycode>_altgr=<char>' pair per key;",
-        "# <char> is a literal single character, or 0xNN for a codepoint above",
-        "# ASCII (the Nordic letters). See kernel/lib/keyboard_layout.c.",
-        "#",
-        "# KEYCODES ARE LINUX EVDEV NUMBERS, not AT scancodes -- decimal, and",
-        "# the same numbers virtio-input and a USB keyboard report natively.",
+        f"# toy-os keyboard layout: {layout} ({LAYOUTS.get(layout, '?')})",
+        f"# GENERATED by tools/gen_kbs.py from Linux's XKB '{layout}' layout -- do",
+        "# not hand-edit. Format and limits: kernel/lib/keyboard_layout.c and",
+        "# the generator's own top comment. Keys are LINUX EVDEV KEYCODES.",
         "",
     ]
-
-    missing = []
+    skipped, problems, deads = [], [], []
     for key in KEY_ORDER:
         if key not in keycodes or key not in key_syms:
             continue
         keycode = keycodes[key] - 8
-        # KEYCODE_MAX in kernel/lib/keyboard_layout.c. Above it are media
-        # and consumer keys with no character to map.
-        if keycode < 1 or keycode > 255:
+        if keycode < 1 or keycode > 255:      # KB_KEYCODE_MAX
             continue
         levels = key_syms[key]
-        for level_idx, suffix in ((0, ""), (1, "_shift"), (2, "_altgr")):
-            if level_idx >= len(levels):
+        for lvl, suffix in enumerate(LEVEL_SUFFIX):
+            if lvl >= len(levels):
                 continue
-            ch = keysym_to_char(levels[level_idx])
-            if ch is None:
-                if levels[level_idx] not in ("NoSymbol", "VoidSymbol"):
-                    missing.append((key, levels[level_idx]))
+            sym = levels[lvl]
+            if sym in ("NoSymbol", "VoidSymbol"):
                 continue
-            cp = ord(ch)
-            value = ch if 32 <= cp <= 126 else f"0x{cp:02X}"
-            lines.append(f"kc_{keycode}{suffix}={value}")
+            if sym.startswith("dead_") and sym[5:] in DEAD_KEYS:
+                lines.append(f"kc_{keycode}{suffix}=dead:{sym[5:]}")
+                if sym[5:] not in deads:
+                    deads.append(sym[5:])
+                continue
+            cp = keysym_cp(sym)
+            if cp is None:
+                skipped.append((key, suffix or "_base", sym))
+                if lvl < 2 and key not in ("ESC", "BKSP", "TAB", "RTRN"):
+                    problems.append(f"{key}{suffix or ''}: {sym}")
+                continue
+            lines.append(f"kc_{keycode}{suffix}={fmt(cp)}")
 
-    if missing:
+    if deads:
         lines.append("")
-        lines.append("# Skipped -- keysym has no glyph in this kernel's font "
-                      "(see this script's top comment):")
-        for key, sym in missing:
-            lines.append(f"#   {key}: {sym}")
+        lines.append("# Dead keys: what each types alone, then its compositions.")
+    for name in deads:
+        lines.append(f"dead:{name}={fmt(DEAD_KEYS[name][0])}")
+        for base, res in sorted(pairs[name].items()):
+            lines.append(f"dead:{name}:{fmt(base)}={fmt(res)}")
 
-    return "\n".join(lines) + "\n"
+    if skipped:
+        lines.append("")
+        lines.append("# Skipped -- not Latin-1, so this font cannot draw it:")
+        for key, lvl, sym in skipped:
+            lines.append(f"#   {key}{lvl}: {sym}")
+
+    return "\n".join(lines) + "\n", problems
+
+
+def write(layout, content):
+    out_dir = os.path.join("seed", "sync", "etc", "kbs")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, layout)
+    with open(out_path, "w", encoding="ascii") as f:
+        f.write(content)
+    return out_path
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(f"usage: {sys.argv[0]} <xkb-layout> [--write]", file=sys.stderr)
-        sys.exit(1)
-    layout = sys.argv[1]
-    content = generate(layout)
-    if "--write" in sys.argv[2:]:
-        import os
-        out_dir = os.path.join("seed", "sync", "etc", "kbs")
-        os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, layout)
-        with open(out_path, "w") as f:
-            f.write(content)
-        print(f"gen_kbs: wrote {out_path}", file=sys.stderr)
+    args = sys.argv[1:]
+    if "--choices" in args:
+        for name in sorted(LAYOUTS, key=lambda n: LAYOUTS[n]):
+            print(f"Choice.{name}={LAYOUTS[name]}")
+        return 0
+    if "--all" in args or "--check" in args:
+        bad = 0
+        for layout in sorted(LAYOUTS):
+            content, problems = generate(layout)
+            if problems:
+                bad += 1
+                print(f"gen_kbs: {layout} types non-Latin-1 on base/Shift: "
+                      + ", ".join(problems), file=sys.stderr)
+            if "--write" in args:
+                write(layout, content)
+        if "--write" in args:
+            print(f"gen_kbs: wrote {len(LAYOUTS)} layouts to seed/sync/etc/kbs",
+                  file=sys.stderr)
+        return 1 if (bad and "--check" in args) else 0
+    names = [a for a in args if not a.startswith("--")]
+    if len(names) != 1:
+        print(f"usage: {sys.argv[0]} <xkb-layout> [--write] | --all [--write] "
+              "| --check | --choices", file=sys.stderr)
+        return 1
+    content, problems = generate(names[0])
+    for p in problems:
+        print(f"gen_kbs: {names[0]}: non-Latin-1 on base/Shift: {p}", file=sys.stderr)
+    if "--write" in args:
+        print(f"gen_kbs: wrote {write(names[0], content)}", file=sys.stderr)
     else:
         sys.stdout.write(content)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
