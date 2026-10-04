@@ -161,7 +161,9 @@ def start_menu(g, res):
     res.check("the Start menu opened", sm.get("open"), "")
     g.click_away()
     edge = np_["x"]
-    y = sm["y"] + sm["h"] - 120            # the app pane, below its rows
+    # The app pane below its rows AND above the window's bottom: a row
+    # fixed to the menu alone fell under Notepad once the menu grew.
+    y = min(sm["y"] + sm["h"] - 120, np_["y"] + np_["h"] - 30)
     inside = sm["x"] + 210 < edge < sm["x"] + sm["w"] - 40
     res.check("the window's edge lies under the Start menu's pane", inside,
               f"edge={edge} menu={sm['x']}..{sm['x'] + sm['w']}")
