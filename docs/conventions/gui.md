@@ -1743,7 +1743,7 @@ this the obvious way), not from how much history it accumulated.
   shape names straight-alpha QOI files (`image=`, `image2=`, `image3=`,
   one per size) whose colours are the theme's own, and the loader
   decodes ONLY the one the size setting wants -- so a size change
-  reloads the theme. **`hand`, `move` and `not-allowed` fall back to
+  reloads the theme. **`hand`, `move`, `not-allowed` and `crosshair` fall back to
   the theme's ARROW**, not to a built-in: they have none, and an arrow
   is what showed there before they existed. **The built-in shapes are the floor**: a
   missing or malformed file costs its own shape, not the pointer --
@@ -5345,7 +5345,9 @@ main()'s local.
 - **A client that made a file and is about to go asks for a notice**
   (`uapp_notice(a, WIN_NOTICE_*, flags, path)`); the compositor draws
   the card beside its crash notices and acts on Open / Copy / Folder
-  itself, so the card outlives the client. The path rides `text` in
+  itself, so the card outlives the client. Its Save as cannot be the
+  compositor's (a chooser is a client window): it spawns Screenshot
+  with `--save-as PATH`. The path rides `text` in
   pieces (`WIN_NOTICE_PIECES_MAX`).
 - **A new kind is a `WIN_NOTICE_*` and a branch in `crash_notice.c`**
   (title, thumbnail, actions) -- never a client-drawn window pretending

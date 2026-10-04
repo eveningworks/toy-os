@@ -1176,10 +1176,11 @@ right thing:
 ## The pointer
 
 The cursor's shapes are DATA, not code: `/usr/share/cursors/<theme>/`,
-one descriptor per shape, ten names (`arrow`, `text`, `wait`,
+one descriptor per shape, eleven names (`arrow`, `text`, `wait`,
 `resize-h`, `resize-v`, `resize-diag`, `resize-diag2`, `hand`, `move`,
-`not-allowed` -- the last three are cursor-shape-v1's pointer, move and
-not-allowed, and a theme lacking one shows its arrow). The rules, in
+`not-allowed`, `crosshair` -- the last four are cursor-shape-v1's
+pointer, move, not-allowed and crosshair, and a theme lacking one shows
+its arrow). The rules, in
 the order they bite:
 
 - **A shape is MASKS or an IMAGE, Xcursor's split.** Masks (`default`,

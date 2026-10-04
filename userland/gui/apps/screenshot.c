@@ -3,8 +3,10 @@
 // the bottom -- Region / Screen / Window, the shutter, the pointer, copy
 // to the clipboard, a delay, close. There is no window to manage: the
 // shutter saves to /home/screenshots, the compositor puts up a card with
-// the picture and Open / Copy / Folder (WIN_REQ_NOTICE), and the app is
-// gone. /bin/screenshot is the other front end on lib/ushot.h.
+// the picture and Open / Copy / Folder / Save as (WIN_REQ_NOTICE), and
+// the app is gone. /bin/screenshot is the other front end on lib/ushot.h.
+// The card's Save as comes back here as `--save-as PATH` (the bottom of
+// this file).
 //
 // **THE CHOICE IS MADE ON A FROZEN FRAME**, taken before the overlay is
 // shown: the thing being photographed cannot move while you choose
@@ -26,6 +28,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <errno.h>
 #include "rt/sys.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
@@ -38,6 +41,9 @@
 #include "lib/uconf.h"
 #include "lib/ushot.h"
 #include "keyboard.h"
+#include "kpath.h"   // k_path_basename/_dirname -- the kernel's, linked into ring 3
+#include "lib/uimg.h"
+#include "ui/uui_filedialog.h"
 
 #define SHOT_DIR  "/home/screenshots"
 #define PREFS     "/etc/screenshot.conf"   // the app's own (docs/conventions/gui.md)
@@ -81,6 +87,7 @@ static int g_ax, g_ay;            // the press point
 static struct rect g_start;       // the selection when the drag began
 static int g_pressed_ctl = -1;    // the pill control a press armed
 static int g_hot = -1;            // the pill control under the pointer
+static int g_px, g_py;            // the pointer, for the size beside it
 
 static struct uapp *g_app;
 static int g_launch_delay;        // this copy was relaunched after a delay
@@ -351,6 +358,8 @@ static void norm(struct rect *r, int x0, int y0, int x1, int y1) {
 
 static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     if (x < 0) return;   // the pointer left
+    g_px = x;
+    g_py = y;
     int hot = on_pill(x, y) ? ctl_at(x, y) : -1;
     if (hot != g_hot) { g_hot = hot; uapp_redraw(a); }
     if (g_mode == MODE_WINDOW && !on_pill(x, y)) {
@@ -367,6 +376,7 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
             if (h == 1 || h == 5) c = WIN_CURSOR_RESIZE_V;   // the top and bottom middles
             else if (h >= 0) c = WIN_CURSOR_RESIZE_H;
             else if (g_sel.w > 0 && uui_hit(g_sel.x, g_sel.y, g_sel.w, g_sel.h, x, y)) c = WIN_CURSOR_MOVE;
+            else c = WIN_CURSOR_CROSSHAIR;   // a press here starts a new region
         }
         uapp_set_cursor(a, c);
         return;
@@ -429,13 +439,22 @@ static void frame_rect(struct ugfx_surface *s, const struct rect *r) {
     ugfx_draw_rect(s, r->x - 2, r->y - 2, r->w + 4, r->h + 4, ugfx_rgb(0, 0, 0));
 }
 
+// Above the selection -- or, while a drag sizes it, beside the pointer,
+// where the eye is (Spectacle's shape).
 static void size_label(struct ugfx_surface *s, const struct rect *r) {
     char t[32];
     snprintf(t, sizeof t, "%d x %d", r->w, r->h);
     int u = unit(), tw = ugfx_text_width(t) + u, th = u + u / 2;
     int x = r->x + (r->w - tw) / 2, y = r->y - th - u / 2;
     if (y < u / 2) y = r->y + u / 2;
+    if (g_drag == DRAG_NEW || g_drag == DRAG_HANDLE) {
+        x = g_px + u;
+        y = g_py + u;
+        if (x + tw > g_sw - 2) x = g_px - u - tw;   // flipped at the edges
+        if (y + th > g_sh - 2) y = g_py - u - th;
+    }
     x = clampi(x, 2, g_sw - tw - 2);
+    y = clampi(y, 2, g_sh - th - 2);
     uui_fill_round_rect(s, x, y, tw, th, UUI_CAPSULE, ugfx_rgb(24, 24, 28));
     ugfx_draw_string(s, x + u / 2, y + (th - ugfx_char_h()) / 2, t, UTHEME_WHITE, ugfx_rgb(24, 24, 28));
 }
@@ -596,7 +615,136 @@ static int on_close(struct uapp *a) {
     return 1;
 }
 
+// --- Save as (the card's fourth button) --------------------------------
+//
+// `--save-as PATH`: a small window showing the picture, the shared
+// chooser over it, and a COPY written where it says -- the original
+// stays, because it is the folder's record of the capture. The format is
+// the new name's extension (uimg_save()).
+
+static char g_save_src[256];
+static struct uimg g_src, g_preview;
+static struct uui_filedialog g_chooser;
+static int g_chooser_asked;
+static char g_save_note[128];
+
+static int keep_images(void *ctx, const char *dir, const struct sys_dirent *e) {
+    (void)ctx; (void)dir;
+    if (e->is_dir) return 1;
+    const char *dot = strrchr(e->name, '.');
+    return dot && (strcmp(dot, ".qoi") == 0 || strcmp(dot, ".png") == 0);
+}
+
+static const struct uui_filedialog_filter SAVE_FILTERS[] = {
+    { "Images (.qoi .png)", keep_images, 0 },
+    UUI_FILEDIALOG_ALL_FILES,
+};
+
+static void save_chosen(void *ctx, const char *path);
+
+static void ask_where(struct uapp *a) {
+    char dir[sizeof g_save_src];
+    if (!k_path_dirname(g_save_src, dir, sizeof dir)) snprintf(dir, sizeof dir, "%s", SHOT_DIR);
+    struct uui_filedialog_opts o = {
+        .mode = UUI_FILEDIALOG_SAVE,
+        .title = "Save Screenshot As",
+        .start_dir = dir,
+        .initial_name = k_path_basename(g_save_src),
+        .filters = SAVE_FILTERS,
+        .filter_count = (int)(sizeof SAVE_FILTERS / sizeof SAVE_FILTERS[0]),
+    };
+    if (!uui_filedialog_open(a, &g_chooser, &o, save_chosen, a)) uapp_quit(a, 1);
+}
+
+static void save_chosen(void *ctx, const char *path) {
+    struct uapp *a = (struct uapp *)ctx;
+    if (!path || strcmp(path, g_save_src) == 0) { uapp_quit(a, 0); return; }
+    int rc = uimg_save(path, &g_src, NULL);
+    if (rc == 0) {
+        ulogf("screenshot: saved as %s\n", path);
+        uapp_quit(a, 0);
+        return;
+    }
+    // Asked again, with the reason under the picture: a refused name is
+    // not the end of the save.
+    snprintf(g_save_note, sizeof g_save_note, rc == -ENOTSUP ? "Name it .qoi or .png"
+             : "Could not save %s", k_path_basename(path));
+    ulogf("screenshot: save as %s failed (%d)\n", path, rc);
+    uapp_redraw(a);
+    ask_where(a);
+}
+
+static void save_open(struct uapp *a) {
+    if (uimg_load(g_save_src, &g_src) < 0) {
+        ulogf("screenshot: cannot read %s\n", g_save_src);
+        uapp_quit(a, 1);
+    }
+}
+
+static void save_draw(struct uapp *a, struct uapp_draw *d) {
+    struct ugfx_surface *s = uapp_surface(d);
+    int u = unit();
+    ugfx_fill_rect(s, 0, 0, s->w, s->h, UTHEME_WINDOW_BG);
+    int bw = s->w - 2 * u, bh = s->h - 3 * u;
+    if (g_src.px && bw > 0 && bh > 0) {
+        int pw, ph;
+        uimg_fit_size(g_src.w, g_src.h, bw, bh, UIMG_FIT_CONTAIN, &pw, &ph);
+        if (g_preview.w != pw || g_preview.h != ph) {
+            uimg_free(&g_preview);
+            uimg_scale(&g_src, pw, ph, &g_preview);
+        }
+        if (g_preview.px) {
+            int x = (s->w - pw) / 2, y = u + (bh - ph) / 2;
+            ugfx_draw_rect(s, x - 1, y - 1, pw + 2, ph + 2, UTHEME_OUTLINE);
+            ugfx_blit(s, x, y, pw, ph, g_preview.px, pw);
+        }
+    }
+    const char *note = g_save_note[0] ? g_save_note : k_path_basename(g_save_src);
+    ugfx_draw_string_elided(s, u, s->h - u - u / 2, s->w - 2 * u, note,
+                            g_save_note[0] ? utheme_action(UTHEME_ACT_DANGER) : UTHEME_TEXT,
+                            UTHEME_WINDOW_BG);
+    // ASKED FROM THE FIRST FRAME, not on_open: the loop must be running
+    // for the compositor to take a second window.
+    if (!g_chooser_asked) { g_chooser_asked = 1; ask_where(a); }
+}
+
+static void save_key(struct uapp *a, int key, unsigned mods) {
+    (void)mods;
+    if (key == 0x1B) uapp_quit(a, 0);
+}
+
+static int save_close(struct uapp *a) {
+    (void)a;
+    if (uui_filedialog_is_open(&g_chooser)) uui_filedialog_close_window(&g_chooser);
+    uimg_free(&g_preview);
+    uimg_free(&g_src);
+    return 1;
+}
+
+static int save_as_main(void) {
+    struct uapp_desc desc = {
+        .title    = "Save Screenshot",
+        .app_id   = "screenshot",
+        .w        = 480,
+        .h        = 300,
+        .on_open  = save_open,
+        .on_draw  = save_draw,
+        .on_key   = save_key,
+        .on_close = save_close,
+    };
+    return uapp_run(&desc);
+}
+
 int main(int argc, char **argv) {
+    // The card's Save as: the rest of the line is the path.
+    if (argc > 2 && !strcmp(argv[1], "--save-as")) {
+        size_t n = 0;
+        for (int i = 2; i < argc; i++)
+            n += (size_t)snprintf(g_save_src + n, n < sizeof g_save_src ? sizeof g_save_src - n : 0,
+                                  "%s%s", i > 2 ? " " : "", argv[i]);
+        if (n >= sizeof g_save_src) return 1;
+        return save_as_main();
+    }
     prefs_load();
     for (int i = 1; i + 1 < argc; i++) {
         if (!strcmp(argv[i], "--delay")) g_launch_delay = atoi(argv[++i]);

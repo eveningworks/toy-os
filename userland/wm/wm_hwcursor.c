@@ -121,8 +121,9 @@ int wm_hwcursor_sync(enum wm_cursor_kind kind) {
         w = s->w; h = s->h;
         hot_x = s->hot_x; hot_y = s->hot_y;
     } else if (kind == WM_CURSOR_NORMAL || kind == WM_CURSOR_HAND ||
-               kind == WM_CURSOR_MOVE || kind == WM_CURSOR_NOT_ALLOWED) {
-        // No theme arrow either: the three arrow-backed shapes show the
+               kind == WM_CURSOR_MOVE || kind == WM_CURSOR_NOT_ALLOWED ||
+               kind == WM_CURSOR_CROSSHAIR) {
+        // No theme arrow either: the arrow-backed shapes show the
         // built-in arrow, as the software path does.
         wm_builtin_arrow_masks(&outline, &fill, &w, &h, &stride);
         hot_x = 0; hot_y = 0;

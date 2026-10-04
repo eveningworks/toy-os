@@ -192,10 +192,11 @@ Scaling). The **on-screen keyboard** floats over the desktop, dragged by
 its bar, and docks full width with one button.
 
 **Screenshots are an overlay**, GNOME's shape: PrtSc freezes and dims
-the screen under a pill -- Region (drag, then resize by its handles),
-Screen, Window (the one under the pointer), the pointer, copy to the
-clipboard, a delay -- and the shutter leaves a card in the corner with
-the picture and Open / Copy / Folder. `/bin/screenshot` does the same
+the screen under a pill -- Region (a crosshair; drag, with the size
+beside the pointer, then resize by its handles), Screen, Window (the one
+under the pointer), the pointer, copy to the clipboard, a delay -- and
+the shutter leaves a card in the corner with the picture and Open / Copy
+/ Folder / Save as (the shared chooser; a copy, as .qoi or .png). `/bin/screenshot` does the same
 from a shell.
 
 **Notepad** is a tabbed editor in Kate's and Windows 11 Notepad's shape:

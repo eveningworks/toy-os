@@ -28,8 +28,8 @@
 #define POLL_NS       500000000ull
 #define RECENT_NS     60000000000ull   // "the desktop restarted" only if it just did
 
-// The close box, then up to three actions; what they are is the kind's.
-enum { BTN_CLOSE = 0, BTN_A, BTN_B, BTN_C, BTNS };
+// The close box, then up to four actions; what they are is the kind's.
+enum { BTN_CLOSE = 0, BTN_A, BTN_B, BTN_C, BTN_D, BTNS };
 #define BTN_DETAILS BTN_A   // a crash's
 #define BTN_REOPEN  BTN_B
 enum { KIND_CRASH = 0, KIND_SHOT };
@@ -265,7 +265,7 @@ static void card_rect(int i, int *x, int *y, int *w, int *h) {
 }
 
 static const char *shot_label(int b) {
-    return b == BTN_A ? "Open" : b == BTN_B ? "Copy" : "Folder";
+    return b == BTN_A ? "Open" : b == BTN_B ? "Copy" : b == BTN_C ? "Folder" : "Save as...";
 }
 
 static int button_rect(int i, int b, int *x, int *y, int *w, int *h) {
@@ -280,7 +280,8 @@ static int button_rect(int i, int b, int *x, int *y, int *w, int *h) {
     *h = utheme_control_h();
     *y = cy + chh - pad() - *h;
     if (n->kind == KIND_SHOT) {
-        // Left to right under the picture: Open (the primary), Copy, Folder.
+        // Left to right under the picture: Open (the primary), Copy,
+        // Folder, Save as.
         int bx = cx + pad();
         for (int k = BTN_A; k <= b; k++) {
             *w = ugfx_text_width(shot_label(k)) + 2 * ugfx_char_w();
@@ -289,7 +290,7 @@ static int button_rect(int i, int b, int *x, int *y, int *w, int *h) {
         }
         return 0;
     }
-    if (b == BTN_C) return 0;
+    if (b == BTN_C || b == BTN_D) return 0;
     int bw = ugfx_text_width("Details") + 2 * ugfx_char_w();
     int rw = ugfx_text_width("Reopen") + 2 * ugfx_char_w();
     int right = cx + cw - pad();
@@ -315,7 +316,7 @@ int crash_notice_rect(int *x, int *y, int *w, int *h) {
 }
 
 const char *crash_notice_button(int b, int r[4]) {
-    if (!g_count || b < BTN_A || b > BTN_C) return 0;
+    if (!g_count || b < BTN_A || b > BTN_D) return 0;
     if (!button_rect(0, b, &r[0], &r[1], &r[2], &r[3])) return 0;
     if (g_n[0].kind == KIND_SHOT) return shot_label(b);
     return b == BTN_DETAILS ? "Details" : "Reopen";
@@ -386,6 +387,13 @@ int crash_notice_handle_click(int mx, int my) {
             // Handed the FILE, the File Manager opens its folder with it
             // selected (docs/conventions/gui.md).
             int pid = sys_spawn("/bin/wm/apps/files", n.path, -1);
+            if (pid > 0) wm_track_launched(pid);
+        } else if (b == BTN_D) {
+            // The compositor cannot hold a chooser: Screenshot opens one
+            // over a preview of the file and writes the copy.
+            char args[PATH_MAX_NOTICE + 16];
+            snprintf(args, sizeof args, "--save-as %s", n.path);
+            int pid = sys_spawn("/bin/wm/apps/screenshot", args, -1);
             if (pid > 0) wm_track_launched(pid);
         }
         return 1;

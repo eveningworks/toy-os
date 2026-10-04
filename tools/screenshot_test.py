@@ -389,7 +389,8 @@ def overlay_checks(dbg, disk, out, qmp, skip):
     check("the compositor shows a card for the saved file",
           nt.get("title") == "Screenshot saved" and (nt.get("path") or "").endswith(name or "?"),
           str(nt))
-    check("...with Open, Copy and Folder", labels == ["Open", "Copy", "Folder"], str(labels))
+    check("...with Open, Copy, Folder and Save as",
+          labels == ["Open", "Copy", "Folder", "Save as..."], str(labels))
 
     # --- 6. Region: a drag, then a handle; the crop is what was chosen
     c = open_overlay(dbg)
@@ -455,6 +456,71 @@ def overlay_checks(dbg, disk, out, qmp, skip):
             im = Image.open(got)
             check("a click captures that window at its size",
                   im.size == (note["w"], note["h"]), f"{im.size}")
+
+    # --- 8a. Region: a crosshair where a press starts a region, not on the pill
+    c = open_overlay(dbg)
+    if check("PrtSc for the pointer's shape", c is not None):
+        dbg.send("gui key r")
+        dbg.settle()
+        dbg.warp_cursor(qmp, W // 4, H // 4)
+        time.sleep(0.6)
+        s = dbg.cursor_shape()
+        check("Region: open ground shows the crosshair", s == dbg.CURSOR_CROSSHAIR, f"shape={s}")
+        pill = rect_of(layout(dbg), "pill")
+        if pill:
+            dbg.warp_cursor(qmp, c["x"] + pill[0] + 6, c["y"] + pill[1] + pill[3] // 2)
+            time.sleep(0.6)
+            s = dbg.cursor_shape()
+            check("control: the pill does not", s != dbg.CURSOR_CROSSHAIR, f"shape={s}")
+        dbg.send("gui key 0x1b")
+        gone(dbg)
+
+    # --- 8b. the card's Save as: the chooser over a preview, and a COPY
+    c = open_overlay(dbg)
+    if check("PrtSc for Save as", c is not None):
+        dbg.send("gui key s")
+        dbg.settle()
+        press_ctl(dbg, c, layout(dbg), "shutter")
+        gone(dbg)
+        src = newest(dbg)
+        nt = dbg.state().get("notice") or {}
+        b = next((x for x in nt.get("buttons", []) if x.get("label") == "Save as..."), None)
+        if check("the card's Save as is there to press", b is not None, str(nt.get("buttons"))):
+            dbg.logs("screenshot:", clear=True)
+            dbg.click(b["x"] + b["w"] // 2, b["y"] + b["h"] // 2)
+            deadline, titles = time.time() + 10, []
+            while time.time() < deadline:
+                titles = [x["title"] for x in dbg.windows()]
+                if "Save Screenshot As" in titles and "Save Screenshot" in titles:
+                    break
+                time.sleep(0.3)
+            if check("...opens the chooser over a preview of the file",
+                     "Save Screenshot As" in titles and "Save Screenshot" in titles, str(titles)):
+                for _ in range(48):                 # the offered name, gone
+                    dbg.key("0x08", settle=False)
+                for ch in "saved-copy.png":
+                    dbg.key({".": "0x2e", "-": "0x2d"}.get(ch, ch), settle=False)
+                dbg.settle()
+                dbg.key("0x0d")
+                deadline, done = time.time() + 10, []
+                while time.time() < deadline and not done:
+                    done = dbg.logs("screenshot: saved as ", clear=False)
+                    time.sleep(0.3)
+                check("...and Return writes the copy where it was named",
+                      bool(done) and done[-1].strip().endswith("/home/screenshots/saved-copy.png"),
+                      str(done))
+                check("...and the window goes", gone(dbg))
+                dbg.send("sh sync")
+                time.sleep(0.3)
+                files = dbg.send("sh ls /home/screenshots").split()
+                check("the original is kept beside it", src in files and "saved-copy.png" in files,
+                      str(files))
+                got = out("saved_copy.png")
+                if pull(disk, "/home/screenshots/saved-copy.png", got):
+                    im = Image.open(got)
+                    check("...as a real PNG, at the capture's size",
+                          im.format == "PNG" and im.size == (W, H), f"{im.format} {im.size}")
+                dbg.send("sh rm /home/screenshots/saved-copy.png")
 
     # --- 8. Esc saves nothing; the copy toggle is kept and is said
     before = newest(dbg)

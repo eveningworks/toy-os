@@ -105,6 +105,15 @@ def g_not_allowed(d, s, cx=11.0, cy=11.0, r=8.0, w=2.6):
     return (11, 11)
 
 
+def g_crosshair(d, s, c=12.5, gap=2.6, arm=10.5, w=1.6):
+    """Four arms around an open centre, and a dot on the hotspot."""
+    for x0, y0, x1, y1 in ((c - arm, c - w / 2, c - gap, c + w / 2), (c + gap, c - w / 2, c + arm, c + w / 2),
+                           (c - w / 2, c - arm, c + w / 2, c - gap), (c - w / 2, c + gap, c + w / 2, c + arm)):
+        d.rectangle([x0 * s, y0 * s, x1 * s, y1 * s], fill=255)
+    d.rectangle([(c - w / 2) * s, (c - w / 2) * s, (c + w / 2) * s, (c + w / 2) * s], fill=255)
+    return (12, 12)
+
+
 GEOM = {
     "arrow": ((16, 23), g_arrow),
     "text": ((11, 22), g_ibeam),
@@ -116,6 +125,7 @@ GEOM = {
     "hand": ((22, 25), g_hand),
     "move": ((25, 25), g_move),
     "not-allowed": ((23, 23), g_not_allowed),
+    "crosshair": ((25, 25), g_crosshair),
 }
 
 

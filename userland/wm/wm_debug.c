@@ -1214,7 +1214,7 @@ static void cmd_state(struct dbg_out *o, int json) {
             dbg_out_printf(o, "\"path\":\"%s\",\"sub\":\"%s\",\"buttons\":[",
                            np ? np : "", ns ? ns : "");
             int first = 1;
-            for (int b = 1; b <= 3; b++) {
+            for (int b = 1; b <= 4; b++) {
                 int r[4];
                 const char *lb = crash_notice_button(b, r);
                 if (!lb) continue;

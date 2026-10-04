@@ -884,7 +884,8 @@ struct win_event {
 #define WIN_CURSOR_HAND     5 // a link: cursor-shape-v1's `pointer`
 #define WIN_CURSOR_MOVE     6 // this thing moves where you drag it
 #define WIN_CURSOR_NOT_ALLOWED 7 // a drop or action is refused here
-#define WIN_CURSOR_COUNT    8
+#define WIN_CURSOR_CROSSHAIR 8 // a point or region is picked here
+#define WIN_CURSOR_COUNT    9
 
 // THE CLIPBOARD IS NOT HERE ANY MORE. It was a buffer in
 // kernel/proc/win_server.c reached by SYS_WIN_CLIP, holding untrusted

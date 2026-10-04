@@ -36,7 +36,7 @@ const char *crash_notice_describe(int details[4], int reopen[4]);
 
 // A client's WIN_REQ_NOTICE, one piece of its path at a time.
 void crash_notice_piece(int pid, int a, int kind, unsigned flags, const char *text);
-// The newest card's action `b` (1..3): its label, and its rect in r.
+// The newest card's action `b` (1..4): its label, and its rect in r.
 const char *crash_notice_button(int b, int r[4]);
 const char *crash_notice_path(void);   // a file card's file, or NULL
 const char *crash_notice_sub(void);

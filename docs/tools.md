@@ -4171,8 +4171,10 @@ window without going through it will find its layout polls timing out.
   mode equal to the screen as it was (the overlay, its pill and its
   taskbar button absent, the focus where it was), a dragged and then
   handle-resized region cropped to the pixel, the Window target
-  following the pointer, the compositor's card with Open / Copy /
-  Folder, Esc saving nothing, the copy toggle said on the card, and no
+  following the pointer, the crosshair over open ground in Region (the
+  pill as its control), the compositor's card with Open / Copy / Folder
+  / Save as and that Save as end to end (the chooser over a preview, a
+  PNG copy beside the kept original), Esc saving nothing, the copy toggle said on the card, and no
   launch left a zombie. The cursor box and the taskbar clock (it shows
   seconds) are left out of every comparison.
 

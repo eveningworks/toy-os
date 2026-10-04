@@ -647,6 +647,7 @@ static enum wm_cursor_kind client_cursor_at(int mx, int my) {
         case WIN_CURSOR_HAND:     return WM_CURSOR_HAND;
         case WIN_CURSOR_MOVE:     return WM_CURSOR_MOVE;
         case WIN_CURSOR_NOT_ALLOWED: return WM_CURSOR_NOT_ALLOWED;
+        case WIN_CURSOR_CROSSHAIR: return WM_CURSOR_CROSSHAIR;
         default: break;
         }
         break;
