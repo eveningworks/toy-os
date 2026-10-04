@@ -134,6 +134,19 @@ struct utext {
     // text to the right of the gutter, so callers pass the same box.
     int gutter;
     int line_highlight;
+
+    // TYPING AND SHOWING WHITESPACE, all off by default so a caller that
+    // never sets them gets the old behaviour exactly. `tab_width` (0 or
+    // 1: one cell, as before) sets where a tab's stops are, for drawing,
+    // wrapping and hit-testing alike; `tab_spaces` makes Tab type spaces
+    // to the next stop; `auto_indent` makes Enter repeat the line's
+    // indent; `show_ws` marks spaces and tabs; `scroll_margin` keeps
+    // that many rows visible around the caret when it moves.
+    int tab_width;
+    int tab_spaces;
+    int auto_indent;
+    int show_ws;
+    int scroll_margin;
     uint32_t gutter_fg, gutter_bg, line_bg;
 
     // Ranges tinted behind the text (find hits): the caller's array,

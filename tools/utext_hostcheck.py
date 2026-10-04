@@ -507,10 +507,85 @@ static void check_gutter(void) {
     if (utext_line_index(&t, 1) != 7) fail("line_index", utext_line_index(&t, 1), 7);
 }
 
+// TABS, INDENT AND THE MARGIN (utext.h's typing options). A tab is as
+// wide as the gap to the next stop, for wrapping, drawing, hit-testing
+// and the widest line alike -- the bug is the four disagreeing.
+static void check_tabs(void) {
+    static char b[256];
+    struct utext t;
+    int ln, col;
+
+    utext_init_buf(&t, b, (int)sizeof b);
+    utext_insert_text(&t, "a\tb\n\tx", 6);
+    t.tab_width = 4;
+    utext_set_wrap(&t, UTEXT_WRAP_OFF);
+    utext_metrics(&t, 40 * CW, 4 * CH, NULL, NULL);
+    pos_of_index(&t, 40, 2, &ln, &col);
+    if (ln != 0 || col != 4) fail("'b' after a tab sits at the stop", ln * 100 + col, 4);
+    pos_of_index(&t, 40, 5, &ln, &col);
+    if (ln != 1 || col != 4) fail("a leading tab fills to the stop", ln * 100 + col, 104);
+    // A click on a tab's near half is the tab, its far half after it.
+    int at = utext_index_at_point(&t, 0, 0, 40 * CW, 4 * CH, 1 * CW + 1, 1);
+    if (at != 1) fail("a click on a tab's near half", at, 1);
+    at = utext_index_at_point(&t, 0, 0, 40 * CW, 4 * CH, 3 * CW + 1, 1);
+    if (at != 2) fail("a click on a tab's far half", at, 2);
+    at = utext_index_at_point(&t, 0, 0, 40 * CW, 4 * CH, 4 * CW + 1, 1);
+    if (at != 2) fail("a click on the stop is the character there", at, 2);
+    if (utext_widest_line(&t, 40 * CW, 4 * CH) != 5)
+        fail("the widest line counts a tab's cells", utext_widest_line(&t, 40 * CW, 4 * CH), 5);
+
+    // Wrapping counts the tab's cells: "ab\tcd" in 4 columns breaks after the tab.
+    static const char *const w[] = { "ab", "cd" };
+    utext_init_buf(&t, b, (int)sizeof b);
+    t.tab_width = 4;
+    expect_lines("ab\tcd", 4, UTEXT_WRAP_WORD, w, 2, "a tab's cells count toward the wrap");
+
+    // Tab types spaces to the next stop.
+    utext_init_buf(&t, b, (int)sizeof b);
+    t.tab_width = 4;
+    t.tab_spaces = 1;
+    utext_insert_text(&t, "ab", 2);
+    utext_key(&t, '\t', 0);
+    EXPECT(&t, "ab  ", "Tab types spaces to the stop");
+    utext_key(&t, '\t', 0);
+    EXPECT(&t, "ab      ", "...and a whole stop from one");
+
+    // Enter repeats the indent -- up to the caret, never more.
+    utext_init_buf(&t, b, (int)sizeof b);
+    t.auto_indent = 1;
+    utext_insert_text(&t, "  \tx", 4);
+    utext_key(&t, '\n', 0);
+    EXPECT(&t, "  \tx\n  \t", "Enter keeps the indent");
+    utext_init_buf(&t, b, (int)sizeof b);
+    t.auto_indent = 1;
+    utext_insert_text(&t, "    x", 5);
+    t.ed.cursor = 2;
+    utext_key(&t, '\n', 0);
+    EXPECT(&t, "  \n    x", "Enter inside the indent keeps only what is left of the caret");
+    // ...and with it off, Enter is DECLINED as before: a field commits
+    // on it and a document's caller inserts the newline itself.
+    utext_init_buf(&t, b, (int)sizeof b);
+    utext_insert_text(&t, "  x", 3);
+    if (utext_key(&t, '\n', 0)) fail("Enter without auto-indent is declined", 1, 0);
+    EXPECT(&t, "  x", "Enter without auto-indent changes nothing");
+
+    // THE MARGIN: moving down past the bottom keeps 3 rows below.
+    static char big[512];
+    utext_init_buf(&t, big, (int)sizeof big);
+    for (int i = 0; i < 30; i++) utext_insert_text(&t, "line\n", 5);
+    t.scroll_margin = 3;
+    utext_scroll_top(&t);
+    utext_metrics(&t, 40 * CW, 10 * CH, NULL, NULL);
+    t.ed.cursor = utext_line_index(&t, 8);
+    utext_reveal_cursor(&t, 40 * CW, 10 * CH);
+    if (utext_top_line(&t, 40 * CW, 10 * CH) != 2)
+        fail("the margin keeps 3 rows below the caret", utext_top_line(&t, 40 * CW, 10 * CH), 2);
+}
+
 int main(int argc, char **argv) {
     int corrupt = argc > 1 && xeq(argv[1], "--corrupt");
     int first = corrupt ? 2 : 1;
-    if (!corrupt) { check_semantics(); check_rule(); check_undo(); check_gutter(); }
+    if (!corrupt) { check_semantics(); check_rule(); check_undo(); check_gutter(); check_tabs(); }
     for (int i = first; i + 1 < argc; i += 3) {
         int cols = atoi(argv[i + 1]);
         int wrap = atoi(argv[i + 2]);

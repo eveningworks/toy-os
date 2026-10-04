@@ -10154,6 +10154,25 @@ the block holding the editor's top line (`uui_markdown_y_of()`). Both
 are a walk of the document, so neither runs on a frame where nothing
 moved.
 
+## An app's Options window is a dialog of pages, applied on OK
+
+Notepad's options were mocked up both ways (2026-10-04): a dialog of
+pages over Defaults / OK / Cancel, the shape Terminal and File Manager
+Options already had (Dolphin's and Kate's Configure dialogs), and a
+page inside the window applying each change at once (Windows 11
+Notepad, GNOME Text Editor's preferences). The dialog won on
+consistency: three apps whose Options behave alike read as one system,
+and OK/Cancel lets a person try a combination and back out of all of it.
+It is `ui/uui_prefs.h` now -- the window, the pages, the rows, the focus
+ring and the buttons -- with the controls and the config left to the
+app, so the next Options window is a table of rows rather than a fourth
+copy of the dialog. Two rules came with it: **an option changed from a
+menu is the same option** (Notepad's View toggles write the same keys
+the window does, as Windows Notepad's Word wrap is remembered), and
+**what a program KEEPS is not an option** -- the recent list and the
+tabs to reopen live in `/var/lib/notepad/`, the options in `/etc`, the
+FHS's split between state and configuration.
+
 ## Disk Mark draws the run, and keeps every run
 
 CrystalDiskMark shows four numbers at the end. GNOME Disks draws

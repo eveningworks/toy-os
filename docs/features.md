@@ -219,7 +219,13 @@ a colour-coded command bar, a line-number gutter with the caret's line
 tinted, find with every hit highlighted, a live Markdown preview beside
 the source that scrolls with it, and undo and redo -- which every text
 field on the desktop has, from one edit history in the toolkit. Undoing
-back to what was saved makes a document clean again. **Disk Mark**
+back to what was saved makes a document clean again. Its **Options**
+window (Edit > Options..., or the gear) keeps tab width and
+spaces-for-Tab, keep-the-indent, shown whitespace, the text size, the
+bars, the preview's mode and side, reopening the last tabs, opening in
+a tab or a window, line endings for new files, trimming and a final
+newline on save, and how many recent files File > Recent keeps, across
+runs. **Disk Mark**
 draws the run as it happens -- four meter cards and GNOME Disks' graph
 of throughput over the run, its phases marked -- benchmarks any
 writable disk volume, can be stopped, and keeps every run in a history

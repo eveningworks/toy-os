@@ -41,6 +41,8 @@
 #include "lib/ufile.h"
 #include "lib/uclip.h"
 #include "keyboard.h" // KEY_* codes, the same ones the WM delivers
+#include "ui/umonofont.h"
+#include "notepad/notepad.h"   // the options, their window, the kept state
 
 // A small inset so glyphs and the frame don't touch when there is no
 // gutter -- not an outer moat. The edit surface fills the content area
@@ -76,9 +78,7 @@
 #define CMD_SAVE_AS    4
 #define CMD_EXIT       5
 #define CMD_RECENT     6  // the submenu itself -- queried, never committed
-#define CMD_RECENT_0   7
-#define CMD_RECENT_1   8
-#define CMD_RECENT_2   9
+// 7-9 were the three Recent rows; they are CMD_RECENT_0 + i now.
 #define CMD_SELECT_ALL 10
 #define CMD_DELETE     11
 #define CMD_GOTO       12 // submenu
@@ -99,8 +99,9 @@
 #define CMD_PREV_TAB   27
 #define CMD_FIND_NEXT  28
 #define CMD_FIND_PREV  29
+#define CMD_OPTIONS    30
+#define CMD_RECENT_0   40   // .. + NP_RECENT_MAX - 1
 
-#define RECENT_MAX 3
 
 static struct uapp *g_app;   // for callbacks that carry no uapp
 
@@ -168,12 +169,18 @@ static int doc_reserve(struct doc *d, int bytes) {
 }
 
 static char g_status[96];
-static int g_show_status = 1;
-static int g_linenums = 1;
+// The options (np_conf.c), and the copy last written, so a change made
+// from the menus saves only the key it moved.
+static struct np_conf g_conf, g_conf_saved;
+#define g_show_status (g_conf.statusbar)
+#define g_linenums (g_conf.linenums)
+static int g_menu_shown;           // F10 brought a hidden menu bar up
+static struct umonofont g_docfont; // the document's face at the chosen size
+static int g_close_ok;             // "close several tabs" was answered
 
 // The Recent list. The menu items point straight at these buffers, so
 // "update the menu" is "write the string" (ui/uui_menubar.h).
-static char g_recent[RECENT_MAX][PATH_MAX_LEN];
+static char g_recent[NP_RECENT_MAX][PATH_MAX_LEN];
 static int g_recent_count;
 
 static struct uui_menubar g_menu;
@@ -200,13 +207,17 @@ static char g_eol[16];
 
 // --- the menu tree ----------------------------------------------------
 
-static const struct uui_menu_item recent_items[] = {
-    UUI_MENU(g_recent[0], CMD_RECENT_0, 0),
-    UUI_MENU(g_recent[1], CMD_RECENT_1, 0),
-    UUI_MENU(g_recent[2], CMD_RECENT_2, 0),
+static const struct uui_menu_item recent_items[NP_RECENT_MAX] = {
+    UUI_MENU(g_recent[0], CMD_RECENT_0 + 0, 0), UUI_MENU(g_recent[1], CMD_RECENT_0 + 1, 0),
+    UUI_MENU(g_recent[2], CMD_RECENT_0 + 2, 0), UUI_MENU(g_recent[3], CMD_RECENT_0 + 3, 0),
+    UUI_MENU(g_recent[4], CMD_RECENT_0 + 4, 0), UUI_MENU(g_recent[5], CMD_RECENT_0 + 5, 0),
+    UUI_MENU(g_recent[6], CMD_RECENT_0 + 6, 0), UUI_MENU(g_recent[7], CMD_RECENT_0 + 7, 0),
+    UUI_MENU(g_recent[8], CMD_RECENT_0 + 8, 0), UUI_MENU(g_recent[9], CMD_RECENT_0 + 9, 0),
 };
 
-static const struct uui_menu_item file_items[] = {
+// NOT const: the Recent submenu shows as many rows as there are files.
+#define FILE_RECENT_ROW 2
+static struct uui_menu_item file_items[] = {
     UUI_MENU("New tab",      CMD_NEW,       "Ctrl-N"),
     UUI_MENU("Open...",      CMD_OPEN,      "Ctrl-O"),
     UUI_SUBMENU_CODE("Recent files", recent_items, CMD_RECENT),
@@ -231,6 +242,8 @@ static const struct uui_menu_item edit_items[] = {
     UUI_MENU_SEP,
     UUI_MENU("Select All",       CMD_SELECT_ALL, "Ctrl-A"),
     UUI_MENU("Delete Selection", CMD_DELETE,     "Del"),
+    UUI_MENU_SEP,
+    UUI_MENU_ICON("Options...",  CMD_OPTIONS,    0, "tb-gear", 0),
 };
 
 // THE CONTEXT MENU IS THE SAME WIDGET WITH NO BAR, its rows the Edit
@@ -291,6 +304,7 @@ static const struct uui_toolbar_item tb_items[] = {
     { "tb-find",    "Find (Ctrl+F)",      CMD_FIND,     0, 0,          "Ctrl-F", UTHEME_ACT_VIEW },
     { "tb-wrap",    "Word wrap (Alt+Z)",  CMD_WORDWRAP, 0, UUI_TB_END, "Alt+Z",  UTHEME_ACT_ARRANGE },
     { "tb-preview", "Markdown preview (Ctrl+E)", CMD_MARKDOWN, 0, 0,   "Ctrl-E", UTHEME_ACT_ARRANGE },
+    { "tb-gear",    "Options",            CMD_OPTIONS,  0, 0,          0,        UTHEME_ACT_VIEW },
 };
 
 // --- the file chooser and the unsaved-changes dialog ------------------
@@ -307,7 +321,7 @@ static int g_dlg_saving;
 // finishing a Save that an ask started.
 static struct uui_dialog g_ask;
 
-enum { ASK_SAVE = 1, ASK_DISCARD, ASK_CANCEL };
+enum { ASK_SAVE = 1, ASK_DISCARD, ASK_CANCEL, ASK_CLOSE_ALL };
 enum { PEND_NONE = 0, PEND_CLOSE, PEND_CLOSE_TAB };
 static int g_pending;
 static int g_after_save;
@@ -371,18 +385,47 @@ static void set_title(struct uapp *a) {
 }
 
 // Most-recent-first, deduplicated, capped; on every open and save.
+static void recent_save(void);
+static void recent_sync_menu(void);
+
 static void recent_push(const char *path) {
-    int at = RECENT_MAX - 1;
+    if (g_conf.recent_max <= 0) return;
+    // A path already listed MOVES to the top; only a new one adds a row
+    // (counting it again showed a placeholder row as a recent file).
+    int at = -1;
     for (int i = 0; i < g_recent_count; i++)
         if (strcmp(g_recent[i], path) == 0) { at = i; break; }
+    if (at < 0) {
+        at = g_recent_count < NP_RECENT_MAX ? g_recent_count : NP_RECENT_MAX - 1;
+        if (g_recent_count < NP_RECENT_MAX) g_recent_count++;
+    }
     for (int i = at; i > 0; i--) strlcpy(g_recent[i], g_recent[i - 1], PATH_MAX_LEN);
     strlcpy(g_recent[0], path, PATH_MAX_LEN);
-    if (g_recent_count < RECENT_MAX) g_recent_count++;
+    if (g_recent_count > g_conf.recent_max) g_recent_count = g_conf.recent_max;
+    recent_sync_menu();
+    recent_save();
 }
 
 // --- documents: made, switched, closed --------------------------------
 
 static void find_run(int select);
+
+// The options every document takes, applied at creation and again on OK.
+static void doc_apply_conf(struct doc *d) {
+    d->text.gutter = g_linenums;
+    d->text.line_highlight = g_conf.line_highlight;
+    d->text.tab_width = g_conf.tab_width;
+    d->text.tab_spaces = g_conf.tab_spaces;
+    d->text.auto_indent = g_conf.auto_indent;
+    d->text.show_ws = g_conf.show_ws;
+    d->text.scroll_margin = g_conf.scroll_margin ? 3 : 0;
+}
+
+static int preview_for(const char *path) {
+    if (g_conf.preview == NP_PREVIEW_ALWAYS) return 1;
+    if (g_conf.preview == NP_PREVIEW_NEVER) return 0;
+    return path && looks_like_markdown(path);
+}
 
 static struct doc *doc_new(void) {
     if (g_ndocs >= MAX_DOCS) { set_status("too many tabs -- close one first"); return NULL; }
@@ -393,6 +436,10 @@ static struct doc *doc_new(void) {
     d->text.animate = 1;   // Toykit redraws per frame while a scroll glides
     d->text.gutter = g_linenums;
     d->text.line_highlight = 1;
+    doc_apply_conf(d);
+    utext_set_wrap(&d->text, g_conf.wrap ? UTEXT_WRAP_WORD : UTEXT_WRAP_OFF);
+    d->crlf = g_conf.crlf_new;
+    d->preview = g_conf.preview == NP_PREVIEW_ALWAYS;
     d->undo_mem = (unsigned char *)malloc(UNDO_BYTES);
     uui_undo_init(&d->undo, d->undo_mem, d->undo_mem ? UNDO_BYTES : 0);
     d->text.ed.undo = &d->undo;
@@ -496,7 +543,7 @@ static int load_into(struct uapp *a, struct doc *d, const char *path) {
     d->text.ed.cursor = 0;
     utext_sel_clear(&d->text);
     utext_scroll_top(&d->text);   // 0 is the BOTTOM (utext.h)
-    d->preview = looks_like_markdown(path);
+    d->preview = preview_for(path);
     strlcpy(d->path, path, PATH_MAX_LEN);
     doc_mark_clean(d);
     recent_push(path);
@@ -520,22 +567,73 @@ static int open_path(struct uapp *a, const char *path) {
     return 1;
 }
 
+// THE SAVING OPTIONS EDIT THE DOCUMENT, as one step of its history --
+// Kate's and gedit's choice -- so what is on screen is what was written
+// and Undo puts the spaces back. The caret keeps its place in the text.
+static void tidy_for_save(struct doc *d) {
+    struct utext *t = &d->text;
+    if (!g_conf.trim_trailing && !g_conf.final_newline) return;
+    int caret = t->ed.cursor;
+    uui_undo_begin(&d->undo);
+    if (g_conf.trim_trailing) {
+        for (int e = t->count; e >= 0;) {
+            int ls = e;
+            while (ls > 0 && t->buf[ls - 1] != '\n') ls--;
+            int end = e;
+            if (end > ls && t->buf[end - 1] == '\r') end--;   // a CRLF file's \r stays
+            int st = end;
+            while (st > ls && (t->buf[st - 1] == ' ' || t->buf[st - 1] == '\t')) st--;
+            if (st < end) {
+                t->ed.sel_anchor = st;
+                t->ed.sel_active = 1;
+                t->ed.cursor = end;
+                utext_sel_delete(t);
+                if (caret >= end) caret -= end - st;
+                else if (caret > st) caret = st;
+            }
+            if (ls == 0) break;
+            e = ls - 1;
+        }
+    }
+    if (g_conf.final_newline && t->count > 0 && t->buf[t->count - 1] != '\n') {
+        utext_sel_clear(t);
+        t->ed.cursor = t->count;
+        utext_insert(t, '\n');   // a CRLF document gets its \r on the way out
+    }
+    uui_undo_end(&d->undo);
+    t->ed.cursor = caret > t->count ? t->count : caret;
+    utext_sel_clear(t);
+}
+
+// The buffer holds '\n' for every line typed here, so a CRLF document
+// is written with each bare '\n' as "\r\n" -- which also mends a file
+// whose lines were mixed. An LF document goes out byte for byte.
+static int write_doc(int fd, const struct doc *d) {
+    static char out[16384];
+    int n = 0;
+    for (int i = 0; i < d->text.count; i++) {
+        char c = d->buf[i];
+        if (n + 2 > (int)sizeof out) {
+            if (sys_write(fd, out, (size_t)n) < 0) return 0;
+            n = 0;
+        }
+        if (c == '\n' && d->crlf && (i == 0 || d->buf[i - 1] != '\r')) out[n++] = '\r';
+        out[n++] = c;
+    }
+    return n == 0 || sys_write(fd, out, (size_t)n) >= 0;
+}
+
 static int save_file(struct uapp *a, struct doc *d, const char *path) {
     if (!path_fits(path)) return 0;
+    tidy_for_save(d);
     int fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
     if (fd < 0) { set_status("save failed"); return 0; }
     uapp_busy_begin(a);
-    // Straight from the buffer, in runs SYS_WRITE takes (SYS_WRITE_MAX).
-    for (int i = 0; i < d->text.count;) {
-        int n = d->text.count - i;
-        if (n > 65536) n = 65536;
-        if (sys_write(fd, d->buf + i, (size_t)n) < 0) {
-            sys_close(fd);
-            uapp_busy_end(a);
-            set_status("write failed");
-            return 0;
-        }
-        i += n;
+    if (!write_doc(fd, d)) {
+        sys_close(fd);
+        uapp_busy_end(a);
+        set_status("write failed");
+        return 0;
     }
     sys_close(fd);
     uapp_busy_end(a);
@@ -563,8 +661,17 @@ static const struct ugfx_font *ui_font(void) {
 }
 #define IN_UI_FONT(expr) do { const struct ugfx_font *was_ = ui_font(); expr; ugfx_set_font(was_); } while (0)
 
-static int menubar_h(void)   { int h; IN_UI_FONT(h = uui_menubar_height(&g_menu)); return h; }
-static int toolbar_h(void)   { int h; IN_UI_FONT(h = uui_toolbar_height(&g_tb)); return h; }
+static int menubar_shown(void) { return g_conf.menubar || g_menu_shown; }
+static int menubar_h(void) {
+    int h = 0;
+    if (menubar_shown()) IN_UI_FONT(h = uui_menubar_height(&g_menu));
+    return h;
+}
+static int toolbar_h(void) {
+    int h = 0;
+    if (g_conf.cmdbar) IN_UI_FONT(h = uui_toolbar_height(&g_tb));
+    return h;
+}
 static int tabs_h(void)      { int h; IN_UI_FONT(h = uui_tabs_height()); return h; }
 static int statusbar_h(void) {
     int h = 0;
@@ -590,7 +697,7 @@ static int hbar_h(void) {
 // The editor's column: the whole width, or the splitter's first share
 // when the preview is open.
 static int editor_w(int cw) {
-    if (!cur()->preview) return cw;
+    if (!cur()->preview || g_conf.preview_below) return cw;
     // ALL of it in the interface face: the splitter's own position
     // depends on its band, whose thickness is font-derived too.
     int ew;
@@ -599,12 +706,24 @@ static int editor_w(int cw) {
     return ew;
 }
 
+// The editor's bottom: the window's, or the splitter's first share when
+// the preview sits BELOW the text.
+static int editor_bottom(int ch) {
+    int bottom = ch - statusbar_h();
+    if (!cur()->preview || !g_conf.preview_below) return bottom;
+    int eb;
+    IN_UI_FONT(uui_splitter_set_track(&g_split, chrome_top(), bottom, 6 * ugfx_char_h(),
+                                      6 * ugfx_char_h());
+               eb = chrome_top() + uui_splitter_before(&g_split));
+    return eb;
+}
+
 static void text_rect_for(int cw, int ch, int *x, int *y, int *w, int *h) {
     int ew = editor_w(cw);
     *x = g_linenums ? 0 : TEXT_PAD;
     *y = chrome_top();
     *w = ew - *x - scrollbar_w();
-    *h = ch - *y - statusbar_h() - hbar_h();
+    *h = editor_bottom(ch) - *y - hbar_h();
     if (*w < 1) *w = 1;
     if (*h < 1) *h = 1;
 }
@@ -633,8 +752,10 @@ static void layout_chrome(int cw, int ch) {
     int y = 0;
     uui_menubar_set_geometry(&g_menu, 0, y, cw, menubar_h());
     uui_menubar_set_bounds(&g_menu, 0, 0, cw, ch);
+    WIDGET(ID_MENU)->hidden = !menubar_shown();
     y += menubar_h();
     uui_toolbar_ops.set_geometry(&g_tb, 0, y, cw, toolbar_h());
+    WIDGET(ID_TOOLBAR)->hidden = !g_conf.cmdbar;
     y += toolbar_h();
     uui_tabs_set_geometry(&g_tabs, 0, y, cw, tabs_h());
     y += tabs_h();
@@ -648,7 +769,12 @@ static void layout_chrome(int cw, int ch) {
     int ew = editor_w(cw);
     WIDGET(ID_MD)->hidden = !preview;
     WIDGET(ID_SPLIT)->hidden = !preview;
-    if (preview) {
+    if (preview && g_conf.preview_below) {
+        int sw = uui_splitter_thickness();
+        int eb = editor_bottom(ch);
+        uui_splitter_set_geometry(&g_split, 0, eb, cw, sw);
+        uui_markdown_set_geometry(&g_md, 0, eb + sw, cw, y + body_h - eb - sw);
+    } else if (preview) {
         int sw = uui_splitter_thickness();
         uui_splitter_set_geometry(&g_split, ew, y, sw, body_h);
         uui_markdown_set_geometry(&g_md, ew + sw, y, cw - ew - sw, body_h);
@@ -879,6 +1005,8 @@ static void find_close(void) {
 // is no "refresh the menu" step anywhere in this app.
 static unsigned menu_item_flags(int code) {
     struct doc *d = cur();
+    if (code >= CMD_RECENT_0 && code < CMD_RECENT_0 + NP_RECENT_MAX)
+        return code - CMD_RECENT_0 < g_recent_count ? 0 : UUI_MI_DISABLED;
     switch (code) {
     case CMD_SAVE:
         return doc_dirty(d) ? 0 : UUI_MI_DISABLED;
@@ -893,9 +1021,7 @@ static unsigned menu_item_flags(int code) {
     case CMD_PASTE:
         return g_clip_has_text ? 0 : UUI_MI_DISABLED;
     case CMD_RECENT:
-    case CMD_RECENT_0: return g_recent_count > 0 ? 0 : UUI_MI_DISABLED;
-    case CMD_RECENT_1: return g_recent_count > 1 ? 0 : UUI_MI_DISABLED;
-    case CMD_RECENT_2: return g_recent_count > 2 ? 0 : UUI_MI_DISABLED;
+        return g_recent_count > 0 ? 0 : UUI_MI_DISABLED;
     case CMD_STATUSBAR:
         return g_show_status ? UUI_MI_CHECKED : 0;
     case CMD_LINENUMS:
@@ -927,7 +1053,7 @@ static int g_scrollbar_drag, g_hbar_drag;
 // document selects the monospace family and puts the previous one back.
 // The chrome is drawn by the toolkit afterwards, in the interface face.
 static const struct ugfx_font *doc_font(void) {
-    return ugfx_set_font(ugfx_font_mono(UGFX_FONT_REGULAR));
+    return ugfx_set_font(umonofont_get(&g_docfont, g_conf.font_size, "notepad"));
 }
 
 static void draw_scrollbar(struct ugfx_surface *s, int tx, int ty, int tw, int th) {
@@ -1049,6 +1175,7 @@ static void reveal_cursor(void) {
 // --- the file chooser -------------------------------------------------
 
 static void run_pending(struct uapp *a);
+static void open_requested(struct uapp *a, const char *path);
 
 static void dlg_done(void *ctx, const char *path) {
     struct uapp *a = (struct uapp *)ctx;
@@ -1067,7 +1194,7 @@ static void dlg_done(void *ctx, const char *path) {
         if (after && ok) run_pending(a);
         else if (after) g_pending = PEND_NONE;   // the reason is in the status bar
     } else {
-        open_path(a, path);
+        open_requested(a, path);
     }
     uapp_redraw(a);
 }
@@ -1174,6 +1301,149 @@ static void run_pending(struct uapp *a) {
 // The ONE place a command happens: the menu, the command bar and the
 // keys all route here.
 
+// --- the options and what is kept between runs -------------------------
+
+static void conf_store(void) {
+    np_conf_save(&g_conf, &g_conf_saved);
+    g_conf_saved = g_conf;
+}
+
+static void recent_sync_menu(void) {
+    int shown = g_recent_count < 1 ? 1 : g_recent_count;   // one greyed row when empty
+    file_items[FILE_RECENT_ROW].sub_count = shown;
+    if (g_recent_count == 0) strlcpy(g_recent[0], "(empty)", PATH_MAX_LEN);
+}
+
+// A list of paths, one a line: /var/lib/notepad/recent and .../session.
+static int paths_read(const char *file, char out[][PATH_MAX_LEN], int max) {
+    static char buf[NP_RECENT_MAX * PATH_MAX_LEN + MAX_DOCS * PATH_MAX_LEN];
+    size_t got = 0;
+    enum ufile_result r = ufile_read_into(file, buf, sizeof buf - 1, &got);
+    if (r != UFILE_OK && r != UFILE_SHORT) return 0;
+    buf[got] = '\0';
+    int n = 0;
+    for (char *p = buf; *p && n < max;) {
+        char *e = p;
+        while (*e && *e != '\n') e++;
+        int len = (int)(e - p);
+        if (len > 0 && len < PATH_MAX_LEN) {
+            memcpy(out[n], p, (size_t)len);
+            out[n][len] = '\0';
+            n++;
+        }
+        p = *e ? e + 1 : e;
+    }
+    return n;
+}
+
+static void paths_write(const char *file, char paths[][PATH_MAX_LEN], int n) {
+    sys_mkdir("/var/lib");
+    sys_mkdir(NOTEPAD_STATE_DIR);
+    int fd = sys_open(file, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+    if (fd < 0) return;
+    for (int i = 0; i < n; i++) {
+        sys_write(fd, paths[i], strlen(paths[i]));
+        sys_write(fd, "\n", 1);
+    }
+    sys_close(fd);
+}
+
+static void recent_save(void) { paths_write(NOTEPAD_RECENT, g_recent, g_recent_count); }
+
+static void recent_load(void) {
+    g_recent_count = g_conf.recent_max > 0 ? paths_read(NOTEPAD_RECENT, g_recent, NP_RECENT_MAX) : 0;
+    if (g_recent_count > g_conf.recent_max) g_recent_count = g_conf.recent_max;
+    recent_sync_menu();
+}
+
+static void recent_clear(void) {
+    g_recent_count = 0;
+    recent_sync_menu();
+    recent_save();
+    set_status("recent files cleared");
+}
+
+// THE TABS, written when the window starts closing -- before the asks
+// for unsaved tabs remove them one by one. Unnamed tabs are not kept.
+static void session_save(void) {
+    static char paths[MAX_DOCS][PATH_MAX_LEN];
+    int n = 0;
+    for (int i = 0; i < g_ndocs; i++)
+        if (g_docs[i]->path[0]) strlcpy(paths[n++], g_docs[i]->path, PATH_MAX_LEN);
+    paths_write(NOTEPAD_SESSION, paths, n);
+}
+
+static void session_restore(struct uapp *a) {
+    static char paths[MAX_DOCS][PATH_MAX_LEN];
+    int n = paths_read(NOTEPAD_SESSION, paths, MAX_DOCS);
+    for (int i = 0; i < n; i++) open_path(a, paths[i]);
+    if (n) ulogf("notepad: reopened %d tab(s)\n", n);
+}
+
+// OPEN, or open in a WINDOW of its own when the options say so -- unless
+// this window holds nothing yet, which Open fills either way.
+static void open_requested(struct uapp *a, const char *path) {
+    int already = 0;
+    for (int i = 0; i < g_ndocs; i++) if (strcmp(g_docs[i]->path, path) == 0) already = 1;
+    if (g_conf.open_window && !already && !doc_pristine(cur())) {
+        recent_push(path);
+        uapp_spawn(a, "/bin/wm/apps/notepad", path);
+        set_status("opened in a new window");
+        return;
+    }
+    open_path(a, path);
+}
+
+static void on_prefs_commit(const struct np_conf *next) {
+    struct np_conf was = g_conf;
+    g_conf = *next;
+    conf_store();
+    for (int i = 0; i < g_ndocs; i++) {
+        struct doc *d = g_docs[i];
+        doc_apply_conf(d);
+        if (g_conf.wrap != was.wrap)
+            utext_set_wrap(&d->text, g_conf.wrap ? UTEXT_WRAP_WORD : UTEXT_WRAP_OFF);
+        if (g_conf.preview != was.preview) d->preview = preview_for(d->path[0] ? d->path : 0);
+    }
+    if (g_conf.preview_below != was.preview_below) g_split.horizontal = !g_conf.preview_below;
+    if (g_recent_count > g_conf.recent_max) g_recent_count = g_conf.recent_max;
+    recent_sync_menu();
+    recent_save();
+    ulogf("notepad: options applied tab %d wrap %d font %d\n", g_conf.tab_width, g_conf.wrap,
+          g_conf.font_size);
+    if (g_app) { reveal_cursor(); uapp_redraw(g_app); }
+}
+
+// CLOSING SEVERAL TABS ASKS FIRST, when the options say to -- Windows
+// Terminal's and every browser's question -- and then the unsaved ones
+// are asked about one by one, as before.
+static void ask_close_all(struct uapp *a) {
+    if (uui_dialog_is_open(&g_ask)) return;
+    static const struct uui_dialog_button btns[] = {
+        { "Close tabs", ASK_CLOSE_ALL, 0 }, { "Cancel", ASK_CANCEL, 0 },
+    };
+    snprintf(g_ask_line, sizeof g_ask_line, "Close all %d tabs?", g_ndocs);
+    g_ask_rows[0] = g_ask_line;
+    uui_menubar_close(&g_menu);
+    uui_menubar_close(&g_ctx);
+    uui_dialog_set_bounds(&g_ask, 0, 0, uapp_width(a), uapp_height(a));
+    uui_dialog_open(&g_ask, "Close Notepad", g_ask_rows, 1, btns, 2, 0, ASK_CANCEL);
+    uapp_set_cursor(a, WIN_CURSOR_DEFAULT);
+    uapp_redraw(a);
+}
+
+// Asked only when nothing ELSE would be: an unsaved tab's own question
+// already stops the close, and two questions in a row is one too many.
+static int must_confirm_close(void) {
+    return g_conf.confirm_close && g_ndocs > 1 && !g_close_ok && !any_dirty();
+}
+
+static void begin_close(struct uapp *a) {
+    session_save();
+    if (must_confirm_close()) { ask_close_all(a); return; }
+    close_all_step(a);
+}
+
 static void do_command(struct uapp *a, int code) {
     // An ACTION is an event a test waits for exactly once, so it is
     // never a layout line (docs/conventions/gui.md).
@@ -1181,9 +1451,22 @@ static void do_command(struct uapp *a, int code) {
     // dispatch-ok: THE SET IS THE APP'S OWN CMD_* LIST, which the menu,
     // the command bar and the key table all name -- the File Manager's
     // do_command() case: entries that are not uniform, one line each.
+    if (code >= CMD_RECENT_0 && code < CMD_RECENT_0 + NP_RECENT_MAX) {
+        int i = code - CMD_RECENT_0;
+        if (i < g_recent_count) {
+            // A COPY: opening calls recent_push(), which rewrites the slot.
+            char path[PATH_MAX_LEN];
+            strlcpy(path, g_recent[i], sizeof path);
+            open_requested(a, path);
+        }
+        return;
+    }
     switch (code) {
     case CMD_NEW:
         if (doc_new()) { switch_to(g_ndocs - 1); set_status("new tab"); }
+        break;
+    case CMD_OPTIONS:
+        np_prefs_open(a, &g_conf, on_prefs_commit, recent_clear);
         break;
     case CMD_OPEN:
         file_dialog(0);
@@ -1196,7 +1479,7 @@ static void do_command(struct uapp *a, int code) {
         file_dialog(1);
         break;
     case CMD_EXIT:
-        close_all_step(a);
+        begin_close(a);
         break;
     case CMD_CLOSE_TAB:
         close_tab(a, g_cur);
@@ -1207,18 +1490,6 @@ static void do_command(struct uapp *a, int code) {
     case CMD_PREV_TAB:
         switch_to((g_cur + g_ndocs - 1) % g_ndocs);
         break;
-    case CMD_RECENT_0:
-    case CMD_RECENT_1:
-    case CMD_RECENT_2: {
-        int i = code - CMD_RECENT_0;
-        if (i < g_recent_count) {
-            // A COPY: opening calls recent_push(), which rewrites the slot.
-            char path[PATH_MAX_LEN];
-            strlcpy(path, g_recent[i], sizeof path);
-            open_path(a, path);
-        }
-        break;
-    }
     case CMD_UNDO:
         if (utext_undo(T)) { reveal_cursor(); set_status("undone"); }
         break;
@@ -1242,12 +1513,16 @@ static void do_command(struct uapp *a, int code) {
         utext_sel_clear(T);
         utext_scroll_bottom(T);
         break;
+    // THE VIEW MENU'S TOGGLES ARE THE OPTIONS, and are remembered the
+    // same way: Windows Notepad keeps Word wrap and the status bar.
     case CMD_STATUSBAR:
         g_show_status = !g_show_status;
+        conf_store();
         break;
     case CMD_LINENUMS:
         g_linenums = !g_linenums;
         for (int i = 0; i < g_ndocs; i++) g_docs[i]->text.gutter = g_linenums;
+        conf_store();
         break;
     case CMD_MARKDOWN:
         cur()->preview = !cur()->preview;
@@ -1257,6 +1532,8 @@ static void do_command(struct uapp *a, int code) {
         int on = utext_get_wrap(T) != UTEXT_WRAP_OFF;
         utext_set_wrap(T, on ? UTEXT_WRAP_OFF : UTEXT_WRAP_WORD);
         set_status(on ? "word wrap off" : "word wrap on");
+        g_conf.wrap = !on;   // what the next document gets
+        conf_store();
         break;
     }
     case CMD_FIND:
@@ -1360,6 +1637,7 @@ static void log_layout(struct uapp *a) {
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
+    if (g_menu_shown && g_menu.depth == 0) g_menu_shown = 0;
     struct ugfx_surface *s = uapp_surface(d);
     refresh_tabs();
     set_title(a);
@@ -1417,6 +1695,10 @@ static void on_widget(struct uapp *a, int id, int reason) {
             else if (save_file(a, cur(), cur()->path)) run_pending(a);
             else g_pending = PEND_NONE;   // the failure is in the status bar
             break;
+        case ASK_CLOSE_ALL:
+            g_close_ok = 1;
+            close_all_step(a);
+            break;
         case ASK_CANCEL:
         default:
             g_pending = PEND_NONE;
@@ -1436,6 +1718,9 @@ static void tab_closed(void *ctx, int i)   { (void)ctx; if (g_app) { close_tab(g
 static void tab_new(void *ctx)             { (void)ctx; if (g_app) { do_command(g_app, CMD_NEW); uapp_redraw(g_app); } }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
+    // A HIDDEN MENU BAR comes up for F10 and goes again when its menu
+    // closes (on_draw) -- Windows' and KDE's hidden-menu behaviour.
+    if (key == KEY_F10 && !g_conf.menubar) g_menu_shown = 1;
     // AN OPEN POPUP TAKES THE KEY, wherever the app thinks it is.
     int code;
     if (uui_menubar_key(&g_ctx, key, &code)) {
@@ -1698,14 +1983,15 @@ static void on_open_cb(struct uapp *a) {
     g_cur = 0;
     set_status("F10 for the menu -- Ctrl-O open, Ctrl-S save, Ctrl-F find");
 
-    for (int i = 0; i < RECENT_MAX; i++) strlcpy(g_recent[i], "(empty)", PATH_MAX_LEN);
+    for (int i = 0; i < NP_RECENT_MAX; i++) strlcpy(g_recent[i], "(empty)", PATH_MAX_LEN);
+    recent_load();
 
     uui_menubar_init(&g_ctx, 0, 0);   // no bar of its own: open_at() supplies the rows
     g_ctx.item_flags = menu_item_flags;
     uui_markdown_init(&g_md);
     uui_findbar_init(&g_find);
     g_find.pill = 1;
-    uui_splitter_init(&g_split, 1, 500);
+    uui_splitter_init(&g_split, !g_conf.preview_below, 500);
     g_split.line = UTHEME_SEPARATOR;
     uui_tabs_init(&g_tabs, g_tablist, 0, 0);
     g_tabs.on_select = tab_selected;
@@ -1727,15 +2013,16 @@ static void on_open_cb(struct uapp *a) {
     update_indicators();
 
     // AFTER the widgets exist: opening writes the status and the title.
-    if (g_arg_path[0]) {
-        open_path(a, g_arg_path);
-        set_title(a);
-    }
+    if (g_conf.reopen) session_restore(a);
+    if (g_arg_path[0]) open_path(a, g_arg_path);
+    set_title(a);
 }
 
 // The X, Alt+F4 and the window menu. Refusing is not returning 1 -- the
 // asks answer frames later and quit through run_pending().
 static int on_close_cb(struct uapp *a) {
+    session_save();
+    if (must_confirm_close()) { ask_close_all(a); return 0; }
     if (!any_dirty()) return 1;
     close_all_step(a);
     return 0;
@@ -1755,6 +2042,8 @@ static void default_size(int *w, int *h) {
 
 int main(int argc, char **argv) {
     if (argc > 1 && argv[1][0]) strlcpy(g_arg_path, argv[1], sizeof g_arg_path);
+    np_conf_load(&g_conf);
+    g_conf_saved = g_conf;
 
     uui_menubar_init(&g_menu, menu_bar, (int)(sizeof menu_bar / sizeof menu_bar[0]));
     g_menu.item_flags = menu_item_flags;

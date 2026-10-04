@@ -86,6 +86,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `ugfx.h` | ugfx -- the userland drawing runtime for ring-3 window clients. |
 | `ugfx_tex.h` | ugfx_tex.h -- a perspective-correct textured triangle. |
 | `ulog.h` | Toolkit diagnostics: one line to the app's stderr, which the kernel routes to its log and to a QMP test's console (CLAUDE.md's "diagnostics go to stderr"). |
+| `umonofont.h` | umonofont -- the desktop's MONOSPACE face at a size an app chooses, or the session's own when it chooses none: what a terminal grid or a text document draws in. |
 | `utext.h` | utext -- a wrapped, scrollable, editable text buffer with a cursor and a selection. |
 | `utheme.h` | The ring-3 toolkit's THEME: a PALETTE (colour roles, Qt's QPalette / GTK's named colours) and METRICS (font-derived sizes and spacing, Qt's QStyle). |
 | `uui.h` | Toykit -- the ring-3 GUI toolkit -- and the umbrella include for its widgets. |
@@ -119,6 +120,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_pathbar.h` | A BREADCRUMB PATH: the folder you are in as a row of buttons, one per level, each of which takes you there -- Explorer's address bar, Dolphin's URL navigator, GTK's path bar. |
 | `uui_places.h` | PLACES AND DEVICES: the list down the left of a file window -- named folders a person goes to (Home, Documents, ...), then every mounted filesystem with how full it is. |
 | `uui_popup.h` | A POPUP SURFACE, as a widget sees it. |
+| `uui_prefs.h` | uui_prefs -- an app's OPTIONS WINDOW: a sidebar of pages, each a column of "Caption:  control  [control]" rows, over Defaults / OK / Cancel. |
 | `uui_primitives.h` | Every widget reaches its default colours through the theme (UUI_COLOR / UTHEME_*), so the one header they all include carries it. |
 | `uui_progress.h` | A PROGRESS BAR: a track and a fill, determinate or busy. |
 | `uui_radio_list.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |

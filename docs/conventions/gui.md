@@ -1655,6 +1655,17 @@ this the obvious way), not from how much history it accumulated.
   (`apply_drag()`) and the release commits into ranks. Buttons are
   DRAWN at `taskbar_draw_x()` (a glide) and HIT at their layout x. `gui taskbar --json` reports all of it;
   `tools/taskbar_style_test.py` checks each where it is drawn.
+- **AN APP'S OPTIONS WINDOW IS `ui/uui_prefs.h`.** A sidebar of pages,
+  "Caption: control" rows, Defaults / OK / Cancel, modal, nothing applied
+  until OK. The app declares its controls (ids below
+  `UUI_PREFS_ID_BASE`), fills them before `uui_prefs_open()` and reads
+  them back in `on_ok`; `on_action` is for its own buttons (Notepad's
+  Clear list). Checkboxes STACK, one row each with an empty caption --
+  two side by side ran off the window. Notepad uses it; Terminal
+  (`term_prefs.c`) and File Manager (`fm_options.c`) still hand-build the
+  same dialog and move onto it when next touched. A size for a
+  monospace face comes from `ui/umonofont.h`, shared by Terminal and
+  Notepad. `tools/notepad_options_test.py`.
 - **A POPUP CHOOSES ON THE RELEASE, AND ONE CLOSED UNDER A PRESS OWES
   THAT PRESS A RELEASE.** `uui_dropdown` arms a row on the press and
   picks it on the release (Windows', Qt's and GTK's combo boxes), which

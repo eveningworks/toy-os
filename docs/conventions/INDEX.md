@@ -444,6 +444,7 @@ whenever a headline here tells you something you did not already know.
   app**
 - **THE TASKBAR'S LAYOUT IS FOUR INDEPENDENT SETTINGS, AND EVERY RECT
   COMES FROM `taskbar_geom()`**
+- **AN APP'S OPTIONS WINDOW IS `ui/uui_prefs.h`**
 - **A POPUP CHOOSES ON THE RELEASE, AND ONE CLOSED UNDER A PRESS OWES
   THAT PRESS A RELEASE**
 - **A CLIENT IS TOLD FOCUS BY `wm_focus_sync()`, NEVER BY A MUTATION

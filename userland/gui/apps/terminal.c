@@ -89,7 +89,7 @@
 #include <unistd.h>   // chdir/getcwd, around a new tab's spawn
 #include "keyboard.h"
 #include "ansi.h"   // the kernel's parser, compiled into libuapp too
-#include "font_faces.h"   // FONT_FACE_DIR, for a private atlas
+#include "ui/umonofont.h"   // the grid's face at a chosen size
 #include "term/term.h"    // /etc/terminal.conf and the Preferences dialog
 
 // THE WINDOW IS SIZED FOR A GRID, NOT IN PIXELS. A fixed pair does not
@@ -612,9 +612,7 @@ static char *g_rowbuf;   // draw_row's run scratch,  g_cap_cols + 1
 // desktop's monospace family (`system.font_mono`, ui/ugfx.h). That is
 // the pair this window needs: the desktop's SIZE, in a face whose
 // cells line up.
-static struct ugfx_font g_font;
-static void *g_font_arena;
-static int g_font_px;          // what g_font holds; 0 = following the desktop
+static struct umonofont g_font;   // the grid's face at the configured size
 static int g_cell_w, g_cell_h;
 
 // The caret's blink phase. Toggled by on_tick when cursor_blink is
@@ -627,38 +625,10 @@ static int g_caret_on = 1;
 // face may be proportional -- a grid of cells drawn in one does not
 // line up, which is the whole reason the two families exist.
 static const struct ugfx_font *grid_font(void) {
-    return g_font_px ? &g_font : ugfx_font_mono(UGFX_FONT_REGULAR);
+    return umonofont_get(&g_font, g_conf.font_size, "uterm");
 }
 
 static void font_sync(void) {
-    if (g_conf.font_size != g_font_px) {
-        void *arena = 0;
-        if (g_conf.font_size) {
-            char face[48], path[96];
-            // **THE MONOSPACE FACE, not `system.font_face`.** Reading
-            // the UI one here would make a configured size undo the
-            // family split -- the one window that most needs a fixed
-            // cell would be the one drawing in the interface's face.
-            if (!usetting_get("system.font_mono", face, sizeof face) || !face[0]
-                || strcmp(face, "builtin") == 0)
-                strlcpy(face, "dejavu-sans-mono", sizeof face);
-            snprintf(path, sizeof path, "%s/%s.ttf", FONT_FACE_DIR, face);
-            unsigned long need = ugfx_font_arena_size(g_conf.font_size);
-            arena = malloc(need);
-            if (!arena || !ugfx_font_load(path, g_conf.font_size, 0, &g_font, arena, need)) {
-                // A face that will not rasterize leaves the DESKTOP's
-                // font in place rather than an empty window -- and says
-                // so, or the setting reads as silently ignored.
-                free(arena);
-                arena = 0;
-                ulogf("uterm: cannot rasterize %s at %dpx; using the desktop font\n",
-                       path, g_conf.font_size);
-            }
-        }
-        free(g_font_arena);
-        g_font_arena = arena;
-        g_font_px = arena ? g_conf.font_size : 0;
-    }
     // Re-read EVERY call, not only after a reload: while we are
     // following the desktop, its size can move under us (WIN_EV_FONT)
     // and these two are what the whole grid is derived from.

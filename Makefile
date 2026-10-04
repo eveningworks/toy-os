@@ -916,7 +916,7 @@ $(LIBC): $(LIBC_OBJS)
 # outcome for those -- see $(LIBUAPP) above.
 EXTRA_OBJS_uiclient   =
 EXTRA_OBJS_calculator =
-EXTRA_OBJS_notepad    =
+EXTRA_OBJS_notepad    = notepad/np_conf notepad/np_prefs
 EXTRA_OBJS_terminal   = term/term_conf term/term_prefs term/term_panel
 # Shapes keeps its teapot mesh in userland/shapes/, outside the program
 # directories for the reason userland/fm/ is (see EXTRA_OBJS_files).

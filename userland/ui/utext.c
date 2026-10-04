@@ -12,8 +12,25 @@
 #include "ui/utext.h"
 #include "ui/uui_caret.h"
 #include "ui/uui_undo.h"
+#include "ui/uui_widget.h"   // uui_key_is_shortcut
 
 #define CURSOR_BAR_W 2
+
+// **A TAB IS AS WIDE AS THE GAP TO THE NEXT STOP**, counted from the
+// start of the visual row. `tab_width` 0 or 1 keeps the old one cell.
+// Every pass that turns indices into columns goes through these two --
+// drawing and hit-testing disagreeing by a tab is the bug they prevent.
+static int cells_at(const struct utext *t, char c, int col) {
+    if (c != '\t' || t->tab_width <= 1) return 1;
+    return t->tab_width - col % t->tab_width;
+}
+
+// The column of index `k` on the visual row that begins at `row`.
+static int col_of(const struct utext *t, int row, int k) {
+    int col = 0;
+    for (int i = row; i < k && i < t->count; i++) col += cells_at(t, t->buf[i], col);
+    return col;
+}
 
 char utext_at(const struct utext *t, int i) {
     if (i < 0 || i >= t->count) return 0;
@@ -50,6 +67,7 @@ void utext_init_buf(struct utext *t, char *buf, int cap) {
     t->gutter = 0;
     t->line_highlight = 0;
     t->gutter_fg = t->gutter_bg = t->line_bg = 0;
+    t->tab_width = t->tab_spaces = t->auto_indent = t->show_ws = t->scroll_margin = 0;
     t->marks = 0;
     t->mark_count = 0;
     t->nl_cache.valid = 0;
@@ -144,7 +162,7 @@ static void line_span(const struct utext *t, int cols, int start,
             // invisible, so pushing a line over the edge with them
             // would break before a word that fits perfectly well.
             if (run < 0) run = i;
-            col++;
+            col += cells_at(t, c, col);
             continue;
         }
 
@@ -271,7 +289,7 @@ static void pos_of_index(struct utext *t, int cols, int target,
         line_span(t, cols, i, &draw_end, &next);
         if (target <= draw_end || last_span(t, draw_end, next) || next <= i) {
             *out_line = line;
-            *out_col = (target < i ? 0 : (target > draw_end ? draw_end : target) - i);
+            *out_col = target < i ? 0 : col_of(t, i, target > draw_end ? draw_end : target);
             return;
         }
         i = next;
@@ -418,9 +436,16 @@ void utext_reveal_cursor(struct utext *t, int w, int h) {
         if (t->hscroll < 0) t->hscroll = 0;
     }
 
+    // A MARGIN, when asked, keeps lines in view around the caret (Vim's
+    // 'scrolloff'); never more than leaves a row to stand on.
+    int m = t->scroll_margin;
+    if (m > (visible_rows - 1) / 2) m = (visible_rows - 1) / 2;
+    if (m < 0) m = 0;
     int want = first;
-    if (cl < first) want = cl;
-    else if (cl >= first + visible_rows) want = cl - visible_rows + 1;
+    if (cl < first + m) want = cl - m;
+    else if (cl >= first + visible_rows - m) want = cl - visible_rows + 1 + m;
+    if (want < 0) want = 0;
+    if (want > total - visible_rows) want = total - visible_rows > 0 ? total - visible_rows : 0;
     if (want == first) return;
 
     t->scroll_offset = total - visible_rows - want;
@@ -519,9 +544,13 @@ void utext_draw(struct utext *t, struct ugfx_surface *s,
 
         while (mi < t->mark_count && t->marks[mi].end <= i) mi++;
         int mk = mi;
+        int vc = 0;   // the visual column, tabs expanded
         for (int k = i; k < draw_end; k++) {
-            int col = k - i - t->hscroll;   // hscroll is 0 while wrapping
-            if (col < 0) continue;
+            char ch = t->buf[k];
+            int n = cells_at(t, ch, vc);
+            int col = vc - t->hscroll;   // hscroll is 0 while wrapping
+            vc += n;
+            if (col + n <= 0) continue;
             if (col >= max_cols) break;
             while (mk < t->mark_count && t->marks[mk].end <= k) mk++;
             uint32_t cell = row_bg;
@@ -529,14 +558,31 @@ void utext_draw(struct utext *t, struct ugfx_surface *s,
             else if (mk < t->mark_count && t->marks[mk].start <= k) cell = t->marks[mk].bg;
             // text-measure-ok: a fixed grid by contract -- see the top of this file
             int rx = x + col * char_w;
-            if (cell != row_bg) ugfx_fill_rect(s, rx, ry, char_w, char_h, cell);
-            ugfx_draw_char(s, rx, ry, t->buf[k], fg, cell);
+            if (cell != row_bg) ugfx_fill_rect(s, rx, ry, n * char_w, char_h, cell);
+            if (ch == '\t' || (ch == ' ' && t->show_ws)) {
+                // SPACES AND TABS, when asked: a centred dot for a space and
+                // a rule to an arrowhead for a tab, faint (gedit's and
+                // Kate's marks). Drawn, not glyphs: the grid font has none.
+                if (t->show_ws) {
+                    uint32_t ink = mix(cell, fg, 80);
+                    int cy = ry + char_h / 2;
+                    if (ch == ' ') ugfx_fill_rect(s, rx + char_w / 2 - 1, cy - 1, 2, 2, ink);
+                    else {
+                        int x0 = rx + 2, x1 = rx + n * char_w - 3;
+                        ugfx_fill_rect(s, x0, cy, x1 - x0, 1, ink);
+                        ugfx_fill_rect(s, x1 - 2, cy - 2, 1, 5, ink);
+                        ugfx_fill_rect(s, x1 - 1, cy - 1, 1, 3, ink);
+                    }
+                }
+                continue;
+            }
+            ugfx_draw_char(s, rx, ry, ch, fg, cell);
         }
         // A selection running THROUGH a line break should read as
         // reaching the end of the line, so paint one cell past the last
         // character rather than stopping short.
         if (has_sel && draw_end >= sel_start && draw_end < sel_end) {
-            int col = draw_end - i - t->hscroll;
+            int col = col_of(t, i, draw_end) - t->hscroll;
             if (col >= 0 && col < max_cols)
                 // text-measure-ok: same grid contract
                 ugfx_fill_rect(s, x + col * char_w, ry, char_w, char_h, sel_bg);
@@ -583,8 +629,15 @@ int utext_index_at_point(struct utext *t, int x, int y, int w, int h, int px, in
         int draw_end, next;
         line_span(t, max_cols, i, &draw_end, &next);
         if (row == want_row) {
-            int at = i + want_col;
-            return at > draw_end ? draw_end : at;
+            // The character whose cells hold the column; past a tab's
+            // middle is the far side of it, as in every editor.
+            int vc = 0;
+            for (int k = i; k < draw_end; k++) {
+                int n = cells_at(t, t->buf[k], vc);
+                if (want_col < vc + n) return (n > 1 && want_col - vc >= (n + 1) / 2) ? k + 1 : k;
+                vc += n;
+            }
+            return draw_end;
         }
         if (last_span(t, draw_end, next) || next <= i)
             return draw_end;   // clicked below the last line
@@ -606,7 +659,8 @@ int utext_widest_line(struct utext *t, int w, int h) {
     for (int i = 0;;) {
         int draw_end, next;
         line_span(t, max_cols, i, &draw_end, &next);
-        if (draw_end - i > widest) widest = draw_end - i;
+        int w2 = col_of(t, i, draw_end);
+        if (w2 > widest) widest = w2;
         if (last_span(t, draw_end, next) || next <= i) break;
         i = next;
     }
@@ -831,5 +885,30 @@ int utext_undo(struct utext *t) { return uui_edit_undo(&t->ed, &UTEXT_EDIT_OPS, 
 int utext_redo(struct utext *t) { return uui_edit_redo(&t->ed, &UTEXT_EDIT_OPS, t); }
 
 int utext_key(struct utext *t, int key, unsigned mods) {
+    if (!uui_key_is_shortcut(key, mods) && key == '\t' && t->tab_spaces && t->tab_width > 1) {
+        // To the next stop, measured on the caret's logical line: what a
+        // Tab would have filled, typed as spaces.
+        int ls = line_start(t, t->ed.cursor);
+        int n = t->tab_width - col_of(t, ls, t->ed.cursor) % t->tab_width;
+        char sp[16];
+        for (int i = 0; i < n && i < (int)sizeof sp; i++) sp[i] = ' ';
+        utext_insert_text(t, sp, n < (int)sizeof sp ? n : (int)sizeof sp);
+        return 1;
+    }
+    if (!uui_key_is_shortcut(key, mods) && (key == '\n' || key == '\r') && t->auto_indent) {
+        // THE INDENT OF THE LINE ABOVE, up to the caret: Enter in the
+        // middle of the indent does not invent more of it.
+        int ls = line_start(t, t->ed.cursor);
+        char ind[1 + 64];
+        int n = 0;
+        ind[n++] = '\n';
+        for (int i = ls; i < t->ed.cursor && n < (int)sizeof ind; i++) {
+            char c = t->buf[i];
+            if (c != ' ' && c != '\t') break;
+            ind[n++] = c;
+        }
+        utext_insert_text(t, ind, n);
+        return 1;
+    }
     return uui_edit_key(&t->ed, &UTEXT_EDIT_OPS, t, key, mods);
 }
