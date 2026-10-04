@@ -54,7 +54,7 @@
 // filtering, and is not this.
 //
 // EVERYTHING HERE RUNS IN AN INTERRUPT HANDLER. No allocation, no wake,
-// no lock -- the same restraint the transition queue beside it observes
+// no lock -- the same restraint the key event stream beside it observes
 // (api/keyboard.h). Recording is a bounded copy into a static ring.
 
 // Whether the tap is recording, and the switch behind `kernel.kbdtap`.
@@ -75,7 +75,7 @@ int  kbdtap_enabled(void);
 // a scancode, so zero is unambiguous); `extended` says it followed an
 // 0xE0 prefix. `mods` is sampled by the caller AFTER a modifier key has
 // updated the state, so a Shift press reports Shift held -- the same
-// rule the transition queue follows, and for the same reason.
+// rule the key event stream follows, and for the same reason.
 void kbdtap_key(uint16_t wire, int extended, uint16_t keycode, int down,
                 uint8_t mods);
 

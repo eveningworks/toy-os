@@ -505,8 +505,10 @@ int win_server_set_compositor(int pid, uint64_t pml4) {
     g_comp_pid = pid;
     g_comp_pml4 = pid ? pml4 : 0;
     // The queue belongs to the ROLE: a successor must not inherit a
-    // predecessor's keystrokes, or a `gui` command meant for it.
+    // predecessor's keystrokes, or a `gui` command meant for it -- nor
+    // the keyboard's own queued edges and owed releases.
     win_input_reset();
+    keyboard_events_attach(pid != 0);
 
     // WHO OWNS THE KEYBOARD follows the role, and this is the one place
     // the role changes -- so registering, deregistering, a kill and a

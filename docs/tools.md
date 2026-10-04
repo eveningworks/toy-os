@@ -4728,7 +4728,7 @@ runs first**: a `doom1.wad` with one
   `gui_regress.py`.
 
 - **`keyup_test.py`** -- key RELEASES reaching a ring-3 client, across
-  all five layers that carry one: the driver's transition queue, the
+  all five layers that carry one: the driver's key event stream, the
   kernel's raw-event push, the compositor's raw-input queue, the WM's
   routing and Toykit's `on_key_up`, via `winclient`, which keeps a
   model of what is currently HELD -- nothing else in the tree does,

@@ -370,23 +370,17 @@ int keyboard_try_getchar_mods(uint8_t *out_mods);
 
 // --- THE KEY EVENT STREAM: what a compositor reads -------------------
 //
-// **WHILE A COMPOSITOR HOLDS THE KEYBOARD** (the console tty is bypassed,
-// keyboard_suspend_blocking()), every key event goes to ONE ordered queue
-// of edges and nowhere else -- Linux evdev's shape: each press as its
-// translated code (a character or a KEY_* special, autorepeats and
+// **WHILE A COMPOSITOR IS ATTACHED** (keyboard_events_attach(), called
+// on every compositor role change), every key event goes to ONE ordered
+// queue of edges and nowhere else -- Linux evdev's shape: each press as
+// its translated code (a character or a KEY_* special, autorepeats and
 // dead-key output included, Ctrl folded as above), each release, and both
-// edges of the modifier keys. The console terminal gets nothing then, so
-// it holds nothing stale when the keyboard comes back.
-//
-// One queue rather than presses in one and releases in another, because
-// two queues lose the ORDER: a press, its release and a second press
-// queued between two reads came out press, release, release, press --
-// and the second key stayed held.
+// edges of the modifier keys. The console terminal gets nothing then;
+// while the screen is held with no compositor, keys go nowhere.
 //
 // **A QUEUED PRESS ALWAYS HAS ROOM FOR ITS RELEASE.** On overflow the
 // newest press is refused whole (and its release with it); nothing queued
-// is evicted and no release is ever refused. Emptied when the keyboard
-// changes hands.
+// is evicted and no release is ever refused. Emptied on every role change.
 //
 // **THE CODE ON A RELEASE IS WHAT THE FIRST PRESS PRODUCED**, not what
 // the same physical key would produce now. Pressing W, holding it,
@@ -396,11 +390,18 @@ int keyboard_try_getchar_mods(uint8_t *out_mods);
 // Wayland give the client by delivering physical keycodes and letting
 // XKB translate; doing it here keeps ONE vocabulary on the wire.
 //
-// WHO READS IT: win_input.c, for a registered compositor, and only as
+// WHO READS IT: win_input.c, for the attached compositor, and only as
 // much as the compositor's own queue has room for. Returns 1 with the
 // event (`down` 1 or 0, the KEY_MOD_* state after it), or 0 when nothing
 // is waiting. Any output may be NULL.
 int keyboard_try_get_key(int *out_code, int *out_down, uint8_t *out_mods);
+
+// Attaches (1) or detaches (0) the compositor that reads the key streams
+// -- this one and keyboard_try_get_physical()'s -- and EMPTIES both,
+// owed releases included, either way. win_role.c calls it on every role
+// change, so a restarted or replacement compositor starts clean.
+void keyboard_events_attach(int on);
+int keyboard_events_attached(void);
 
 // EVERY KEY'S EDGES, BY POSITION: the evdev keycode (abi/input_keys.h),
 // 1 for a press and 0 for a release, and the KEY_MOD_* state after it.
@@ -409,8 +410,10 @@ int keyboard_try_get_key(int *out_code, int *out_down, uint8_t *out_mods);
 // ring finger held?"), which the codes above cannot answer once Ctrl
 // has turned a letter into a control code. SDL's scancodes, Windows'
 // WM_KEYDOWN beside WM_CHAR, Wayland's wl_keyboard.key. The compositor
-// drains it for the windows that ask (WIN_EV_KEY_PHYS). Returns 1 and
-// fills the outputs, or 0 when nothing is waiting; any may be NULL.
+// drains it for the windows that ask (WIN_EV_KEY_PHYS), only while it
+// is attached, under the same never-lose-a-release rule as the stream
+// above. Returns 1 and fills the outputs, or 0 when nothing is waiting;
+// any may be NULL.
 int keyboard_try_get_physical(uint16_t *out_keycode, int *out_down,
                               uint8_t *out_mods);
 

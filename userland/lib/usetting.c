@@ -128,10 +128,7 @@ static struct choice_info *ci_for(int index, uint32_t gen, int kcount) {
     if (index < 0 || index >= kcount + uschema_count()) return 0;
     if (index >= g_ci_cap) {
         int cap = g_ci_cap ? g_ci_cap : 64;
-        while (cap <= index) {
-            if (cap > (1 << 20)) return 0;   // no registry is this big
-            cap *= 2;
-        }
+        while (cap <= index) cap *= 2;   // bounded: index < the registry's size
         struct choice_info *n = realloc(g_ci, (size_t)cap * sizeof *n);
         if (!n) return 0;
         memset(n + g_ci_cap, 0, (size_t)(cap - g_ci_cap) * sizeof *n);
@@ -140,7 +137,8 @@ static struct choice_info *ci_for(int index, uint32_t gen, int kcount) {
     }
     struct choice_info *e = &g_ci[index];
     if (e->gen != gen || !e->known) {
-        ci_forget_choices(e);
+        free(e->value);
+        free(e->label);
         memset(e, 0, sizeof *e);
         e->gen = gen;
     }

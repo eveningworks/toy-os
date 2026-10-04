@@ -26,6 +26,8 @@
 #include "kfmt.h"   // klog_printf
 #include "process.h"
 #include "proc_info.h"
+#include "keyboard.h"
+#include "input.h"   // input_report_key(): a key, as a driver reports one
 
 #define EVENT_PATH "/tests/event_test"
 #define READY_PATH "/tests/waitready_test"
@@ -323,4 +325,24 @@ KTEST("win_input", "only the compositor may wait for kernel events") {
     }
     KTEST_ASSERT(exited);
     KTEST_ASSERT_EQ(exit_code, 0);
+}
+
+KTEST("win_input", "a compositor change empties the keyboard's stream and its owed releases") {
+    // THROUGH THE ROLE, not the keyboard's own call: a restart or a
+    // handoff must not hand the new compositor the old one's Enter, nor
+    // the release of a key it never saw go down.
+    SKIP_IF_ROLE_HELD;
+    int pid = spare_pid();
+    if (!pid) KTEST_SKIP("no spare pid");
+    scheduler_preempt_disable();
+    win_server_set_compositor(pid, 0);
+    input_report_key(INPUT_KEY_ENTER, 1);        // seen by the first compositor
+    int queued = 0, c, d;
+    uint8_t m;
+    win_server_set_compositor(pid, 0);           // ...the role changes hands
+    input_report_key(INPUT_KEY_ENTER, 0);        // its release arrives after
+    while (keyboard_try_get_key(&c, &d, &m)) queued++;
+    win_server_set_compositor(0, 0);
+    scheduler_preempt_enable();
+    KTEST_ASSERT_EQ(queued, 0);
 }

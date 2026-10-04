@@ -160,7 +160,7 @@
 // 32-deep queue within a fraction of a second and report constant drops
 // while the user did nothing at all.
 // A KEY CAME UP. `a` is the code its PRESS produced and `mods` is the
-// modifier state after the change (api/keyboard.h's transition queue).
+// modifier state after the change (api/keyboard.h's key event stream).
 //
 // **A SEPARATE EVENT TYPE, NOT A FLAG ON WIN_EV_KEY.** A client written
 // before this existed keeps working unchanged -- it never asked for this

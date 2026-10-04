@@ -595,7 +595,7 @@ static int is_modifier_code(int c) {
 
 static int modified_key(uint16_t mod, uint16_t key, int *codes, uint8_t *mods, int cap) {
     uint8_t m = 0;
-    int window = tty_bypassed(tty_console());
+    int window = keyboard_events_attached();
     while (keyboard_try_getchar_mods(&m) != -1) { }
     while (keyboard_try_get_key(0, 0, 0)) { }
     input_report_key(mod, 1);
@@ -621,16 +621,19 @@ static int modified_key(uint16_t mod, uint16_t key, int *codes, uint8_t *mods, i
 // modifier bit; a TERMINAL gets what a terminal sends.
 KTEST("input", "Alt+key is the key with KEY_MOD_ALT for a window, ESC then the key for a terminal") {
     struct tty *t = tty_console();
-    int was = tty_bypassed(t);
+    int was = tty_bypassed(t), was_att = keyboard_events_attached();
     int codes[4];
     uint8_t mods[4];
 
     scheduler_preempt_disable();
     tty_set_bypass(t, 1);
+    keyboard_events_attach(1);
     int n_win = modified_key(INPUT_KEY_LEFTALT, EVDEV_A, codes, mods, 4);
     int win0 = codes[0], winmods = mods[0];
+    keyboard_events_attach(0);
     tty_set_bypass(t, 0);
     int n_term = modified_key(INPUT_KEY_LEFTALT, EVDEV_A, codes, mods, 4);
+    keyboard_events_attach(was_att);
     tty_set_bypass(t, was);
     scheduler_preempt_enable();
 
@@ -644,18 +647,21 @@ KTEST("input", "Alt+key is the key with KEY_MOD_ALT for a window, ESC then the k
 
 KTEST("input", "Ctrl+digit reaches a window with KEY_MOD_CTRL and a terminal not at all") {
     struct tty *t = tty_console();
-    int was = tty_bypassed(t);
+    int was = tty_bypassed(t), was_att = keyboard_events_attached();
     int codes[4];
     uint8_t mods[4];
 
     scheduler_preempt_disable();
     tty_set_bypass(t, 1);
+    keyboard_events_attach(1);
     int n_win = modified_key(INPUT_KEY_LEFTCTRL, EVDEV_1, codes, mods, 4);
     int win0 = codes[0], winmods = mods[0];
+    keyboard_events_attach(0);
     tty_set_bypass(t, 0);
     int n_term = modified_key(INPUT_KEY_LEFTCTRL, EVDEV_1, codes, mods, 4);
     // Ctrl+letter is unchanged on both sides: the control code.
     int n_letter = modified_key(INPUT_KEY_LEFTCTRL, EVDEV_A, codes, mods, 4);
+    keyboard_events_attach(was_att);
     tty_set_bypass(t, was);
     scheduler_preempt_enable();
 
@@ -672,8 +678,8 @@ KTEST("input", "Ctrl+digit reaches a window with KEY_MOD_CTRL and a terminal not
 // key INPUT_KEY_1 going down with KEY_MOD_CTRL set, not a dropped key.
 KTEST("input", "the physical stream reports positions, both edges, and no repeats") {
     scheduler_preempt_disable();
-    uint16_t kc; int down; uint8_t m;
-    while (keyboard_try_get_physical(&kc, &down, &m)) { }
+    int was_att = keyboard_events_attached();
+    keyboard_events_attach(1);            // the stream exists only for a compositor
     uint8_t cm;
     input_report_key(INPUT_KEY_LEFTCTRL, 1);
     input_report_key(INPUT_KEY_1, 1);
@@ -684,6 +690,7 @@ KTEST("input", "the physical stream reports positions, both edges, and no repeat
     int n = 0;
     while (n < 6 && keyboard_try_get_physical(&kcs[n], &downs[n], &mods[n])) n++;
     while (keyboard_try_getchar_mods(&cm) != -1) { }
+    keyboard_events_attach(was_att);
     scheduler_preempt_enable();
 
     KTEST_ASSERT_EQ(n, 4);
@@ -720,11 +727,12 @@ static void window_events(void (*script)(void)) {
     char name[KB_LAYOUT_NAME_MAX];
     k_strlcpy(name, keyboard_layout_current(), sizeof name);
     struct tty *t = tty_console();
-    int was = tty_bypassed(t);
+    int was = tty_bypassed(t), was_att = keyboard_events_attached();
     k_memset(&g_ev, 0, sizeof g_ev);
 
     scheduler_preempt_disable();
     tty_set_bypass(t, 1);
+    keyboard_events_attach(1);
     while (keyboard_try_get_key(0, 0, 0)) { }
     keyboard_layout_load_text(DEAD_FIXTURE, sizeof DEAD_FIXTURE - 1);
     script();
@@ -739,6 +747,7 @@ static void window_events(void (*script)(void)) {
         }
     }
     keyboard_layout_compose_reset();
+    keyboard_events_attach(was_att);
     tty_set_bypass(t, was);
     scheduler_preempt_enable();
     keyboard_layout_load(name);
@@ -858,4 +867,47 @@ KTEST("input", "every KEY_* special has a C1 low byte and IS_SPECIAL_KEY knows i
     }
     KTEST_ASSERT(!IS_SPECIAL_KEY(KEY_PRINT_SCREEN + 1));
     KTEST_ASSERT(!IS_SPECIAL_KEY(0xE9));
+}
+
+static void script_hold_enter(void) { input_report_key(INPUT_KEY_ENTER, 1); }
+KTEST("input", "a compositor change empties the key streams and forgets owed releases") {
+    // A restart or handoff: the old compositor's queued Enter must not
+    // reach the new one, and the release of a key it saw go down must
+    // not either -- the new one never saw the press.
+    struct tty *t = tty_console();
+    int was = tty_bypassed(t), was_att = keyboard_events_attached();
+    int c, d, n_after = 0, n_held = 0, n_ring = 0;
+    uint8_t m;
+    uint16_t pk; int pd; uint8_t pm;
+
+    scheduler_preempt_disable();
+    tty_set_bypass(t, 1);
+    keyboard_events_attach(1);
+    script_hold_enter();                       // Enter down, still held
+    keyboard_events_attach(1);                 // ...the compositor changes
+    input_report_key(INPUT_KEY_ENTER, 0);      // its release arrives
+    while (keyboard_try_get_key(&c, &d, &m)) n_after++;
+    while (keyboard_try_get_physical(&pk, &pd, &pm)) n_after++;
+    // Detached with the screen held (a restart in progress): typed keys
+    // reach neither the stream nor the console behind the desktop.
+    keyboard_events_attach(0);
+    while (keyboard_try_getchar_mods(&m) != -1) { }
+    tap(INPUT_KEY_ENTER);
+    while (keyboard_try_get_key(&c, &d, &m)) n_held++;
+    while (keyboard_try_getchar_mods(&m) != -1) n_ring++;
+    keyboard_events_attach(was_att);
+    tty_set_bypass(t, was);
+    scheduler_preempt_enable();
+
+    KTEST_ASSERT_EQ(n_after, 0);   // nothing from before, no orphan release
+    KTEST_ASSERT_EQ(n_held, 0);
+    KTEST_ASSERT_EQ(n_ring, 0);
+}
+
+static void script_pause(void) { input_report_key(INPUT_KEY_PAUSE, 1); }
+KTEST("input", "Pause, which has no release on PS/2, owes nothing") {
+    window_events(script_pause);
+    KTEST_ASSERT_EQ(g_ev.n, 2);
+    KTEST_ASSERT(g_ev.code[0] == KEY_PAUSE && g_ev.down[0] == 1);
+    KTEST_ASSERT(g_ev.code[1] == KEY_PAUSE && g_ev.down[1] == 0);
 }

@@ -58,7 +58,7 @@ static struct query_kbdtap g_batch[BATCH];
 // so an indexed table would be mostly hole. Short names on purpose:
 // this is a column, and "SHIFT-LEFT" beside "'a'" in the same column
 // is what makes a log readable at a glance. The four modifier keys
-// never reach the byte stream (they ride the transition queue) but are
+// never reach the byte stream (they ride the compositor's event stream) but are
 // named anyway, so a transition can be printed too.
 static const struct { int code; const char *name; } g_key_names[] = {
     { KEY_ARROW_UP,          "UP" },

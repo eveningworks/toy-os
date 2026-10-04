@@ -1697,12 +1697,14 @@ still a byte stream. Why the specials moved: docs/decisions/drivers.md,
 the Nordic-keyboard entry.
 
 **A COMPOSITOR READS ONE ORDERED STREAM OF EDGES**
-(`keyboard_try_get_key()`): while the console is bypassed every press
+(`keyboard_try_get_key()`): while a compositor is attached every press
 and release goes there and nowhere else, so never pair the console's
 ring with a second queue to rebuild the order -- that lost releases. A
 queued press always has room for its release; overflow refuses the
-newest press, whole. `win_input_poll()` takes only what the
-compositor's queue has room for and leaves the rest queued.
+newest press, whole. `win_input_poll()` reads each source only while
+the compositor's queue has room and leaves the rest queued. The streams
+are emptied on EVERY compositor role change (`keyboard_events_attach()`);
+docs/decisions/gui.md, "One ordered key stream", has why.
 
 **A DEAD KEY TYPES NOTHING UNTIL THE NEXT KEY.** Composition is the
 layout's (`keyboard_layout_compose()`), behind every driver, so a test
@@ -1784,7 +1786,7 @@ would be logged carrying somebody else's scancode: a wrong number in the
 one tool whose whole job is being trusted about numbers.
 
 **The modifier switch has ONE exit.** It sets the state, then records,
-then pushes the transition -- so the tap and the transition queue cannot
+then queues the event -- so the tap and the key event stream cannot
 drift into sampling `current_mods()` at two different instants, and a
 Shift press reports Shift held rather than absent.
 

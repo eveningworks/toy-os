@@ -4456,20 +4456,14 @@ ever ask whether W has come up. Pushing releases into that stream would
 put bytes in front of every shell in the system to serve a consumer that
 is not a shell.
 
-So there is a second, parallel **transition queue**
-(`keyboard_try_get_transition()` -- since 2026-10-04 merged into ONE
-ordered event stream, `keyboard_try_get_key()`, because two queues read
-separately lost the order; docs/conventions/kernel.md), and its contents
-were defined by one rule: **everything the byte stream cannot represent** -- all releases,
-and both edges of the four modifier keys. Ordinary presses are not
-duplicated onto it. `win_input.c` turns a transition into
-`WIN_EV_RAW_KEY` (a modifier press) or `WIN_EV_RAW_KEY_UP` (any
-release).
+So releases needed a path of their own. The first one was a parallel
+transition queue beside the console's ring (0caef160); it is superseded
+by the next entry, one ordered key stream.
 
 ### The modifier keys needed codes of their own
 
 `KEY_SHIFT`, `KEY_CTRL`, `KEY_ALT` and `KEY_ALTGR` (0xF796-0xF799) exist
-**only on the transition path** and are never pushed into the byte
+**only in the compositor's key stream** and are never pushed into the byte
 stream -- pressing Shift must not put a byte in front of a shell, and
 `klineedit.c` would otherwise have to learn to ignore four new codes.
 
@@ -4551,6 +4545,49 @@ and requiring the client to still report it held several frames later is
 what nothing press-only can pass. Disabling `on_key_up` in `uapp.c`
 turns 5 of 10 checks red, and the last one reports "still holds 5 keys"
 -- a stuck key, seen from inside the client.
+
+## One ordered key stream for the compositor, not a press queue beside a release queue
+
+**While a compositor is attached, every key event goes to ONE ordered
+queue of down/up edges** (`keyboard_try_get_key()`, kernel/drivers/
+input/keyboard.c) and nowhere else: each press as its translated code
+(autorepeats and dead-key output included), each release, and both edges
+of the modifier keys. That is Linux evdev's shape -- one stream of
+`EV_KEY` events with a value of 1, 2 or 0 -- and Wayland's
+`wl_keyboard.key`, which carries pressed and released in one ordered
+event.
+
+**Why not the obvious split.** Presses already went to the console's
+ring for terminals, so the first design (0caef160) put releases on a
+second, parallel queue and the compositor read one press then every
+release per poll. Two queues read separately cannot keep ORDER: a press,
+its release and a second press queued between two polls came out press,
+release, release, press, and the second key stayed held for any client
+tracking key-up. Pairing them with position markers was tried and
+rejected in review -- the two queues had opposite overflow policies, so
+an evicted marker made every later one pop the wrong key. With one queue
+the order is simply the order things happened.
+
+**Never lose a release.** A press is admitted only while the free slots
+after it still cover the release of every key whose press is queued and
+unreleased; on overflow the newest press is refused whole, with its
+release, and nothing queued is evicted. The positional stream
+(`keyboard_try_get_physical()`, `WIN_EV_KEY_PHYS`) keeps the same rule.
+`win_input_poll()` reads every input source only while the compositor's
+own queue has room, leaving the rest queued, and takes keys and
+positional edges in turn so neither starves the other; a direct push
+into a full compositor queue never sheds a release. A lost release (an
+i8042 overrun) costs one slot until the key is pressed again, and PS/2
+Pause, which has no release at all, is sent as down and up together.
+
+**The streams belong to the compositor ROLE.** Every role change -- a
+restart that keeps the screen held, a handoff -- empties both, owed
+releases included (`keyboard_events_attach()`), so a new compositor is
+never handed its predecessor's Enter or Ctrl+Q, nor a release for a
+press it never saw; while the screen is held with none attached, keys go
+nowhere. The console terminal gets keys only while no compositor is
+attached and the screen is not held, so it holds nothing stale when the
+keyboard comes back.
 
 ## The file manager is a commander, and it opens as an Explorer
 
