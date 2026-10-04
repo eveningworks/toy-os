@@ -49,6 +49,10 @@ int      intel_display_clock_agrees(uint32_t hw_khz, uint32_t edid_khz);
 // Gen9: an HDMI-mode DPLL's CFGCR1/CFGCR2 to the pixel clock in kHz, 0
 // for a disabled or unencodable one.
 uint32_t intel_display_gen9_hdmi_khz(uint32_t cfgcr1, uint32_t cfgcr2);
+// Gen9: the pipe scaler's initial phase for a src/dst ratio in 16.16.
+uint32_t intel_display_gen9_phase(uint32_t scale);
+// Gen9: CFGCR1/CFGCR2 for an HDMI pixel clock; 1, or 0 when none fits.
+int intel_display_gen9_wrpll(uint32_t pixel_khz, uint32_t *cfgcr1, uint32_t *cfgcr2);
 
 // The panel fitter's window for a mode of w x h on a panel of pw x ph
 // under `scaling` (enum display_scaling); pure, for the KTESTs.

@@ -96,3 +96,70 @@ KTEST("edid", "the active display's EDID, when there is one, names a timing the 
     KTEST_ASSERT(e->timing[0].vactive >= 480);
     KTEST_ASSERT(e->timing[0].pixel_khz > 0);
 }
+
+// The mode lists, on the canned block with its established and standard
+// bytes rewritten (and the checksum fixed): 640x480@60 and 1024x768@60
+// from the bitmap; 1920x1080@60 (16:9), 1280x1024@60 (5:4), 1680x1050@60
+// (16:10 in EDID 1.3+) and an unused slot from the standard timings.
+KTEST("edid", "established and standard timings become listed modes") {
+    uint8_t b[EDID_BLOCK];
+    k_memcpy(b, PANEL, EDID_BLOCK);
+    b[35] = 0x20; b[36] = 0x08; b[37] = 0;
+    for (int i = 38; i < 54; i++) b[i] = 0x01;
+    b[38] = (1920 / 8) - 31; b[39] = 0xC0;
+    b[40] = (1280 / 8) - 31; b[41] = 0x80;
+    b[42] = (1680 / 8) - 31; b[43] = 0x00;
+    uint8_t sum = 0;
+    for (int i = 0; i < EDID_BLOCK - 1; i++) sum = (uint8_t)(sum + b[i]);
+    b[127] = (uint8_t)(0x100 - sum);
+    struct display_edid e;
+    KTEST_ASSERT_EQ(edid_parse(b, EDID_BLOCK, &e), 1);
+    KTEST_ASSERT_EQ(e.mode_count, 5);
+    KTEST_ASSERT(e.mode[0].w == 640 && e.mode[0].h == 480 && e.mode[0].hz == 60);
+    KTEST_ASSERT(e.mode[1].w == 1024 && e.mode[1].h == 768);
+    KTEST_ASSERT(e.mode[2].w == 1920 && e.mode[2].h == 1080 && e.mode[2].hz == 60);
+    KTEST_ASSERT(e.mode[3].w == 1280 && e.mode[3].h == 1024);
+    KTEST_ASSERT(e.mode[4].w == 1680 && e.mode[4].h == 1050);
+}
+
+// DMT 0x52, the timing a real 1920x1080@60 is set with: 148.5 MHz,
+// 2200 x 1125 total, both syncs positive.
+KTEST("edid", "a listed mode's timing comes from the DMT table") {
+    struct edid_timing t;
+    KTEST_ASSERT_EQ(edid_dmt_timing(1920, 1080, 60, &t), 1);
+    KTEST_ASSERT_EQ(t.pixel_khz, 148500u);
+    KTEST_ASSERT_EQ(edid_htotal(&t), 2200u);
+    KTEST_ASSERT_EQ(edid_vtotal(&t), 1125u);
+    KTEST_ASSERT(t.hsync_pos && t.vsync_pos);
+    KTEST_ASSERT(edid_refresh_mhz(&t) == 60000);
+    KTEST_ASSERT_EQ(edid_dmt_timing(1920, 1080, 75, &t), 0);   // not in the table
+}
+
+// A CEA-861 extension's video data block: VIC 16 (1920x1080@60), VIC 4
+// with the native flag (0x84), VIC 3 (720x480, no DMT timing, dropped)
+// and VIC 16 again (listed once). A corrupt extension adds nothing and
+// still leaves the base block parsed.
+KTEST("edid", "a CEA extension's short video descriptors become listed modes") {
+    static uint8_t b[EDID_MAX];
+    k_memcpy(b, PANEL, EDID_BLOCK);
+    b[126] = 1;
+    uint8_t sum = 0;
+    for (int i = 0; i < EDID_BLOCK - 1; i++) sum = (uint8_t)(sum + b[i]);
+    b[127] = (uint8_t)(0x100 - sum);
+    uint8_t *x = b + EDID_BLOCK;
+    k_memset(x, 0, EDID_BLOCK);
+    x[0] = 0x02; x[1] = 0x03; x[2] = 9;
+    x[4] = (2 << 5) | 4; x[5] = 16; x[6] = 0x84; x[7] = 3; x[8] = 16;
+    sum = 0;
+    for (int i = 0; i < EDID_BLOCK - 1; i++) sum = (uint8_t)(sum + x[i]);
+    x[127] = (uint8_t)(0x100 - sum);
+    struct display_edid e;
+    KTEST_ASSERT_EQ(edid_parse(b, EDID_MAX, &e), 1);
+    KTEST_ASSERT_EQ(e.extensions, 1);
+    KTEST_ASSERT_EQ(e.mode_count, 2);
+    KTEST_ASSERT(e.mode[0].w == 1920 && e.mode[0].h == 1080 && e.mode[0].hz == 60);
+    KTEST_ASSERT(e.mode[1].w == 1280 && e.mode[1].h == 720);
+    x[127] ^= 1;   // corrupt the extension
+    KTEST_ASSERT_EQ(edid_parse(b, EDID_MAX, &e), 1);
+    KTEST_ASSERT_EQ(e.mode_count, 0);
+}

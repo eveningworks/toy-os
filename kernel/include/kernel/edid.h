@@ -16,6 +16,7 @@
 // program.
 
 #define EDID_BLOCK 128
+#define EDID_MAX   (2 * EDID_BLOCK)   // the base block and one extension: all a reader asks for
 #define EDID_NAME_MAX 14   // 13 characters and a terminator
 
 // One detailed timing, in the EDID's own vocabulary (pixels and lines;
@@ -30,6 +31,15 @@ struct edid_timing {
     uint8_t  hsync_pos, vsync_pos;  // polarity, meaningful for a digital separate sync
 };
 
+// A mode the monitor LISTS by size and refresh -- the established
+// bitmap and the standard timings -- with no timing of its own: a
+// driver that wants to set one looks the timing up (edid_dmt_timing()).
+struct edid_mode {
+    uint16_t w, h;
+    uint8_t  hz;
+};
+#define EDID_MODES_MAX 24
+
 struct display_edid {
     char     vendor[4];        // three letters, from the PNP id
     uint16_t product;
@@ -41,16 +51,25 @@ struct display_edid {
     char     name[EDID_NAME_MAX];   // the monitor-name descriptor, or ""
     int      timing_count;          // detailed timings found, 0..4
     struct edid_timing timing[4];   // [0] is the preferred one
+    int      mode_count;            // established + standard, as listed
+    struct edid_mode mode[EDID_MODES_MAX];
+    uint8_t  extensions;            // blocks after this one (CEA etc.), unread
 };
 
 // 1 and `out` filled, or 0 (bad header, short block, bad checksum) and
-// `out` untouched. `len` is the bytes available; only the base block
-// is read, extensions are ignored.
+// `out` untouched. `len` is the bytes available. A CEA-861 extension in
+// the second block adds its short video descriptors to `mode`; a bad
+// extension is skipped, never a reason to reject the base block.
 int edid_parse(const uint8_t *block, int len, struct display_edid *out);
 
 // The refresh rate of a timing in millihertz (59940 for 59.94 Hz), or
 // 0 for a timing with no total. Derived, so never stored.
 uint32_t edid_refresh_mhz(const struct edid_timing *t);
+
+// The VESA DMT timing for w x h at `hz`, from a small table of the sizes
+// the display ladder offers; 1 and `out` filled, or 0 for a mode it has
+// no timing for. Pure, like the parser.
+int edid_dmt_timing(uint16_t w, uint16_t h, uint8_t hz, struct edid_timing *out);
 
 // Totals, for comparing against a CRTC: active + blank.
 static inline uint32_t edid_htotal(const struct edid_timing *t) { return (uint32_t)t->hactive + t->hblank; }

@@ -42,6 +42,36 @@ static void copy_text(const uint8_t *d, char *out, int cap) {
     out[n] = 0;
 }
 
+// CEA-861 short video descriptors (the video data block, tag 2): a VIC
+// each, bit 7 the "native" flag for VICs 1-64. Only the VICs the DMT
+// table can time are kept -- the same timings under another name.
+static void parse_cea(const uint8_t *x, struct display_edid *e) {
+    static const struct { uint8_t vic; struct edid_mode m; } VIC[] = {
+        { 1, { 640, 480, 60 } }, { 4, { 1280, 720, 60 } }, { 16, { 1920, 1080, 60 } },
+    };
+    uint8_t sum = 0;
+    for (int i = 0; i < EDID_BLOCK; i++) sum = (uint8_t)(sum + x[i]);
+    if (x[0] != 0x02 || sum != 0) return;
+    int end = x[2] < 4 || x[2] > EDID_BLOCK - 1 ? 4 : x[2];
+    for (int i = 4; i < end; ) {
+        int tag = x[i] >> 5, n = x[i] & 0x1F;
+        if (i + 1 + n > end) break;
+        for (int j = 0; tag == 2 && j < n; j++) {
+            uint8_t v = x[i + 1 + j];
+            uint8_t vic = (v & 0x80) && (v & 0x7F) <= 64 ? (uint8_t)(v & 0x7F) : v;
+            for (unsigned k = 0; k < sizeof VIC / sizeof VIC[0]; k++) {
+                if (VIC[k].vic != vic || e->mode_count >= EDID_MODES_MAX) continue;
+                int dup = 0;
+                for (int m = 0; m < e->mode_count; m++)
+                    dup |= e->mode[m].w == VIC[k].m.w && e->mode[m].h == VIC[k].m.h &&
+                           e->mode[m].hz == VIC[k].m.hz;
+                if (!dup) e->mode[e->mode_count++] = VIC[k].m;
+            }
+        }
+        i += 1 + n;
+    }
+}
+
 int edid_parse(const uint8_t *b, int len, struct display_edid *out) {
     if (!b || !out || len < EDID_BLOCK) return 0;
     if (k_memcmp(b, EDID_HEADER, 8) != 0) return 0;
@@ -84,8 +114,73 @@ int edid_parse(const uint8_t *b, int len, struct display_edid *out) {
         }
     }
     if (!e.name[0]) k_memcpy(e.name, text, sizeof text);
-    *out = e;
+
+    // The established bitmap (bytes 35-37, EDID 1.3 table 3.18), the
+    // modes worth setting: interlaced and Mac-only ones are skipped.
+    static const struct { uint8_t byte, bit; struct edid_mode m; } EST[] = {
+        { 35, 5, { 640, 480, 60 } }, { 35, 2, { 640, 480, 75 } },
+        { 35, 0, { 800, 600, 60 } }, { 36, 6, { 800, 600, 75 } },
+        { 36, 3, { 1024, 768, 60 } }, { 36, 1, { 1024, 768, 75 } },
+        { 36, 0, { 1280, 1024, 75 } },
+    };
+    for (unsigned i = 0; i < sizeof EST / sizeof EST[0]; i++)
+        if ((b[EST[i].byte] >> EST[i].bit) & 1 && e.mode_count < EDID_MODES_MAX)
+            e.mode[e.mode_count++] = EST[i].m;
+    // Standard timings (bytes 38-53): width/8 - 31, an aspect code, and
+    // refresh - 60. 0x0101 (or 0x0000) is an unused slot. Aspect 00 is
+    // 16:10 from EDID 1.3 on, 1:1 before.
+    for (int i = 0; i < 8; i++) {
+        uint8_t x = b[38 + 2 * i], a = b[39 + 2 * i];
+        if ((x == 1 && a == 1) || x == 0 || e.mode_count >= EDID_MODES_MAX) continue;
+        uint16_t w = (uint16_t)((x + 31) * 8), h;
+        switch (a >> 6) {
+        case 0: h = (e.version > 1 || e.revision >= 3) ? (uint16_t)(w * 10 / 16) : w; break;
+        case 1: h = (uint16_t)(w * 3 / 4); break;
+        case 2: h = (uint16_t)(w * 4 / 5); break;
+        default: h = (uint16_t)(w * 9 / 16); break;
+        }
+        e.mode[e.mode_count++] = (struct edid_mode){ w, h, (uint8_t)((a & 0x3F) + 60) };
+    }
+    e.extensions = b[126];
+    if (len >= EDID_MAX && e.extensions) parse_cea(b + EDID_BLOCK, &e);
+    k_memcpy(out, &e, sizeof e);   // not `*out = e`: that is a memcpy call, and there is none
     return 1;
+}
+
+// VESA DMT (v1.0 r13) for the display ladder's sizes at 60 Hz. pixel
+// kHz; h: active, front porch, sync, back porch; v the same; polarity.
+static const struct {
+    uint16_t w, h; uint8_t hz; uint32_t khz;
+    uint16_t hfp, hs, hbp, vfp, vs, vbp; uint8_t hpos, vpos;
+} DMT[] = {
+    {  640,  480, 60,  25175, 16,  96,  48, 10, 2, 33, 0, 0 },   // 0x04
+    {  800,  600, 60,  40000, 40, 128,  88,  1, 4, 23, 1, 1 },   // 0x09
+    { 1024,  768, 60,  65000, 24, 136, 160,  3, 6, 29, 0, 0 },   // 0x10
+    { 1280,  720, 60,  74250, 110, 40, 220,  5, 5, 20, 1, 1 },   // 0x55
+    { 1280, 1024, 60, 108000, 48, 112, 248,  1, 3, 38, 1, 1 },   // 0x23
+    { 1366,  768, 60,  85500, 70, 143, 213,  3, 3, 24, 1, 1 },   // 0x51
+    { 1600,  900, 60, 108000, 24,  80,  96,  1, 3, 96, 1, 1 },   // 0x53, reduced blanking
+    { 1920, 1080, 60, 148500, 88,  44, 148,  4, 5, 36, 1, 1 },   // 0x52
+};
+
+int edid_dmt_timing(uint16_t w, uint16_t h, uint8_t hz, struct edid_timing *out) {
+    for (unsigned i = 0; i < sizeof DMT / sizeof DMT[0]; i++) {
+        if (DMT[i].w != w || DMT[i].h != h || DMT[i].hz != hz) continue;
+        k_memset(out, 0, sizeof *out);
+        out->pixel_khz = DMT[i].khz;
+        out->hactive = w;
+        out->hsync_off = DMT[i].hfp;
+        out->hsync_w = DMT[i].hs;
+        out->hblank = (uint16_t)(DMT[i].hfp + DMT[i].hs + DMT[i].hbp);
+        out->vactive = h;
+        out->vsync_off = DMT[i].vfp;
+        out->vsync_w = DMT[i].vs;
+        out->vblank = (uint16_t)(DMT[i].vfp + DMT[i].vs + DMT[i].vbp);
+        out->hsync_pos = DMT[i].hpos;
+        out->vsync_pos = DMT[i].vpos;
+        return 1;
+    }
+    return 0;
 }
 
 uint32_t edid_refresh_mhz(const struct edid_timing *t) {

@@ -3883,10 +3883,12 @@ things to know.
   ladder below it, the smaller ones through the panel fitter under a
   pipe cycle (`docs/conventions/gui.md`'s scaling entry has the setting
   and the fitter's arming order).
-- **GEN8 AND GEN9, BY DEVICE ID, AND GEN9 GETS ONLY THE CURSOR AND THE
-  FLIP.** Kaby Lake (`KBL_IDS`) is claimed at the firmware's mode; the
-  eDP modeset, fitter, AUX and backlight are gen8's register map and
-  are not reached (no MODESET cap, gen-guarded entry points). Gen9
+- **ONE `struct intel_gen_ops` PER GENERATION, CHOSEN BY DEVICE ID;
+  NO `if (gen == ...)` IN THE DRIVER.** Gen8 (`BDW_IDS`) is the eDP
+  panel's: AUX EDID, the panel fitter, the backlight. Gen9 (`KBL_IDS`,
+  `intel_gen9.c` + `intel_gen9_modeset.c`) is an HDMI/DVI monitor's:
+  GMBUS EDID, scaler modes, real modes through `set_timing`. A slot a
+  generation lacks is NULL and its caller refuses. Gen9
   keeps gen8's plane OFFSETS with different FIELDS (format 27:24,
   stride in 64-byte units, tiling 12:10 --
   `intel_display_plane_matches()`), needs a DDB slice before a plane

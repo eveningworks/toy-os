@@ -64,7 +64,9 @@ others.
 
 `kernel.intel_cycle` is the same shape with four words: `pipe`, `link`
 and `native` each run one mechanism of the Intel display's modeset (see
-`docs/conventions/kernel.md`'s EDID entry) and log every readback;
+`docs/conventions/kernel.md`'s EDID entry) and log every readback --
+on gen8 the eDP panel's, on gen9 the HDMI port's (`link` there cycles
+the DDI buffer, `native` the PLL too);
 `off` does nothing, and the value always reads back as `off`.
 
 `kernel.crash` is the destructive one: `config set kernel.crash gp-fault`

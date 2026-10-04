@@ -121,6 +121,33 @@ KTEST("intel-display", "a pixel clock agrees with the EDID's within 1%, either s
     KTEST_ASSERT_EQ(intel_display_clock_agrees(241500, 0), 0);        // no EDID clock
 }
 
+// i915's skl_scaler_calc_phase() for RGB, worked by hand: 1:1 starts at
+// phase 0 with the trip bit; a 2x upscale (src/dst 0.5) at -0.25, which
+// wraps to 0.75 = 0xC000 >> 2; a 1.5x downscale at +0.25 with the trip.
+// The oracle is the firmware: from 241.5 MHz alone the search must land
+// on the exact CFGCR1/CFGCR2 the desktop's GOP programmed (DCO 402.5 x
+// 24 MHz, P2 Q2 K2 at the 9600 MHz centre); and every clock it answers
+// for must decode back to itself within the DCO's 24/2^15 MHz step.
+KTEST("intel-display", "the gen9 WRPLL search reproduces the firmware's dividers") {
+    uint32_t c1 = 0, c2 = 0;
+    KTEST_ASSERT_EQ(intel_display_gen9_wrpll(241500, &c1, &c2), 1);
+    KTEST_ASSERT_EQ(c1, 0x80800192u);
+    KTEST_ASSERT_EQ(c2, 0x2a4u);
+    static const uint32_t CLOCKS[] = { 25175, 40000, 65000, 74250, 85500, 108000, 148500, 241500 };
+    for (unsigned i = 0; i < sizeof CLOCKS / sizeof CLOCKS[0]; i++) {
+        KTEST_ASSERT_EQ(intel_display_gen9_wrpll(CLOCKS[i], &c1, &c2), 1);
+        uint32_t back = intel_display_gen9_hdmi_khz(c1, c2);
+        uint32_t d = back > CLOCKS[i] ? back - CLOCKS[i] : CLOCKS[i] - back;
+        KTEST_ASSERT(d <= 2);
+    }
+}
+
+KTEST("intel-display", "the gen9 scaler phase follows i915's formula") {
+    KTEST_ASSERT_EQ(intel_display_gen9_phase(0x10000), 0x0001u);
+    KTEST_ASSERT_EQ(intel_display_gen9_phase(0x8000), 0x3000u);
+    KTEST_ASSERT_EQ(intel_display_gen9_phase(0x18000), 0x1001u);
+}
+
 KTEST("intel-display", "a gen9 HDMI DPLL decodes to its pixel clock") {
     KTEST_ASSERT_EQ(intel_display_gen9_hdmi_khz(0x80800192u, 0x2a4u), 241500u);
     KTEST_ASSERT_EQ(intel_display_gen9_hdmi_khz(0x00800192u, 0x2a4u), 0u);   // disabled

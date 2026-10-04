@@ -66,7 +66,7 @@ const struct display_edid *display_edid(void) { return g_have_edid ? &g_edid : 0
 // bytes. A block that fails to parse is logged as such -- a panel
 // answering garbage is worth knowing about before a modeset trusts it.
 static void read_edid(const struct display_driver *d) {
-    static uint8_t raw[EDID_BLOCK];
+    static uint8_t raw[EDID_MAX];
     g_have_edid = 0;
     if (!d->read_edid) return;
     int n = d->read_edid(raw, sizeof raw);
@@ -80,6 +80,15 @@ static void read_edid(const struct display_driver *d) {
         return;
     }
     g_have_edid = 1;
+    // The listed modes, one line: what a driver could set for real.
+    char ml[200];
+    int mn = 0;
+    ml[0] = 0;
+    for (int i = 0; i < g_edid.mode_count && mn < (int)sizeof ml - 16; i++)
+        mn += k_snprintf(ml + mn, sizeof ml - (size_t)mn, " %ux%u@%u",
+                         g_edid.mode[i].w, g_edid.mode[i].h, g_edid.mode[i].hz);
+    klog_printf("display: EDID lists%s%s (%u extension block(s))\n",
+                mn ? "" : " no modes", ml, g_edid.extensions);
     klog_printf("display: EDID %s %04x \"%s\" %s %ux%u cm, %d detailed timing(s)\n",
                 g_edid.vendor, g_edid.product, g_edid.name,
                 g_edid.digital ? "digital" : "analog",

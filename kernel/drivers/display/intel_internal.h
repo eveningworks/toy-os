@@ -107,6 +107,7 @@
 // generation-specific path goes through it. Scattered `if (gen == 9)`
 // checks were how a gen8 register write could reach gen9 unnoticed: a
 // missing slot here is a NULL the caller checks, not a wrong write.
+struct edid_timing;
 struct intel_gen_ops {
     int gen;
     const uint16_t *ids;
@@ -122,6 +123,9 @@ struct intel_gen_ops {
     // A mode at the native timing, scaled: source w x h shown in the
     // window at x,y of ww x wh. Required with DISPLAY_CAP_MODESET.
     int  (*fit)(uint32_t w, uint32_t h, uint32_t x, uint32_t y, uint32_t ww, uint32_t wh);
+    // A REAL mode: the transcoder, port and PLL re-lit at timing `t`
+    // (shown 1:1). NULL where only the native timing can be shown.
+    int  (*set_timing)(const struct edid_timing *t);
     // kernel.intel_cycle's mechanisms; NULL where a generation has none.
     int  (*pipe_cycle)(void);
     int  (*link_retrain)(void);
@@ -140,6 +144,11 @@ int  intel_aux_native_read(uint32_t addr, uint8_t *buf, int len); // DPCD; bytes
 int  intel_aux_native_write(uint32_t addr, const uint8_t *buf, int len);
 
 // intel_gen9.c -- Kaby Lake: intel_gen9_ops and what it points at.
+// The scaler half of a mode, for the modeset's use with the pipe off.
+int intel_gen9_fit(uint32_t w, uint32_t h, uint32_t x, uint32_t y, uint32_t ww, uint32_t wh);
+// intel_gen9_modeset.c -- one cycle at level 0 pipe, 1 port, 2 PLL, at
+// timing `t` (NULL: the transcoder's own; level 2 needs one).
+int intel_gen9_cycle(int level, const struct edid_timing *t);
 
 // intel_gmbus.c -- the display engine's I2C, for an HDMI/DVI EDID.
 int  intel_gmbus_pin_for_port(int port);   // 0 when the DDI has none

@@ -30,6 +30,7 @@
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv -v` names THIS file
 #include "timer.h"  // coarse_ticks -- rate-limiting the live-scanout probe
 #include "intel_internal.h"
+#include "edid.h"     // the mode list: the EDID's listed modes and DMT timings
 
 DRIVER_DECLARE("intel-display", "display", "Intel gen8/gen9 display engine: modeset, cursor plane, page flip, backlight (gen8)");
 
@@ -571,23 +572,65 @@ static int ladder_fits(int index, uint32_t *w, uint32_t *h) {
     return *w < g_native_w && *h <= g_native_h && !(*w == g_native_w && *h == g_native_h);
 }
 
-static int intel_mode_count(void) {
-    int n = 1, w_, h_;
+// THE MODE LIST, built once the EDID is known: native first; then the
+// REAL modes -- a size the monitor lists whose DMT timing is known,
+// set with its own pixel clock (gen9's set_timing); then the ladder's
+// sizes no real mode covers, scaled from the native timing. A size
+// appears once, real winning over scaled.
+#define MODES_MAX 24
+struct mode_entry { uint32_t w, h; int real; struct edid_timing t; };
+static struct mode_entry g_modes[MODES_MAX];
+static int g_nmodes;
+static int g_on_native = 1;   // the transcoder runs the native timing (no real mode up)
+
+static int has_mode(uint32_t w, uint32_t h) {
+    for (int i = 0; i < g_nmodes; i++) if (g_modes[i].w == w && g_modes[i].h == h) return 1;
+    return 0;
+}
+
+static void build_modes(void) {
+    if (g_nmodes) return;
+    const struct display_edid *e = display_edid();
+    g_modes[g_nmodes++] = (struct mode_entry){ g_native_w, g_native_h, 0, { 0 } };
+    if (g_ops->set_timing && e && e->timing_count &&
+        e->timing[0].hactive == g_native_w && e->timing[0].vactive == g_native_h) {
+        g_modes[0].real = 1;
+        g_modes[0].t = e->timing[0];
+        for (int i = 0; i < e->mode_count && g_nmodes < MODES_MAX; i++) {
+            struct edid_timing t;
+            const struct edid_mode *m = &e->mode[i];
+            if (m->w > g_native_w || m->h > g_native_h || has_mode(m->w, m->h)) continue;
+            if (!edid_dmt_timing(m->w, m->h, m->hz, &t)) continue;
+            if (t.pixel_khz > e->timing[0].pixel_khz) continue;   // see intel_gen9_modeset.c
+            g_modes[g_nmodes++] = (struct mode_entry){ m->w, m->h, 1, t };
+        }
+    }
+    int lw, lh;
     uint32_t w, h;
-    for (int i = 0; display_ladder_mode(i, &w_, &h_); i++)
-        if (ladder_fits(i, &w, &h)) n++;
-    return n;
+    for (int i = 0; display_ladder_mode(i, &lw, &lh) && g_nmodes < MODES_MAX; i++)
+        if (ladder_fits(i, &w, &h) && !has_mode(w, h))
+            g_modes[g_nmodes++] = (struct mode_entry){ w, h, 0, { 0 } };
+    // Largest first after native, as the ladder is: the list a person picks from.
+    for (int i = 2; i < g_nmodes; i++)
+        for (int j = i; j > 1 && g_modes[j].w * g_modes[j].h > g_modes[j - 1].w * g_modes[j - 1].h; j--) {
+            struct mode_entry t;
+            k_memcpy(&t, &g_modes[j], sizeof t);
+            k_memcpy(&g_modes[j], &g_modes[j - 1], sizeof t);
+            k_memcpy(&g_modes[j - 1], &t, sizeof t);
+        }
+    klog_printf("intel-display: %d modes, native %ux%u%s\n", g_nmodes, g_native_w, g_native_h,
+                g_modes[0].real ? ", real modes from the EDID" : "");
+}
+
+static int intel_mode_count(void) {
+    build_modes();
+    return g_nmodes;
 }
 
 static void intel_mode_at(int index, struct display_mode *out) {
-    out->width = g_native_w; out->height = g_native_h; out->bpp = 32;
-    if (index <= 0) return;
-    int n = 0, w_, h_;
-    uint32_t w, h;
-    for (int i = 0; display_ladder_mode(i, &w_, &h_); i++) {
-        if (!ladder_fits(i, &w, &h)) continue;
-        if (++n == index) { out->width = w; out->height = h; return; }
-    }
+    build_modes();
+    if (index < 0 || index >= g_nmodes) index = 0;
+    out->width = g_modes[index].w; out->height = g_modes[index].h; out->bpp = 32;
 }
 
 // One axis of the fitter's window. THE INVARIANT (the PRM's, checked by
@@ -621,30 +664,45 @@ void intel_display_fit_window(int scaling, uint32_t w, uint32_t h, uint32_t pw, 
     *wh = fit_axis(fh, ph, y);
 }
 
+static void surface_size(uint32_t w, uint32_t h) {
+    g_surface.width = w;
+    g_surface.height = h;
+    for (int b = 0; b < SCANOUTS; b++) { g_scanout[b].width = w; g_scanout[b].height = h; }
+}
+
 static int fit_current(uint32_t w, uint32_t h) {
     uint32_t x, y, ww, wh;
     intel_display_fit_window(display_scaling(), w, h, g_native_w, g_native_h, &x, &y, &ww, &wh);
     if (!g_ops->fit || !g_ops->fit(w, h, x, y, ww, wh)) return 0;
-    g_surface.width = w;
-    g_surface.height = h;
-    for (int b = 0; b < SCANOUTS; b++) { g_scanout[b].width = w; g_scanout[b].height = h; }
+    surface_size(w, h);
     return 1;
 }
 
+// A real mode re-lights the pipe at its timing; a scaled one (and the
+// native one) runs on the native timing, so a real mode is left first.
 static int intel_set_mode(const struct display_mode *m) {
     if (!m || m->bpp != 32) return 0;
-    int listed = 0, n = intel_mode_count();
-    for (int i = 0; i < n && !listed; i++) {
-        struct display_mode c;
-        intel_mode_at(i, &c);
-        listed = c.width == m->width && c.height == m->height;
+    build_modes();
+    const struct mode_entry *e = 0;
+    for (int i = 0; i < g_nmodes && !e; i++)
+        if (g_modes[i].w == m->width && g_modes[i].h == m->height) e = &g_modes[i];
+    if (!e) return 0;
+    if (e->real && e != &g_modes[0]) {
+        if (!g_ops->set_timing(&e->t)) return 0;
+        g_on_native = 0;
+        surface_size(e->w, e->h);
+        return 1;
     }
-    if (!listed) return 0;
+    if (!g_on_native) {
+        if (!g_ops->set_timing(&g_modes[0].t)) return 0;
+        g_on_native = 1;
+    }
     return fit_current(m->width, m->height);
 }
 
 static int intel_set_scaling(int mode) {
     (void)mode;   // read back through display_scaling() by fit_current
+    if (!g_on_native) return 1;   // a real mode is shown 1:1: nothing to scale
     if (g_surface.width == g_native_w && g_surface.height == g_native_h) return 1;
     return fit_current(g_surface.width, g_surface.height);
 }

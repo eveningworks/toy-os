@@ -38,7 +38,7 @@ person has to keep true.
 
 | Driver | Claims | Notes |
 |---|---|---|
-| `intel-display` | Intel gen8/gen9 display engine | gen8: eDP modeset, EDID over AUX, cursor plane, page flip, backlight, panel fitter. Gen9 (Kaby Lake): cursor plane and page flip at the firmware's mode, EDID over GMBUS. |
+| `intel-display` | Intel gen8/gen9 display engine | gen8: eDP modeset, EDID over AUX, cursor plane, page flip, backlight, panel fitter. Gen9 (Kaby Lake): HDMI modeset with real lower modes from the EDID, scaler modes, EDID over GMBUS, cursor plane, page flip. |
 | `virtio-gpu` | virtio GPU | 2D modesetting; `-vga virtio`. |
 | `bochs` | QEMU stdvga (`1234:1111`) | Modesetting. |
 | `vmsvga` | VMware SVGA II (`15AD:0405`) | Modesetting; honours `video=WxH`. |

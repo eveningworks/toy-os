@@ -6018,7 +6018,7 @@ prints them. Measured in QEMU: apps 17.0M, shared 7.4M, graphics 3.5M,
 kernel 38.3M of 66.3M -- the kernel row is mostly the 9 MB image, the
 RAM-sized process table, stacks, page tables and the caches.
 
-### Intel gen9 on the Kaby Lake desktop over HDMI: readout, adopt (cursor + flip), GMBUS EDID, scaler modes, an HDMI modeset
+### Intel gen9 on the Kaby Lake desktop over HDMI: readout, adopt, GMBUS EDID, scaler modes, HDMI modeset
 
 The third test machine (a Lenovo desktop, HD 630 `8086:5912`, one
 monitor on HDMI at 2560x1440) ran on vesafb: the driver refused any
@@ -6052,15 +6052,33 @@ Adapter until the vendor driver loads. The stages, one flash each:
    2026-10-04 (`intel_gmbus.c`): DDI D's pin 6 answered 128 bytes, a
    DELL U2515H, and the firmware's timing -- the transcoder's porches and
    DPLL1 decoded to 241.5 MHz -- MATCHES its preferred timing to the kHz.
-4. **3, scaler modes**: the ladder below native through `PS_CTRL`,
-   keeping the HDMI timing -- runtime `config set resolution` as the
-   laptops have it. FIRST, fold the scattered `g_gen == 8/9` checks in
-   `intel_display.c` into a per-generation ops table chosen in
-   `find_gpu()` (raised in review, 2026-10-04): a third set of gen9
-   paths added as more `if`s is how a gen8 write reaches gen9 unnoticed.
-5. **4, an HDMI modeset**: a DPLL in HDMI mode from the pixel clock
-   (`skl_ddi_calculate_wrpll`), the DDI buffer translations, the
-   transcoder in HDMI mode, the timings from the EDID.
+4. **3, scaler modes**: BUILT 2026-10-04, after the scattered
+   generation checks became `struct intel_gen_ops` (a review's point:
+   a missed `if` is how a gen8 write reaches gen9). A smaller mode is
+   `PIPESRC` and `PLANE_SIZE` shown through scaler 0 -- live, no pipe
+   cycle, as i915's fastset does -- HQ mode, the medium filter and
+   i915's phase formula; native restores the firmware's own scaler
+   state (`PS_CTRL` 0x90800000, its PROGRAMMED coefficients). Confirmed
+   by eye: 1920x1080 filling the Dell, 1280x1024 pillarboxed 380 px a
+   side, native back.
+5. **4, an HDMI modeset, with real lower modes**: BUILT 2026-10-04
+   (`intel_gen9_modeset.c`), one mechanism per flash behind
+   `kernel.intel_cycle` -- `pipe` (planes, transcoder, DDI function),
+   `link` (also the DDI buffer; HDMI has no training), `native` (also
+   DPLL1, its dividers recomputed by a port of `skl_ddi_calculate_wrpll`
+   that reproduces the GOP's 0x80800192/0x2a4 from 241.5 MHz alone).
+   REAL modes are the sizes the EDID lists -- established, standard and
+   the CEA extension's video descriptors (read: the GMBUS read is 256
+   bytes when the base block says an extension follows) -- that the
+   DMT table can time, at or below the native clock; the rest of the
+   ladder stays scaled. On the Dell: real 640x480, 800x600, 1024x768,
+   1280x720, 1280x1024, 1920x1080; scaled 1600x900, 1366x768. Confirmed
+   by eye with the monitor's own input notice: each cycle back, real
+   1920x1080 (148.5 MHz, 8910 MHz / 12) and 1024x768, scaled 1600x900
+   from a real mode (native re-lit first), and a boot with 1920x1080
+   stored. NOT reprogrammed, and safe only BELOW the firmware's mode:
+   the DDI buffer translations, TRANS_CLK_SEL, watermarks/DDB and
+   CDCLK -- a mode above it would need all four.
 
 ### Intel blitter acceleration on the BCS ring
 

@@ -8980,3 +8980,27 @@ category the others miss (the /lib image cache and the block cache are
 in it on purpose, as Linux counts buff/cache apart from processes). The
 walk costs a few microseconds per process per Task Manager refresh;
 `proc_info.mem_bytes` stays, unchanged, for `ps`.
+
+## A lower mode is REAL when the monitor lists it, and scaled from native otherwise
+
+Stage 4 of the Kaby Lake work gave the driver two ways to show a size
+below the monitor's native one: re-light the pipe at that size's own
+timing (the monitor scales), or keep the native timing and scale in
+the GPU's pipe scaler (stage 3).
+
+**What real systems do.** Windows lists a monitor's EDID modes and
+sets them for real, offering "GPU scaling" as a separate control;
+Linux's i915 sets an EDID mode for real and uses the panel fitter only
+when a mode is not supported (eDP panels, which have one timing).
+Wayland compositors (KWin, Mutter) list the connector's modes from
+the EDID and set them as-is.
+
+**toy-os does the same, and fills the gaps with scaling.** A size the
+EDID lists (established, standard or CEA) with a known DMT timing at
+or below the native pixel clock is set for real; every other ladder
+size is scaled from the native timing, so the resolution list is the
+same on a monitor that lists little. The cap at the native clock is
+not cosmetic: the re-modeset keeps the firmware's DDI translations,
+watermarks, DDB and CDCLK, each of which a FASTER mode could outrun.
+An eDP panel (gen8) has one timing, so all its smaller sizes are
+scaled -- the same answer i915 gives.
