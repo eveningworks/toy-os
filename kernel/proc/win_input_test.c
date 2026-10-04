@@ -346,3 +346,35 @@ KTEST("win_input", "a compositor change empties the keyboard's stream and its ow
     scheduler_preempt_enable();
     KTEST_ASSERT_EQ(queued, 0);
 }
+
+KTEST("win_input", "a full queue of releases sheds nothing; a screen notice coalesces") {
+    // A release is never evicted: with nothing else to shed, the NEW
+    // event is the one refused. And a screen notice is a state, so a
+    // second one replaces the first rather than taking a slot.
+    SKIP_IF_ROLE_HELD;
+    int pid = spare_pid();
+    if (!pid) KTEST_SKIP("no spare pid");
+    win_server_set_compositor(pid, 0);
+    struct win_event scr = { .type = WIN_EV_SCREEN, .a = 640, .b = 480 };
+    KTEST_ASSERT(win_input_push(&scr));
+    scr.a = 800;
+    KTEST_ASSERT(win_input_push(&scr));
+    KTEST_ASSERT_EQ(win_input_pending(), 1);
+    struct win_event got;
+    KTEST_ASSERT(win_input_pop(&got));
+    KTEST_ASSERT_EQ(got.a, 800);              // the newest won
+
+    for (int i = 0; i < WIN_EVENT_QUEUE_MAX; i++) {
+        struct win_event up = { .type = WIN_EV_RAW_KEY_UP, .a = 'a' + i % 26 };
+        KTEST_ASSERT(win_input_push(&up));
+    }
+    struct win_event press = { .type = WIN_EV_RAW_KEY, .a = 'z' };
+    int took_press = win_input_push(&press);
+    int took_notice = win_input_push(&scr);
+    int ups = 0;
+    while (win_input_pop(&got)) if (got.type == WIN_EV_RAW_KEY_UP) ups++;
+    win_server_set_compositor(0, 0);
+    KTEST_ASSERT(!took_press);
+    KTEST_ASSERT(!took_notice);
+    KTEST_ASSERT_EQ(ups, WIN_EVENT_QUEUE_MAX);   // every release survived
+}

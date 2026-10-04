@@ -1696,20 +1696,24 @@ an ANSI sequence by then (`api/termkey.h`) -- so `read()` on fd 0 is
 still a byte stream. Why the specials moved: docs/decisions/drivers.md,
 the Nordic-keyboard entry.
 
-**A COMPOSITOR READS ONE ORDERED STREAM OF EDGES**
-(`keyboard_try_get_key()`): while a compositor is attached every press
-and release goes there and nowhere else, so never pair the console's
-ring with a second queue to rebuild the order -- that lost releases. A
-queued press always has room for its release; overflow refuses the
-newest press, whole. `win_input_poll()` reads each source only while
-the compositor's queue has room and leaves the rest queued. The streams
-are emptied on EVERY compositor role change (`keyboard_events_attach()`);
-docs/decisions/gui.md, "One ordered key stream", has why.
-
 **A DEAD KEY TYPES NOTHING UNTIL THE NEXT KEY.** Composition is the
 layout's (`keyboard_layout_compose()`), behind every driver, so a test
 that presses a dead key and expects a character back on that press is
 wrong; one that switches layouts mid-accent loses the accent.
+
+## A COMPOSITOR READS ONE ORDERED STREAM OF EDGES, AND NO RELEASE IS EVER SHED
+
+`api/keyboard.h` (`keyboard_try_get_key()`, `keyboard_try_get_physical()`).
+While a compositor is attached every press and release goes there and
+nowhere else, so never pair the console's ring with a second queue to
+rebuild the order -- that lost releases. A queued press always has room
+for its release; overflow refuses the newest press, whole. In the
+compositor's queue (`kernel/proc/win_input.c`) a release -- a key's, a
+position's, a button's -- is marked and never evicted; `win_input_poll()`
+reads each source only while there is room short of a notice reserve,
+and leaves the rest queued. The streams are emptied on EVERY compositor
+role change (`keyboard_events_attach()`), and are touched only with
+interrupts off. docs/decisions/gui.md, "One ordered key stream", has why.
 
 ## THE KERNEL KEEPS A ROLLING LOG OF KEY EVENTS, AND `kbd` PRINTS IT
 

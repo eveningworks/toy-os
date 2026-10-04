@@ -102,13 +102,12 @@ static uint8_t current_mods(void) {
 //
 // See keyboard.h (keyboard_try_get_key(), keyboard_try_get_physical()).
 // While a compositor is ATTACHED (keyboard_events_attach()), every key
-// event goes to these two queues and nowhere else, in the order it
+// event goes to these two streams and nowhere else, in the order it
 // happened: `kev` carries each press as its translated code --
 // autorepeats and dead-key output included -- and each release; `phys`
 // carries the same keys by position, both edges, no repeats. Linux's
 // evdev shape. While none is attached, a held screen drops keys and a
-// console takes them (ring_push()). Everything here runs in the IRQ
-// handler: no allocation, no wake, no lock.
+// console takes them (emit()).
 //
 // **THE INVARIANT, FOR BOTH: A PRESS THAT IS QUEUED ALWAYS HAS ROOM FOR
 // ITS RELEASE.** A press is admitted only while the free slots after it
@@ -118,71 +117,108 @@ static uint8_t current_mods(void) {
 // key whose press was refused has its release dropped too, so a client
 // never sees half of a key. Nothing queued is ever evicted.
 //
-// A RELEASE THAT NEVER COMES (an i8042 overrun) leaves its key owed: one
-// slot of each queue until that key is pressed and released again, and
-// never more than KEY_DOWN_MAX in all, so presses keep fitting. Pause has
-// no release at all on PS/2 and is sent as down-and-up at once.
-#define KEV_MAX 256          // a burst of a hundred-odd keys between two polls
-#define KEY_DOWN_MAX 128     // evdev keycodes tracked; INPUT_KEY_COMPOSE is 127
-struct key_event_rec {
+// **AND OWED IS BOUNDED BY THE KEYS TRACKED, WHICH EACH RING EXCEEDS.**
+// A release that never comes (an i8042 overrun) leaves its key owed: one
+// slot until that key is pressed and released again, and never more than
+// the tracked keycodes in all -- each ring is twice that, so presses keep
+// fitting whatever is lost. A role change forgets every owed release.
+//
+// **EVERY READ AND WRITE IS WITH INTERRUPTS OFF.** The producers are
+// IRQ handlers (PS/2, virtio-input) and polled sources run from
+// scheduler_idle() (USB HID), the reader is win_input_poll() and the
+// reset comes from a syscall -- all on one CPU (docs/smp-design.md), so
+// interrupts off is what serialises them. No lock: an IRQ cannot take one.
+struct edge_rec {
     uint16_t code;
     uint8_t  down;
     uint8_t  mods;
 };
-static struct key_event_rec kev[KEV_MAX];
-static unsigned kev_head, kev_tail;
+struct edge_ring {
+    struct edge_rec *buf;
+    unsigned size, head, tail;
+    int owed;                 // presses queued whose release is still to come
+};
+
+static int er_free(const struct edge_ring *r) {
+    return (int)((r->tail + r->size - r->head - 1) % r->size);
+}
+static void er_put(struct edge_ring *r, uint16_t code, int down) {
+    r->buf[r->head] = (struct edge_rec){ code, (uint8_t)(down ? 1 : 0), current_mods() };
+    r->head = (r->head + 1) % r->size;
+}
+// Room for a press: itself, plus every owed release, plus its own if it
+// starts a hold.
+static int er_admits(const struct edge_ring *r, int new_hold) {
+    return er_free(r) >= r->owed + (new_hold ? 2 : 1);
+}
+static int er_get(struct edge_ring *r, struct edge_rec *out) {
+    uint64_t f = irq_save();
+    int got = r->tail != r->head;
+    if (got) {
+        *out = r->buf[r->tail];
+        r->tail = (r->tail + 1) % r->size;
+    }
+    irq_restore(f);
+    return got;
+}
+static void er_reset(struct edge_ring *r) { r->head = r->tail = 0; r->owed = 0; }
+
+#define KEY_DOWN_MAX 128     // evdev keycodes tracked by `kev`; INPUT_KEY_COMPOSE is 127
+#define PHYS_KEYCODES 256    // ...and by `phys`
+static struct edge_rec kev_buf[2 * KEY_DOWN_MAX], phys_buf[2 * PHYS_KEYCODES];
+static struct edge_ring kev  = { kev_buf,  2 * KEY_DOWN_MAX, 0, 0, 0 };
+static struct edge_ring phys = { phys_buf, 2 * PHYS_KEYCODES, 0, 0, 0 };
 static uint8_t  kev_delivered[KEY_DOWN_MAX];   // this key's press is queued
 static uint16_t kev_code[KEY_DOWN_MAX];        // ...as this code: its release's
-static int kev_held;                           // keys with a release owed
-static int g_attached;                         // a compositor reads these queues
+static uint8_t  phys_held[PHYS_KEYCODES / 8];  // `phys`'s owed set, and its repeat filter
+static int g_attached;                         // a compositor reads these streams
 
-static int kev_free(void) {
-    return (int)((kev_tail + KEV_MAX - kev_head - 1) % KEV_MAX);
-}
-
-// Only ever called with room (the admission checks below).
-static void kev_put(uint16_t code, int down) {
-    kev[kev_head] = (struct key_event_rec){ code, (uint8_t)(down ? 1 : 0), current_mods() };
-    kev_head = (kev_head + 1) % KEV_MAX;
-}
-
-// A character with no key of its own (a dead key's accent; Pause; a key
-// past the tracked range): down and up together, or neither.
+// A character with no key of its own (a dead key's accent; a key past
+// the tracked range): down and up together, or neither.
 static void kev_synthetic(uint16_t code) {
-    if (kev_free() < kev_held + 2) return;
-    kev_put(code, 1);
-    kev_put(code, 0);
+    uint64_t f = irq_save();
+    if (er_admits(&kev, 1)) {
+        er_put(&kev, code, 1);
+        er_put(&kev, code, 0);
+    }
+    irq_restore(f);
 }
 
 // A press of `keycode` that produced `code`. A REPEAT (the key is
-// already delivered) costs one slot; a new hold costs one more, the
-// release it will owe. A RELEASE REPORTS WHAT THE FIRST PRESS PRODUCED:
-// hold W ('w'), press Shift, and the repeats say 'W' -- the release must
-// still say 'w', or a client that saw 'w' go down holds it forever.
+// already delivered) starts no hold. A RELEASE REPORTS WHAT THE FIRST
+// PRESS PRODUCED: hold W ('w'), press Shift, and the repeats say 'W' --
+// the release must still say 'w', or a client that saw 'w' go down holds
+// it forever.
 static void kev_press(uint16_t keycode, uint16_t code) {
     if (!code) return;
     if (keycode >= KEY_DOWN_MAX) { kev_synthetic(code); return; }
+    uint64_t f = irq_save();
     int repeat = kev_delivered[keycode];
-    if (kev_free() < kev_held + (repeat ? 1 : 2)) return;   // refused, whole
-    kev_put(code, 1);
-    if (!repeat) {
-        kev_delivered[keycode] = 1;
-        kev_code[keycode] = code;
-        kev_held++;
+    if (er_admits(&kev, !repeat)) {           // else refused, whole
+        er_put(&kev, code, 1);
+        if (!repeat) {
+            kev_delivered[keycode] = 1;
+            kev_code[keycode] = code;
+            kev.owed++;
+        }
     }
+    irq_restore(f);
 }
 
 static void kev_release(uint16_t keycode) {
-    if (keycode >= KEY_DOWN_MAX || !kev_delivered[keycode]) return;
-    kev_delivered[keycode] = 0;
-    kev_held--;
-    kev_put(kev_code[keycode], 0);
+    if (keycode >= KEY_DOWN_MAX) return;
+    uint64_t f = irq_save();
+    if (kev_delivered[keycode]) {
+        kev_delivered[keycode] = 0;
+        kev.owed--;
+        er_put(&kev, kev_code[keycode], 0);
+    }
+    irq_restore(f);
 }
 
 int keyboard_try_get_key(int *out_code, int *out_down, uint8_t *out_mods) {
-    if (kev_tail == kev_head) return 0;
-    struct key_event_rec e = kev[kev_tail];
-    kev_tail = (kev_tail + 1) % KEV_MAX;
+    struct edge_rec e;
+    if (!er_get(&kev, &e)) return 0;
     if (out_code) *out_code = e.code;
     if (out_down) *out_down = e.down;
     if (out_mods) *out_mods = e.mods;
@@ -191,64 +227,47 @@ int keyboard_try_get_key(int *out_code, int *out_down, uint8_t *out_mods) {
 
 // The same keys by position. `phys_held` is what makes a PS/2 typematic
 // repeat -- another make code for a key already down -- NOT an edge (USB
-// and virtio report no repeats), and is the owed set for the invariant
-// above: a refused press leaves its bit clear, so its release is dropped.
-// A keycode past the bitmap is left out rather than wrapped.
-#define PHYS_KEYCODES 256
-#define PHYS_MAX 128
-struct phys_edge {
-    uint16_t keycode;
-    uint8_t  down;
-    uint8_t  mods;
-};
-static struct phys_edge phys[PHYS_MAX];
-static unsigned phys_head, phys_tail;
-static uint8_t phys_held[PHYS_KEYCODES / 8];
-static int phys_owed;
-
-static int phys_free(void) {
-    return (int)((phys_tail + PHYS_MAX - phys_head - 1) % PHYS_MAX);
-}
-
+// and virtio report no repeats), and is the owed set: a refused press
+// leaves its bit clear, so its release is dropped. A keycode past the
+// bitmap is left out rather than wrapped.
 static void phys_push(uint16_t keycode, int down) {
     if (!g_attached || keycode >= PHYS_KEYCODES) return;
     uint8_t bit = (uint8_t)(1u << (keycode & 7));
+    uint64_t f = irq_save();
     int held = (phys_held[keycode >> 3] & bit) != 0;
-    if (held == !!down) return;          // a repeat, or a release of nothing
-    if (down) {
-        if (phys_free() < phys_owed + 2) return;   // refused, whole
-        phys_held[keycode >> 3] |= bit;
-        phys_owed++;
-    } else {
-        phys_held[keycode >> 3] &= (uint8_t)~bit;
-        phys_owed--;
+    if (held != !!down) {                     // else a repeat, or a release of nothing
+        if (!down) {
+            phys_held[keycode >> 3] &= (uint8_t)~bit;
+            phys.owed--;
+            er_put(&phys, keycode, 0);
+        } else if (er_admits(&phys, 1)) {     // else refused, whole
+            phys_held[keycode >> 3] |= bit;
+            phys.owed++;
+            er_put(&phys, keycode, 1);
+        }
     }
-    phys[phys_head] = (struct phys_edge){ keycode, (uint8_t)(down ? 1 : 0), current_mods() };
-    phys_head = (phys_head + 1) % PHYS_MAX;
+    irq_restore(f);
 }
 
 int keyboard_try_get_physical(uint16_t *out_keycode, int *out_down, uint8_t *out_mods) {
-    if (phys_tail == phys_head) return 0;
-    struct phys_edge e = phys[phys_tail];
-    phys_tail = (phys_tail + 1) % PHYS_MAX;
-    if (out_keycode) *out_keycode = e.keycode;
+    struct edge_rec e;
+    if (!er_get(&phys, &e)) return 0;
+    if (out_keycode) *out_keycode = e.code;
     if (out_down) *out_down = e.down;
     if (out_mods) *out_mods = e.mods;
     return 1;
 }
 
-// EVERY compositor role change lands here (win_role.c): both queues and
+// EVERY compositor role change lands here (win_role.c): both streams and
 // every owed release are emptied, so a new compositor -- a restart, a
 // handoff -- is never handed the last one's edges, nor a release for a
-// press it never saw. With interrupts off: IRQ1 writes the same state.
+// press it never saw.
 void keyboard_events_attach(int on) {
     uint64_t f = irq_save();
-    kev_head = kev_tail = 0;
+    er_reset(&kev);
+    er_reset(&phys);
     k_memset(kev_delivered, 0, sizeof kev_delivered);
-    kev_held = 0;
-    phys_head = phys_tail = 0;
     k_memset(phys_held, 0, sizeof phys_held);
-    phys_owed = 0;
     g_attached = on ? 1 : 0;
     irq_restore(f);
 }
@@ -264,25 +283,25 @@ static uint16_t emitting_keycode;
 // Bytes still to drop from a Pause sequence -- see keyboard_feed_byte().
 static int pause_swallow;
 
-// A press produced `c`: to the compositor's event stream while it holds
-// the keyboard, to the console terminal otherwise -- never both, so the
-// terminal holds nothing stale when the keyboard comes back.
-static void ring_push(uint16_t c) {
+// A key produced `c`: to the compositor's event stream while one is
+// attached, to the console terminal otherwise -- never both, so the
+// terminal holds nothing stale when the keyboard comes back. `synthetic`
+// is a character with no key of its own (a dead key's accent), which goes
+// down and up at once.
+static void emit(uint16_t c, int synthetic) {
     // The tap's view of the SAME push, so `kbd` can show a keycode and
     // the character it turned into on one line. Here rather than at the
     // ~20 call sites for the reason `emitting_keycode` is here.
     kbdtap_produced(c);
-    if (g_attached) kev_press(emitting_keycode, c);
-    else if (!tty_bypassed(tty_console())) tty_input(tty_console(), c, current_mods());
+    if (g_attached) {
+        if (synthetic) kev_synthetic(c);
+        else kev_press(emitting_keycode, c);
+    } else if (!tty_bypassed(tty_console())) {
+        tty_input(tty_console(), c, current_mods());
+    }
     // else: a held screen with no compositor yet -- the key goes nowhere
 }
-
-// A character with no key of its own, routed like ring_push().
-static void push_synthetic(uint16_t c) {
-    kbdtap_produced(c);
-    if (g_attached) kev_synthetic(c);
-    else if (!tty_bypassed(tty_console())) tty_input(tty_console(), c, current_mods());
-}
+static void ring_push(uint16_t c) { emit(c, 0); }
 
 // Defined below, beneath keyboard_key_event() which is its public face.
 // Declared here because the PS/2 path is the one caller that has a wire
@@ -358,18 +377,23 @@ void keyboard_feed_byte(uint8_t sc) {
     // **PAUSE IS SIX BYTES AND HAS NO RELEASE.** It arrives as
     // E1 1D 45 E1 9D C5 and nothing else uses the E1 prefix, so the
     // whole sequence is swallowed by counting: report the press when the
-    // prefix arrives and drop the five bytes behind it. There is no
-    // break code to report, which is why this is the one key that
-    // reports a press with no matching release -- documented rather
-    // than smoothed over, because a client tracking held keys has to
-    // tolerate it (and already must, see win_proto.h).
+    // prefix arrives and drop the five bytes behind it. There is no break
+    // code, so the release is REPORTED HERE, at once -- the wire is the
+    // one place that knows it will never come, and every layer above (the
+    // key stream, the positional stream, the tap) then sees an ordinary
+    // press and release. USB and virtio report Pause's real release.
+    //
+    // THE SWALLOW IS CHECKED FIRST: the sequence carries a second E1, and
+    // read as a new Pause it reported the key twice and ate three of the
+    // bytes after it -- the next keystroke.
+    if (pause_swallow) {
+        pause_swallow--;
+        return;
+    }
     if (sc == 0xE1) {
         pause_swallow = 5;
         key_event(INPUT_KEY_PAUSE, 1, 0xE1, 0);
-        return;
-    }
-    if (pause_swallow) {
-        pause_swallow--;
+        key_event(INPUT_KEY_PAUSE, 0, 0xE1, 0);
         return;
     }
 
@@ -553,7 +577,7 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     case INPUT_KEY_CAPSLOCK:   ring_push(KEY_CAPS_LOCK); return;
     case INPUT_KEY_NUMLOCK:    ring_push(KEY_NUM_LOCK); return;
     case INPUT_KEY_SCROLLLOCK: ring_push(KEY_SCROLL_LOCK); return;
-    case INPUT_KEY_PAUSE:      push_synthetic(KEY_PAUSE); return;   // no break code on PS/2
+    case INPUT_KEY_PAUSE:      ring_push(KEY_PAUSE); return;
     case INPUT_KEY_SYSRQ:      ring_push(KEY_PRINT_SCREEN); return;
 
     // --- THE NUMERIC KEYPAD, AS THE CHARACTERS ON ITS KEYCAPS ---------
@@ -607,7 +631,7 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
         // TWO CHARACTERS FROM ONE PRESS (an accent, then the key): the
         // accent has no key of its own, so it goes down AND up at once,
         // and the key is what this keycode's release reports.
-        if (n == 2) push_synthetic(out[0]);
+        if (n == 2) emit(out[0], 1);
         if (n > 0) ring_push(out[n - 1]);
         return;
     }

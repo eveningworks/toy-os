@@ -67,6 +67,8 @@ whenever a headline here tells you something you did not already know.
   scancode**
 - **A KEY IS AN `int`: A CHARACTER IS ONE LATIN-1 BYTE, A `KEY_*` SPECIAL
   IS ABOVE 0xFF**
+- **A COMPOSITOR READS ONE ORDERED STREAM OF EDGES, AND NO RELEASE IS
+  EVER SHED**
 - **`kbd` PRINTS EVERY STAGE OF A KEYPRESS, AND ITS KERNEL LOG IS OFF BY
   DEFAULT**
 - **A LOG LINE'S LEVEL ARRIVES IN-BAND (`klog_printf(KLOG_ERR "...")`),

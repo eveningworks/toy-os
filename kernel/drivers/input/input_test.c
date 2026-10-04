@@ -23,6 +23,16 @@
 #include "mouse.h"
 #include "tty.h"              // the bypass: which side of the split a key lands on
 #include "win_proto.h"        // WIN_EVENT_QUEUE_MAX: how much one poll may take
+#include "win_role.h"         // win_server_compositor_pid(): a live desktop's streams
+
+// THE KEY STREAMS BELONG TO A LIVE COMPOSITOR when one holds the role:
+// keyboard_events_attach() would empty them under it, so a test that
+// attaches skips instead (win_input_test.c has the same guard).
+#define SKIP_IF_ROLE_HELD                                                     \
+    do {                                                                      \
+        if (win_server_compositor_pid())                                      \
+            KTEST_SKIP("a compositor holds the role");                        \
+    } while (0)
 #include "scheduler.h"
 #include "ktest.h"
 #include "driver.h"
@@ -620,6 +630,7 @@ static int modified_key(uint16_t mod, uint16_t key, int *codes, uint8_t *mods, i
 // bypassed, as while a compositor holds it) gets the key and its
 // modifier bit; a TERMINAL gets what a terminal sends.
 KTEST("input", "Alt+key is the key with KEY_MOD_ALT for a window, ESC then the key for a terminal") {
+    SKIP_IF_ROLE_HELD;
     struct tty *t = tty_console();
     int was = tty_bypassed(t), was_att = keyboard_events_attached();
     int codes[4];
@@ -646,6 +657,7 @@ KTEST("input", "Alt+key is the key with KEY_MOD_ALT for a window, ESC then the k
 }
 
 KTEST("input", "Ctrl+digit reaches a window with KEY_MOD_CTRL and a terminal not at all") {
+    SKIP_IF_ROLE_HELD;
     struct tty *t = tty_console();
     int was = tty_bypassed(t), was_att = keyboard_events_attached();
     int codes[4];
@@ -677,6 +689,7 @@ KTEST("input", "Ctrl+digit reaches a window with KEY_MOD_CTRL and a terminal not
 // modifier that changes nothing about what is reported -- Ctrl+1 is the
 // key INPUT_KEY_1 going down with KEY_MOD_CTRL set, not a dropped key.
 KTEST("input", "the physical stream reports positions, both edges, and no repeats") {
+    SKIP_IF_ROLE_HELD;
     scheduler_preempt_disable();
     int was_att = keyboard_events_attached();
     keyboard_events_attach(1);            // the stream exists only for a compositor
@@ -717,7 +730,7 @@ static const char DEAD_FIXTURE[] =
 
 #define EVLOG_MAX 600
 struct evlog { int n, code[EVLOG_MAX], down[EVLOG_MAX]; };
-static struct evlog g_ev;   // ~5 KB: off the kernel stack
+static struct evlog g_ev, g_ph;   // keys, and the same keys by position
 
 static void tap(uint16_t kc) { input_report_key(kc, 1); input_report_key(kc, 0); }
 
@@ -729,6 +742,7 @@ static void window_events(void (*script)(void)) {
     struct tty *t = tty_console();
     int was = tty_bypassed(t), was_att = keyboard_events_attached();
     k_memset(&g_ev, 0, sizeof g_ev);
+    k_memset(&g_ph, 0, sizeof g_ph);
 
     scheduler_preempt_disable();
     tty_set_bypass(t, 1);
@@ -746,6 +760,9 @@ static void window_events(void (*script)(void)) {
             if (room == 1) more = 1;
         }
     }
+    uint16_t pk;
+    while (keyboard_try_get_physical(&pk, &d, &m))
+        if (g_ph.n < EVLOG_MAX) { g_ph.code[g_ph.n] = pk; g_ph.down[g_ph.n++] = d; }
     keyboard_layout_compose_reset();
     keyboard_events_attach(was_att);
     tty_set_bypass(t, was);
@@ -776,6 +793,7 @@ static int still_held(int code) {
 
 static void script_dead_x(void) { tap(13); tap(45); }
 KTEST("input", "dead key + a key it does not compose with: both characters come back UP") {
+    SKIP_IF_ROLE_HELD;
     // Two characters from one press. The accent has no key, so it goes
     // down and up at once; the key's own release reports the key.
     window_events(script_dead_x);
@@ -788,6 +806,7 @@ KTEST("input", "dead key + a key it does not compose with: both characters come 
 
 static void script_dead_kp(void) { tap(13); tap(INPUT_KEY_KP1); tap(18); }
 KTEST("input", "a keypad character ends a pending accent like any other key") {
+    SKIP_IF_ROLE_HELD;
     // "dead acute, KP1, e" is "acute 1 e" -- the keypad is text.
     window_events(script_dead_kp);
     KTEST_ASSERT_EQ(g_ev.n, 6);
@@ -798,6 +817,7 @@ KTEST("input", "a keypad character ends a pending accent like any other key") {
 
 static void script_interleave(void) { tap(18); tap(45); tap(13); tap(45); }
 KTEST("input", "a window gets presses and releases in the order they happened") {
+    SKIP_IF_ROLE_HELD;
     // Each press before ITS release, the second key's press before the
     // second key's release -- two queues read separately broke exactly that.
     window_events(script_interleave);
@@ -812,6 +832,7 @@ KTEST("input", "a window gets presses and releases in the order they happened") 
 #define BURST 100
 static void script_burst(void) { for (int i = 0; i < BURST; i++) tap(i % 2 ? 45 : 18); }
 KTEST("input", "a burst typed between two polls all arrives, in order, every press released") {
+    SKIP_IF_ROLE_HELD;
     // 200 events, far more than a compositor's queue holds: each poll
     // takes what fits and the rest WAITS -- nothing evicted, nothing lost.
     window_events(script_burst);
@@ -834,6 +855,7 @@ static void script_repeat(void) {
     input_report_key(45, 0);
 }
 KTEST("input", "a long autorepeat cannot crowd out a release that is owed") {
+    SKIP_IF_ROLE_HELD;
     // 400 repeats overflow the queue: the newest presses are refused,
     // and both releases still arrive -- a queued press always has room
     // for its release.
@@ -871,6 +893,7 @@ KTEST("input", "every KEY_* special has a C1 low byte and IS_SPECIAL_KEY knows i
 
 static void script_hold_enter(void) { input_report_key(INPUT_KEY_ENTER, 1); }
 KTEST("input", "a compositor change empties the key streams and forgets owed releases") {
+    SKIP_IF_ROLE_HELD;
     // A restart or handoff: the old compositor's queued Enter must not
     // reach the new one, and the release of a key it saw go down must
     // not either -- the new one never saw the press.
@@ -904,10 +927,39 @@ KTEST("input", "a compositor change empties the key streams and forgets owed rel
     KTEST_ASSERT_EQ(n_ring, 0);
 }
 
-static void script_pause(void) { input_report_key(INPUT_KEY_PAUSE, 1); }
-KTEST("input", "Pause, which has no release on PS/2, owes nothing") {
+static void pause_wire(void) {
+    static const uint8_t seq[] = { 0xE1, 0x1D, 0x45, 0xE1, 0x9D, 0xC5 };
+    for (unsigned i = 0; i < sizeof seq; i++) keyboard_feed_byte(seq[i]);
+}
+static void script_pause(void) {
+    pause_wire();
+    pause_wire();
+    keyboard_feed_byte(0x12);   // 'e' (set 1 make 0x12, evdev 18) right behind:
+    keyboard_feed_byte(0x92);   // ...it must not be swallowed as Pause's tail
+}
+KTEST("input", "PS/2 Pause, which has no break code, comes back up in both streams") {
+    // The wire reports the release Pause never sends, so the key stream,
+    // the positional stream and the tap all see a press and a release --
+    // and a SECOND Pause is a second press, not a repeat of a stuck one.
+    SKIP_IF_ROLE_HELD;
     window_events(script_pause);
-    KTEST_ASSERT_EQ(g_ev.n, 2);
+    KTEST_ASSERT_EQ(g_ev.n, 6);
+    for (int i = 0; i < 4; i++) {
+        KTEST_ASSERT_EQ(g_ev.code[i], KEY_PAUSE);
+        KTEST_ASSERT_EQ(g_ev.down[i], (i % 2) == 0);
+    }
+    KTEST_ASSERT_EQ(g_ev.code[4], 'e');
+    KTEST_ASSERT_EQ(g_ph.n, 6);
+    for (int i = 0; i < 4; i++) {
+        KTEST_ASSERT_EQ(g_ph.code[i], INPUT_KEY_PAUSE);
+        KTEST_ASSERT_EQ(g_ph.down[i], (i % 2) == 0);
+    }
+}
+
+static void script_pause_usb(void) { input_report_key(INPUT_KEY_PAUSE, 1); }
+KTEST("input", "a keyboard with a real Pause release can hold Pause") {
+    SKIP_IF_ROLE_HELD;
+    window_events(script_pause_usb);
+    KTEST_ASSERT_EQ(g_ev.n, 1);           // down, and held: no invented release
     KTEST_ASSERT(g_ev.code[0] == KEY_PAUSE && g_ev.down[0] == 1);
-    KTEST_ASSERT(g_ev.code[1] == KEY_PAUSE && g_ev.down[1] == 0);
 }

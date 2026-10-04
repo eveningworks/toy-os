@@ -18,8 +18,18 @@
 // ONE queue, for the one process that drains it. Static rather than
 // kmalloc'd because it is written from interrupt handlers, and
 // allocating there would mean taking the heap's state in an interrupt.
+//
+// **A RELEASE IS NEVER SHED** -- a key's, a key position's, a button's --
+// because a client that saw the press and not the release holds it
+// forever. Such a slot is marked `keep`; a full queue evicts only an
+// unmarked input event and otherwise refuses the NEW event. Input from
+// win_input_poll() never fills the last NOTICE_RESERVE slots, so a
+// notice (WIN_EV_SCREEN, WIN_EV_FONT, a broadcast) always finds room
+// over a backlog of releases; the idempotent ones coalesce, latest wins.
+#define NOTICE_RESERVE 4
 static struct {
     struct win_event ring[WIN_EVENT_QUEUE_MAX];
+    uint8_t keep[WIN_EVENT_QUEUE_MAX];   // by ring slot: a release, never evicted
     int head;    // next slot to pop
     int count;   // how many are queued
     int dropped; // overflow drops since the last reset
@@ -29,6 +39,7 @@ static struct {
 void win_input_reset(void) {
     q.head = 0;
     q.count = 0;
+    k_memset(q.keep, 0, sizeof q.keep);
     q.dropped = 0;
     q.newest_edge = 0;
 }
@@ -46,12 +57,14 @@ static int is_input(uint32_t type) {
     }
 }
 
-// A RELEASE IS NEVER SHED: a client that saw the press and not the
-// release holds the key forever. A press, motion or a notch can go.
+// A key or key-position release (a button-up edge is told by its push).
 static int is_release(const struct win_event *e) {
     return e->type == WIN_EV_RAW_KEY_UP || (e->type == WIN_EV_RAW_KEY_PHYS && !e->b);
 }
 
+// `edge`: 0 for no button edge, EDGE_DOWN or EDGE_UP for one.
+#define EDGE_DOWN 1
+#define EDGE_UP   2
 static int queue_push(const struct win_event *ev, int edge) {
     int pid = win_server_compositor_pid();
     if (!pid || !ev) return 0;
@@ -78,10 +91,12 @@ static int queue_push(const struct win_event *ev, int edge) {
     // SETTING. It says "look again", and a second copy says nothing the
     // first did not -- while a program writing all day would otherwise
     // fill the queue with them.
-    if (ev->type == WIN_EV_FSWATCH || ev->type == WIN_EV_SETTING) {
+    // A SCREEN or FONT notice is a state too: the newest says it all.
+    if (ev->type == WIN_EV_FSWATCH || ev->type == WIN_EV_SETTING ||
+        ev->type == WIN_EV_SCREEN || ev->type == WIN_EV_FONT) {
         for (int i = 0; i < q.count; i++) {
             struct win_event *e = &q.ring[(q.head + i) % WIN_EVENT_QUEUE_MAX];
-            if (e->type == ev->type && (ev->type == WIN_EV_SETTING || e->a == ev->a)) {
+            if (e->type == ev->type && (ev->type != WIN_EV_FSWATCH || e->a == ev->a)) {
                 *e = *ev;
                 return 1;   // already queued; its wake is already pending
             }
@@ -89,36 +104,35 @@ static int queue_push(const struct win_event *ev, int edge) {
     }
 
     if (q.count == WIN_EVENT_QUEUE_MAX) {
-        // Full: drop the OLDEST INPUT event that is not a release, and
-        // only when there is no input the oldest of all. See
+        // Full: drop the OLDEST INPUT event not marked `keep`. See
         // WIN_EVENT_QUEUE_MAX's comment for why the old end rather than
-        // refusing the new event. win_input_poll() never gets here -- it
-        // takes only what fits; this is for a direct push.
-        int victim = -1, any_input = 0;
+        // refusing the new event -- and with nothing evictable, the new
+        // event IS refused, because a release is never the one shed.
+        // win_input_poll() never fills the queue (queue_room()); this is
+        // for a direct push.
+        int victim = -1;
         for (int i = 0; i < q.count && victim < 0; i++) {
-            const struct win_event *e = &q.ring[(q.head + i) % WIN_EVENT_QUEUE_MAX];
-            if (!is_input(e->type)) continue;
-            any_input = 1;
-            if (!is_release(e)) victim = i;
-        }
-        if (victim < 0 && any_input && is_input(ev->type)) {
-            q.dropped++;            // all releases: the NEW input goes
-            return 0;
+            int slot = (q.head + i) % WIN_EVENT_QUEUE_MAX;
+            if (is_input(q.ring[slot].type) && !q.keep[slot]) victim = i;
         }
         if (victim < 0) {
-            victim = 0;             // no input at all, or a notification
-            for (int i = 0; i < q.count; i++)   // over a queue of releases
-                if (is_input(q.ring[(q.head + i) % WIN_EVENT_QUEUE_MAX].type)) { victim = i; break; }
+            q.dropped++;
+            return 0;
         }
-        for (int i = victim; i < q.count - 1; i++)
-            q.ring[(q.head + i) % WIN_EVENT_QUEUE_MAX] = q.ring[(q.head + i + 1) % WIN_EVENT_QUEUE_MAX];
+        for (int i = victim; i < q.count - 1; i++) {
+            int to = (q.head + i) % WIN_EVENT_QUEUE_MAX, from = (q.head + i + 1) % WIN_EVENT_QUEUE_MAX;
+            q.ring[to] = q.ring[from];
+            q.keep[to] = q.keep[from];
+        }
         q.count--;
         q.dropped++;
     }
 
-    q.ring[(q.head + q.count) % WIN_EVENT_QUEUE_MAX] = *ev;
+    int slot = (q.head + q.count) % WIN_EVENT_QUEUE_MAX;
+    q.ring[slot] = *ev;
+    q.keep[slot] = (uint8_t)(is_release(ev) || edge == EDGE_UP);
     q.count++;
-    q.newest_edge = edge;
+    q.newest_edge = edge != 0;
 
     // The woken syscall returns 0 ("try again"), NOT the event: this
     // may be running in an IRQ under some other process's CR3, so the
@@ -133,9 +147,9 @@ static int queue_push(const struct win_event *ev, int edge) {
 
 int win_input_push(const struct win_event *ev) { return queue_push(ev, 0); }
 
-// Free slots in the compositor's queue: what a drain may take without
-// queue_push() evicting older input to fit it.
-static int queue_room(void) { return WIN_EVENT_QUEUE_MAX - q.count; }
+// What an input drain may take: the free slots, less the notice reserve
+// (see the queue above). Taking only this, a poll never evicts input.
+static int queue_room(void) { return WIN_EVENT_QUEUE_MAX - NOTICE_RESERVE - q.count; }
 
 const void *win_input_wait_chan(void) { return &q; }
 
@@ -204,7 +218,9 @@ void win_input_poll(void) {
     // poll never makes queue_push() evict input to fit input.
     int ex = 0, ey = 0;
     while (queue_room() > 0 && mouse_try_get_button_edge(&edge, &ex, &ey)) {
-        push_ev(WIN_EV_RAW_MOUSE, ex, ey, edge, 1);
+        // An edge that lifts any button is a release: never shed.
+        push_ev(WIN_EV_RAW_MOUSE, ex, ey, edge,
+                (g_last_buttons & (uint8_t)~edge) ? EDGE_UP : EDGE_DOWN);
         g_last_buttons = edge;
         lx = ex;
         ly = ey;
@@ -233,21 +249,32 @@ void win_input_poll(void) {
 
     // KEYS, in the order they happened (keyboard_try_get_key()), and THE
     // SAME KEYS BY POSITION (WIN_EV_KEY_PHYS, always pushed: whether any
-    // window wants them is the compositor's to know). TAKEN IN TURN, one
-    // of each, so a backlog in one cannot starve the other.
+    // window wants them is the compositor's to know). TAKEN IN TURN, and
+    // which goes first alternates across polls too -- so even with one
+    // free slot per poll a backlog in one cannot starve the other.
+    static int phys_first;
     for (;;) {
-        int took = 0, kcode = 0, kdown = 0;
-        uint16_t tcode = 0;
-        int tdown = 0;
-        uint8_t kmods = 0, tmods = 0;
-        if (queue_room() > 0 && keyboard_try_get_key(&kcode, &kdown, &kmods)) {
-            push(kdown ? WIN_EV_RAW_KEY : WIN_EV_RAW_KEY_UP, kcode, 0, kmods);
-            took = 1;
+        int took = 0;
+        for (int k = 0; k < 2; k++) {
+            if (queue_room() <= 0) break;
+            if ((k == 0) == !phys_first) {
+                int kcode = 0, kdown = 0;
+                uint8_t kmods = 0;
+                if (keyboard_try_get_key(&kcode, &kdown, &kmods)) {
+                    push(kdown ? WIN_EV_RAW_KEY : WIN_EV_RAW_KEY_UP, kcode, 0, kmods);
+                    took = 1;
+                }
+            } else {
+                uint16_t tcode = 0;
+                int tdown = 0;
+                uint8_t tmods = 0;
+                if (keyboard_try_get_physical(&tcode, &tdown, &tmods)) {
+                    push(WIN_EV_RAW_KEY_PHYS, (int)tcode, tdown, tmods);
+                    took = 1;
+                }
+            }
         }
-        if (queue_room() > 0 && keyboard_try_get_physical(&tcode, &tdown, &tmods)) {
-            push(WIN_EV_RAW_KEY_PHYS, (int)tcode, tdown, tmods);
-            took = 1;
-        }
+        phys_first = !phys_first;
         if (!took) break;
     }
 
