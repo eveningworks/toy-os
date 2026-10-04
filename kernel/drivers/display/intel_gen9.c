@@ -1,7 +1,8 @@
 // Intel gen9 (Kaby Lake) -- what the firmware programmed, read and
-// logged before anything here writes a register. Stage 1a of the
-// desktop's driver: intel_display.c binds a gen9 device, calls this, and
-// does NOT claim, so the first boot on a new machine changes nothing.
+// logged before anything here writes a register, and the one thing gen9
+// needs that gen8 does not before its cursor can show: a DDB slice.
+// intel_display.c claims at the firmware's mode for the cursor plane and
+// the flip; the eDP modeset paths are gen8's.
 //
 // Gen9's display engine is gen8's at the same offsets with different
 // FIELDS, plus a display buffer (DDB) every plane must own a slice of:
@@ -90,4 +91,52 @@ void intel_gen9_readout_log(void) {
                 intel_rd(DBUF_CTL), intel_rd(DC_STATE_EN),
                 intel_rd(GMBUS0), intel_rd(GMBUS0 + 4), intel_rd(GMBUS0 + 8),
                 intel_rd(GMBUS0 + 12), intel_rd(GMBUS0 + 16), intel_rd(GMBUS0 + 0x20));
+}
+
+// THE CURSOR'S SLICE OF THE DISPLAY BUFFER. The firmware gives it none
+// (CUR_BUF_CFG 0), and a plane with no DDB blocks fetches nothing --
+// enabled, armed and invisible. i915's skl_ddb allocation puts the
+// cursor's 32 blocks (one active pipe) at the END of its pipe's range,
+// so they are carved from the end of the primary plane's here. Both
+// BUF_CFG registers and the watermarks are double-buffered: the plane's
+// half latches at its next PLANE_SURF write, re-written below with the
+// value it already holds; the cursor's at the CURBASE write that
+// setup_cursor() makes next. An END is inclusive in the register.
+#define CURSOR_DDB_BLOCKS 32
+#define WM_ENABLE    (1u << 31)
+#define WM_LINES(n)  ((uint32_t)(n) << 14)
+#define WM_BLOCKS    0x3FFu
+// Level 0 only: one line and 8 blocks covers a 64-pixel ARGB line many
+// times over and leaves the levels a low-power state needs disabled.
+#define CURSOR_WM0   (WM_ENABLE | WM_LINES(1) | 8)
+
+int intel_gen9_cursor_ddb(int p) {
+    uint32_t have = intel_rd(CUR_BUF_CFG(p));
+    if (have) {
+        klog_printf("intel-gen9: cursor already has ddb %#x\n", have);
+        return 1;
+    }
+    uint32_t plane = intel_rd(PLANE_BUF_CFG(p));
+    uint32_t start = plane & 0x3FF, end = (plane >> 16) & 0x3FF;
+    if (end < start + 4 * CURSOR_DDB_BLOCKS) {
+        klog_printf("intel-gen9: plane ddb %#x too small to share -- no cursor plane\n", plane);
+        return 0;
+    }
+    uint32_t plane_end = end - CURSOR_DDB_BLOCKS;
+    // Every enabled level of the plane must still fit what it keeps.
+    for (int lvl = 0; lvl < 8; lvl++) {
+        uint32_t wm = intel_rd(PLANE_WM(p, lvl));
+        if ((wm & WM_ENABLE) && (wm & WM_BLOCKS) > plane_end - start) {
+            klog_printf("intel-gen9: plane wm%d %#x needs more than %u blocks -- no cursor plane\n",
+                        lvl, wm, plane_end - start);
+            return 0;
+        }
+    }
+    intel_wr(PLANE_BUF_CFG(p), (plane_end << 16) | start);
+    intel_wr(DSPSURF(p), intel_rd(DSPSURF(p)));   // arm the plane's half
+    intel_wr(CUR_BUF_CFG(p), (end << 16) | (plane_end + 1));
+    intel_wr(CUR_WM(p, 0), CURSOR_WM0);
+    klog_printf("intel-gen9: ddb plane %u-%u, cursor %u-%u, cursor wm0 %#x\n",
+                start, plane_end, plane_end + 1, end, CURSOR_WM0);
+    return 1;
 }

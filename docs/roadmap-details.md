@@ -6007,10 +6007,19 @@ Adapter until the vendor driver loads. The stages, one flash each:
 
 1. **1a, readout.** BUILT 2026-10-04: `intel_gen9.c` logs the planes,
    DDB and watermarks, transcoders, DDI buffers, DPLLs, power wells and
-   GMBUS, and the device is NOT claimed.
-2. **1b, adopt.** Claim at the firmware's mode: the gen9 plane checks,
-   the cursor plane (if its DDB slice exists, else program one) and the
-   three-buffer mailbox flip.
+   GMBUS. On the desktop: pipe A at 2560x1440, the plane XRGB8888,
+   linear, stride 160 (x64 = 10240), surface 0 in a 32 MiB stolen
+   region; `PLANE_SURFLIVE` reads 0x20 in its low bits even on an off
+   plane; the plane owns DDB blocks 0-445 and pipe B's off plane
+   446-891, the cursor NONE; transcoder A on port D in HDMI mode, 8 bpc,
+   2720x1481 total (CVT-RB); DPLL1 in HDMI mode, DCO 9660 MHz / 8 =
+   5 x 241.5 MHz; the pipe scaler already on at 1:1; GMBUS's last
+   transfer was the firmware's own EDID read (address 0xA0).
+2. **1b, adopt.** BUILT 2026-10-04: claimed at the firmware's mode with
+   CURSOR and FLIP only. The cursor's 32 blocks are carved from the end
+   of the plane's slice (414-445, i915's placement) with a level-0
+   watermark; scanouts start 256 KiB-aligned in the GGTT
+   (`skl_plane_min_alignment` for linear), where gen8's are packed.
 3. **2, EDID over GMBUS** on the pin pair the active DDI uses (SKL: DPB
    pin 5, DPC 4, DPD 6), so `lsdisplay` names the monitor.
 4. **3, scaler modes**: the ladder below native through `PS_CTRL`,

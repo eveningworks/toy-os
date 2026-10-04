@@ -3,15 +3,16 @@
 #include <stdint.h>
 #include "display.h"
 
-// Intel integrated graphics, gen8 (Broadwell) -- the DISPLAY ENGINE
+// Intel integrated graphics, gen8 (Broadwell) and gen9 (Kaby Lake) -- the DISPLAY ENGINE
 // only, as a display_driver. What Linux's i915 calls fastboot: the
 // firmware's GOP has already lit the panel and programmed a pipe, so
 // the driver READS OUT that state and adopts it rather than setting a
 // mode. On top of the inherited scanout it adds what vesafb cannot:
-// the cursor plane, the backlight PWM, and the display power well.
+// the cursor plane, the page flip, the backlight PWM (gen8), and the
+// display power well. The eDP modeset (intel_modeset.c) is gen8 only.
 //
 // Register it after virtio-gpu/vmsvga and before bochs/vesafb. It
-// claims only a gen8 device whose live plane matches GRUB's framebuffer
+// claims only a gen8/gen9 device whose live plane matches GRUB's framebuffer
 // exactly, and declines otherwise -- vesafb then takes the same pixels.
 void intel_display_register(void);
 
@@ -26,8 +27,13 @@ int intel_display_power_well(int on);
 uint32_t intel_display_curpos_field(int v);
 uint32_t intel_display_duty(uint32_t max, int percent);
 int      intel_display_percent(uint32_t max, uint32_t duty);
+// Whether a plane's control and stride registers describe a linear
+// XRGB8888 surface of `pitch` bytes, in generation `gen`'s encoding.
+int      intel_display_plane_matches(int gen, uint32_t cntr, uint32_t stride, uint32_t pitch);
 // 1 while this driver owns the screen (never under QEMU).
 int intel_display_active(void);
+// The generation it claimed (8 or 9), 0 when inactive.
+int intel_display_gen(void);
 // How many scanouts it set up: 3 with the flip, 1 without, 0 inactive.
 int intel_display_scanout_count(void);
 

@@ -63,6 +63,10 @@
 #define DSPCNTR_ENABLE   (1u << 31)
 #define DSPCNTR_FMT_MASK (0xFu << 26)
 #define DSPCNTR_BGRX8888 (0x6u << 26)
+// Gen9 (PLANE_CTL at DSPCNTR's offset): the same enable bit, these fields.
+#define PLANE_CTL_FMT_MASK   (0xFu << 24)
+#define PLANE_CTL_XRGB8888   (0x4u << 24)
+#define PLANE_CTL_TILED_MASK (0x7u << 10)
 
 #define CURCNTR_MODE_MASK    0x3Fu
 #define CURCNTR_64_ARGB      0x27u
@@ -105,8 +109,10 @@ int  intel_aux_read_edid(uint8_t *out, int cap);   // display_driver.read_edid
 int  intel_aux_native_read(uint32_t addr, uint8_t *buf, int len); // DPCD; bytes or -1
 int  intel_aux_native_write(uint32_t addr, const uint8_t *buf, int len);
 
-// intel_gen9.c -- Kaby Lake's firmware state, logged. Writes nothing.
+// intel_gen9.c -- Kaby Lake's firmware state, logged; and the cursor's
+// slice of the display buffer, carved from the end of the plane's.
 void intel_gen9_readout_log(void);
+int  intel_gen9_cursor_ddb(int pipe);
 
 // intel_readout.c -- what the firmware programmed, decoded and compared.
 struct display_edid;

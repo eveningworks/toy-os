@@ -78,6 +78,7 @@ KTEST("intel-display", "on the hardware a flip round trip lands in DSPSURFLIVE")
 
 KTEST("intel-display", "on the hardware the backlight reads back what was set") {
     if (!intel_display_active()) KTEST_SKIP("no Intel display on this machine");
+    if (intel_display_gen() != 8) KTEST_SKIP("the panel PWM is gen8's (a gen9 desktop has none)");
     KTEST_ASSERT(display_has(DISPLAY_CAP_BACKLIGHT));
     int was = display_backlight_get();
     KTEST_ASSERT(was >= 0);
@@ -85,6 +86,23 @@ KTEST("intel-display", "on the hardware the backlight reads back what was set") 
     KTEST_ASSERT_EQ(display_backlight_get(), 60);
     KTEST_ASSERT_EQ(display_backlight_set(was), 1);
     KTEST_ASSERT_EQ(display_backlight_get(), was);
+}
+
+// The firmware planes the two machines actually booted with: the ASUS
+// (gen8, BGRX8888 at stride 7680) and the Kaby Lake desktop (gen9,
+// PLANE_CTL 0x84000000, stride 160 = 10240 bytes). Each generation's
+// encoding must refuse the other's.
+KTEST("intel-display", "a firmware plane matches only in its own generation's encoding") {
+    KTEST_ASSERT_EQ(intel_display_plane_matches(8, 0x98000000u, 7680, 7680), 1);
+    KTEST_ASSERT_EQ(intel_display_plane_matches(9, 0x84000000u, 160, 10240), 1);
+    KTEST_ASSERT_EQ(intel_display_plane_matches(9, 0x98000000u, 7680, 7680), 0);
+    KTEST_ASSERT_EQ(intel_display_plane_matches(8, 0x84000000u, 160, 10240), 0);
+    // Gen9 refusals: stride in bytes, X-tiled, the plane off, another format.
+    KTEST_ASSERT_EQ(intel_display_plane_matches(9, 0x84000000u, 10240, 10240), 0);
+    KTEST_ASSERT_EQ(intel_display_plane_matches(9, 0x84000400u, 160, 10240), 0);
+    KTEST_ASSERT_EQ(intel_display_plane_matches(9, 0x04000000u, 160, 10240), 0);
+    KTEST_ASSERT_EQ(intel_display_plane_matches(9, 0x82000000u, 160, 10240), 0);
+    KTEST_ASSERT_EQ(intel_display_plane_matches(7, 0x98000000u, 7680, 7680), 0);
 }
 
 #include "edid.h"
