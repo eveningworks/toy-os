@@ -836,8 +836,9 @@ manual steps to be worth automating:
   `0.0.0.0:8080` by default (the port the dev host's firewall leaves
   open); a QEMU guest reaches it as `10.0.2.2`. The test tools mount one
   source at the root instead (`make_handler({"": ...})`). **`GET
-  <ch>/notes`** is the release notes: `release_notes()` reads the
-  `Release-note:` trailers and `refs/notes/release` git notes (for a
+  <ch>/notes`** is the release notes: `release_notes()` reads every
+  `Release-note:` LINE of the message body (not git's trailer parse,
+  which sees only the last paragraph) and `refs/notes/release` git notes (for a
   commit pushed without a trailer) of the build's last 200 commits (`git log`
   from `TOYOS_BUILD_ID` in `version.h`, not HEAD), one line per commit;
   `--publish` freezes them as `notes` in the snapshot, and an older
@@ -4378,6 +4379,17 @@ window without going through it will find its layout polls timing out.
   restore, then Restore to the original rect). Its control is
   `mutate.py` restoring to WIN_NORMAL and disabling `wm_focus_sync()`:
   6 checks go red. In `gui_regress.py`.
+- **`notepad_options_test.py`** -- Notepad Options, asserted by what
+  the options DO: OK writes `/etc/notepad.conf` (only the keys that
+  moved); the status bar going off gives the text its height; Tab types
+  spaces to an 8-column stop and Save trims the trailing ones, read back
+  with `cat`; the saved file is ONE entry in `/var/lib/notepad/recent`;
+  closing and reopening Notepad brings the tab back; Preview Always +
+  Below puts the Markdown pane under the text. Opens Options by keys
+  (F10, Right, `o` -- the unique letter in Edit) and clicks the rows the
+  window's own layout log names (`options: layout <name>`). Control:
+  `mutate.py` dropping spaces-for-Tab and the reopen turns exactly
+  those two red. In `gui_regress.py`.
 - **`window_identity_test.py`** -- a window held across frames stays
   the SAME window when `windows[]` is renumbered under it: the window
   menu across a close below it (its Close must close its own window) and

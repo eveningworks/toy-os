@@ -278,7 +278,11 @@ def release_notes(build_id, limit=NOTES_COMMITS):
     try:
         out = subprocess.run(
             ["git", "log", f"-n{limit}", "--abbrev=8", f"--notes={NOTES_REF}",
-             "--format=%h%x1f%(trailers:key=Release-note,valueonly,separator=%x1e)%x1f%N%x1d",
+             # THE WHOLE BODY, not %(trailers): git takes trailers only
+             # from a message's LAST paragraph, and every commit here ends
+             # with a Co-Authored-By paragraph AFTER its Release-note --
+             # so the trailer form read nothing, for every commit.
+             "--format=%h%x1f%B%x1f%N%x1d",
              rev],
             cwd=REPO, check=True, capture_output=True, text=True).stdout
     except (OSError, subprocess.CalledProcessError):
@@ -287,9 +291,11 @@ def release_notes(build_id, limit=NOTES_COMMITS):
         sha, _, rest = rec.strip("\n").partition("\x1f")
         if not sha:
             continue
-        trailers, _, noted = rest.partition("\x1f")
+        body, _, noted = rest.partition("\x1f")
+        trailers = [ln for ln in body.splitlines()
+                    if ln.lower().startswith("release-note:")]
         said = 0
-        for v in trailers.split("\x1e") + noted.splitlines():
+        for v in trailers + noted.splitlines():
             v = " ".join(v.split())          # a folded trailer is one line
             if v.lower().startswith("release-note:"):
                 v = v[len("release-note:"):].strip()

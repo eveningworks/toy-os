@@ -663,9 +663,12 @@ this the obvious way), not from how much history it accumulated.
   as "a change with no visible effect", which is right for a refactor, a
   test or a doc and wrong for a fix somebody was waiting for. Several
   lines for several changes; any other kind is dropped with a warning by
-  `update_server.py`, never guessed at. It goes with the trailers at the
-  END of the message (`git interpret-trailers` reads only the last
-  paragraph), before `Co-Authored-By:`. **A commit already pushed
+  `update_server.py`, never guessed at. It goes at the END of the
+  message, before `Co-Authored-By:`, and is read as a LINE wherever it
+  is -- not as a git trailer: git takes trailers only from the last
+  paragraph, commits here put a blank line before `Co-Authored-By:`, and
+  reading `%(trailers)` found no note in any commit until 2026-10-04.
+  **A commit already pushed
   without one gets a GIT NOTE, never a rewrite**: `git notes
   --ref=release add -m "fixed: <text>" <sha>`, then `git push origin
   refs/notes/release` -- one `<kind>: <text>` per line, read like the
