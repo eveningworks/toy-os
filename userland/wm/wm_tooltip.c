@@ -42,6 +42,8 @@ void wm_tooltip_cancel(void) {
 }
 
 void wm_tooltip_track(const char *text, int x, int y, int w, int h) {
+    // Nothing under a modal overlay says what it is.
+    if (wm_overlay_modal_open()) { wm_tooltip_cancel(); return; }
     if (!text || !text[0]) { wm_tooltip_cancel(); return; }
 
     // THE SAME THING IS NOT A NEW THING. Re-arming on every frame would

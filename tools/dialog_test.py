@@ -27,8 +27,9 @@ THREE TRAPS THIS ENCODES
      down-and-right from its hotspot with a black outline, so probing the
      hover point measures the cursor. The first version of this check
      "passed" by reading (0, 0, 0) -- pure cursor.
-  3. **Use "Exit to shell", not "Shutdown".** Both open the identical
-     dialog; committing Yes on Shutdown powers the machine off mid-test.
+  3. **Open it with the desktop's Delete, on a file made for it.** The
+     Start menu's power rows used to open this dialog and now open the
+     Leave page (tools/leave_test.py); Delete is its harmless caller.
 
 The buttons are located by scanning for THEME_BUTTON_BG rather than by
 hardcoded offsets, because the dialog sizes itself to its message and any
@@ -86,16 +87,26 @@ def main():
         enter_gui(qmp, args.sock)
     dbg = DebugConsole(args.sock)
 
-    st = dbg.json("gui taskbar --json")["start"]
-    dbg.send(f"gui click {st['cx']} {st['cy']}")
+    # A file on the desktop, selected, then Delete: the dialog asks.
+    dbg.send("sh touch /home/desktop/dialogtest.txt")
+    fi, deadline = None, time.time() + 10
+    while fi is None and time.time() < deadline:   # the desktop polls its folder
+        icons = dbg.json("gui icons --json") or {}
+        fi = next((i for i in icons.get("icons", []) if i["name"] == "dialogtest.txt"), None)
+        if fi is None:
+            dbg.settle()
+    check("the file to delete is a desktop icon", fi is not None, str(icons)[:200])
+    if not fi:
+        dbg.send("sh rm /home/desktop/dialogtest.txt")
+        return 1
+    dbg.send(f"gui click {fi['x'] + fi['w'] // 2} {fi['y'] + fi['w'] // 2}")
     dbg.settle()
-    x, y = dbg.menu_row("Exit to shell")
-    dbg.send(f"gui click {x} {y}")
+    dbg.key("0x99")   # Delete
     dbg.settle()
-    time.sleep(0.5)
     state = dbg.json("gui state --json")
     check("dialog opened", state["overlays"]["confirm_dialog"], str(state["overlays"]))
     if not state["overlays"]["confirm_dialog"]:
+        dbg.send("sh rm /home/desktop/dialogtest.txt")
         return 1
 
     scr = state["screen"]
@@ -114,6 +125,7 @@ def main():
     btns = info.get("buttons", [])
     check("the WM reports both dialog buttons", len(btns) == 2, str(info))
     if len(btns) != 2:
+        dbg.send("sh rm /home/desktop/dialogtest.txt")
         return 1
 
     runs = [(b["x"], b["x"] + b["w"] - 1) for b in btns]
@@ -163,6 +175,7 @@ def main():
     check("No closes the dialog", not st3["overlays"]["confirm_dialog"],
           str(st3["overlays"]))
 
+    dbg.send("sh rm /home/desktop/dialogtest.txt")
     print(f"\n=== {len(fails)} failed ===")
     for f in fails:
         print("  FAILED:", f)

@@ -138,6 +138,7 @@ TOOLS = [
     ("filedialog", "filedialog_test.py", "the shared file chooser, as an owned window"),
     ("forcequit", "forcequit_test.py", "not-responding detection and force quit"),
     ("dialog", "dialog_test.py", "the confirm dialog, by pixel value"),
+    ("leave", "leave_test.py", "the Leave page: Restart/Shut down/Exit to shell, apps asked to close, Restart into"),
     ("sched", "sched_gui_test.py", "the desktop stays live while a process runs"),
     ("blank", "blank_window_test.py", "no app opens a blank window"),
     ("wingeom", "window_geometry_test.py", "windows come back where you left them"),

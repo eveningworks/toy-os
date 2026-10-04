@@ -191,6 +191,13 @@ device as a choice, Mute all) and brightness (the panel, its mode,
 Scaling). The **on-screen keyboard** floats over the desktop, dragged by
 its bar, and docks full width with one button.
 
+**Restart, Shut down and Exit to shell are one Leave page**, KDE's
+shape: big buttons over the desktop dimmed and blurred, "Restart into"
+any other GRUB entry, and **every app is asked to close first** -- one
+still open after a few seconds (Notepad asking whether to save) is
+listed, with Cancel back to it or "Shut down anyway". Nothing acts on a
+timer.
+
 **Screenshots are an overlay**, GNOME's shape: PrtSc freezes and dims
 the screen under a pill -- Region (a crosshair; drag, with the size
 beside the pointer, then resize by its handles), Screen, Window (the one

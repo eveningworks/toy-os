@@ -1,5 +1,5 @@
 // The boot-menu reader and the environment-block writer behind `reboot
-// --entry` and the Start menu's Restart flyout (lib/ubootmenu.h).
+// --entry` and the Leave page's "Restart into" (lib/ubootmenu.h).
 //
 // WHAT A BROKEN VERSION WOULD STILL PASS, which is what shaped this:
 //

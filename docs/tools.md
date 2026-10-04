@@ -2417,9 +2417,22 @@ window without going through it will find its layout polls timing out.
 - **`check_layout.py`** -- see CLAUDE.md's `docs/` section: verifies the built
   image's directories against `docs/filesystem-layout.md`, and warns
   about orphaned seeded files. Runs in `preflight.sh` and CI.
+- **`leave_test.py`** -- the Leave page (`userland/wm/leave_page.c`):
+  Start's Shutdown and Restart rows open it with their own action
+  focused, the desktop dimmed under it (a pixel against the frame
+  before), Left/Right and Esc; then Notepad with typed text and
+  Calculator open, Shut down asks both to close -- **the control is the
+  pair**: Calculator must be reported closed and its window gone,
+  Notepad still open -- Cancel returns to Notepad, "Shut down anyway"
+  acts, and "Restart into" lists the boot entries and restarts into the
+  one picked. **Every final action is a dry run** (`gui leave dry on`
+  makes it a `leave: would ...` log line), so nothing powers off. In
+  `gui_regress.py`.
 - **`dialog_test.py`** -- verifies the confirm dialog's buttons by
   PIXEL VALUE: hover moves the hovered button and leaves its neighbour
-  alone, a press dragged off doesn't commit, No closes it. Three traps
+  alone, a press dragged off doesn't commit, No closes it. Opened with
+  the desktop's Delete on a file it makes (Start's power rows open the
+  Leave page now). Three traps
   it encodes: hover needs the REAL cursor parked (use
   `DebugConsole.warp_cursor()` -- `gui move` holds for one WM iteration
   only, and `QMPSession.goto()` is open-loop and undershoots a large

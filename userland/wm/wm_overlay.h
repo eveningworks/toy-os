@@ -179,6 +179,12 @@ struct wm_overlay {
     // notice sitting in the corner does not stop a game's keys or a
     // full-screen scanout. 0 for every menu and popup.
     int passive;
+
+    // MODAL: while it is up NOTHING under it hears the pointer -- no
+    // right-click menu, no wheel, no thumb button, no taskbar tooltip --
+    // and the desktop takes no keys. The confirm dialog and the Leave
+    // page. Asked through wm_overlay_modal_open(), never by name.
+    int modal;
 };
 
 // Draws every open overlay, least modal first. Called once per frame
@@ -251,6 +257,8 @@ void wm_overlay_set_parent(const char *name);
 // Is ANY overlay up? What the lease policy asks: an overlay is drawn by
 // this compositor, and a compositor that is not presenting cannot show it.
 int wm_overlay_any_open(void);
+// A modal overlay is up (the `modal` field): input under it goes nowhere.
+int wm_overlay_modal_open(void);
 // Is the point covered by an open overlay? Then no window under it may
 // see the pointer -- a row lit up UNDER a menu is the window hovering
 // what it cannot even show. A tooltip covers nothing; an overlay with

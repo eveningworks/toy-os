@@ -3,7 +3,7 @@
 
 // GRUB's menu, read from its grub.cfg, and the ONE-SHOT choice of which
 // entry the next boot takes -- `grub-reboot`'s mechanism, for `reboot
-// --entry` and the Start menu's Restart flyout.
+// --entry` and the Leave page's "Restart into".
 //
 // THE CHOICE IS GRUB'S TO CLEAR, NOT OURS. This writes `next_entry` into
 // GRUB's environment block; grub.cfg loads it, makes it the default and

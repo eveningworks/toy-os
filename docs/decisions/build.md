@@ -2010,8 +2010,8 @@ is not loosened for this.
 **A machine that could not honour the choice is REFUSED, by name.** A
 `grub.cfg` without the stanza, or `/etc/grub-core.modules` recording a
 core without `loadenv`, would write `next_entry` and boot the default --
-a silent no-op. `reboot --entry` says which, and the Start menu's
-Restart shows no flyout. The laptops needed `install --bootloader
+a silent no-op. `reboot --entry` says which, and the Leave page offers
+no "Restart into". The laptops needed `install --bootloader
 confirm` and the stanza added to their hand-kept `grub.cfg` (done
 2026-09-30, both).
 

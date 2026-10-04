@@ -47,6 +47,7 @@
 #include "wm_overlay.h"
 #include "osk.h"
 #include "confirm_dialog.h"
+#include "leave_page.h"
 #include "desktop.h"
 #include "wm_tray.h"
 #include "wm_taskbar.h"
@@ -1120,6 +1121,7 @@ void wm_run(void) {
         volume_poll_config();   // the level and the device list, and the debounced write
         brightness_poll_config();
         crash_notice_poll();
+        leave_page_poll();       // the apps asked to close: gone yet?
 
         // Drain everything the kernel has queued for us, then read the
         // position out of it. One pump per frame, fully draining -- see
@@ -1181,7 +1183,7 @@ void wm_run(void) {
         // edge-triggered pattern as the left button above, dispatching
         // to context_menu.h's popup instead of a window action.
         int right_edge_down = (buttons & 0x2) && !(prev_buttons & 0x2);
-        if (right_edge_down) wm_handle_right_click(mx, my);
+        if (right_edge_down && !wm_overlay_modal_open()) wm_handle_right_click(mx, my);
 
         // MIDDLE AND THE TWO THUMB BUTTONS, BOTH EDGES. Unlike the two
         // above these do no window management at all -- they are handed
@@ -1203,7 +1205,7 @@ void wm_run(void) {
         for (unsigned t = 0; t < sizeof PASSTHRU / sizeof PASSTHRU[0]; t++) {
             unsigned bit = PASSTHRU[t];
             int now = (buttons & bit) != 0, was = (prev_buttons & bit) != 0;
-            if (now != was) wm_handle_thumb_button(mx, my, bit, now);
+            if (now != was && !wm_overlay_modal_open()) wm_handle_thumb_button(mx, my, bit, now);
         }
 
         // A Start-menu action (currently just "Exit to shell") may have
@@ -1402,6 +1404,7 @@ void wm_run(void) {
         // its open panel -- which is where KDE, GNOME and Windows all
         // put volume-by-wheel. Anywhere else it falls through to the
         // focused window, so a scrollable app is unaffected.
+        if (wm_overlay_modal_open()) wheel = 0;   // nothing under a modal scrolls
         if (wheel != 0 && volume_handle_wheel(mx, my, wheel)) wheel = 0;
         if (wheel != 0 && brightness_handle_wheel(mx, my, wheel)) wheel = 0;
         // ...and then any open overlay that scrolls, over its own rect
@@ -1469,7 +1472,7 @@ void wm_run(void) {
                 // every Super shortcut.
                 if (key_down) {
                     g_super_used = 0;
-                } else if (!g_super_used && !confirm_dialog_open &&
+                } else if (!g_super_used && !wm_overlay_modal_open() &&
                            !wm_shortcut_inhibited(f)) {
                     if (start_menu_open) start_menu_close();
                     else start_menu_open_now();
@@ -1531,7 +1534,7 @@ void wm_run(void) {
                 redraw_pending = 1;
             } else if (f >= 0 && key != -1 && windows[f].app && windows[f].app->on_key) {
                 windows[f].app->on_key(&windows[f], key, key_mods);
-            } else if (f < 0 && key != -1 && !confirm_dialog_open) {
+            } else if (f < 0 && key != -1 && !wm_overlay_modal_open()) {
                 // No window has the focus: the DESKTOP is the focus,
                 // and its icons take Ctrl+C/X/V and Delete.
                 if (desktop_handle_key(key, key_mods)) redraw_pending = 1;

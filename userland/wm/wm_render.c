@@ -17,6 +17,7 @@
 #include "volume_popup.h"
 #include "wm_overlay.h"
 #include "confirm_dialog.h"
+#include "leave_page.h"
 #include "desktop.h"
 #include "wm_tray.h"
 #include "rt/sys.h"   // sys_monotonic_ns(), for the frame timer below
@@ -619,7 +620,7 @@ static void draw_cursor(int x, int y, enum wm_cursor_kind kind) {
 static enum wm_cursor_kind client_cursor_at(int mx, int my) {
     // The Start menu's search field is text: the I-beam, as over any field.
     if (start_menu_open) return start_menu_text_at(mx, my) ? WM_CURSOR_TEXT : WM_CURSOR_NORMAL;
-    if (context_menu_open || calendar_open || confirm_dialog_open) return WM_CURSOR_NORMAL;
+    if (context_menu_open || calendar_open || wm_overlay_modal_open()) return WM_CURSOR_NORMAL;
     if (my >= screen_h - taskbar_h) return WM_CURSOR_NORMAL;
 
     for (int i = window_count - 1; i >= 0; i--) {
@@ -1758,7 +1759,9 @@ static void render_scene(int mx, int my, int has_damage) {
     int covered = wm_top_covers_screen();
     // Everything under this frame's clip is painted afresh: no shadow on it yet.
     wm_shadow_cover(0, 0, screen_w, screen_h);
-    if (!covered) desktop_draw(); // background + icon grid, see desktop.h
+    // UNDER THE LEAVE PAGE'S SNAPSHOT nothing of the scene shows: skip it.
+    int under_page = leave_page_covers();
+    if (!covered && !under_page) desktop_draw(); // background + icon grid, see desktop.h
 
     // Phase 3: a window whose rect doesn't overlap this frame's damage
     // box gets skipped entirely -- not just clipped. Its chrome and
@@ -1790,7 +1793,7 @@ static void render_scene(int mx, int my, int has_damage) {
     // under the current clip like everything else, so a damage rect
     // inside it re-dims only what it repaints.
     int lifted = wm_peek_highlight_index();
-    for (int i = 0; i < window_count; i++)
+    for (int i = 0; i < window_count && !under_page; i++)
         if (i != lifted) draw_one_window(i, focus, covered, has_damage, 0);
     if (lifted >= 0) {
         for (int y = 0; y < screen_h - taskbar_h; y++)
@@ -1798,7 +1801,7 @@ static void render_scene(int mx, int my, int has_damage) {
         draw_one_window(lifted, focus, covered, has_damage, 1);
     }
 
-    if (!covered) draw_taskbar();
+    if (!covered && !under_page) draw_taskbar();
     wm_anim_draw();   // ghosts: over the windows and the taskbar a minimize shrinks into
     // Every open overlay, LEAST modal first, from the one table that
     // also decides who gets a click (wm_overlay.h). The order used to
@@ -2057,7 +2060,7 @@ void wm_render_frame(int mx, int my) {
     // open. The others still opt out, and converting each is the same
     // three steps: track the hover instead of deriving it in the draw,
     // damage the rect on every state change, drop it from here.
-    int overlay_now = context_menu_open || calendar_open || confirm_dialog_open;
+    int overlay_now = context_menu_open || calendar_open || confirm_dialog_open || leave_page_open;
     if (overlay_now || overlay_was_open) {
         damage_reset();
     }

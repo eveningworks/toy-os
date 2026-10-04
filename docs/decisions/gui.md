@@ -9781,10 +9781,11 @@ are taller, so the column shows eight and scrolls past that, and the
 tooltip is kept only for a comment the row had to cut.
 
 **The power actions are labelled footer buttons**, Shut down with its
-glyph and Restart with a chevron when a boot menu is behind it. They
-were rows in the folder rail under a divider -- "act" rows mixed with
-"select" rows; in the footer they are still one click from open, the
-reason they never went behind a Leave tab, and the rail is folders only.
+glyph. They were rows in the folder rail under a divider -- "act" rows
+mixed with "select" rows; in the footer they are still one click from
+open, and the rail is folders only. Each opens the Leave page (its own
+entry below), which holds the boot-entry choice the Restart button's
+chevron used to.
 The row walk keeps its order and kinds (folders, actions, apps, the
 description, search, and now the settings button), so the keyboard,
 the hit test and every tool reading `gui menu --json` follow the move.
@@ -9957,6 +9958,28 @@ picture is scaled into a buffer of the app's and composed from there
 write-combining scanout buffer, which must never be read.
 
 
+
+## Restart, Shut down and Exit to shell are a Leave page that asks apps to close
+
+The three Start rows each opened a Yes/No box saying unsaved changes
+would be lost, and then dropped them. They open one full-screen page now
+(mockup P2, chosen 2026-10-04) -- KDE Plasma's Leave screen: the three
+actions as big buttons with the one clicked focused, "Restart into" the
+other GRUB entry, Cancel. **Choosing one asks every app window to close
+first**, through the same polite close the title bar's X sends, which an
+app may refuse; after five seconds the ones still open are listed with
+Cancel or "<action> anyway". Windows (WM_QUERYENDSESSION and its "these
+apps are preventing shutdown" screen), KDE's session manager and GNOME's
+inhibitors all have this shape. The page cannot know WHY an app stayed
+-- there is no "unsaved" bit in the protocol, only a window that did not
+go -- so it says "still open", and Cancel takes you back to it, because
+whatever it is asking is hidden behind the page.
+
+**No countdown** (GNOME's 60 s, KDE's 30 s): those exist for a shutdown
+nobody at the screen started, which toy-os never does. **The backdrop is
+one snapshot**, blurred and dimmed at the first frame: a live full-screen
+blur per frame is far beyond the software compositor's budget (the
+transparency entry above measured a cached Start menu alone at 3.4 ms).
 
 ## DOOM fetches its own game data, pinned by SHA-256 rather than trusted by certificate
 

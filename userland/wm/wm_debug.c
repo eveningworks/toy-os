@@ -22,6 +22,7 @@
 #include "wm_peek.h"
 #include "context_menu.h"
 #include "confirm_dialog.h"
+#include "leave_page.h"
 #include "gui_apps.h"
 #include "kapi.h"
 #include "win_role.h"
@@ -512,6 +513,7 @@ static void cmd_probe(struct dbg_out *o, int px, int py, int json) {
     // what the window hit-test above says.
     const char *overlay = "none";
     if (confirm_dialog_open)   overlay = "confirm-dialog";
+    else if (leave_page_open)  overlay = "leave-page";
     else if (context_menu_open) overlay = "context-menu";
     else if (start_menu_open)  overlay = "start-menu";
     else if (py >= screen_h - taskbar_h) overlay = "taskbar";
@@ -622,6 +624,39 @@ static void cmd_ctxmenu(struct dbg_out *o, int json) {
         dbg_out_write(o, context_menu_row_label(i));
         dbg_out_write(o, "\r\n");
     }
+}
+
+// The Leave page: its phase, the focused action, every control by name,
+// and the apps it asked to close. `gui leave dry on|off` makes its final
+// action a log line, so a test can go all the way without powering off.
+static void cmd_leave(struct dbg_out *o, int json) {
+    const char *name; int x, y, w, h;
+    if (json) {
+        dbg_out_printf(o, "{\"phase\":\"%s\",\"focus\":%d,\"controls\":[",
+                       leave_page_phase(), leave_page_focus());
+        int first = 1;
+        for (int i = 0; i < 16; i++) {
+            if (!leave_page_control(i, &name, &x, &y, &w, &h)) continue;
+            dbg_out_printf(o, "%s{\"name\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
+                           "\"cx\":%d,\"cy\":%d}", first ? "" : ",", name, x, y, w, h,
+                           x + w / 2, y + h / 2);
+            first = 0;
+        }
+        dbg_out_write(o, "],\"apps\":[");
+        const char *t; int gone;
+        for (int i = 0; leave_page_app(i, &t, &gone); i++)
+            dbg_out_printf(o, "%s{\"title\":\"%s\",\"gone\":%s}", i ? "," : "", t,
+                           gone ? "true" : "false");
+        dbg_out_write(o, "]}\r\n");
+        return;
+    }
+    dbg_out_printf(o, "leave: %s, focus %d\r\n", leave_page_phase(), leave_page_focus());
+    for (int i = 0; i < 16; i++)
+        if (leave_page_control(i, &name, &x, &y, &w, &h))
+            dbg_out_printf(o, "  %s centre=%d,%d\r\n", name, x + w / 2, y + h / 2);
+    const char *t; int gone;
+    for (int i = 0; leave_page_app(i, &t, &gone); i++)
+        dbg_out_printf(o, "  app \"%s\" %s\r\n", t, gone ? "closed" : "open");
 }
 
 // The open confirm dialog's message and buttons.
@@ -1860,6 +1895,17 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
     if (k_strcmp(sub, "peek") == 0)         { cmd_peek(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "ctxmenu") == 0)      { cmd_ctxmenu(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "dialog") == 0)       { cmd_dialog(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "leave") == 0) {
+        char *arg = next_tok(&p);
+        if (arg && k_strcmp(arg, "dry") == 0) {
+            char *v = next_tok(&p);
+            leave_page_set_dry_run(v && k_strcmp(v, "on") == 0);
+            dbg_out_printf(o, "leave: dry run %s\r\n", v && k_strcmp(v, "on") == 0 ? "on" : "off");
+            return 1;
+        }
+        cmd_leave(o, arg && k_strcmp(arg, "--json") == 0);
+        return 1;
+    }
     if (k_strcmp(sub, "taskbar") == 0)      { cmd_taskbar(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "calendar") == 0)     { cmd_calendar(o, wants_json(p)); return 1; }
     if (k_strcmp(sub, "volume") == 0)       { cmd_volume(o, wants_json(p)); return 1; }

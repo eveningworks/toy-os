@@ -13,9 +13,8 @@
 #include "wm_internal.h"
 #include "wm_glass.h"
 #include "wm_taskbar.h"   // taskbar_start_rect()
-#include "confirm_dialog.h"
 #include "context_menu.h"
-#include "lib/ubootmenu.h"
+#include "leave_page.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"
 #include "kapi.h"
@@ -72,87 +71,12 @@ int start_menu_recent_on(void) {
 // old hardcoded "Esc always exits the window manager" shortcut: it's
 // discoverable now instead of a hidden key.
 //
-// All three go through confirm_dialog.h's reusable Yes/No popup instead
-// of acting directly -- each drops every open window's unsaved state
-// (no session restore exists), so a stray click landing on one
-// shouldn't be irreversible.
-static void do_exit_to_shell(void) { wm_exit_requested = 1; }
-static void action_exit_to_shell(void) {
-    confirm_dialog_open_with("Exit to shell? Unsaved changes will be lost.", do_exit_to_shell, 0);
-}
-
-// Shutdown -- a real poweroff through the machine's own ACPI tables
-// (kernel/acpi/). Unlike do_exit_to_shell(), system_poweroff() never
-// returns, so there is no wm_exit_requested-style flag to set here.
-static void do_shutdown(void) { sys_poweroff(0); }
-static void action_shutdown(void) {
-    confirm_dialog_open_with("Shut down? Unsaved changes will be lost.", do_shutdown, 0);
-}
-
-// Restart -- the same syscall with the other argument (the FADT's reset
-// register). Before Shutdown, as KDE orders them.
-static void do_restart(void) { sys_poweroff(1); }
-
-// RESTART INTO A BOOT ENTRY: with more than one GRUB entry, Restart opens
-// a flyout of them -- KDE's Leave dialog and Windows' power menu both
-// offer this -- and a pick is confirmed like a plain restart, naming the
-// entry. The choice is one boot only; lib/ubootmenu.h has why that is
-// GRUB's to enforce. Read when the menu OPENS, not per draw: it is a
-// file on /boot.
-static struct ubootmenu g_boot;
-static int g_boot_menu;           // two entries or more: Restart has a flyout
-static int g_from_key;            // the context menu takes no keys; see action_restart
-static int g_boot_pick;
-static char g_boot_label[UBOOTMENU_MAX][UBOOTMENU_TITLE + 12];
-static struct context_menu_item g_boot_item[UBOOTMENU_MAX];
-static char g_boot_msg[UBOOTMENU_TITLE + 64];
-
-static void do_restart_into(void) {
-    // The default needs no choice, but one left pending is cleared or
-    // it would win instead.
-    const char *title = g_boot_pick == g_boot.def ? 0 : g_boot.title[g_boot_pick];
-    if (ubootmenu_set_next(title) < 0) {
-        confirm_dialog_open_with("Could not save the boot choice. Restart normally?",
-                                 do_restart, 0);
-        return;
-    }
-    sys_poweroff(1);
-}
-
-static void pick_boot_entry(void *ctx) {
-    g_boot_pick = (int)(intptr_t)ctx;
-    k_snprintf(g_boot_msg, sizeof g_boot_msg, "Restart into %s? Unsaved changes will be lost.",
-             g_boot.title[g_boot_pick]);
-    start_menu_close();
-    confirm_dialog_open_with(g_boot_msg, do_restart_into, 0);
-}
-
-static void action_restart(void) {
-    // From the keyboard, the plain confirm: the flyout could not be
-    // driven by the keys that opened it.
-    if (!g_boot_menu || g_from_key) {
-        confirm_dialog_open_with("Restart? Unsaved changes will be lost.", do_restart, 0);
-        return;
-    }
-    int x = 0, y = 0, w = 0;
-    for (int n = 0; n < start_menu_row_count(); n++) {
-        const char *label; int kind, h;
-        if (!start_menu_row_info(n, &label, &kind, &x, &y, &w, &h, 0)) break;
-        if (kind == START_ROW_ACTION && !k_strcmp(label, "Restart")) break;
-    }
-    for (int i = 0; i < g_boot.count; i++) {
-        k_snprintf(g_boot_label[i], sizeof g_boot_label[i], "%s%s", g_boot.title[i],
-                 i == g_boot.def ? " (default)" : "");
-        k_memset(&g_boot_item[i], 0, sizeof g_boot_item[i]);
-        g_boot_item[i].label = g_boot_label[i];
-        g_boot_item[i].on_select = pick_boot_entry;
-        g_boot_item[i].ctx = (void *)(intptr_t)i;
-    }
-    // A CHILD OF THE START MENU, as a row's right-click menu is: naming
-    // the parent keeps Start up under it (wm_input.c).
-    wm_overlay_set_parent("start");
-    context_menu_open_at(x + w, y, g_boot_item, g_boot.count);
-}
+// ALL THREE OPEN THE LEAVE PAGE (leave_page.h), with the chosen one
+// focused: it asks every app to close before acting, offers the other
+// two, and holds "Restart into" -- KDE's Leave screen.
+static void action_exit_to_shell(void) { leave_page_show(LEAVE_EXIT); }
+static void action_shutdown(void)      { leave_page_show(LEAVE_SHUTDOWN); }
+static void action_restart(void)       { leave_page_show(LEAVE_RESTART); }
 
 const struct start_action wm_system_actions[] = {
     { "Exit to shell", action_exit_to_shell },
@@ -448,12 +372,11 @@ struct sm_layout {
 };
 
 // The footer's button in slot `i`: its width, from its label
-// plus Shut down's glyph and Restart's chevron when it has a boot menu.
+// plus Shut down's glyph.
 static int sm_action_w(int i) {
     const char *lb = wm_system_actions[foot_action(i)].label;
     int w = ugfx_text_width(lb) + 2 * ugfx_char_h();
     if (!k_strcmp(lb, "Shutdown")) w += ugfx_char_h() + 9;
-    if (!k_strcmp(lb, "Restart") && g_boot_menu) w += ugfx_char_h();
     return w;
 }
 
@@ -1134,7 +1057,6 @@ void start_menu_open_now(void) {
     wm_overlay_close_others("start");
     read_settings();
     start_menu_open = 1;
-    g_boot_menu = ubootmenu_read(&g_boot, 0) >= 2 && g_boot.oneshot;
     snapshot_recent();
     flash_row = -1;
     hover_token = 0;
@@ -1184,16 +1106,6 @@ static void draw_magnifier(int cx, int cy, int r, uint32_t c) {
     ugfx_draw_circle(wm_surface(), cx, cy, r, c, GEOM_AA);
     ugfx_draw_line(wm_surface(), cx + r - 1, cy + r - 1,
                    cx + r + r / 2, cy + r + r / 2, c, GEOM_AA);
-}
-
-// A stroked chevron, the card's submenu mark (ui/uui_menubar.c).
-static void sm_chevron(int cx, int cy, uint32_t c) {
-    int r = ugfx_char_h() / 3;
-    if (r < 3) r = 3;
-    for (int d = 0; d < 2; d++) {
-        ugfx_draw_line(wm_surface(), cx - r / 2 + d, cy - r, cx + r / 2 + d, cy, c, GEOM_AA);
-        ugfx_draw_line(wm_surface(), cx + r / 2 + d, cy, cx - r / 2 + d, cy + r, c, GEOM_AA);
-    }
 }
 
 void start_menu_draw(int mx, int my) {
@@ -1313,8 +1225,7 @@ void start_menu_draw(int mx, int my) {
             continue;
         }
         if (kind == START_ROW_ACTION) {
-            // A labelled footer button: Shut down with the power glyph,
-            // Restart with a chevron when a boot menu is behind it.
+            // A labelled footer button: Shut down with the power glyph.
             int tx = x + ch;
             if (!k_strcmp(label, "Shutdown")) {
                 const struct uimg *ico = icon_get("tb-power", ch + 3);
@@ -1322,8 +1233,6 @@ void start_menu_draw(int mx, int my) {
                 tx += ch + 9;
             }
             ugfx_draw_string_clipped(s, tx, y + (h - ch) / 2, x + w - tx, label, row_fg, ink_bg);
-            if (!k_strcmp(label, "Restart") && g_boot_menu)
-                sm_chevron(x + w - ch, y + h / 2, row_fg);
             continue;
         }
 
@@ -1419,7 +1328,7 @@ static int activate(int n) {
     }
     if (n < L.cats + acts) {
         wm_system_actions[foot_action(n - L.cats)].on_select();
-        return !context_menu_open;      // a flyout keeps Start up under it
+        return 1;   // the Leave page replaces Start
     }
     if (n < L.cats + acts + pane_visible(&L, 0)) {
         struct gui_app *a; int act;
@@ -1582,9 +1491,7 @@ int start_menu_key(int key, uint8_t mods) {
             pane_visible(&L, &first);
             int row = sel_row >= 0 ? sel_row : first;
             int n = L.cats + foot_count() + (row - first);
-            g_from_key = 1;
             if (activate(n)) flash(n);
-            g_from_key = 0;
             redraw_pending = 1;
         }
         return 1;
