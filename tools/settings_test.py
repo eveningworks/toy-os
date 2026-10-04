@@ -1112,6 +1112,20 @@ def main():
           stored_value(dbg, "timezone") == "losangeles",
           f"stored={stored_value(dbg, 'timezone')!r}")
 
+    # A CLICK ON A ROW STAGES AT ONCE. The dropdown chose on the PRESS
+    # and closed its popup under the release, which then reached nobody
+    # -- so Settings staged the change only at the NEXT click anywhere,
+    # and Apply stayed dead until the user clicked the background.
+    mark_click = len(drain(dbg))
+    dbg.send(f"gui click {popup_x + 40} {popup_top + 6}")
+    dbg.settle()
+    time.sleep(0.6)
+    clicked = staged_for(dbg, mark_click, "system.timezone")
+    check("clicking a dropdown row stages it with no second click",
+          clicked is not None,
+          "no `settings: staged` line -- the choice's release never "
+          "reached the app, so Apply stays disabled")
+
     dbg.key(0x1B)   # Esc: put the popup away before the next section
     dbg.settle()
     # AND DISCARD WHAT THE KEYS STAGED: leaving a page with a change asks

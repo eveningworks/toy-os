@@ -1655,6 +1655,18 @@ this the obvious way), not from how much history it accumulated.
   (`apply_drag()`) and the release commits into ranks. Buttons are
   DRAWN at `taskbar_draw_x()` (a glide) and HIT at their layout x. `gui taskbar --json` reports all of it;
   `tools/taskbar_style_test.py` checks each where it is drawn.
+- **A POPUP CHOOSES ON THE RELEASE, AND ONE CLOSED UNDER A PRESS OWES
+  THAT PRESS A RELEASE.** `uui_dropdown` arms a row on the press and
+  picks it on the release (Windows', Qt's and GTK's combo boxes), which
+  also gives press-on-the-box, drag, release. It picked on the press and
+  closed its popup, and the compositor sends no release to a surface
+  that is gone (nor does `wl_pointer`) -- so the app heard the change
+  only at the next release anywhere, and System Settings' Apply stayed
+  dead until the background was clicked. uapp now remembers a primary
+  press on a popup (`g_press_slot`) and, if that popup closes before the
+  release, delivers the release itself AFTER the event that closed it
+  (`owed_release()`), never re-entering a widget mid-call.
+  `settings_test.py`'s "clicking a dropdown row stages it".
 - **A CLIENT IS TOLD FOCUS BY `wm_focus_sync()`, NEVER BY A MUTATION
   ASSUMING THE LAST SLOT.** It compares `wm_focus_index()`'s window, by
   `open_seq`, against the one last told and sends the loss and the gain;

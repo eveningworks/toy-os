@@ -37,6 +37,11 @@ struct uui_dropdown {
     // in-window. OWNED; every open/close goes through dd_open/dd_close
     // so the surface cannot outlive the `open` flag.
     int popup;
+    // A press that can end in a choice: one in the list, or the one that
+    // opened it (press on the box, drag into the list, release). The
+    // choice is made on RELEASE -- a press-commit closed the popup under
+    // its own release, which then reached nobody.
+    int tracking;
 };
 
 void uui_dropdown_init(struct uui_dropdown *d, int x, int y, int w, int h,
@@ -60,10 +65,15 @@ void uui_dropdown_draw(struct ugfx_surface *s, const struct uui_dropdown *d);
 void uui_dropdown_draw_popup(struct ugfx_surface *s, const struct uui_dropdown *d);
 
 int uui_dropdown_hit(const struct uui_dropdown *d, int cx, int cy);
-int uui_dropdown_click(struct uui_dropdown *d, int cx, int cy); // 1 if it consumed the click
-// A drag inside an OPEN popup, forwarded to its list so the popup's
-// scrollbar behaves like any other. No-ops while closed.
+// The PRESS: opens or closes on the box, scrolls on the popup's bar,
+// ARMS a row in the list, dismisses elsewhere. 1 if it consumed it.
+int uui_dropdown_click(struct uui_dropdown *d, int cx, int cy);
+// A held drag: the popup's scrollbar thumb, or the row a release would
+// pick. No-ops while closed.
 int uui_dropdown_drag(struct uui_dropdown *d, int cx, int cy);
+// The RELEASE, where a row is chosen -- as a Windows, Qt or GTK combo
+// box chooses -- and the popup closes. 1 if the selection changed.
+int uui_dropdown_release(struct uui_dropdown *d, int cx, int cy);
 void uui_dropdown_drag_end(struct uui_dropdown *d);
 
 // While OPEN the popup takes everything (Esc dismisses, Enter commits,

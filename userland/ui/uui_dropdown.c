@@ -12,6 +12,7 @@ void uui_dropdown_init(struct uui_dropdown *d, int x, int y, int w, int h,
                         const char *const *items, int count) {
     d->x = x; d->y = y; d->w = w; d->h = h;
     d->open = 0;
+    d->tracking = 0;
     d->max_rows = 6;
     d->focused = 0;
     d->bg = ugfx_rgb(255, 255, 255);
@@ -86,6 +87,7 @@ static void dd_close(struct uui_dropdown *d) {
         d->popup = 0;
     }
     d->open = 0;
+    d->tracking = 0;
 }
 
 // Moves the closed box AND re-places the popup under it.
@@ -157,7 +159,8 @@ int uui_dropdown_hit(const struct uui_dropdown *d, int cx, int cy) {
 
 int uui_dropdown_click(struct uui_dropdown *d, int cx, int cy) {
     if (uui_dropdown_hit(d, cx, cy)) {
-        if (d->open) dd_close(d); else dd_open(d);
+        if (d->open) dd_close(d);
+        else { dd_open(d); d->tracking = 1; }
         return 1;
     }
     if (d->open) {
@@ -168,8 +171,8 @@ int uui_dropdown_click(struct uui_dropdown *d, int cx, int cy) {
         if (uui_listbox_press(&d->list, cx, cy)) return 1;
 
         if (uui_hit(d->list.x, d->list.y, d->list.w, d->list.h, cx, cy)) {
-            uui_listbox_click(&d->list, cx, cy);
-            dd_close(d); // committing closes it
+            d->tracking = 1;   // chosen on the release
+            uui_listbox_hover(&d->list, cx, cy);
             return 1;
         }
         // A click anywhere else DISMISSES rather than falling through to
@@ -187,7 +190,17 @@ int uui_dropdown_click(struct uui_dropdown *d, int cx, int cy) {
 // works exactly as it does in a standalone listbox. No-ops while closed.
 int uui_dropdown_drag(struct uui_dropdown *d, int cx, int cy) {
     if (!d->open) return 0;
+    if (d->tracking) return uui_listbox_hover(&d->list, cx, cy);
     return uui_listbox_drag(&d->list, cx, cy);
+}
+
+int uui_dropdown_release(struct uui_dropdown *d, int cx, int cy) {
+    int tracking = d->tracking;
+    d->tracking = 0;
+    if (!d->open || !tracking || uui_listbox_hit(&d->list, cx, cy) < 0) return 0;
+    int changed = uui_listbox_click(&d->list, cx, cy);
+    dd_close(d);   // choosing closes it, changed or not
+    return changed;
 }
 
 void uui_dropdown_drag_end(struct uui_dropdown *d) {
@@ -287,10 +300,14 @@ static int dd_ops_motion(void *w, int cx, int cy, unsigned buttons) {
 }
 
 static int dd_ops_release(void *w, int cx, int cy) {
-    (void)cx; (void)cy;
-    if (((struct uui_dropdown *)w)->disabled) return 0;
-    uui_dropdown_drag_end((struct uui_dropdown *)w);
-    return 0;
+    struct uui_dropdown *d = (struct uui_dropdown *)w;
+    if (d->disabled) return 0;
+    uui_dropdown_drag_end(d);
+    // A release that closed the popup repaints even with the value
+    // unchanged, so the box is redrawn without it.
+    int was_open = d->open;
+    int changed = uui_dropdown_release(d, cx, cy);
+    return changed || (was_open && !d->open);
 }
 
 // Only while OPEN: a closed dropdown deliberately ignores the wheel, so

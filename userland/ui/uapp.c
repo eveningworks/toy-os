@@ -91,6 +91,24 @@ static uint32_t g_popup_parent;
 static struct uapp_surf g_surf[WIN_CLIENT_MAX];
 #define TOPLEVEL (&g_surf[0])
 
+// A PRIMARY PRESS IN FLIGHT ON A POPUP, so a popup closed under it can
+// end it. The compositor sends no release to a surface that is gone (nor
+// does wl_pointer), and the widget that took the press would otherwise
+// hold the router's grab until the next release anywhere -- a value
+// committed at the press reached the app only then. The close OWES the
+// release, delivered after the event that closed it (owed_release()),
+// never from inside the widget call that is closing it.
+static uint32_t g_press_slot;           // 0: none, or the press was not on a popup
+static struct win_event g_press_up;     // that press, as a release in its parent's coordinates
+static int g_release_owed;
+
+static void popup_press_closed(int id) {
+    if (id > 0 && (uint32_t)id == g_press_slot) {
+        g_press_slot = 0;
+        g_release_owed = 1;
+    }
+}
+
 static int slot_of(const struct uapp_surf *s) { return (int)(s - g_surf); }
 
 static void buf_name(char *out, unsigned cap, int slot, int buf) {
@@ -937,6 +955,7 @@ static int popup_open(void *ctx, int ax, int ay, int aw, int ah, int w, int h,
 static void popup_close(void *ctx, int id) {
     (void)ctx;
     if (id <= 0 || id >= WIN_CLIENT_MAX || !g_surf[id].used) return;
+    popup_press_closed(id);
     wmchan_send(WIN_REQ_DESTROY, (uint32_t)id, 0, 0, 0, 0);
     bufs_release(&g_surf[id]);
     g_app.dirty = 1;   // the widget that owned it repaints its own state
@@ -1239,6 +1258,7 @@ static void popup_dismissed(int id) {
     struct uapp_surf *s = &g_surf[id];
     void (*done)(void *) = s->done;
     void *owner = s->owner;
+    popup_press_closed(id);
     bufs_release(s);
     if (done) done(owner);
     g_app.dirty = 1;
@@ -1428,6 +1448,16 @@ static void reap_children(void) {
     }
 }
 
+static void dispatch(struct uapp *a, const struct win_event *in);
+
+// The release a closed popup owes its press (g_press_slot above).
+static void owed_release(struct uapp *a) {
+    if (!g_release_owed) return;
+    g_release_owed = 0;
+    struct win_event up = g_press_up;
+    dispatch(a, &up);
+}
+
 static void dispatch(struct uapp *a, const struct win_event *in) {
     const struct uapp_desc *d = a->desc;
 
@@ -1437,6 +1467,22 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
     // Typing or clicking shows the caret solid and restarts its blink,
     // whichever window or widget the event is for (ui/uui_caret.h).
     if (in->type == WIN_EV_KEY || in->type == WIN_EV_MOUSE_DOWN) uui_caret_reset();
+
+    if (in->type == WIN_EV_MOUSE_DOWN && (WIN_MOUSE_BUTTONS(in->mods) & 0x1)) {
+        g_press_slot = 0;
+        if (in->window != a->window && in->window < WIN_CLIENT_MAX && g_surf[in->window].used) {
+            const struct uapp_surf *ps = &g_surf[in->window];
+            g_press_slot = in->window;
+            g_press_up = *in;
+            g_press_up.type = WIN_EV_MOUSE_UP;
+            g_press_up.window = ps->parent ? ps->parent : a->window;
+            g_press_up.a = in->a + ps->ox;
+            g_press_up.b = in->b + ps->oy;
+            g_press_up.mods = WIN_MOUSE_MODS(in->mods) << WIN_MOUSE_MODS_SHIFT;
+        }
+    } else if (in->type == WIN_EV_MOUSE_UP && !(WIN_MOUSE_BUTTONS(in->mods) & 0x1)) {
+        g_press_slot = 0;
+    }
 
     // AN EVENT ON A POPUP IS THE TOPLEVEL'S, TRANSLATED. The widgets
     // hit-test one coordinate space -- the toplevel's content -- and a
@@ -2126,7 +2172,10 @@ static int uapp_pump(struct uapp *a, int block) {
     // Drain everything queued, blocking or not: one wake often carries
     // several events, and handling them together is what makes the
     // single coalesced present below correct rather than laggy.
-    while (a->running && next_event(&ev)) dispatch(a, &ev);
+    while (a->running && next_event(&ev)) {
+        dispatch(a, &ev);
+        owed_release(a);
+    }
 
     // A widget asked for another frame from its last draw: paint every
     // surface, since nothing says which one it was on. Only while
