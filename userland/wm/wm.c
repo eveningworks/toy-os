@@ -24,7 +24,8 @@
 // with nothing else changing -- cheap without needing real dirty-rect
 // tracking of the scene: see wm_render_cursor_move() in wm_render.c.
 #include "wm/wm_watch.h" // the config pollers' change counters
-#include <stdlib.h>   // free: the client widget map
+#include <limits.h>
+#include <stdlib.h>   // free: the client widget map; realloc: the window table
 #include "wm_internal.h"
 #include "wm_shadow.h"
 #include "wm_glass.h"
@@ -69,23 +70,12 @@ static int windows_cap = 0;
 
 // Grows the window table by doubling. See wm_internal.h for the two
 // rules the caller owes (index, don't cache a `struct window *`).
-//
-// sbrk + copy, and the old block is LEAKED rather than freed -- ring 3
-// has no free (SYS_SBRK only grows), which is the one place this port is
-// genuinely worse than the ring-0 original. It is bounded and small: the
-// table doubles, so reaching N windows leaks under N entries in total, a
-// few KiB at any window count a person will reach. A real allocator
-// (Milestone 24) turns this back into a free(); until then the tradeoff
-// is written down rather than hidden behind a wrapper that looks like
-// malloc and silently never releases.
 int wm_windows_reserve(int n) {
     if (n <= windows_cap) return 1;
 
     int cap = windows_cap ? windows_cap : WM_WINDOWS_INITIAL;
-    while (cap < n) cap *= 2;
-
-    struct window *grown = sys_sbrk((int64_t)((size_t)cap * sizeof *grown));
-    if (grown == (void *)-1) grown = 0;
+    while (cap < n && cap <= INT_MAX / 2) cap *= 2;
+    struct window *grown = cap >= n ? realloc(windows, (size_t)cap * sizeof *grown) : 0;
     if (!grown) {
         // The only way a window can be refused now. Logged rather than
         // silent: the old fixed-table refusal did nothing at all and
@@ -93,12 +83,7 @@ int wm_windows_reserve(int n) {
         sys_eprint("wm: out of memory growing the window table\n");
         return 0;
     }
-
-    k_memset(grown, 0, (size_t)cap * sizeof *grown);
-    if (windows) {
-        k_memcpy(grown, windows, (size_t)window_count * sizeof *grown);
-        // No free -- see above.
-    }
+    k_memset(grown + windows_cap, 0, (size_t)(cap - windows_cap) * sizeof *grown);
     windows = grown;
     windows_cap = cap;
     return 1;
