@@ -7166,3 +7166,31 @@ command is consumed by something else, was not measured.
 
 **Open:** why the OUT endpoint halted. Candidates: the adapter itself under sustained transmit; `rtl_transmit()` calling `xhci_service()` when its ring is full (added 2026-09-30 for 64 KiB datagrams); the completion code that halted it (the log does not print it -- worth adding). The ASUS's RTL8153 has not shown it.
 
+## NOTEPAD: A SECOND CLOSE REQUEST WHILE A TAB'S SAVE PROMPT IS OPEN CAN MAKE "DON'T SAVE" DISCARD A DIFFERENT TAB
+
+Not reproduced; the path, from reading `userland/gui/apps/notepad.c`:
+tab B (dirty, index 1) has its tab-close prompt open (`PEND_CLOSE_TAB`)
+and tab A (index 0) is dirty too. A window close request (`WIN_EV_CLOSE`:
+Alt+F4, the X, or the taskbar's Close all) reaches `on_close_cb()`, which
+runs `close_all_step()`: `switch_to(0)` runs, then `ask_discard()` returns
+early because a prompt is already open. The user answers Don't Save and
+`run_pending()` calls `doc_remove(g_cur)` -- tab A, which was never asked
+about. The fix is the client's: `on_close_cb()` returns 0 at once while
+`uui_dialog_is_open(&g_ask)`, treating a repeated close the way a Wayland
+client treats `xdg_toplevel.close` -- as an idempotent request.
+
+To reproduce: two dirty tabs, close the second tab with its x (the prompt
+opens), then press Alt+F4 and answer Don't Save; check which tab is gone.
+
+## THE TASKBAR'S CLOSE ALL AND OVERFLOW BUTTON HAVE THREE OPEN EDGE CASES AT a514af47
+
+All three are fixed on `ff018f84` (branch `worktree-agent-accbd145b0a59dd3b`),
+which is held unpushed: its "never ask a window with a dialog open" skip
+(`wm_dialog_blocker()` in `close_batch_ask()`) means a Leave page started
+while any app has a modal dialog open asks nobody, never arms its
+deadline, and stays in its closing phase with only Cancel. The review of
+`ff018f84` has the full list; fixing that skip properly (a skipped window
+is not "asked"; an all-skipped batch still arms the wait; the dedup for
+in-window prompts belongs in the client, see the Notepad entry above) is
+what releases it.
+
