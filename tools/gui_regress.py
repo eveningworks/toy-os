@@ -188,6 +188,7 @@ TOOLS = [
     ("wallpaper", "wallpaper_mode_test.py", "fit vs fill, at a mode where they differ, and when the picture is decoded"),
     ("thumbcache", "thumbcache_test.py", "thumbnail decode rate, and the disk cache under it"),
     ("shortcut", "shortcut_test.py", "global keyboard shortcuts, and rebinding them"),
+    ("identity", "window_identity_test.py", "a held window survives a close or raise that renumbers windows[]"),
 ]
 
 # Roughly how long each tool takes, in seconds, used ONLY to decide what

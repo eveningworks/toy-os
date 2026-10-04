@@ -28,7 +28,7 @@ int wm_shortcut_fire(int key, unsigned mods);
 
 // A client asking to receive shortcut keys itself (WIN_REQ_INHIBIT_
 // SHORTCUTS -- abi/win_proto.h says why one would). `window` is the
-// slot; `on` arms or releases.
+// index now; it is held by the window's open_seq. `on` arms or releases.
 void wm_shortcut_inhibit(int window, int on);
 
 // Is the shortcut matcher currently held off for the FOCUSED window?

@@ -146,11 +146,8 @@ static void broadcast_state(uint32_t type, int32_t a, int32_t b, uint32_t bit) {
     }
 }
 
-// Finds the windows[] slot for one client window, or -1. Linear over at
-// most MAX_WINDOWS entries, which is nothing, and it avoids caching an
-// index that close_window() reshuffles (see wm.c -- indices move when a
-// window closes, which has bitten pending_write/pending_read/
-// pending_proc for exactly this reason).
+// Finds the windows[] index for one client window, or -1. Linear, and
+// it avoids caching an index that a close or a raise renumbers.
 static int find_client_window(int pid, uint32_t id) {
     for (int i = 0; i < window_count; i++) {
         if (windows[i].client_pid == pid && windows[i].client_win == id) return i;

@@ -76,6 +76,10 @@ void context_menu_open_at(int x, int y, const struct context_menu_item *items, i
 // outside it, or when a fresh right-click elsewhere should replace it.
 void context_menu_close(void);
 
+// Whether the open menu is the one built from `items` -- for a caller
+// whose target can vanish while its menu is up.
+int context_menu_showing(const struct context_menu_item *items);
+
 // Draws the popup at its open position -- a no-op if context_menu_open
 // is 0 (same "caller still checks, this just draws" contract as
 // start_menu_draw()).

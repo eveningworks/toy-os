@@ -261,6 +261,36 @@ const char *wm_window_icon_name_of(const struct window *w) {
 
 // ---- window lifecycle ----
 
+int wm_index_after_move(int v, int idx, int to_front) {
+    if (v < 0) return v;
+    if (v == idx) return to_front ? window_count - 1 : -1;
+    return v > idx ? v - 1 : v;
+}
+
+// EVERY INDEX HELD ACROSS A FRAME, renumbered for a move of windows[idx]
+// -- see wm_index_after_move(). A capture on a window being CLOSED is
+// cancelled; its client is going, so it is owed no release. The window
+// menu and the shortcut inhibitor hold open_seq instead and need nothing.
+static void wm_windows_moving(int idx, int to_front) {
+    if (!to_front && drag_outline_win == idx)
+        wm_damage_rect(drag_outline_x, drag_outline_y, drag_outline_w, drag_outline_h);
+    if (!to_front && title_btn_armed_win == idx) {
+        title_btn_armed_kind = -1;
+        title_btn_pressed_active = 0;
+    }
+    if (!to_front && title_hover_win == idx) title_hover_kind = -1;
+    dragging = wm_index_after_move(dragging, idx, to_front);
+    resizing = wm_index_after_move(resizing, idx, to_front);
+    drag_outline_win = wm_index_after_move(drag_outline_win, idx, to_front);
+    resize_ask_idx = wm_index_after_move(resize_ask_idx, idx, to_front);
+    content_dragging = wm_index_after_move(content_dragging, idx, to_front);
+    content_pressed = wm_index_after_move(content_pressed, idx, to_front);
+    content_hover_win = wm_index_after_move(content_hover_win, idx, to_front);
+    title_btn_armed_win = wm_index_after_move(title_btn_armed_win, idx, to_front);
+    title_hover_win = wm_index_after_move(title_hover_win, idx, to_front);
+    wm_dnd_windows_moving(idx, to_front);
+}
+
 void bring_to_front(int idx) {
     if (idx == window_count - 1) return;
 
@@ -300,14 +330,10 @@ void bring_to_front(int idx) {
         wm_client_send_focus(&windows[idx], 1);
     }
 
+    wm_windows_moving(idx, 1);
     struct window tmp = windows[idx];
     for (int i = idx; i < window_count - 1; i++) windows[i] = windows[i + 1];
     windows[window_count - 1] = tmp;
-
-    // Reordering used to need three more fixups here, keeping
-    // pending_write_win/pending_read_win/pending_proc_win pointing at
-    // the same window across the shuffle. R9 deleted those slots, so the
-    // reorder is now just the reorder.
 }
 
 // A window AND its dialogs, promoted together -- the dialogs last, so
@@ -600,14 +626,6 @@ void wm_request_close(int idx) {
 }
 
 void close_window(int idx) {
-    // Refuse to close a window with a write in flight -- pending_write's
-    // handle is polled by index (pending_write_win), and the callback it
-    // eventually fires (gui_apps.h's on_write_complete) is delivered to
-    // &windows[pending_write_win]; closing mid-write would either shift
-    // that slot to point at a DIFFERENT window by the time the write
-    // finishes, or (if this is the last window) leave it dangling. Same
-    // "block while pending" choice as window_start_write() refusing a
-    // second concurrent write. See wm.h's window_write_pending().
     // Give the app a chance to release whatever it allocated for this
     // window (multi-instance apps kmalloc/kzalloc their own per-window
     // state -- see gui_apps.h's `multi_instance` flag and
@@ -674,19 +692,8 @@ void close_window(int idx) {
     sys_eprint(windows[idx].app ? windows[idx].app->name : windows[idx].title);
     sys_eprint("\n");
 
-    // A DRAG IN PROGRESS NAMES A WINDOW BY INDEX, and the shift below
-    // makes that index somebody else. Cancel it here rather than let a
-    // release move or resize the wrong window; an outline on screen is
-    // dropped with it.
-    if (dragging == idx || resizing == idx || drag_outline_win == idx) {
-        if (drag_outline_win >= 0) {
-            wm_damage_rect(drag_outline_x, drag_outline_y,
-                           drag_outline_w, drag_outline_h);
-        }
-        drag_outline_win = -1;
-        if (dragging == idx) dragging = -1;
-        if (resizing == idx) resizing = -1;
-    }
+    wm_window_menu_forget(idx);
+    wm_windows_moving(idx, 0);
 
     // THE WIDGET MAP IS THIS SLOT'S, and the shift below overwrites the
     // pointer with the next window's. Freed here or it leaks one

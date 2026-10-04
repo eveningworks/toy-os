@@ -15,5 +15,6 @@ int  wm_dnd_refused_at(int mx, int my);      // a drop here would be taken by no
 void wm_dnd_motion(int mx, int my, uint8_t buttons);
 int  wm_dnd_took_drop(void);
 void wm_dnd_draw(int mx, int my);
+void wm_dnd_windows_moving(int idx, int to_front);   // see wm_index_after_move()
 
 #endif

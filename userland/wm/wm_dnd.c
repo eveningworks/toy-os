@@ -153,3 +153,7 @@ void wm_dnd_draw(int mx, int my) {
     ugfx_draw_string_clipped(wm_surface(), x + 6, y + 3, tw, g_label, UTHEME_TEXT, UTHEME_PANEL_BG);
     wm_damage_rect(x - 1, y - 1, w + 2, h + 2);
 }
+
+void wm_dnd_windows_moving(int idx, int to_front) {
+    g_over = wm_index_after_move(g_over, idx, to_front);
+}

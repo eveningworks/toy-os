@@ -438,13 +438,15 @@ void wm_handle_left_click(int mx, int my) {
 
 // ---- right-click dispatch (see context_menu.h / wm_internal.h) ----
 
-// Small static scratch used as a context-menu item's `ctx` -- set right
-// before the menu it belongs to opens, read back when a row is later
-// selected. Safe as a single shared static: only one context menu is
-// ever open at a time (opening a new one always closes the last), and
-// nothing else in this single-threaded event loop can touch it in
-// between open and select.
-static int g_ctx_window_target;
+// The window menu's window, as its open_seq -- the menu stays up while
+// windows open, close and raise, and an index would by then name a
+// different window (Close on one window closed another). Every row
+// resolves it through ctx_target(), and a window that has gone does
+// nothing.
+static uint32_t g_ctx_window_seq;
+static struct context_menu_item g_window_menu[5];
+
+static int ctx_target(void *ctx) { return wm_window_by_seq(*(uint32_t *)ctx); }
 
 // Goes through wm_request_close(), not close_window(). It used to call
 // the latter, which for a ring-3 client destroyed its window without
@@ -452,11 +454,14 @@ static int g_ctx_window_target;
 // handshake the X button had always honoured, and an app refusing to
 // close was closed anyway. A WM feature that treats one window kind
 // correctly and the other not; see wm_internal.h.
-static void ctx_close_window(void *ctx) { wm_request_close(*(int *)ctx); }
+static void ctx_close_window(void *ctx) {
+    int i = ctx_target(ctx);
+    if (i >= 0) wm_request_close(i);
+}
 
 static void ctx_minimize_window(void *ctx) {
-    int i = *(int *)ctx;
-    if (i < 0 || i >= window_count) return;
+    int i = ctx_target(ctx);
+    if (i < 0) return;
     wm_anim_minimize(i);
     windows[i].state = WIN_MINIMIZED;
     redraw_pending = 1;
@@ -510,7 +515,8 @@ static void wm_toggle_maximize(int i) {
 }
 
 static void ctx_toggle_maximize_window(void *ctx) {
-    wm_toggle_maximize(*(int *)ctx);
+    int i = ctx_target(ctx);
+    if (i >= 0) wm_toggle_maximize(i);
 }
 
 // Fullscreen: the whole screen, no chrome, no taskbar. The window's
@@ -538,6 +544,7 @@ void wm_set_fullscreen(int i, int on) {
         if (is_client) wm_client_send_resize(w, screen_w, screen_h);
         else { w->w = screen_w; w->h = screen_h; }
         bring_to_front(i);
+        w = &windows[window_count - 1];   // the raise moved it
     } else {
         w->fullscreen = 0;
         if (w->fs_prev == WIN_MAXIMIZED) {
@@ -559,8 +566,8 @@ void wm_set_fullscreen(int i, int on) {
 }
 
 static void ctx_toggle_fullscreen_window(void *ctx) {
-    int i = *(int *)ctx;
-    if (i >= 0 && i < window_count) wm_set_fullscreen(i, !windows[i].fullscreen);
+    int i = ctx_target(ctx);
+    if (i >= 0) wm_set_fullscreen(i, !windows[i].fullscreen);
 }
 
 // Launching DISMISSES the Start menu, which is what a left-click on the
@@ -586,8 +593,8 @@ static void ctx_add_to_desktop(void *ctx) { desktop_add_launcher((const struct g
 // wm_request_close() (ASK the client) rather than close_window() (seize
 // it), which is a bug this file has already shipped once.
 static void ctx_restore_window(void *ctx) {
-    int i = *(int *)ctx;
-    if (i < 0 || i >= window_count || windows[i].state != WIN_MINIMIZED) return;
+    int i = ctx_target(ctx);
+    if (i < 0 || windows[i].state != WIN_MINIMIZED) return;
     wm_anim_restore(i);
     windows[i].state = WIN_NORMAL;
     wm_ensure_reachable(i);
@@ -598,8 +605,9 @@ static void ctx_restore_window(void *ctx) {
 void wm_open_window_menu(int idx, int mx, int my) {
     if (idx < 0 || idx >= window_count) return;
     const struct window *w = &windows[idx];
-    g_ctx_window_target = idx;
-    static struct context_menu_item items[5];
+    if (!windows[idx].open_seq) windows[idx].open_seq = wm_next_open_seq();
+    g_ctx_window_seq = w->open_seq;
+    struct context_menu_item *items = g_window_menu;
     int n = 0;
     // A MINIMIZED window -- reachable only from its taskbar button --
     // offers the way back instead of a Minimize that would do nothing.
@@ -607,30 +615,35 @@ void wm_open_window_menu(int idx, int mx, int my) {
     // stands for look alike.
     if (w->state == WIN_MINIMIZED)
         items[n++] = (struct context_menu_item){ .label = "Restore", .on_select = ctx_restore_window,
-                                                 .ctx = &g_ctx_window_target, .icon = "tb-restore" };
+                                                 .ctx = &g_ctx_window_seq, .icon = "tb-restore" };
     else
         items[n++] = (struct context_menu_item){ .label = "Minimize", .on_select = ctx_minimize_window,
-                                                 .ctx = &g_ctx_window_target, .icon = "tb-minimize" };
+                                                 .ctx = &g_ctx_window_seq, .icon = "tb-minimize" };
     // Nothing that sizes a window it cannot see: maximizing or going
     // fullscreen from minimized would leave it resized and still hidden.
     if (w->resizable && w->state != WIN_MINIMIZED) {
         int max = w->state == WIN_MAXIMIZED;
         items[n++] = (struct context_menu_item){ .label = max ? "Restore" : "Maximize",
                                                  .on_select = ctx_toggle_maximize_window,
-                                                 .ctx = &g_ctx_window_target,
+                                                 .ctx = &g_ctx_window_seq,
                                                  .icon = max ? "tb-restore" : "tb-maximize" };
         items[n++] = (struct context_menu_item){ .label = w->fullscreen ? "Exit Fullscreen" : "Fullscreen",
                                                  .on_select = ctx_toggle_fullscreen_window,
-                                                 .ctx = &g_ctx_window_target,
+                                                 .ctx = &g_ctx_window_seq,
                                                  .icon = w->fullscreen ? "tb-unfullscreen" : "tb-fullscreen",
                                                  .tint = UTHEME_ACT_VIEW };
     }
     // Close apart, as Windows' window menu sets it, with the key that does it.
     items[n++] = (struct context_menu_item){ .separator = 1 };
     items[n++] = (struct context_menu_item){ .label = "Close", .on_select = ctx_close_window,
-                                             .ctx = &g_ctx_window_target, .icon = "tb-close",
+                                             .ctx = &g_ctx_window_seq, .icon = "tb-close",
                                              .tint = UTHEME_ACT_DANGER, .accel = "Alt+F4" };
     context_menu_open_at(mx, my, items, n);
+}
+
+void wm_window_menu_forget(int idx) {
+    if (windows[idx].open_seq == g_ctx_window_seq && context_menu_showing(g_window_menu))
+        context_menu_close();
 }
 
 // Pin or unpin, and leave the Start menu UP: this changes what the menu

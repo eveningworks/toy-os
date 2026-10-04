@@ -1655,6 +1655,20 @@ this the obvious way), not from how much history it accumulated.
   (`apply_drag()`) and the release commits into ranks. Buttons are
   DRAWN at `taskbar_draw_x()` (a glide) and HIT at their layout x. `gui taskbar --json` reports all of it;
   `tools/taskbar_style_test.py` checks each where it is drawn.
+- **A WINDOW HELD ACROSS FRAMES IS HELD BY `open_seq`, OR ITS INDEX IS
+  RENUMBERED IN `wm_windows_moving()`.** `windows[]` is z-order and two
+  functions move entries: `close_window()` compacts it and
+  `bring_to_front()` rotates one to the end. A bare index kept past
+  either names a DIFFERENT window -- the window menu's Close closed
+  another app, a raise handed the shortcut inhibitor to whichever window
+  took the focused slot, and a drag kept a slot one past the end. The
+  input captures (drag, resize, press, armed title button, hover, the
+  DnD target) are renumbered or cancelled in `wm_windows_moving()`
+  (`wm.c`); a long-lived target (the window menu, the inhibitor, peek,
+  the group menu) holds `open_seq` and resolves it through
+  `wm_window_by_seq()`. A NEW cached index joins one of the two.
+  wlroots holds surface pointers with destroy listeners instead; the
+  array is why this is needed here. `tools/window_identity_test.py`.
 - **TASKBAR PEEK IS AN OVERLAY THAT HOLDS WINDOWS BY `open_seq`.**
   `userland/wm/wm_peek.c`, `desktop.taskbar_peek` = `off` | `preview` |
   `highlight`: a card of box-averaged CONTENT thumbnails (no chrome),

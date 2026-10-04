@@ -103,6 +103,10 @@ void context_menu_damage(void) {
     redraw_pending = 1;
 }
 
+int context_menu_showing(const struct context_menu_item *items) {
+    return context_menu_open && g_ncodes > 0 && g_src[0] == &items[0];
+}
+
 void context_menu_open_at(int x, int y, const struct context_menu_item *items, int count) {
     int n = build(items, count);
 

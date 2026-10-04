@@ -249,7 +249,7 @@ struct window {
     // of the same client with NO CHROME -- window_content_*() answer the
     // whole rect -- no taskbar button, no saved geometry, placed by the
     // compositor against the work area and dismissed by a press outside
-    // every surface of its client. `popup_parent` is the slot it was
+    // every surface of its client. `popup_parent` is the client window id it was
     // anchored to. Created at the top of the list; it never needs to
     // follow its parent because the press that would move the parent
     // dismisses it first.
@@ -266,7 +266,7 @@ struct window {
     // A DIALOG WINDOW (abi/win_proto.h's WIN_REQ_DIALOG): a second
     // toplevel of the same client, WITH chrome, owned by one of its
     // client's windows -- centred on it, stacked with it, and carrying
-    // no taskbar button of its own. `dialog_owner` is the owner's slot.
+    // no taskbar button of its own. `dialog_owner` is the owner's client window id.
     //
     // `modal` means the owner takes no input while this is up: a press
     // on it raises this instead. Win32 disables the owner HWND for the

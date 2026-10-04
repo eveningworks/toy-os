@@ -137,22 +137,31 @@ int wm_shortcut_fire(int key, unsigned mods) {
 // is dropped the moment that window stops being the focused one, so a
 // client that crashes or wanders off mid-capture cannot leave the
 // desktop with no shortcuts. See abi/win_proto.h.
-static int g_inhibit_window = -1;
+// Held as the window's open_seq, never its index: a raise or a close
+// renumbers windows[], and an index handed the inhibition to whichever
+// window took the focused slot next.
+static uint32_t g_inhibit_seq;
+
+static uint32_t seq_of(int window) {
+    return window >= 0 && window < window_count ? windows[window].open_seq : 0;
+}
 
 void wm_shortcut_inhibit(int window, int on) {
-    if (on) g_inhibit_window = window;
-    else if (g_inhibit_window == window) g_inhibit_window = -1;
+    uint32_t seq = seq_of(window);
+    if (!seq) return;
+    if (on) g_inhibit_seq = seq;
+    else if (g_inhibit_seq == seq) g_inhibit_seq = 0;
     ulogf("wm: shortcuts %s by window %d\n", on ? "inhibited" : "released", window);
 }
 
 int wm_shortcut_inhibited(int focused_window) {
-    return g_inhibit_window >= 0 && g_inhibit_window == focused_window;
+    return g_inhibit_seq && g_inhibit_seq == seq_of(focused_window);
 }
 
 void wm_shortcut_focus_changed(int focused_window) {
-    if (g_inhibit_window >= 0 && g_inhibit_window != focused_window) {
+    if (g_inhibit_seq && g_inhibit_seq != seq_of(focused_window)) {
         ulogf("wm: shortcuts released -- window %d is no longer focused\n",
-              g_inhibit_window);
-        g_inhibit_window = -1;
+              wm_window_by_seq(g_inhibit_seq));
+        g_inhibit_seq = 0;
     }
 }

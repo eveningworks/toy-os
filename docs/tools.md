@@ -4359,6 +4359,18 @@ window without going through it will find its layout polls timing out.
   notification is the signal, and a waiter beside it is redundant even
   when it works (CLAUDE.md). Named by no runner -- it is a helper, not a
   test.
+- **`window_identity_test.py`** -- a window held across frames stays
+  the SAME window when `windows[]` is renumbered under it: the window
+  menu across a close below it (its Close must close its own window) and
+  across its own window's close (dismissed), a held title-bar drag
+  across a close below it (`gui state`'s `dragging` follows, and the
+  release moves that window only), and the shortcut inhibitor across a
+  RAISE of another window into the focused slot (Super+E must fire).
+  Windows are told apart by ICON NAME -- a client's `app` is empty and
+  Notepad's title is its document's. The drag needs a REAL held button
+  (`QMPSession.mouse_down` after `warp_cursor`); `gui drag` cannot hold
+  one across a close. Red on the build before the fix (6 of 11). In
+  `gui_regress.py`.
 - **`shortcut_test.py`** -- global keyboard shortcuts: the default
   bindings, the Super gesture, and rebinding one through System Settings
   (15 checks). It reaches the Shortcuts page by TYPING "shortcuts" into

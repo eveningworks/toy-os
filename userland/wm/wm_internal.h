@@ -89,10 +89,20 @@ uint32_t wm_next_open_seq(void);
 // close_window(), which compacts the array.
 int wm_window_by_seq(uint32_t seq);
 
+// Where cached index `v` points after close_window() (to_front = 0) or
+// bring_to_front() (to_front = 1) moves windows[idx]: renumbered, or -1
+// when it named the window being closed. Called BEFORE the move, while
+// window_count is still the old count. Every index held across a frame
+// goes through this in wm_windows_moving() (wm.c) -- a new one joins
+// that list -- or it silently names another window after the next close.
+int wm_index_after_move(int v, int idx, int to_front);
+
 // The window menu (Minimize/Restore, Maximize, Fullscreen, Close) for
 // windows[idx] at (mx, my) -- the title bar's right-click, and the
 // taskbar button's.
 void wm_open_window_menu(int idx, int mx, int my);
+// windows[idx] is closing: drop the window menu if it is that window's.
+void wm_window_menu_forget(int idx);
 int btn_size(void);
 
 // THE RESIZE BORDER IS MOSTLY OUTSIDE THE WINDOW, which is how
@@ -146,7 +156,10 @@ int btn_size(void);
 //     docs/decisions.md's "struct window * isn't a stable per-window
 //     identity"); growth makes the pointer itself stale rather than
 //     merely pointing at the wrong window.
-//   - Index, don't cache. `windows[i]` is always current.
+//   - Index, don't cache. `windows[i]` is always current -- and an
+//     index held ACROSS FRAMES is renumbered by close_window() and
+//     bring_to_front(), so it goes through wm_windows_moving() (wm.c)
+//     or holds the window's open_seq instead.
 extern struct window *windows;
 extern int window_count;
 
