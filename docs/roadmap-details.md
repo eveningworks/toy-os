@@ -6328,6 +6328,30 @@ any of the others closing, for whatever the menu ran. With fifteen
 windows open on the laptop the full repaints had cost 100-119 ms a
 frame for as long as a menu was up.
 
+## The toolkit repaints only INVALIDATED widgets, and a present's damage comes from that, not a frame diff
+
+`uapp` repaints a client's whole buffer every frame and keeps no record of
+what changed, so the present's damage rects (`struct win_damage`) are found
+by comparing the new buffer against the last presented one row by row
+(`uregion_diff()`). That is correct by construction, but it costs a pass over
+the buffer per present on top of the full repaint itself.
+
+What Qt (`QWidget::update(rect)`) and GTK (`gtk_widget_queue_draw_area()`)
+do instead: a widget INVALIDATES the area it needs redrawn, the next frame
+repaints only the invalid region, and the damage handed to the compositor
+(`wl_surface.damage_buffer`, DXGI `Present1`'s dirty rects) is that region --
+a by-product of repainting less rather than a second thing to keep true.
+Declaring damage without that would be an unchecked claim: one missed call
+leaves stale pixels with nothing failing.
+
+So the shape is: `uui_widget` ops gain an invalidate path (the caret, a
+hovered row, a text edit), the router repaints only invalid widgets, and the
+frame diff stays behind as a DEBUG verifier the way the WM's damage verifier
+checks the compositor. The trigger is a measurement, not this entry: after
+the compositor's visible-region change is on the laptop, time a typed key in
+a large Notepad from repaint to present; if the client side dominates, this
+is next.
+
 ## `Terminal=true` on a `.desktop` entry
 
 Every `.desktop` entry today is a GUI program: `Exec=` names a binary
