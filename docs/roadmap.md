@@ -816,7 +816,7 @@ run on, not by order.
 - [ ] A clocksource watchdog, cross-checking the TSC against a second source the way Linux does
 - [ ] MSI-X vectors per QUEUE rather than one per device -- wanted by multi-queue virtio and NVMe, worth it once a second CPU is online
 - [x] ~~Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table~~ DONE 2026-09-12
-- [x] ~~Every XKB layout Latin-1 can type, with dead keys and Shift+AltGr~~ DONE 2026-10-04 -- 21 in `tools/gen_kbs.py`'s `LAYOUTS`
+- [x] ~~Every XKB layout Latin-1 can type, with dead keys and Shift+AltGr~~ DONE 2026-10-04 -- `tools/gen_kbs.py`'s `LAYOUTS`
 - [ ] Settings shows a picture of the chosen keyboard layout -- the layout data is in `/etc/kbs`; nothing draws it yet
 - [ ] Several layouts at once, switched with a shortcut and shown in the tray (Windows' Win+Space, GNOME's input sources)
 - [ ] The on-screen keyboard should draw the CONFIGURED layout, not its own copy of US QWERTY -- it still types US whatever is set

@@ -280,12 +280,10 @@ int keyboard_layout_translate(uint16_t keycode, int shift, int altgr) {
     return g_table[shift ? LVL_SHIFT : LVL_BASE][keycode];
 }
 
-// Is `lo` a lowercase letter whose capital is `up`? ASCII, or Latin-1's
-// 0xE0-0xFE (less the division sign), whose capitals sit 0x20 below.
+// Is `lo` a lowercase letter whose capital is `up`? (k_latin1_toupper:
+// ASCII and Latin-1 alike.)
 static int case_pair(int lo, int up) {
-    if (lo >= 'a' && lo <= 'z') return up == lo - 'a' + 'A';
-    if (lo >= 0xE0 && lo <= 0xFE && lo != 0xF7) return up == lo - 0x20;
-    return 0;
+    return lo > 0 && lo <= 0xFF && up != lo && k_latin1_toupper(lo) == up;
 }
 
 // AltGr levels are left alone, as XKB's FOUR_LEVEL_SEMIALPHABETIC and

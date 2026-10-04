@@ -179,3 +179,14 @@ KTEST("string", "strcasecmp") {
     // so å (0xE5) sorts after 'a' rather than before everything.
     KTEST_ASSERT(k_strcasecmp("\xE5", "a") > 0);
 }
+
+KTEST("string", "Latin-1 case folding pairs the letters and nothing else") {
+    KTEST_ASSERT_EQ(k_latin1_toupper(0xE9), 0xC9);   // e-acute
+    KTEST_ASSERT_EQ(k_latin1_tolower(0xC9), 0xE9);
+    KTEST_ASSERT_EQ(k_latin1_toupper('q'), 'Q');     // ASCII still folds
+    KTEST_ASSERT_EQ(k_latin1_toupper(0xF7), 0xF7);   // division sign
+    KTEST_ASSERT_EQ(k_latin1_tolower(0xD7), 0xD7);   // multiplication sign
+    KTEST_ASSERT_EQ(k_latin1_toupper(0xDF), 0xDF);   // sharp s: no capital
+    KTEST_ASSERT_EQ(k_latin1_toupper(0xFF), 0xFF);   // y-diaeresis: none either
+    KTEST_ASSERT_EQ(k_latin1_toupper(0xB5), 0xB5);   // micro sign is not a pair
+}

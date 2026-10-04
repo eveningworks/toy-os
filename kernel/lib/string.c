@@ -129,6 +129,15 @@ int k_isspace(char c) {
 int k_tolower(int c) { return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c; }
 int k_toupper(int c) { return (c >= 'a' && c <= 'z') ? c - ('a' - 'A') : c; }
 
+int k_latin1_tolower(int c) {
+    if (c >= 0xC0 && c <= 0xDE && c != 0xD7) return c + 0x20;
+    return k_tolower(c);
+}
+int k_latin1_toupper(int c) {
+    if (c >= 0xE0 && c <= 0xFE && c != 0xF7) return c - 0x20;
+    return k_toupper(c);
+}
+
 int k_strcasecmp(const char *a, const char *b) {
     // Fold through unsigned char, not char: a Latin-1 byte is negative
     // as a signed char here, and comparing those raw would order Å

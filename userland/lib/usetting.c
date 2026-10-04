@@ -90,82 +90,134 @@ static int raw_choice(struct setting_msg *m, int kcount, uint32_t gen) {
 // --- `Sort=label`: the choice order every front end sees ---------------
 //
 // HERE, NOT IN A CLIENT, so System Settings, `config` and anything else
-// enumerating SETTING_OP_CHOICE agree. The order is worked out once per
-// (setting, generation) and kept: one read of the text file and one pass
-// over the choices, not one per choice asked for. A choice list can grow
-// without the generation moving (a file dropped into /etc/kbs); the
-// cache is per process, so a fresh process sees it.
-#define SORT_MAX   128   // = System Settings' MAX_CHOICES
-#define SORT_SLOTS 16
-struct sort_entry {
-    int used, index, sorted, count;
+// enumerating SETTING_OP_CHOICE agree. Per setting INDEX and per
+// generation, one entry that says whether the setting is sorted -- learned
+// for free from SETTING_OP_INFO's parse of its text file, which every
+// front end asks first, or with one read of `Sort=` if CHOICE comes
+// first -- and, for a sorted one only, its choices (value and label)
+// already in order. So an unsorted setting costs nothing beyond its
+// ordinary CHOICE, and a sorted one is enumerated once and then answered
+// with no I/O at all. A list can grow without the generation moving (a
+// file dropped into /etc/kbs); the cache is per process, so a fresh
+// process sees it.
+#define CHOICE_RUNAWAY 4096   // a guard against a provider that never ends, not a size
+
+struct choice_info {
     uint32_t gen;
-    uint8_t order[SORT_MAX];
-};
-static struct sort_entry g_sort[SORT_SLOTS];
-static int g_sort_next;
-static char g_sort_label[SORT_MAX][SETTING_ABI_LABEL_MAX];
-
-static const struct sort_entry *sort_entry_for(int index, int kcount, uint32_t gen) {
-    for (int i = 0; i < SORT_SLOTS; i++)
-        if (g_sort[i].used && g_sort[i].index == index && g_sort[i].gen == gen)
-            return &g_sort[i];
-
-    struct sort_entry *e = &g_sort[g_sort_next];
-    g_sort_next = (g_sort_next + 1) % SORT_SLOTS;
-    memset(e, 0, sizeof *e);
-    e->used = 1;
-    e->index = index;
-    e->gen = gen;
-
-    // Whose text file: the setting's own (ns, name).
-    struct setting_msg t;
-    memset(&t, 0, sizeof t);
-    if (index < kcount) {
-        t.op = SETTING_OP_INFO;
-        t.index = (uint32_t)index;
-        if (sys_setting(&t) != 0) return e;
-    } else {
-        struct uschema s;
-        if (!uschema_at(index - kcount, &s)) return e;
-        strlcpy(t.ns, s.ns, sizeof t.ns);
-        strlcpy(t.name, s.name, sizeof t.name);
-    }
+    int known, sorted, built, count, cap;
     char ns[SETTING_ABI_NS_MAX], name[SETTING_ABI_NAME_MAX];
-    strlcpy(ns, t.ns, sizeof ns);
-    strlcpy(name, t.name, sizeof name);
-    uschema_text_for(ns, name, &t);
-    if (!(t.sflags & SETTING_ABI_SF_SORTED)) return e;
+    char (*value)[SETTING_ABI_VALUE_MAX];
+    char (*label)[SETTING_ABI_LABEL_MAX];
+};
+static struct choice_info *g_ci;
+static int g_ci_cap;
 
-    for (int c = 0; c < SORT_MAX; c++) {
+// The entry for `index` at `gen`, reset if it describes another
+// generation; 0 when out of memory (the caller answers unsorted).
+static struct choice_info *ci_for(int index, uint32_t gen) {
+    if (index < 0) return 0;
+    if (index >= g_ci_cap) {
+        int cap = g_ci_cap ? g_ci_cap : 64;
+        while (cap <= index) cap *= 2;
+        struct choice_info *n = realloc(g_ci, (size_t)cap * sizeof *n);
+        if (!n) return 0;
+        memset(n + g_ci_cap, 0, (size_t)(cap - g_ci_cap) * sizeof *n);
+        g_ci = n;
+        g_ci_cap = cap;
+    }
+    struct choice_info *e = &g_ci[index];
+    if (e->gen != gen || !e->known) {
+        free(e->value);
+        free(e->label);
+        memset(e, 0, sizeof *e);
+        e->gen = gen;
+    }
+    return e;
+}
+
+static void ci_learn(int index, uint32_t gen, const char *ns, const char *name, int sorted) {
+    struct choice_info *e = ci_for(index, gen);
+    if (!e || e->known) return;
+    e->known = 1;
+    e->sorted = sorted;
+    strlcpy(e->ns, ns, sizeof e->ns);
+    strlcpy(e->name, name, sizeof e->name);
+}
+
+// Enumerate a sorted setting's choices once, in label order.
+static int ci_build(struct choice_info *e, int index, int kcount, uint32_t gen) {
+    for (int c = 0; c < CHOICE_RUNAWAY; c++) {
+        struct setting_msg t;
         memset(&t, 0, sizeof t);
         t.op = SETTING_OP_CHOICE;
         t.index = (uint32_t)index;
         t.choice = (uint32_t)c;
         if (raw_choice(&t, kcount, gen) != 0) break;
-        strlcpy(g_sort_label[c], t.label[0] ? t.label : t.value, sizeof g_sort_label[c]);
-        e->order[c] = (uint8_t)c;
-        e->count = c + 1;
-    }
-    // Insertion sort by label; a few dozen rows at most.
-    for (int i = 1; i < e->count; i++)
-        for (int j = i; j > 0 && strcasecmp(g_sort_label[e->order[j - 1]],
-                                            g_sort_label[e->order[j]]) > 0; j--) {
-            uint8_t x = e->order[j];
-            e->order[j] = e->order[j - 1];
-            e->order[j - 1] = x;
+        if (e->count == e->cap) {
+            int cap = e->cap ? e->cap * 2 : 32;
+            void *v = realloc(e->value, (size_t)cap * sizeof *e->value);
+            if (!v) return 0;
+            e->value = v;
+            void *l = realloc(e->label, (size_t)cap * sizeof *e->label);
+            if (!l) return 0;
+            e->label = l;
+            e->cap = cap;
         }
-    e->sorted = 1;
-    return e;
+        strlcpy(e->value[e->count], t.value, sizeof e->value[0]);
+        strlcpy(e->label[e->count], t.label[0] ? t.label : t.value, sizeof e->label[0]);
+        e->count++;
+    }
+    // Insertion sort by label, both columns; a few dozen rows at most.
+    char tv[SETTING_ABI_VALUE_MAX], tl[SETTING_ABI_LABEL_MAX];
+    for (int i = 1; i < e->count; i++)
+        for (int j = i; j > 0 && strcasecmp(e->label[j - 1], e->label[j]) > 0; j--) {
+            strlcpy(tv, e->value[j], sizeof tv);
+            strlcpy(tl, e->label[j], sizeof tl);
+            strlcpy(e->value[j], e->value[j - 1], sizeof tv);
+            strlcpy(e->label[j], e->label[j - 1], sizeof tl);
+            strlcpy(e->value[j - 1], tv, sizeof tv);
+            strlcpy(e->label[j - 1], tl, sizeof tl);
+        }
+    e->built = 1;
+    return 1;
 }
 
 static int sorted_choice(struct setting_msg *m, int kcount, uint32_t gen) {
-    const struct sort_entry *e = sort_entry_for((int)m->index, kcount, gen);
-    if (e->sorted) {
-        if (m->choice >= (uint32_t)e->count) return -1;
-        m->choice = e->order[m->choice];
+    int index = (int)m->index;
+    struct choice_info *e = ci_for(index, gen);
+    if (e && e->known && !e->sorted) return raw_choice(m, kcount, gen);
+
+    if (e && !e->known) {
+        // CHOICE before INFO: learn the name, then read `Sort=` once.
+        char ns[SETTING_ABI_NS_MAX] = "", name[SETTING_ABI_NAME_MAX] = "";
+        int rc = -1;
+        if (index < kcount) {
+            rc = raw_choice(m, kcount, gen);
+            strlcpy(ns, m->ns, sizeof ns);
+            strlcpy(name, m->name, sizeof name);
+        } else {
+            struct uschema s;
+            if (uschema_at(index - kcount, &s)) {
+                strlcpy(ns, s.ns, sizeof ns);
+                strlcpy(name, s.name, sizeof name);
+            }
+        }
+        char word[8];
+        int sorted = ns[0] && uschema_text_word(ns, name, SETTING_TEXT_KEY_SORT, word, sizeof word)
+                     && !strcmp(word, "label");
+        ci_learn(index, gen, ns, name, sorted);
+        if (!sorted) return index < kcount ? rc : raw_choice(m, kcount, gen);
     }
-    return raw_choice(m, kcount, gen);
+    if (!e || !e->sorted) return raw_choice(m, kcount, gen);
+
+    if (!e->built && !ci_build(e, index, kcount, gen)) return raw_choice(m, kcount, gen);
+    if (m->choice < 0 || m->choice >= e->count) return -1;
+    strlcpy(m->value, e->value[m->choice], sizeof m->value);
+    strlcpy(m->label, e->label[m->choice], sizeof m->label);
+    strlcpy(m->ns, e->ns, sizeof m->ns);
+    strlcpy(m->name, e->name, sizeof m->name);
+    m->generation = gen;
+    return 0;
 }
 
 // Which half owns `name`, and the schema when it is this one.
@@ -250,6 +302,7 @@ int usetting_dispatch(struct setting_msg *m) {
             int rc = sys_setting(m);
             if (rc != 0) return rc;
             uschema_text_for(m->ns, m->name, m);
+            ci_learn((int)m->index, gen, m->ns, m->name, !!(m->sflags & SETTING_ABI_SF_SORTED));
             return 0;
         }
 
@@ -257,6 +310,7 @@ int usetting_dispatch(struct setting_msg *m) {
         if (!uschema_at(m->index - kcount, &s)) return -1;
         m->generation = gen;
         fill_from_schema(&s, m);
+        ci_learn((int)m->index, gen, s.ns, s.name, !!(m->sflags & SETTING_ABI_SF_SORTED));
         return 0;
     }
 

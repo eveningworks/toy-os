@@ -79,14 +79,6 @@ static int eq_nocase(const char *a, const char *b, int n) {
     return b[n] == '\0';
 }
 
-// A character key's canonical (upper-case) form: ASCII, and Latin-1's
-// 0xE0-0xFE (less the division sign) whose capitals sit 0x20 below.
-static int upper1(int c) {
-    if (c >= 'a' && c <= 'z') return c - ('a' - 'A');
-    if (c >= 0xE0 && c <= 0xFE && c != 0xF7) return c - 0x20;
-    return c;
-}
-
 // A single byte that names itself: printable ASCII or Latin-1, the set
 // keycombo_format() can spell.
 static int is_self_key(unsigned c) {
@@ -105,7 +97,7 @@ static int token_key(const char *tok, int len, uint16_t *out_key, uint8_t *out_m
     // stored form and the formatted form agree; matching lower-cases
     // both ends anyway (keycombo_matches).
     if (len == 1 && is_self_key((unsigned char)tok[0])) {
-        *out_key = (uint16_t)upper1((unsigned char)tok[0]);
+        *out_key = (uint16_t)k_latin1_toupper((unsigned char)tok[0]);
         return 1;
     }
     return 0;
@@ -161,7 +153,7 @@ int keycombo_format(const struct keycombo *c, char *out, size_t cap) {
     if (!kname) {
         // Only what token_key() reads back: anything else is unspellable.
         if (!is_self_key(c->key)) return 0;
-        one[0] = (char)upper1(c->key);
+        one[0] = (char)k_latin1_toupper(c->key);
         one[1] = '\0';
         kname = one;
     }
@@ -207,6 +199,6 @@ int keycombo_matches(const struct keycombo *c, int key, uint8_t mods) {
         int lower = c->key < 0x80 ? k_tolower((unsigned char)c->key) : 0;
         if (lower >= 'a' && lower <= 'z') return key == (lower - 'a' + 1);
     }
-    if (c->key <= 0xFF && key <= 0xFF) return upper1(key) == upper1(c->key);
+    if (c->key <= 0xFF && key <= 0xFF) return k_latin1_toupper(key) == k_latin1_toupper(c->key);
     return key == c->key;
 }

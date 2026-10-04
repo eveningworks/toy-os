@@ -200,28 +200,23 @@ void win_input_poll(void) {
     g_last_x = x;
     g_last_y = y;
 
-    // Keys and wheel notches are CONSUMING reads, so each one is pushed
-    // exactly once and there is no "on change" to apply -- a repeated
-    // key is a real repeated key.
-    uint8_t mods = 0;
-    int key = keyboard_try_getchar_mods(&mods);
-    if (key != -1) push(WIN_EV_RAW_KEY, key, 0, mods);
-
-    // KEY TRANSITIONS: every release, and both edges of the four
-    // modifier keys -- everything the byte stream above cannot carry
-    // (api/keyboard.h). DRAINED, not sampled once: a press and its
-    // release can both land inside one tick, and reporting only the
-    // first would leave a client holding a key that is already up. The
-    // budget bounds the loop against a device reporting nonsense, and is
-    // the queue's own depth for the reason wm_rawin.c's is -- "how many
-    // can be waiting?" has exactly that answer.
+    // KEYS, PRESSES AND RELEASES IN THE ORDER THEY HAPPENED
+    // (keyboard_try_get_key()). This read one press from the ring per
+    // poll and then drained every release, so a press, its release and a
+    // second press queued between two polls reached the WM as press,
+    // release, RELEASE, and only on the next poll the second press -- held
+    // forever by a client tracking WIN_EV_KEY_UP. DRAINED, not sampled:
+    // the budget bounds the loop against a device reporting nonsense, at
+    // the two queues' combined depth.
+    int kcode = 0, kdown = 0;
+    uint8_t kmods = 0;
+    for (int budget = 128; budget > 0; budget--) {
+        if (!keyboard_try_get_key(&kcode, &kdown, &kmods)) break;
+        push(kdown ? WIN_EV_RAW_KEY : WIN_EV_RAW_KEY_UP, kcode, 0, kmods);
+    }
     uint16_t tcode = 0;
     int tdown = 0;
     uint8_t tmods = 0;
-    for (int budget = 64; budget > 0; budget--) {
-        if (!keyboard_try_get_transition(&tcode, &tdown, &tmods)) break;
-        push(tdown ? WIN_EV_RAW_KEY : WIN_EV_RAW_KEY_UP, (int)tcode, 0, tmods);
-    }
 
     // THE SAME KEYS BY POSITION (api/keyboard.h), drained for the same
     // reason. Always pushed: whether any window wants them is the

@@ -16,7 +16,8 @@ way" for anything here, and `docs/roadmap.md` says what is not built.
 long-mode transition done by hand. Linear RGB framebuffer falling back
 to 80×25 VGA text. PS/2 keyboard and mouse sharing the 8042 through one
 dispatcher, with keyboard layouts as *data files* generated from Linux's
-own XKB data: 21 of them (every XKB layout Latin-1 can type), four levels
+own XKB data: every XKB layout Latin-1 can type (`tools/gen_kbs.py`'s
+`LAYOUTS`), four levels
 with Shift+AltGr, and dead keys composed in the kernel behind every
 keyboard driver, Windows-style. Text is Latin-1 end to end -- the font
 carries 0xA0-0xFF in both rings. PIT, CMOS RTC, PC speaker, MBR/GPT partition parsing.

@@ -753,3 +753,71 @@ KTEST("input", "a keypad character ends a pending accent like any other key") {
     KTEST_ASSERT_EQ(k.key[1], '1');
     KTEST_ASSERT_EQ(k.key[2], 'e');
 }
+
+// --- the compositor's read: keyboard_try_get_key(), as win_input_poll()
+// calls it -- in a loop, after everything below has queued.
+struct ordered { int n, code[12], down[12]; };
+
+static void ordered_sequence(const uint16_t *kcs, int n, struct ordered *out) {
+    char name[KB_LAYOUT_NAME_MAX];
+    k_strlcpy(name, keyboard_layout_current(), sizeof name);
+    struct tty *t = tty_console();
+    int was = tty_bypassed(t);
+    k_memset(out, 0, sizeof *out);
+
+    scheduler_preempt_disable();
+    int c, d;
+    uint8_t m;
+    while (keyboard_try_get_key(&c, &d, &m)) { }
+    tty_set_bypass(t, 1);
+    keyboard_layout_load_text(DEAD_FIXTURE, sizeof DEAD_FIXTURE - 1);
+    for (int i = 0; i < n; i++) tap(kcs[i]);
+    while (out->n < 12 && keyboard_try_get_key(&c, &d, &m)) {
+        out->code[out->n] = c;
+        out->down[out->n++] = d;
+    }
+    keyboard_layout_compose_reset();
+    tty_set_bypass(t, was);
+    scheduler_preempt_enable();
+    keyboard_layout_load(name);   // reads /etc/kbs: not under the guard
+}
+
+KTEST("input", "the compositor reads presses and releases in the order they happened") {
+    // Two ordinary keys typed between two polls, then a dead key's two
+    // characters: each press must come before ITS release, and the
+    // second press before the second release -- the old poll read one
+    // press then every release, so the second key arrived after its own
+    // release and stayed held.
+    static const uint16_t seq[] = { 18, 45, 13, 45 };   // e, x, dead acute, x
+    struct ordered o;
+    ordered_sequence(seq, 4, &o);
+    static const int want_code[] = { 'e', 'e', 'x', 'x', 0xB4, 0xB4, 'x', 'x' };
+    static const int want_down[] = { 1, 0, 1, 0, 1, 0, 1, 0 };
+    KTEST_ASSERT_EQ(o.n, 8);
+    for (int i = 0; i < 8; i++) {
+        KTEST_ASSERT_EQ(o.code[i], want_code[i]);
+        KTEST_ASSERT_EQ(o.down[i], want_down[i]);
+    }
+}
+
+KTEST("input", "every KEY_* special has a C1 low byte and IS_SPECIAL_KEY knows it") {
+    // keyboard.h's promise: a special truncated to a byte by mistake is
+    // a C1 control, never a Latin-1 letter or Ctrl-C.
+    static const int all[] = {
+        KEY_ARROW_UP, KEY_ARROW_DOWN, KEY_PAGE_UP, KEY_PAGE_DOWN, KEY_ARROW_LEFT,
+        KEY_ARROW_RIGHT, KEY_HOME, KEY_END, KEY_DELETE, KEY_F2, KEY_F3,
+        KEY_SHIFT_ARROW_LEFT, KEY_SHIFT_ARROW_RIGHT, KEY_SHIFT_ARROW_UP,
+        KEY_SHIFT_ARROW_DOWN, KEY_SHIFT_HOME, KEY_SHIFT_END, KEY_CTRL_ARROW_LEFT,
+        KEY_CTRL_ARROW_RIGHT, KEY_F10, KEY_F4, KEY_SUPER, KEY_SHIFT, KEY_CTRL,
+        KEY_ALT, KEY_ALTGR, KEY_F1, KEY_F5, KEY_F6, KEY_F7, KEY_F8, KEY_F9,
+        KEY_F11, KEY_F12, KEY_INSERT, KEY_MENU, KEY_CAPS_LOCK, KEY_NUM_LOCK,
+        KEY_SCROLL_LOCK, KEY_PAUSE, KEY_PRINT_SCREEN,
+    };
+    for (unsigned i = 0; i < sizeof all / sizeof all[0]; i++) {
+        KTEST_ASSERT(IS_SPECIAL_KEY(all[i]));
+        KTEST_ASSERT((all[i] & 0xFF) >= 0x80 && (all[i] & 0xFF) <= 0x9F);
+        KTEST_ASSERT(!IS_PRINTABLE_KEY(all[i] & 0xFF));
+    }
+    KTEST_ASSERT(!IS_SPECIAL_KEY(KEY_PRINT_SCREEN + 1));
+    KTEST_ASSERT(!IS_SPECIAL_KEY(0xE9));
+}

@@ -127,24 +127,62 @@ struct key_transition {
 static struct key_transition trans[TRANS_MAX];
 static unsigned trans_head, trans_tail;
 
-static void trans_push(uint16_t code, int down) {
-    if (!code) return;
+// `down` is 1/0 for an edge, or TRANS_RING: a MARKER saying "the next
+// key in the console's ring was pushed here" -- see keyboard_try_get_key().
+#define TRANS_RING 2
+
+static void trans_put(uint16_t code, int down) {
     unsigned next = (trans_head + 1) % TRANS_MAX;
     if (next == trans_tail) trans_tail = (trans_tail + 1) % TRANS_MAX; // drop oldest
     trans[trans_head].code = code;
-    trans[trans_head].down = (uint8_t)(down ? 1 : 0);
+    trans[trans_head].down = (uint8_t)down;
     trans[trans_head].mods = current_mods();
     trans_head = next;
 }
 
+static void trans_push(uint16_t code, int down) {
+    if (!code) return;
+    trans_put(code, down ? 1 : 0);
+}
+
 int keyboard_try_get_transition(uint16_t *out_code, int *out_down,
                                  uint8_t *out_mods) {
-    if (trans_tail == trans_head) return 0;
-    struct key_transition t = trans[trans_tail];
-    trans_tail = (trans_tail + 1) % TRANS_MAX;
-    if (out_code) *out_code = t.code;
-    if (out_down) *out_down = t.down;
-    if (out_mods) *out_mods = t.mods;
+    while (trans_tail != trans_head) {
+        struct key_transition t = trans[trans_tail];
+        trans_tail = (trans_tail + 1) % TRANS_MAX;
+        if (t.down == TRANS_RING) continue;   // a position marker, not an edge
+        if (out_code) *out_code = t.code;
+        if (out_down) *out_down = t.down;
+        if (out_mods) *out_mods = t.mods;
+        return 1;
+    }
+    return 0;
+}
+
+int keyboard_try_get_key(int *out_code, int *out_down, uint8_t *out_mods) {
+    // Transitions in order; a marker stands for the ring key pushed at
+    // that point, so a press, its release and the next press come out
+    // in the order they happened however many queued before a poll.
+    while (trans_tail != trans_head) {
+        struct key_transition t = trans[trans_tail];
+        trans_tail = (trans_tail + 1) % TRANS_MAX;
+        if (t.down != TRANS_RING) {
+            if (out_code) *out_code = t.code;
+            if (out_down) *out_down = t.down;
+            if (out_mods) *out_mods = t.mods;
+            return 1;
+        }
+        int c = keyboard_try_getchar_mods(out_mods);
+        if (c == -1) continue;              // the ring dropped it: nothing to report
+        if (out_code) *out_code = c;
+        if (out_down) *out_down = 1;
+        return 1;
+    }
+    // Ring keys with no marker (a marker dropped on overflow): still keys.
+    int c = keyboard_try_getchar_mods(out_mods);
+    if (c == -1) return 0;
+    if (out_code) *out_code = c;
+    if (out_down) *out_down = 1;
     return 1;
 }
 
@@ -227,6 +265,12 @@ static void ring_push(uint16_t c) {
     // ~20 call sites for the reason `emitting_keycode` is here.
     kbdtap_produced(c);
     tty_input(tty_console(), c, current_mods());
+    // A COMPOSITOR READS PRESSES FROM THE RING AND RELEASES FROM `trans`:
+    // mark where this press fell among the releases, or a release queued
+    // behind it can overtake it (keyboard_try_get_key()). Only bypassed,
+    // where one push is exactly one ring entry; a terminal may make it
+    // several bytes or none.
+    if (tty_bypassed(tty_console())) trans_put(c, TRANS_RING);
 }
 
 // Defined below, beneath keyboard_key_event() which is its public face.

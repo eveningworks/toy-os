@@ -18,7 +18,8 @@
 // Nothing should truncate one at all: A KEY IS AN `int` (or at least a
 // uint16_t) EVERYWHERE, and a `uint8_t` key is a bug.
 #define IS_SPECIAL_KEY(k) \
-    ((((k) >= 0xF780 && (k) <= 0xF79F) || ((k) >= 0xF880 && (k) <= 0xF89F)))
+    (((k) >= KEY_ARROW_UP && (k) <= KEY_F9) || ((k) >= KEY_F11 && (k) <= KEY_PRINT_SCREEN))
+// ^ the first and last of each run; a code added to a run moves these.
 #define KEY_ARROW_UP    0xF780
 #define KEY_ARROW_DOWN  0xF781
 #define KEY_PAGE_UP     0xF782
@@ -403,6 +404,15 @@ int keyboard_try_getchar_mods(uint8_t *out_mods);
 // and 0 for a release.
 int keyboard_try_get_transition(uint16_t *out_code, int *out_down,
                                  uint8_t *out_mods);
+
+// THE COMPOSITOR'S READ: every key event in the ORDER IT HAPPENED --
+// ring presses and transitions merged, `down` 1 or 0. Reading the ring
+// and the transitions separately loses that order: with a press, its
+// release and a second press queued, the second press would arrive
+// after its own release and stay held. Same outputs as above; any may
+// be NULL. Consumes from both queues, so it is the ONE reader while a
+// compositor holds the keyboard (win_input.c).
+int keyboard_try_get_key(int *out_code, int *out_down, uint8_t *out_mods);
 
 // EVERY KEY'S EDGES, BY POSITION: the evdev keycode (abi/input_keys.h),
 // 1 for a press and 0 for a release, and the KEY_MOD_* state after it.

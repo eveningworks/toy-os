@@ -53,60 +53,55 @@ static struct query_kbdtap g_batch[BATCH];
 
 // --- naming a code ----------------------------------------------------
 
-// The KEY_* family of api/keyboard.h, indexed by its own macros so the
-// table cannot drift out of step with the header it is naming. Short
-// names on purpose: this is a column, and "SHIFT-LEFT" beside "'a'" in
-// the same column is what makes a log readable at a glance.
-#define KEY_NAME_BASE KEY_ARROW_UP     // the lowest KEY_* code
-#define KEY_NAME_TOP  KEY_PRINT_SCREEN // the highest
-
-static const char *const g_key_names[KEY_NAME_TOP - KEY_NAME_BASE + 1] = {
-    [KEY_ARROW_UP        - KEY_NAME_BASE] = "UP",
-    [KEY_ARROW_DOWN      - KEY_NAME_BASE] = "DOWN",
-    [KEY_PAGE_UP         - KEY_NAME_BASE] = "PGUP",
-    [KEY_PAGE_DOWN       - KEY_NAME_BASE] = "PGDN",
-    [KEY_ARROW_LEFT      - KEY_NAME_BASE] = "LEFT",
-    [KEY_ARROW_RIGHT     - KEY_NAME_BASE] = "RIGHT",
-    [KEY_HOME            - KEY_NAME_BASE] = "HOME",
-    [KEY_END             - KEY_NAME_BASE] = "END",
-    [KEY_DELETE          - KEY_NAME_BASE] = "DEL",
-    [KEY_F2              - KEY_NAME_BASE] = "F2",
-    [KEY_F3              - KEY_NAME_BASE] = "F3",
-    [KEY_SHIFT_ARROW_LEFT  - KEY_NAME_BASE] = "S-LEFT",
-    [KEY_SHIFT_ARROW_RIGHT - KEY_NAME_BASE] = "S-RIGHT",
-    [KEY_SHIFT_ARROW_UP    - KEY_NAME_BASE] = "S-UP",
-    [KEY_SHIFT_ARROW_DOWN  - KEY_NAME_BASE] = "S-DOWN",
-    [KEY_SHIFT_HOME        - KEY_NAME_BASE] = "S-HOME",
-    [KEY_SHIFT_END         - KEY_NAME_BASE] = "S-END",
-    [KEY_CTRL_ARROW_LEFT   - KEY_NAME_BASE] = "C-LEFT",
-    [KEY_CTRL_ARROW_RIGHT  - KEY_NAME_BASE] = "C-RIGHT",
-    [KEY_F10             - KEY_NAME_BASE] = "F10",
-    [KEY_F4              - KEY_NAME_BASE] = "F4",
-    [KEY_SUPER           - KEY_NAME_BASE] = "SUPER",
-    // The four modifier keys never reach the byte stream at all (they
-    // ride the transition queue instead, see api/keyboard.h), so they
-    // cannot appear in this column. Named anyway: the table is indexed,
-    // so a hole here would be a NULL entry to guard rather than a name
-    // to print, and the gap would read as an oversight.
-    [KEY_SHIFT           - KEY_NAME_BASE] = "SHIFT",
-    [KEY_CTRL            - KEY_NAME_BASE] = "CTRL",
-    [KEY_ALT             - KEY_NAME_BASE] = "ALT",
-    [KEY_ALTGR           - KEY_NAME_BASE] = "ALTGR",
-    [KEY_F1              - KEY_NAME_BASE] = "F1",
-    [KEY_F5              - KEY_NAME_BASE] = "F5",
-    [KEY_F6              - KEY_NAME_BASE] = "F6",
-    [KEY_F7              - KEY_NAME_BASE] = "F7",
-    [KEY_F8              - KEY_NAME_BASE] = "F8",
-    [KEY_F9              - KEY_NAME_BASE] = "F9",
-    [KEY_F11             - KEY_NAME_BASE] = "F11",
-    [KEY_F12             - KEY_NAME_BASE] = "F12",
-    [KEY_INSERT          - KEY_NAME_BASE] = "INS",
-    [KEY_MENU            - KEY_NAME_BASE] = "MENU",
-    [KEY_CAPS_LOCK       - KEY_NAME_BASE] = "CAPS",
-    [KEY_NUM_LOCK        - KEY_NAME_BASE] = "NUMLK",
-    [KEY_SCROLL_LOCK     - KEY_NAME_BASE] = "SCRLK",
-    [KEY_PAUSE           - KEY_NAME_BASE] = "PAUSE",
-    [KEY_PRINT_SCREEN    - KEY_NAME_BASE] = "PRTSC",
+// The KEY_* family of api/keyboard.h by name, SEARCHED rather than
+// indexed: the codes sit in two runs far apart (keyboard.h says why),
+// so an indexed table would be mostly hole. Short names on purpose:
+// this is a column, and "SHIFT-LEFT" beside "'a'" in the same column
+// is what makes a log readable at a glance. The four modifier keys
+// never reach the byte stream (they ride the transition queue) but are
+// named anyway, so a transition can be printed too.
+static const struct { int code; const char *name; } g_key_names[] = {
+    { KEY_ARROW_UP,          "UP" },
+    { KEY_ARROW_DOWN,        "DOWN" },
+    { KEY_PAGE_UP,           "PGUP" },
+    { KEY_PAGE_DOWN,         "PGDN" },
+    { KEY_ARROW_LEFT,        "LEFT" },
+    { KEY_ARROW_RIGHT,       "RIGHT" },
+    { KEY_HOME,              "HOME" },
+    { KEY_END,               "END" },
+    { KEY_DELETE,            "DEL" },
+    { KEY_F2,                "F2" },
+    { KEY_F3,                "F3" },
+    { KEY_SHIFT_ARROW_LEFT,  "S-LEFT" },
+    { KEY_SHIFT_ARROW_RIGHT, "S-RIGHT" },
+    { KEY_SHIFT_ARROW_UP,    "S-UP" },
+    { KEY_SHIFT_ARROW_DOWN,  "S-DOWN" },
+    { KEY_SHIFT_HOME,        "S-HOME" },
+    { KEY_SHIFT_END,         "S-END" },
+    { KEY_CTRL_ARROW_LEFT,   "C-LEFT" },
+    { KEY_CTRL_ARROW_RIGHT,  "C-RIGHT" },
+    { KEY_F10,               "F10" },
+    { KEY_F4,                "F4" },
+    { KEY_SUPER,             "SUPER" },
+    { KEY_SHIFT,             "SHIFT" },
+    { KEY_CTRL,              "CTRL" },
+    { KEY_ALT,               "ALT" },
+    { KEY_ALTGR,             "ALTGR" },
+    { KEY_F1,                "F1" },
+    { KEY_F5,                "F5" },
+    { KEY_F6,                "F6" },
+    { KEY_F7,                "F7" },
+    { KEY_F8,                "F8" },
+    { KEY_F9,                "F9" },
+    { KEY_F11,               "F11" },
+    { KEY_F12,               "F12" },
+    { KEY_INSERT,            "INS" },
+    { KEY_MENU,              "MENU" },
+    { KEY_CAPS_LOCK,         "CAPS" },
+    { KEY_NUM_LOCK,          "NUMLK" },
+    { KEY_SCROLL_LOCK,       "SCRLK" },
+    { KEY_PAUSE,             "PAUSE" },
+    { KEY_PRINT_SCREEN,      "PRTSC" },
 };
 
 // One code, as a person would say it. The control codes get their
@@ -126,10 +121,11 @@ static void code_name(unsigned code, char *out, int cap) {
     default: break;
     }
     if (code >= 1 && code <= 26) { snprintf(out, cap, "^%c", (char)('A' + code - 1)); return; }
-    if (code >= KEY_NAME_BASE && code <= KEY_NAME_TOP) {
-        const char *n = g_key_names[code - KEY_NAME_BASE];
-        if (n) { snprintf(out, cap, "%s", n); return; }
-    }
+    for (unsigned i = 0; i < sizeof g_key_names / sizeof g_key_names[0]; i++)
+        if (g_key_names[i].code == (int)code) {
+            snprintf(out, cap, "%s", g_key_names[i].name);
+            return;
+        }
     snprintf(out, cap, "0x%02x", code);
 }
 

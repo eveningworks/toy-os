@@ -19,9 +19,11 @@ active.
     # keyboard de
     Keyboard layout set to de.
 
-The names are XKB's: `al at be br ca ch de dk es fi fo fr gb is it
-latam nl no pt se us` -- every layout whose letters Latin-1 can type (System Settings > Input > Keyboard shows them by
-name, A to Z). `ls /etc/kbs` is the list on a given disk.
+The names are XKB's (`de`, `fr`, `se`...): every layout whose letters
+Latin-1 can type, listed in `tools/gen_kbs.py`'s `LAYOUTS` (`gen_kbs.py
+--choices` prints them with their display names). System Settings >
+Input > Keyboard shows them by name, A to Z; `ls /etc/kbs` is the list
+on a given disk.
 
 A layout is a DATA FILE, not compiled-in code: `/etc/kbs/<name>` maps
 evdev keycodes to four characters each -- base, Shift, AltGr and

@@ -1743,14 +1743,12 @@ $(DISK_IMG):
 # The /etc/kbs layouts are regenerated here (not hand-maintained) by
 # tools/gen_kbs.py --all, whose LAYOUTS table is the one list -- see
 # that script's top comment. It needs `xkbcli` (Debian/Ubuntu: `apt-get install
-# libxkbcommon-tools`); if that's missing, this prints a warning and
-# skips regenerating them rather than failing the build -- whatever's
-# already in $(SEED_DIR)/sync/etc/kbs (nothing, on a machine that's
-# never had xkbcli, including most CI runners) just doesn't get synced
-# onto disk.img, and the kernel's own compiled-in US fallback
-# (keyboard_layout.c) keeps the keyboard working regardless. Delete
-# $(SEED_DIR)/sync/etc/kbs and re-run `make iso` to force a fresh
-# regenerate once xkbcli is installed.
+# libxkbcommon-tools`). WITHOUT xkbcli the step is skipped with a warning
+# -- nothing in $(SEED_DIR)/sync/etc/kbs reaches disk.img, and the
+# kernel's compiled-in US table (keyboard_layout.c) keeps the keyboard
+# working. WITH xkbcli, A LAYOUT THAT FAILS TO GENERATE FAILS THE BUILD
+# (`|| exit 1`): Settings lists /etc/kbs, so a half-written set would
+# offer a layout that falls back to US when picked.
 # EXTRAS=1 fetches the optional, differently-licensed material before
 # seeding -- today that is the Doom shareware IWAD. OFF by default, so no
 # ordinary build reaches the network and no ordinary image carries
