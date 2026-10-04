@@ -1664,7 +1664,10 @@ this the obvious way), not from how much history it accumulated.
   one listed window) share one tracker: record every window FIRST, then
   ask each through `wm_request_close()` -- an ask can close a kernel-space
   window at once and renumber `windows[]` -- and poll which have gone
-  against a 5 s deadline. What is still open then is the CALLER's to
+  against a 5 s deadline. **Each window is asked ONCE**
+  (`close_batch_ask()` skips an entry already asked): a second Close all
+  joining a waiting batch must not re-send WIN_EV_CLOSE to a window
+  already asking to save. What is still open then is the CALLER's to
   present: the Leave page lists it, Close all puts a notice card up
   (`crash_notice_stayed()`: Show it, Force Quit) that leaves by itself
   once those windows close. A third batch close uses the same tracker.

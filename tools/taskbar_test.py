@@ -57,6 +57,10 @@ overflow button reddens exactly "...behind an overflow button". A first
 attempt at that control fired for the wrong reason -- `--in-gui` against
 a guest whose desktop was not up yet, so every check errored -- which is
 why a control's FAILING CHECK is read, not just its exit status.
+The join, names and draghidden sections were seen red too: re-asking
+already-asked entries logs "asking 3" for the second Close all; skipping
+the title elision cuts the card's sentence at "The "; leaving hidden
+windows un-ranked after a drop puts them at the FRONT of the row.
 
 CAVEAT
 ------
@@ -325,6 +329,7 @@ def check_height(dbg, qmp, res):
 # Every setting a section below changes; unset at the end whatever happens,
 # since a setting outlives the tool (CLAUDE.md).
 TOUCHED = ("desktop.taskbar_combine", "desktop.taskbar_buttons", "desktop.taskbar_height")
+SECTIONS = ("height", "combine", "closeall", "join", "names", "draghidden", "overflow")
 
 
 def close_everything(dbg):
@@ -543,6 +548,159 @@ def check_close_all(dbg, qmp, res):
                   not notepads(dbg), f"left {[w['title'] for w in notepads(dbg)]}")
 
 
+def check_drag_hidden(dbg, qmp, res):
+    """A drag-reorder keeps the overflow's windows behind it: the drop
+    re-ranks the row, and the hidden windows must rank AFTER it -- left on
+    their older ranks they sorted first, and the row the user had just
+    arranged went into the overflow list instead."""
+    close_everything(dbg)
+    set_and_wait(dbg, "desktop.taskbar_buttons", "icons", "buttons_kind", "icons")
+    set_and_wait(dbg, "desktop.taskbar_height", "96")
+    tb = set_and_wait(dbg, "desktop.taskbar_combine", "never", "combine", "never")
+    opened = 0
+    while opened < 20 and (tb.get("overflow") is None or tb["overflow"]["count"] < 3):
+        spawn_notepads(dbg, 1)
+        opened += 1
+        tb = strip(dbg)
+    before = [b["key"] for b in tb["buttons"]]
+    hidden = tb["hidden"]
+    if hidden < 3 or len(before) < 2:
+        res.check("drag with windows hidden: three behind the overflow button", False,
+                  f"{opened} windows, {len(before)} buttons, hidden {hidden}")
+        return
+    # A real drag, as taskbar_drag_test does it: button 0 past button 1.
+    src, past = tb["buttons"][0], tb["buttons"][1]
+    dbg.warp_cursor(qmp, src["cx"], src["cy"])
+    time.sleep(0.2)
+    qmp.mouse_down()
+    time.sleep(0.2)
+    end = past["cx"] + past["w"] // 4
+    for x in range(src["cx"], end + 1, 16):
+        dbg.warp_cursor(qmp, x, src["cy"])
+        time.sleep(0.03)
+    dbg.warp_cursor(qmp, end, src["cy"])
+    time.sleep(0.4)
+    qmp.mouse_up()
+    time.sleep(0.4)
+    dbg.settle()
+    tb = strip(dbg)
+    after = [b["key"] for b in tb["buttons"]]
+    res.check("drag with windows hidden: the drop reordered the row",
+              after[:2] == [before[1], before[0]], f"keys {before} -> {after}")
+    res.check("...and the same windows are on the strip, the hidden ones still hidden",
+              sorted(after) == sorted(before) and tb["hidden"] == hidden,
+              f"keys {before} -> {after}, hidden {hidden} -> {tb['hidden']}")
+
+
+def check_close_all_join(dbg, qmp, res):
+    """A second Close all while one waits JOINS it and asks only the
+    windows it adds: the window already asking to save is not sent a
+    second close."""
+    close_everything(dbg)
+    spawn_notepads(dbg, 2)
+    qmp.send_text("unsaved")   # the front Notepad, which will refuse
+    dbg.settle()
+    time.sleep(0.5)
+    for _ in range(2):
+        before = dbg.state()["windows"]
+        dbg.send("gui spawn " + CALCULATOR)
+        deadline = time.time() + 15
+        while time.time() < deadline and dbg.state()["windows"] <= before:
+            time.sleep(0.2)
+        dbg.settle()
+    tb = strip(dbg)
+    note = next((b for b in tb["buttons"] if b["app_id"] == "notepad"), None)
+    calc = next((b for b in tb["buttons"] if b["app_id"] == "calculator"), None)
+    if not note or not calc:
+        res.check("join: a Notepad and a Calculator button", False,
+                  f"app ids {[b['app_id'] for b in tb['buttons']]}")
+        return
+    dbg.logs("closeall:", clear=True)
+    window_menu_for_button(dbg, note)
+    row = dbg.ctxmenu_row("Close all 2 windows")
+    if row:
+        dbg.click(*row)
+        dbg.settle()
+    wait_log(dbg, "asking", 4)
+    time.sleep(0.5)   # the clean Notepad closes; the other asks to save
+    window_menu_for_button(dbg, strip_button(dbg, "calculator") or calc)
+    row = dbg.ctxmenu_row("Close all 2 windows")
+    if row:
+        dbg.click(*row)
+        dbg.settle()
+    time.sleep(0.5)
+    asks = [line for line in dbg.logs("closeall:", clear=False) if "asking" in line]
+    stopped = [line for line in dbg.logs("closeall:", clear=False) if "did not close" in line]
+    res.check("a second Close all, while the first waits, asks only its own two",
+              len(asks) == 2 and "asking 2 " in asks[0] and "asking 2 " in asks[1] and not stopped,
+              f"asks {asks}, already ended {stopped}")
+    said = wait_log(dbg, "did not close", 12)
+    res.check("...and the joined batch ends as one: 1 of 4 stayed",
+              bool(said) and "1 of 4" in said, f"log {said!r}")
+    time.sleep(0.3)
+    nt = dbg.state().get("notice") or {}
+    res.check("...its notice counts the three that closed",
+              "The other 3 closed" in nt.get("sub", ""), f"notice {nt}")
+    btns = {b["label"]: b for b in nt.get("buttons", [])}
+    fq = btns.get("Force Quit")
+    if fq:
+        dbg.click(fq["x"] + fq["w"] // 2, fq["y"] + fq["h"] // 2)
+        deadline = time.time() + 6
+        while time.time() < deadline and notepads(dbg):
+            time.sleep(0.3)
+
+
+LONG_NAMES = ["/tmp/close-all-notice-check-a-rather-long-name-%d.txt" % k for k in range(3)]
+
+
+def check_stayed_sentence(dbg, qmp, res):
+    """Three long-titled windows stay open: the card's sentence elides the
+    TITLES, never its end -- "and 1 more did not close. The other 1
+    closed." -- where a fixed buffer used to cut it mid-word."""
+    close_everything(dbg)
+    for path in LONG_NAMES:
+        dbg.send(f"sh write {path} hello")
+        before = dbg.state()["windows"]
+        dbg.send(f"gui spawn {NOTEPAD} {path}")
+        deadline = time.time() + 15
+        while time.time() < deadline and dbg.state()["windows"] <= before:
+            time.sleep(0.2)
+        dbg.settle()
+        time.sleep(0.5)
+        qmp.send_text("x")   # dirty: it will ask to save
+        dbg.settle()
+    spawn_notepads(dbg, 1)   # the one that closes
+    tb = strip(dbg)
+    dbg.logs("closeall:", clear=True)
+    if tb["buttons"]:
+        window_menu_for_button(dbg, tb["buttons"][0])
+    row = dbg.ctxmenu_row("Close all 4 windows")
+    if row:
+        dbg.click(*row)
+        dbg.settle()
+    said = wait_log(dbg, "did not close", 12)
+    time.sleep(0.3)
+    nt = dbg.state().get("notice") or {}
+    sub = nt.get("sub", "")
+    res.check("three long titles stayed: the sentence keeps its count and its end",
+              bool(said) and "3 of 4" in said and
+              sub.endswith("and 1 more did not close. The other 1 closed.") and ".." in sub,
+              f"log {said!r}, notice {nt}")
+    btns = {b["label"]: b for b in nt.get("buttons", [])}
+    fq = btns.get("Force Quit")
+    if fq:
+        dbg.click(fq["x"] + fq["w"] // 2, fq["y"] + fq["h"] // 2)
+        deadline = time.time() + 6
+        while time.time() < deadline and dbg.state()["windows"]:
+            time.sleep(0.3)
+    for path in LONG_NAMES:
+        dbg.send(f"sh rm {path}")
+
+
+def strip_button(dbg, app_id):
+    return next((b for b in strip(dbg)["buttons"] if b["app_id"] == app_id), None)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -550,11 +708,11 @@ def main():
     ap.add_argument("--in-gui", action="store_true")
     ap.add_argument("--pixels", action="store_true",
                     help="also check the last button is drawn where it says")
-    ap.add_argument("--only", choices=("height", "combine", "closeall", "overflow"),
+    ap.add_argument("--only", choices=SECTIONS,
                     action="append", help="run only these sections (repeatable)")
     args = ap.parse_args()
     port_guard.resolve_instance(args, "taskbar_test")
-    only = set(args.only or ("height", "combine", "closeall", "overflow"))
+    only = set(args.only or SECTIONS)
 
     qmp = QMPSession(port=args.qmp_port)
     if not args.in_gui:
@@ -574,6 +732,14 @@ def main():
                 for name in TOUCHED:
                     dbg.send(f"sh config unset {name}")
                 check_close_all(dbg, qmp, res)
+            if "join" in only:
+                for name in TOUCHED:
+                    dbg.send(f"sh config unset {name}")
+                check_close_all_join(dbg, qmp, res)
+            if "names" in only:
+                check_stayed_sentence(dbg, qmp, res)
+            if "draghidden" in only:
+                check_drag_hidden(dbg, qmp, res)
         finally:
             for name in TOUCHED:
                 dbg.send(f"sh config unset {name}")

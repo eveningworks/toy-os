@@ -26,20 +26,24 @@ int close_batch_add(struct close_batch *b, int idx) {
         if (b->e[k].seq == windows[idx].open_seq) return 0;
     struct close_batch_entry *e = &b->e[b->n++];
     e->seq = windows[idx].open_seq;
-    e->pid = windows[idx].client_pid;
     k_strlcpy(e->title, windows[idx].title, sizeof e->title);
+    e->asked = 0;
     e->gone = 0;
     return 1;
 }
 
-void close_batch_ask(struct close_batch *b) {
+int close_batch_ask(struct close_batch *b) {
     // Looked up afresh each time: a kernel-space window closes AT ONCE
     // inside wm_request_close() and renumbers the rest.
+    int asked = 0;
     for (int k = 0; k < b->n; k++) {
+        if (b->e[k].asked) continue;
+        b->e[k].asked = 1;
         int i = close_batch_window(b, k);
-        if (i >= 0) wm_request_close(i);
+        if (i >= 0) { wm_request_close(i); asked++; }
     }
     b->deadline_ns = sys_monotonic_ns() + CLOSE_BATCH_WAIT_NS;
+    return asked;
 }
 
 int close_batch_update(struct close_batch *b) {
@@ -69,7 +73,7 @@ int close_batch_window(const struct close_batch *b, int k) {
 
 // --- Close all ---------------------------------------------------------------
 
-#define CLOSE_ALL_MAX 64
+#define CLOSE_ALL_MAX NOTICE_STAYED_MAX   // the card names every window left
 static struct close_batch_entry g_store[CLOSE_ALL_MAX];
 static struct close_batch g_all = { g_store, CLOSE_ALL_MAX, 0, 0 };
 static char g_app_id[WIN_APP_ID_MAX];   // every window's app, or "" when they differ
@@ -80,12 +84,10 @@ void close_all_begin(const int *idx, int n) {
     if (n <= 0) return;
     if (!g_all.deadline_ns) { g_all.n = 0; g_app_id[0] = 0; g_icon[0] = 0; g_mixed = 0; }
     // Recorded BEFORE any is asked: an ask can renumber windows[].
-    int added = 0;
     for (int k = 0; k < n; k++) {
         int i = idx[k];
         if (i < 0 || i >= window_count) continue;
         if (!close_batch_add(&g_all, i)) continue;
-        added++;
         if (!g_app_id[0] && !g_mixed) {
             k_strlcpy(g_app_id, windows[i].app_id, sizeof g_app_id);
             const char *ic = wm_window_icon_name(i);
@@ -94,24 +96,37 @@ void close_all_begin(const int *idx, int n) {
             g_mixed = 1;
         }
     }
-    wm_logf("closeall: asking %d window(s) to close\n", added);
-    close_batch_ask(&g_all);
+    int asked = close_batch_ask(&g_all);
+    wm_logf("closeall: asking %d window(s) to close\n", asked);
     redraw_pending = 1;
 }
 
 // "Notepad", from the app's own entry -- the app id is a handle, not a name.
 static const char *app_name(void) {
-    if (g_mixed || !g_app_id[0]) return 0;
-    for (int i = 0; i < gui_app_registry_count; i++) {
-        const struct gui_app *a = &gui_app_registry[i];
-        if (a->app_id && a->name && k_strcmp(a->app_id, g_app_id) == 0) return a->name;
-    }
-    return 0;
+    const struct gui_app *a = g_mixed ? 0 : gui_app_by_id(GUI_SHOW_ALL, g_app_id);
+    return a ? a->name : 0;
+}
+
+// The sentence under the card's title, and its length had it fitted
+// (snprintf's answer). Each title is elided to `tw` pixels; the words
+// around them never are.
+static int stayed_sentence(char *sub, int cap, const char *first, const char *second,
+                            int left, int asking, int closed, int tw) {
+    char a[CLOSE_BATCH_TITLE], b[CLOSE_BATCH_TITLE], tail[32] = "";
+    ugfx_text_elide(a, sizeof a, first, tw);
+    ugfx_text_elide(b, sizeof b, second ? second : "", tw);
+    if (closed) snprintf(tail, sizeof tail, " The other %d closed.", closed);
+    if (left == 1)
+        return snprintf(sub, cap, "%s %s.%s", a,
+                        asking ? "is waiting for an answer" : "did not close", tail);
+    if (left == 2)
+        return snprintf(sub, cap, "%s and %s did not close.%s", a, b, tail);
+    return snprintf(sub, cap, "%s, %s and %d more did not close.%s", a, b, left - 2, tail);
 }
 
 static void tell_stayed(void) {
     uint32_t seq[NOTICE_STAYED_MAX];
-    int pid[NOTICE_STAYED_MAX], n = 0, left = 0, asking = 0;
+    int n = 0, left = 0, asking = 0;
     const char *first = 0, *second = 0;
     for (int k = 0; k < g_all.n; k++) {
         if (g_all.e[k].gone) continue;
@@ -120,24 +135,24 @@ static void tell_stayed(void) {
         else if (!second) second = g_all.e[k].title;
         int i = close_batch_window(&g_all, k);
         if (i >= 0 && wm_dialog_blocker(i) >= 0) asking++;
-        if (n < NOTICE_STAYED_MAX) { seq[n] = g_all.e[k].seq; pid[n] = g_all.e[k].pid; n++; }
+        if (n < NOTICE_STAYED_MAX) seq[n++] = g_all.e[k].seq;   // the batch holds no more
     }
     int closed = g_all.n - left;
     const char *name = app_name();
-    char title[72], sub[96], tail[32] = "";
+    char title[72], sub[96];
     if (name) snprintf(title, sizeof title, "%d %s window%s stayed open", left, name,
                        left == 1 ? "" : "s");
     else snprintf(title, sizeof title, "%d window%s stayed open", left, left == 1 ? "" : "s");
-    if (closed) snprintf(tail, sizeof tail, " The other %d closed.", closed);
-    if (left == 1)
-        snprintf(sub, sizeof sub, "%s %s.%s", first,
-                 asking ? "is waiting for an answer" : "did not close", tail);
-    else if (left == 2)
-        snprintf(sub, sizeof sub, "%s and %s did not close.%s", first, second, tail);
-    else
-        snprintf(sub, sizeof sub, "%s, %s and %d more did not close.%s", first, second,
-                 left - 2, tail);
-    crash_notice_stayed(title, sub, g_icon[0] && !g_mixed ? g_icon : 0, seq, pid, n);
+    // THE COUNT MUST SURVIVE: the titles give way, a character at a
+    // time, until the whole sentence shows in the card's two lines.
+    int tw = ugfx_text_width(first);
+    if (second && ugfx_text_width(second) > tw) tw = ugfx_text_width(second);
+    for (;;) {
+        int len = stayed_sentence(sub, sizeof sub, first, second, left, asking, closed, tw);
+        if (tw <= 0 || (len < (int)sizeof sub && crash_notice_sub_fits(sub))) break;
+        tw -= ugfx_char_w();
+    }
+    crash_notice_stayed(title, sub, g_icon[0] && !g_mixed ? g_icon : 0, seq, n);
 }
 
 void close_all_poll(void) {

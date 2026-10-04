@@ -412,6 +412,12 @@ int ugfx_text_width_n(const char *str, int n);
 int ugfx_draw_string_elided(struct ugfx_surface *s, int x, int y, int max_w,
                             const char *str, uint32_t color, uint32_t bg);
 
+// The same rule into a BUFFER, for text measured now and drawn later --
+// a title inside a sentence that must keep its end: `src` as it fits in
+// `max_w` pixels and `cap` bytes, ending in `..` when cut. Returns 1
+// when it cut.
+int ugfx_text_elide(char *dst, int cap, const char *src, int max_w);
+
 // How many leading characters of `str` fit within `max_w` pixels, whole
 // glyphs only -- the measurement half of ugfx_draw_string_clipped(),
 // for a caller doing its own windowing (a field scrolling to follow its

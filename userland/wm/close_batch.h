@@ -17,9 +17,8 @@
 
 struct close_batch_entry {
     uint32_t seq;                    // the window's open_seq
-    int pid;                         // its client, for a Force Quit
     char title[CLOSE_BATCH_TITLE];   // kept: the window may be gone when it is shown
-    int gone;
+    int asked, gone;
 };
 
 struct close_batch {
@@ -32,8 +31,10 @@ void close_batch_init(struct close_batch *b, struct close_batch_entry *store, in
 void close_batch_reset(struct close_batch *b);
 // Records windows[idx]; 0 when the batch is full or already holds it.
 int close_batch_add(struct close_batch *b, int idx);
-// Asks every entry not yet gone, and starts (or restarts) the wait.
-void close_batch_ask(struct close_batch *b);
+// Asks every entry NOT YET ASKED, and starts (or restarts) the wait;
+// returns how many it asked. Once each: a second WIN_EV_CLOSE to a
+// window already asking to save would ask it again.
+int close_batch_ask(struct close_batch *b);
 // Marks the entries whose window has closed. 1 when any changed.
 int close_batch_update(struct close_batch *b);
 int close_batch_remaining(const struct close_batch *b);
@@ -48,7 +49,8 @@ int close_batch_window(const struct close_batch *b, int k);
 // grouped taskbar button (Windows' jump-list "Close all windows"). The
 // windows are asked; any still open after the wait are named on a notice
 // card (crash_notice.c) with Show it and Force Quit. A second Close all
-// while one is waiting joins it and restarts the wait.
+// while one is waiting joins it, asks only the windows it adds, and
+// restarts the wait.
 void close_all_begin(const int *idx, int n);
 // Each frame, from wm.c.
 void close_all_poll(void);

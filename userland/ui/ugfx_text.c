@@ -1,6 +1,6 @@
 // Text MEASUREMENT: a string in, pixels or an index out.
 //
-// Split out of ugfx.c because these six are the only text functions
+// Split out of ugfx.c because these are the only text functions
 // that touch no font state and no surface -- they stand entirely on
 // ugfx_char_advance() and ugfx_kern(). That is what makes them
 // compilable on the host against a synthetic proportional face, which
@@ -8,7 +8,7 @@
 // decides where a caret goes, and it was wrong in every widget for as
 // long as the interface face was monospace and the error was invisible.
 //
-// THE INVARIANT ALL SIX SHARE: kerning is counted BETWEEN adjacent
+// THE INVARIANT THEY ALL SHARE: kerning is counted BETWEEN adjacent
 // characters, before the advance of the second. So a measurement of a
 // SLICE must be taken on that slice -- an offset into the whole string
 // includes a kern pair the drawing of the slice never applies, which is
@@ -64,6 +64,28 @@ int ugfx_draw_string_elided(struct ugfx_surface *s, int x, int y, int max_w,
     int drawn = ugfx_text_width(buf);
     ugfx_draw_string_clipped(s, x, y, cut_w, buf, color, bg);
     ugfx_draw_string_clipped(s, x + drawn, y, mark, "..", color, bg);
+    return 1;
+}
+
+int ugfx_text_elide(char *dst, int cap, const char *src, int max_w) {
+    if (!dst || cap <= 0) return 0;
+    dst[0] = '\0';
+    if (!src) return 0;
+    int len = 0;
+    while (src[len]) len++;
+    int n;
+    if (len < cap && ugfx_text_width(src) <= max_w) {
+        n = len;
+    } else {
+        // The mark's room first, as ugfx_draw_string_elided() takes it.
+        if (cap < 3) return 1;   // no room for the mark: nothing, never a cut without it
+        int cut_w = max_w - ugfx_text_width("..");
+        n = ugfx_text_fit_chars(src, cut_w < 0 ? 0 : cut_w);
+        if (n > cap - 3) n = cap - 3;
+    }
+    for (int i = 0; i < n; i++) dst[i] = src[i];
+    if (n == len) { dst[n] = '\0'; return 0; }
+    dst[n] = '.'; dst[n + 1] = '.'; dst[n + 2] = '\0';
     return 1;
 }
 

@@ -43,9 +43,13 @@ const char *crash_notice_sub(void);
 
 // THE WINDOWS A CLOSE-ALL LEFT OPEN (close_batch.h): a card naming them,
 // with Show it (the first, raised) and Force Quit (SIGKILL to each one's
-// client). Held by open_seq; the card goes once every window has.
-#define NOTICE_STAYED_MAX 16
+// live client). Held by open_seq; the card goes once every window has.
+// As many as a Close all can ask, so the card acts on all of them.
+#define NOTICE_STAYED_MAX 64
 void crash_notice_stayed(const char *title, const char *sub, const char *icon,
-                         const uint32_t *seq, const int *pid, int n);
+                         const uint32_t *seq, int n);
+// Whether `sub` shows WHOLE in the card's two lines of sentence -- the
+// same wrap the drawing does, so a caller can shorten what it names.
+int crash_notice_sub_fits(const char *sub);
 
 #endif

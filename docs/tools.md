@@ -1354,7 +1354,10 @@ manual steps to be worth automating:
   does not, `never` overflows into the overflow button and its list
   raises a hidden window) and "Close all N windows" (offered only past
   one window; closes three; with one refusing, the notice after the 5 s
-  wait and its Force Quit). `--only height|combine|closeall|overflow`
+  wait and its Force Quit; a second Close all joining a waiting one asks
+  only its own windows; long titles elide but the card's count
+  survives), and a drag-reorder with windows hidden keeps them hidden.
+  `--only height|combine|closeall|join|names|draghidden|overflow`
   runs sections; every setting it touches is unset at the end.
   Its positive control is worth reading in the file: the first attempt
   reddened three checks and left the OVERFLOW check green, because the

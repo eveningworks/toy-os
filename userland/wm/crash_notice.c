@@ -51,7 +51,6 @@ struct notice {
     char path[PATH_MAX_NOTICE];   // a file notice's file
     struct uimg thumb;            // ...and its picture, scaled to the card; owned
     uint32_t seq[NOTICE_STAYED_MAX];   // a close-all's windows, by open_seq
-    int pid[NOTICE_STAYED_MAX];
     int nwin;
     uint64_t until;
 };
@@ -142,7 +141,7 @@ static void tell(const struct query_crash *c) {
 // --- the windows a Close all left open -------------------------------------
 
 void crash_notice_stayed(const char *title, const char *sub, const char *icon,
-                         const uint32_t *seq, const int *pid, int n) {
+                         const uint32_t *seq, int n) {
     struct notice c;
     k_memset(&c, 0, sizeof c);
     c.kind = KIND_STAYED;
@@ -150,7 +149,7 @@ void crash_notice_stayed(const char *title, const char *sub, const char *icon,
     k_strlcpy(c.sub, sub, sizeof c.sub);
     k_strlcpy(c.icon, icon ? icon : "tb-close-all", sizeof c.icon);
     if (n > NOTICE_STAYED_MAX) n = NOTICE_STAYED_MAX;
-    for (int k = 0; k < n; k++) { c.seq[k] = seq[k]; c.pid[k] = pid[k]; }
+    for (int k = 0; k < n; k++) c.seq[k] = seq[k];
     c.nwin = n;
     push(&c);
 }
@@ -275,6 +274,16 @@ void crash_notice_poll(void) {
 
 static int pad(void)    { return ugfx_char_h() * 2 / 3; }
 static int card_w(void) { return ugfx_char_advance('n') * 44; }
+static int icon_sz(void) { return ugfx_char_h() * 2; }
+// The sentence's width beside the icon: crash_notice_draw() wraps it in this.
+static int sentence_w(void) { return card_w() - 3 * pad() - icon_sz(); }
+
+int crash_notice_sub_fits(const char *sub) {
+    char line[sizeof g_n[0].sub];
+    if (!sub || k_strlen(sub) >= sizeof line) return 0;
+    const char *rest = uui_label_wrap_next(sub, sentence_w(), line, sizeof line);
+    return !rest || !*rest || ugfx_text_width(rest) <= sentence_w();
+}
 // A title line and up to two of sentence, then the buttons -- and a
 // file's thumbnail above all of it.
 static int card_h_of(int i) {
@@ -500,7 +509,7 @@ void crash_notice_draw(int mx, int my) {
             ugfx_blit(s, px, py, n->thumb.w, n->thumb.h, n->thumb.px, n->thumb.w);
             top = py + n->thumb.h + pad() - pad();
         }
-        int isz = ugfx_char_h() * 2;
+        int isz = icon_sz();
         int tx, tw;
         if (n->kind == KIND_SHOT) {
             // The title rides ABOVE the picture, the file under it.

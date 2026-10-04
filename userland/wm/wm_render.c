@@ -1392,10 +1392,11 @@ static void draw_taskbar(void) {
         else if (hover == TASKBAR_HOVER_OVERFLOW) bg = p->hover;
         if (bg != p->bar) tb_ground(ox, y, ow, h, g.btn_r, bg, light && bg == p->focus, p->focus_edge);
         char num[8];
-        k_snprintf(num, sizeof num, hidden > 99 ? "99+" : "%d", hidden);
-        // The chevron is the mockup's 10x6 beside 14 px text, from the font.
-        int k = ugfx_char_h() * 7 / 20, v = ugfx_char_h() / 5, nw = ugfx_text_width(num);
-        int gap = 4, cx = ox + (ow - (2 * k + gap + nw)) / 2 + k, cy = y + h / 2;
+        taskbar_overflow_label(num, (int)sizeof num, hidden);
+        struct taskbar_ovf_metrics om;   // the same metrics the layout sized it from
+        taskbar_overflow_metrics(&om);
+        int k = om.k, v = om.v, gap = om.gap, nw = ugfx_text_width(num);
+        int cx = ox + (ow - (2 * k + gap + nw)) / 2 + k, cy = y + h / 2;
         for (int t = 0; t < 2; t++) {   // two rows: a 1.6 px stroke
             ugfx_draw_line(s, cx - k, cy + v + t, cx, cy - v + t, p->text, GEOM_AA);
             ugfx_draw_line(s, cx, cy - v + t, cx + k, cy + v + t, p->text, GEOM_AA);

@@ -260,6 +260,18 @@ enum taskbar_combine taskbar_combine(void);
 // hidden: its x and width from the last layout, and how many windows it
 // stands for (0 = there is none). Its press opens their list on release.
 int taskbar_overflow(int *x, int *w);
+// ITS ONE SET OF METRICS, read by the layout (w) and the renderer (where
+// the chevron and the count go): font-derived, and `w` holds the widest
+// label it draws ("99+").
+struct taskbar_ovf_metrics {
+    int w;        // the whole button
+    int pad;      // either side of the content
+    int k, v;     // the chevron's half-width and half-height
+    int gap;      // between the chevron and the count
+};
+void taskbar_overflow_metrics(struct taskbar_ovf_metrics *m);
+// The count as the button shows it: "7", or "99+" past 99.
+void taskbar_overflow_label(char *buf, int cap, int hidden);
 int taskbar_overflow_menu_open(void);
 int taskbar_overflow_armed(void);   // pressed, not yet released
 #define TASKBAR_HOVER_OVERFLOW (-3)
