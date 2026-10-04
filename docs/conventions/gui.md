@@ -1683,10 +1683,10 @@ this the obvious way), not from how much history it accumulated.
   (`wm_request_close()`: the X, Alt+F4, the window menu, the taskbar) of
   a window with a WM-VISIBLE MODAL dialog first brings it forward
   (`wm_bring_forward()`: unminimized, reachable, raised with the dialog).
-  A prompt drawn INSIDE a window is invisible to the WM and is not
-  raised: the protocol has no window-scoped raise for the client to ask
-  with (`WIN_REQ_ACTIVATE` is per program), so a minimized window asking
-  in-window stays minimized -- a known limit. The CLIENT ignores the
+  A prompt drawn INSIDE a window is invisible to the WM, so the client
+  asks: when uapp refuses a close with a question open in the window it
+  sends `WIN_REQ_ACTIVATE` naming that window, and the WM brings it
+  forward -- unless its last close was a batch's. The CLIENT ignores the
   close: an app that asks on close starts `on_close` with `if
   (uapp_question_open(a)) return 0;` (a modal window of its own, or an
   open `uui_dialog` anywhere in its widgets or layout). An app with no
@@ -1695,8 +1695,10 @@ this the obvious way), not from how much history it accumulated.
   a separate chooser window guards no data. **ONE EXCEPTION:** Notepad
   turns a close under a TAB's prompt (or the Save As that prompt opened)
   into the window's close, writing its session once that tab is gone,
-  so the answer carries the close on. Batch closes -- Close all, the
-  Leave page, End Task -- are quiet (the rule above). Wayland's
+  so the answer carries the close on; a Cancel or a failed save gives
+  the held close up with it. Batch closes -- Close all, the Leave page,
+  End Task (dialogs asked before their owners) -- are quiet (the rule
+  above). Wayland's
   `xdg_toplevel.close` is the same contract: a request, the client's to
   answer.
 - **AN APP'S OPTIONS WINDOW IS `ui/uui_prefs.h`.** A sidebar of pages,

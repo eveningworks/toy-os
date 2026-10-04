@@ -373,12 +373,11 @@ void close_window(int idx);
 // window with a WM-VISIBLE MODAL dialog first brings it forward
 // (wm_bring_forward()): the app ignores a close while it asks, and that
 // dialog is the answer to "why did it not close?". A prompt drawn INSIDE
-// a window is invisible to the WM, so nothing is raised for it -- the
-// window is the one being closed, usually in view already; a minimized
-// one stays minimized (no window-scoped raise request exists to let the
-// client ask; WIN_REQ_ACTIVATE is per PROGRAM). A BATCH close (Close
-// all, the Leave page, End Task) uses wm_request_close_quiet(): no
-// raise, no focus change, and its own list names what stayed.
+// a window is invisible to the WM; the CLIENT that refuses for one asks
+// to be brought forward (WIN_REQ_ACTIVATE naming its window), which the
+// WM grants unless that window's last close was a batch's. A BATCH close
+// (Close all, the Leave page, End Task) uses wm_request_close_quiet():
+// no raise, no focus change, and its own list names what stayed.
 void wm_request_close(int idx);
 void wm_request_close_quiet(int idx);
 
@@ -387,7 +386,8 @@ void wm_request_close_quiet(int idx);
 void wm_bring_forward(int idx);
 
 // End Task (WIN_REQ_CLOSE_PID): every non-popup window of `pid`, asked
-// quietly, each once. Returns how many were asked.
+// quietly, each once, its DIALOGS before their owners. Returns how many
+// were asked.
 int wm_end_task(int pid);
 
 // --- client liveness (apps/wm/wm_client.c) ---------------------------

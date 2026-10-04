@@ -748,22 +748,32 @@ int wm_client_debug_command(const char *line, char *out, int cap) {
 //
 // RECORDED BY open_seq FIRST, then asked: a close can remove a window
 // and renumber windows[], so walking indices while asking could skip
-// one or ask another twice.
+// one or ask another twice. DIALOGS FIRST: the client sees their closes
+// before its owner's, so the owner is not refused for a dialog that was
+// on its way out (uapp_question_open()).
 int wm_end_task(int pid) {
-    static uint32_t seq[256];
     int n = 0;
-    for (int i = 0; i < window_count && n < (int)(sizeof seq / sizeof seq[0]); i++) {
-        if (windows[i].client_pid != pid || windows[i].popup) continue;   // a menu: nothing to ask
-        if (!windows[i].open_seq) windows[i].open_seq = wm_next_open_seq();
-        seq[n++] = windows[i].open_seq;
-    }
+    for (int i = 0; i < window_count; i++)
+        n += windows[i].client_pid == pid && !windows[i].popup;   // a menu: nothing to ask
+    if (n == 0) { wm_logf("wm: end task pid %d: asked 0 window(s)\n", pid); return 0; }
+    uint32_t *seq = malloc((size_t)n * sizeof *seq);
+    if (!seq) return 0;
+    int k = 0;
+    for (int pass = 0; pass < 2; pass++)
+        for (int i = 0; i < window_count && k < n; i++) {
+            if (windows[i].client_pid != pid || windows[i].popup) continue;
+            if ((pass == 0) != (windows[i].dialog != 0)) continue;
+            if (!windows[i].open_seq) windows[i].open_seq = wm_next_open_seq();
+            seq[k++] = windows[i].open_seq;
+        }
     int asked = 0;
-    for (int k = 0; k < n; k++) {
-        int i = wm_window_by_seq(seq[k]);
+    for (int j = 0; j < k; j++) {
+        int i = wm_window_by_seq(seq[j]);
         if (i < 0) continue;   // gone with an earlier one
         wm_request_close_quiet(i);
         asked++;
     }
+    free(seq);
     wm_logf("wm: end task pid %d: asked %d window(s)\n", pid, asked);
     return asked;
 }
@@ -847,6 +857,18 @@ static int activate_twin_of(int asking_pid) {
         return 1;
     }
     return 0;
+}
+
+// WIN_REQ_ACTIVATE naming ONE OF THE CALLER'S OWN windows: a client that
+// refused a close because it is asking in that window wants it seen.
+// Declined (0) when that window's last close was a batch's, which raises
+// nothing (wm.h, close_quiet).
+static int activate_own(int pid, uint32_t win) {
+    int i = find_client_window(pid, win);
+    if (i < 0 || windows[i].close_quiet) return 0;
+    wm_bring_forward(i);
+    wm_logf("wm: brought pid %d's window %u forward for its question\n", pid, (unsigned)win);
+    return 1;
 }
 
 // The client arming or cancelling its repeating timer (WIN_REQ_TIMER).
@@ -1200,7 +1222,7 @@ void wm_client_chan_pump(void) {
             struct wmchan_msg r;
             k_memset(&r, 0, sizeof r);
             r.type = WIN_REQ_ACTIVATE;
-            r.a = activate_twin_of(from);
+            r.a = m.a == WIN_ACTIVATE_OWN ? activate_own(from, m.window) : activate_twin_of(from);
             uchan_server_reply(&g_chan, from, &r, sizeof r);
             break;
         }

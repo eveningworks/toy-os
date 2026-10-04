@@ -582,8 +582,9 @@ def run_one(entry, timeout, logdir):
             f.write(out)
     # A tool that reports its own SKIP is a skip, not a pass -- doom_test
     # exits 0 when there is no IWAD, and counting that as a pass is how a
-    # suite reports coverage it does not have.
-    skipped = rc == 0 and re.search(r"\bSKIP(PING)?\b", out) is not None
+    # suite reports coverage it does not have. Exit 77 is automake's SKIP,
+    # which tools/harness.py's finish() returns when nothing was judged.
+    skipped = rc == 77 or (rc == 0 and re.search(r"\bSKIP(PING)?\b", out) is not None)
     return name, ("skip" if skipped else "pass" if rc == 0 else "fail"), dt, summarise(out, rc)
 
 

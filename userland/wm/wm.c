@@ -633,14 +633,17 @@ static void wm_offer_force_quit(int idx) {
 // CLIENT's to close, because it may have unsaved state and because the
 // process would otherwise go on drawing into a buffer that is no longer
 // on screen.
-void wm_request_close_quiet(int idx) {
+static void send_close(int idx, int quiet) {
     if (idx < 0 || idx >= window_count) return;
     if (wm_client_is_client_window(&windows[idx])) {
+        windows[idx].close_quiet = (uint8_t)quiet;
         wm_client_send_close(&windows[idx]);
         return;
     }
     close_window(idx); // shifts windows[] -- no caller may touch idx again
 }
+
+void wm_request_close_quiet(int idx) { send_close(idx, 1); }
 
 void wm_bring_forward(int idx) {
     if (idx < 0 || idx >= window_count) return;
@@ -659,7 +662,7 @@ void wm_request_close(int idx) {
         wm_bring_forward(idx);
         idx = wm_window_by_seq(seq);
     }
-    wm_request_close_quiet(idx);
+    send_close(idx, 0);
 }
 
 void close_window(int idx) {

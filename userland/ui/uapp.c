@@ -1760,10 +1760,26 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         // window ("File already exists", "Disable device"), whose answer
         // decides. A separate chooser window guards no data, so it does
         // not hold the close (uapp_desc.on_close).
-        if (d->on_close ? d->on_close(a) : !uapp_inwindow_question_open(a)) uapp_quit(a, 0);
-        else ulogf("uapp: close refused%s\n",
-                   uapp_question_open(a) ? " -- a question is open" : "");
+    {
+        // ONE walk for the question, taken where the answer is needed:
+        // before the default decides, or after an on_close that refused
+        // (it may just have OPENED its prompt, Notepad's "Save changes?").
+        int asking;
+        if (!d->on_close) {
+            asking = uapp_inwindow_question_open(a);
+            if (!asking) { uapp_quit(a, 0); break; }
+            ulogf("uapp: close refused -- a question is open\n");
+        } else {
+            if (d->on_close(a)) { uapp_quit(a, 0); break; }
+            asking = uapp_inwindow_question_open(a);
+        }
+        // A REFUSED close's question has to be SEEN, and the compositor
+        // cannot see one drawn in here: ask for THIS window to come
+        // forward. A batch's close is declined there (win_proto.h).
+        if (asking && wmchan_call(WIN_REQ_ACTIVATE, a->window, WIN_ACTIVATE_OWN, 0, 0, 0) == 1)
+            ulogf("uapp: brought forward for its question\n");
         break;
+    }
 
     case WIN_EV_RESIZE:
         // A PROPOSAL from TWS, answered here. Everything an app would

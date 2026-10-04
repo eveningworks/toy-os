@@ -326,6 +326,13 @@ enum { PEND_NONE = 0, PEND_CLOSE, PEND_CLOSE_TAB };
 static int g_pending;
 static int g_session_on_answer;   // a held window close: write the session on the answer (on_close_cb)
 static void session_save(void);
+// The pending close is GIVEN UP (Cancel, a failed or cancelled save): a
+// held window close goes with it, or a later close would write the
+// session after removing a tab.
+static void abandon_pending(void) {
+    g_pending = PEND_NONE;
+    g_session_on_answer = 0;
+}
 static int g_after_save;
 static char g_ask_line[96];
 static const char *g_ask_rows[1];
@@ -1186,7 +1193,7 @@ static void dlg_done(void *ctx, const char *path) {
     if (!path) {
         // A cancelled chooser cancels the CLOSE too: quitting here is
         // what the ask was put up to prevent.
-        if (after) g_pending = PEND_NONE;
+        if (after) abandon_pending();
         set_status("cancelled");
         uapp_redraw(a);
         return;
@@ -1194,7 +1201,7 @@ static void dlg_done(void *ctx, const char *path) {
     if (g_dlg_saving) {
         int ok = save_file(a, cur(), path);
         if (after && ok) run_pending(a);
-        else if (after) g_pending = PEND_NONE;   // the reason is in the status bar
+        else if (after) abandon_pending();   // the reason is in the status bar
     } else {
         open_requested(a, path);
     }
@@ -1693,10 +1700,10 @@ static void on_widget(struct uapp *a, int id, int reason) {
                 // A chooser that never came up must not leave the close
                 // armed for whichever Save As finishes next.
                 g_after_save = file_dialog(1);
-                if (!g_after_save) g_pending = PEND_NONE;
+                if (!g_after_save) abandon_pending();
             }
             else if (save_file(a, cur(), cur()->path)) run_pending(a);
-            else g_pending = PEND_NONE;   // the failure is in the status bar
+            else abandon_pending();   // the failure is in the status bar
             break;
         case ASK_CLOSE_ALL:
             g_close_ok = 1;
@@ -1704,7 +1711,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
             break;
         case ASK_CANCEL:
         default:
-            g_pending = PEND_NONE;
+            abandon_pending();
             break;
         }
         break;

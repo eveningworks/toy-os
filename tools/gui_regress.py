@@ -444,6 +444,8 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot, kvm=False):
         tail = [l for l in out.splitlines() if l.strip()]
         summary = tail[-1].strip() if tail else "(no output)"
 
+    if rc == EXIT_SKIP:
+        summary = "nothing judged -- " + summary
     return (status_of(rc), time.time() - started, summary)
 
 
@@ -462,6 +464,16 @@ def report_skips(results):
     if skipped:
         print(f"\ngui_regress: {len(skipped)} tool(s) skipped, judging nothing: "
               f"{', '.join(skipped)}")
+
+
+def all_clear(results, where=""):
+    """Never a bare "all clear" while anything skipped: the skips are named."""
+    skipped = [r for r in results if r[1] == "SKIP"]
+    line = "gui_regress: all clear" + where
+    if skipped:
+        line += f", {len(skipped)} skipped: " + ", ".join(
+            f"{r[0]} ({r[3].split(' -- ')[0]})" for r in skipped)
+    return line
 
 
 def run_remote_suite(picked, args):
@@ -522,7 +534,7 @@ def run_remote_suite(picked, args):
         if not args.logs:
             print("  re-run with --logs DIR to keep each tool's full output")
         return 1
-    print(f"\ngui_regress: all clear on {host}")
+    print("\n" + all_clear(results, f" on {host}"))
     return 0
 
 
@@ -582,6 +594,8 @@ def run_one_remote(name, script, host, timeout, keep_logs):
         summary = tail[-1].strip() if tail else "(no output)"
     if rc != 0 and unsupported and not summary.startswith(name):
         return ("N/A", time.time() - started, unsupported[-1][:160])
+    if rc == EXIT_SKIP:
+        summary = "nothing judged -- " + summary
     return (status_of(rc), time.time() - started, summary)
 
 
@@ -775,7 +789,7 @@ def main():
         if not args.logs:
             print("  re-run with --logs DIR to keep each tool's full output")
         return 1
-    print("\ngui_regress: all clear")
+    print("\n" + all_clear(results))
     return 0
 
 

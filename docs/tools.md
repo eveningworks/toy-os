@@ -2560,10 +2560,14 @@ window without going through it will find its layout polls timing out.
   that tab goes and the close goes on to ask about the FILE's tab; under
   a tab's Save As chooser it switches no tab and asks nothing new; with
   Options open and the window minimized, a single close is ignored and
-  brings it forward -- unminimized, Options in front; and `gui endtask`
-  (End Task) asks Notepad's two windows once each and raises nothing.
-  Tab 2 is saved by NAME first, so the session check can see a tab that
-  was closed being written.
+  brings it forward -- unminimized, Options in front; `gui endtask` (End
+  Task) asks Notepad's two windows once each, its dialog first, raises
+  nothing, and Notepad exits; a held close given up with Cancel leaves
+  File > Exit to write the session with both tabs; and a minimized dirty
+  Notepad closed from the taskbar comes forward with its prompt (the
+  client's WIN_REQ_ACTIVATE for its own window). Tab 2 is saved by its
+  FULL PATH first, so the session checks can see a tab that was closed,
+  and the cleanup removes exactly that file.
 - **`clipboard_test.py`** -- drives the system TEXT clipboard across two
   apps, which is the claim that makes it a system clipboard rather than
   a feature of one: text copied in Notepad pastes into the GUI Terminal,
