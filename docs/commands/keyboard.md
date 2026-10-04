@@ -20,8 +20,7 @@ active.
     Keyboard layout set to de.
 
 The names are XKB's: `al at be br ca ch de dk es fi fo fr gb is it
-latam lv nl no pl pt ro se us` -- every layout whose base and Shift
-keys Latin-1 can type (System Settings > Input > Keyboard shows them by
+latam nl no pt se us` -- every layout whose letters Latin-1 can type (System Settings > Input > Keyboard shows them by
 name, A to Z). `ls /etc/kbs` is the list on a given disk.
 
 A layout is a DATA FILE, not compiled-in code: `/etc/kbs/<name>` maps
@@ -69,10 +68,9 @@ arrows) is deliberately not modelled -- the keypad always types the
 characters on its keycaps.
 
 **It cannot type outside Latin-1.** The font and every text buffer are
-one byte per character (docs/decisions/drivers.md), so Polish,
-Romanian and Latvian keep their punctuation but lose the AltGr letters
-(the generated file lists what it skipped), and Estonian, whose
-unshifted key is a dead caron, is not shipped. The UTF-8 migration on
+one byte per character (docs/decisions/drivers.md), so Estonian,
+Latvian, Polish and Romanian -- whose own letters are all outside it --
+are not shipped (`tools/gen_kbs.py --check` names the letters). The UTF-8 migration on
 docs/roadmap.md is what lifts that. The on-screen keyboard still draws
 and types US whatever is set here.
 

@@ -477,6 +477,8 @@ void uschema_text_for(const char *ns, const char *name, struct setting_msg *m) {
         if (!strcmp(word, "reboot")) m->sflags |= SETTING_ABI_SF_REBOOT;
         str_key(buf, SETTING_TEXT_KEY_ADVANCED, word, sizeof word);
         if (word[0] == '1') m->sflags |= SETTING_ABI_SF_ADVANCED;
+        str_key(buf, SETTING_TEXT_KEY_SORT, word, sizeof word);
+        if (!strcmp(word, "label")) m->sflags |= SETTING_ABI_SF_SORTED;
 
         m->order = int_key(buf, SETTING_TEXT_KEY_ORDER, 0);
     }

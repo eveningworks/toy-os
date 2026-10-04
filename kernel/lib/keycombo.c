@@ -79,6 +79,20 @@ static int eq_nocase(const char *a, const char *b, int n) {
     return b[n] == '\0';
 }
 
+// A character key's canonical (upper-case) form: ASCII, and Latin-1's
+// 0xE0-0xFE (less the division sign) whose capitals sit 0x20 below.
+static int upper1(int c) {
+    if (c >= 'a' && c <= 'z') return c - ('a' - 'A');
+    if (c >= 0xE0 && c <= 0xFE && c != 0xF7) return c - 0x20;
+    return c;
+}
+
+// A single byte that names itself: printable ASCII or Latin-1, the set
+// keycombo_format() can spell.
+static int is_self_key(unsigned c) {
+    return (c > 32 && c < 127) || (c >= 0xA1 && c <= 0xFF);
+}
+
 // One `+`-separated token, with the surrounding blanks already gone.
 static int token_key(const char *tok, int len, uint16_t *out_key, uint8_t *out_mod) {
     for (int i = 0; i < MOD_COUNT; i++) {
@@ -90,8 +104,8 @@ static int token_key(const char *tok, int len, uint16_t *out_key, uint8_t *out_m
     // A single printable character is itself. Stored UPPER-CASE so the
     // stored form and the formatted form agree; matching lower-cases
     // both ends anyway (keycombo_matches).
-    if (len == 1 && tok[0] > 32 && (unsigned char)tok[0] < 127) {
-        *out_key = (uint16_t)k_toupper((unsigned char)tok[0]);
+    if (len == 1 && is_self_key((unsigned char)tok[0])) {
+        *out_key = (uint16_t)upper1((unsigned char)tok[0]);
         return 1;
     }
     return 0;
@@ -145,8 +159,9 @@ int keycombo_format(const struct keycombo *c, char *out, size_t cap) {
     for (int i = 0; i < NAME_COUNT; i++)
         if (NAMES[i].key == c->key) { kname = NAMES[i].name; break; }
     if (!kname) {
-        if (c->key > 0xFF) return 0;   // a special with no name: unspellable
-        one[0] = (char)k_toupper((unsigned char)c->key);
+        // Only what token_key() reads back: anything else is unspellable.
+        if (!is_self_key(c->key)) return 0;
+        one[0] = (char)upper1(c->key);
         one[1] = '\0';
         kname = one;
     }
@@ -191,9 +206,7 @@ int keycombo_matches(const struct keycombo *c, int key, uint8_t mods) {
         // was a default that could never fire.
         int lower = c->key < 0x80 ? k_tolower((unsigned char)c->key) : 0;
         if (lower >= 'a' && lower <= 'z') return key == (lower - 'a' + 1);
-        return key == c->key;
     }
-    if (c->key < 127 && key < 127)
-        return k_tolower((unsigned char)key) == k_tolower((unsigned char)c->key);
+    if (c->key <= 0xFF && key <= 0xFF) return upper1(key) == upper1(c->key);
     return key == c->key;
 }

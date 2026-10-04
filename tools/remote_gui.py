@@ -555,10 +555,10 @@ class RemoteScreen(QMPSession):
 # else is a single character or an 0xNN code, which both sides agree on.
 _QCODE = {
     "ret": "0x0a", "kp_enter": "0x0a", "esc": "0x1b", "backspace": "0x08",
-    "tab": "0x09", "spc": " ", "up": "0xf791", "down": "0xf792",
-    "left": "0xf795", "right": "0xf796", "pgup": "0xf793", "pgdn": "0xf794",
-    "home": "0xf797", "end": "0xf798", "delete": "0xf799", "insert": "0xf7b3",
-    "f1": "0xf7ab", "f2": "0xf79a", "f3": "0xf79b", "f4": "0xf7a5", "f10": "0xf7a4",
+    "tab": "0x09", "spc": " ", "up": "0xf780", "down": "0xf781",
+    "left": "0xf784", "right": "0xf785", "pgup": "0xf782", "pgdn": "0xf783",
+    "home": "0xf786", "end": "0xf787", "delete": "0xf788", "insert": "0xf882",
+    "f1": "0xf79a", "f2": "0xf789", "f3": "0xf78a", "f4": "0xf794", "f10": "0xf793",
 }
 
 

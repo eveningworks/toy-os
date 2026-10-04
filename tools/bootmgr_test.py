@@ -36,7 +36,7 @@ SETTINGS = "/bin/wm/system/settings"
 TITLE = "Boot Manager"
 CFG = "/boot/boot/grub/grub.cfg"
 ACCENT = (70, 110, 160)
-K_UP, K_DOWN, K_ENTER = "0xf791", "0xf792", "0x0a"   # api/keyboard.h
+K_UP, K_DOWN, K_ENTER = "0xf780", "0xf781", "0x0a"   # api/keyboard.h
 
 _res = Results()
 check = _res.check

@@ -80,6 +80,10 @@ enum setting_result {
 // telling the same kind of lie SETTING_UNSAVED exists to prevent.
 #define SETTING_ABI_SF_REBOOT   (1u << 0) // takes effect at the next boot
 #define SETTING_ABI_SF_ADVANCED (1u << 1) // a UI may keep it behind a disclosure
+// Choices are listed A to Z by display name -- `Sort=label`, an
+// unordered set. Ring 3 sets it and ORDERS SETTING_OP_CHOICE by it
+// (lib/usetting.c), so every front end lists the same order.
+#define SETTING_ABI_SF_SORTED   (1u << 2)
 // THERE IS NO CAP ON THE MERGED LIST. A client sizes its tables from
 // SETTING_OP_COUNT at every read (System Settings, lib/usetting_schema.c):
 // a fixed SETTING_ABI_MAX ran out three times, each time dropping the last

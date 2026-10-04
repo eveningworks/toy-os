@@ -32,7 +32,7 @@ from harness import Results  # noqa: E402
 NOTEPAD = "/bin/wm/apps/notepad"
 CONF = "/etc/notepad.conf"
 DOC = "/var/tmp/npo.txt"
-F10, RIGHT, TAB, ENTER, CTRL_S = "0xf7a4", "0xf796", "0x09", "0x0d", "0x13"
+F10, RIGHT, TAB, ENTER, CTRL_S = "0xf793", "0xf785", "0x09", "0x0d", "0x13"
 
 
 def rect(dbg, prefix, key):

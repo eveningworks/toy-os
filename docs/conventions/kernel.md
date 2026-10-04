@@ -1685,7 +1685,8 @@ motion, while an absolute device is already saying where the pointer IS.
 
 `api/keyboard.h`. What the keyboard delivers -- to the console's queue,
 in a `WIN_EV_KEY`, through a `struct keycombo` -- is either a character,
-0x01-0xFF in Latin-1, or a `KEY_*` special at 0xF791-0xF7B9. **Store it
+0x01-0xFF in Latin-1, or a `KEY_*` special at 0xF780-0xF79F or 0xF880-0xF888 (every low
+byte a C1 control, so a mistaken truncation is inert). **Store it
 in an `int` or a `uint16_t`, never a `uint8_t` or a `char`**: a byte
 silently turns Home into the character 0x97, and a signed `char` makes
 every accented letter negative, so a `>= 32` gate drops it. Test with

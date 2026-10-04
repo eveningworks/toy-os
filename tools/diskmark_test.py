@@ -260,11 +260,11 @@ def main():
     rows = [l.split() for l in hist.splitlines() if len(l.split()) == 12 and l.split()[0].isdigit()]
     check("the finished run was added to the history", any(r[1] == "16" for r in rows),
           f"{len(rows)} rows")
-    con.send("gui key 0xf7b0")   # F9
+    con.send("gui key 0xf79f")   # F9
     con.settle()
     shown = any("diskmark: layout history " in l for l in con.send("sh dmesg").splitlines()[-60:])
     check("F9 shows the history table", shown)
-    con.send("gui key 0xf7b0")
+    con.send("gui key 0xf79f")
     con.settle()
 
     # STOP: a second run, stopped at once. The child is killed AND reaped,

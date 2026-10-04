@@ -36,7 +36,7 @@ PIC = "/var/tmp/props_test.jpg"
 NEW = "props_renamed.jpg"
 DIR = "/var/tmp/props_dir"
 PAGE = (236, 236, 236)   # utheme's panel_bg
-K_DOWN, K_ENTER, K_SELALL = "0xf792", "0x0a", "0x01"
+K_DOWN, K_ENTER, K_SELALL = "0xf781", "0x0a", "0x01"
 
 _res = Results()
 check = _res.check

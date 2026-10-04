@@ -288,8 +288,11 @@ static int case_pair(int lo, int up) {
     return 0;
 }
 
+// AltGr levels are left alone, as XKB's FOUR_LEVEL_SEMIALPHABETIC and
+// Windows do: otherwise Caps would swap levels 3 and 4 (German
+// Caps+AltGr+M would type the ordinal sign instead of mu).
 int keyboard_layout_translate_caps(uint16_t keycode, int shift, int altgr, int caps) {
-    if (caps && keycode < KB_KEYCODE_MAX &&
+    if (caps && !altgr && keycode < KB_KEYCODE_MAX &&
         case_pair(g_table[LVL_BASE][keycode], g_table[LVL_SHIFT][keycode]))
         shift = !shift;
     return keyboard_layout_translate(keycode, shift, altgr);

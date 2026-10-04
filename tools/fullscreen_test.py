@@ -37,9 +37,9 @@ from harness import Results  # noqa: E402
 
 TITLE = "Fullscreen Client"
 FILL = (0x30, 0x60, 0xC0)   # fsclient.c's FILL, as RGB
-KEY_F11 = 0xf7b1
-KEY_F4 = 0xf7a5
-KEY_SUPER = 0xf7a6
+KEY_F11 = 0xf880
+KEY_F4 = 0xf794
+KEY_SUPER = 0xf795
 
 
 Result = Results

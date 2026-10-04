@@ -61,7 +61,7 @@ SAVE_PATH = "/var/tmp/clip_test.txt"
 PHRASE = "clipboard round trip"
 
 CTRL_A, CTRL_C, CTRL_V, CTRL_S = "0x01", "0x03", "0x16", "0x13"
-KEY_END = "0xf798"
+KEY_END = "0xf787"
 ENTER = "0x0d"
 
 # `gui key` takes a code; a space has no bare spelling on that line.

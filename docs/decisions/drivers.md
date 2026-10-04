@@ -101,18 +101,22 @@ address it, so a Nordic letter drew as a space in every GUI app. NBSP
 draws blank; the soft hyphen draws as a hyphen, as on xterm and the
 Linux console, since nothing here hyphenates.
 
-**The KEY_* specials moved from 0x91-0xB9 to 0xF791-0xF7B9** -- the
-Latin-1 block they overlapped (AltGr+1 on Spanish is 0xA1, which was
-Shift+End). Above 0xFF because 41 codes do not fit in the C1 range;
-in Unicode's Private Use Area because that is where macOS puts its
-function keys (NSUpArrowFunctionKey, 0xF700) and because the UTF-8
-migration will carry codepoints in the same stream -- a special at
-0x100 would one day be a Latin Extended-A letter. The low byte is the
-old code, so a key truncated to a byte somewhere lands outside ASCII
-rather than on Ctrl-C. The console terminal's queue already had 16 bits
-of room; the byte-wide links (`tty_input()`, the release table,
-`struct keycombo`) were widened, and a terminal turns a special into ANSI
-before fd 0 sees it, so the byte-stream contract of `read()` held.
+**The KEY_* specials moved from 0x91-0xB9 to 0xF780-0xF79F and
+0xF880-0xF888** -- off the Latin-1 block they overlapped (German
+Shift+AltGr+1 types 0xA1, which was Shift+End). Above 0xFF because 41
+codes do not fit in the C1 range; in Unicode's Private Use Area because
+that is where macOS puts its function keys (NSUpArrowFunctionKey,
+0xF700) and because the UTF-8 migration will carry codepoints in the
+same stream -- a special at 0x100 would one day be a Latin Extended-A
+letter. Two runs rather than one so that EVERY LOW BYTE IS A C1 CONTROL:
+a key truncated to a byte by mistake becomes something no font draws
+and IS_PRINTABLE_KEY refuses, never a letter and never Ctrl-C (a first
+cut kept the old code as the low byte, so a truncated Shift+End typed
+an inverted exclamation mark). The console terminal's queue already
+had 16 bits of room; the byte-wide links (`tty_input()`, the release
+table, `struct keycombo`) were widened, `tty_read()` hands a byte reader
+nothing for a special, and a terminal turns a special into ANSI before
+fd 0 sees it, so the byte-stream contract of `read()` held.
 
 **`char` is signed in this build** (no `-funsigned-char`), so a
 codepoint >= 0x80 is negative as a `char`. Build 501 found six gates
@@ -886,7 +890,7 @@ this device get serviced?" being a different question per driver, and
 
 **`INPUT_KEY_*` is prefixed and `KEY_*` is not, deliberately.**
 `keyboard.h`'s `KEY_*` are the codes this kernel's key RING carries
-(`KEY_HOME` is 0xF797, above every character); `INPUT_KEY_*` are
+(`KEY_HOME` is 0xF786, above every character); `INPUT_KEY_*` are
 what the wire carries before translation (`INPUT_KEY_HOME` is 102,
 Linux's number). Four collided outright when the header was first
 written -- a silent collision between two key vocabularies would have

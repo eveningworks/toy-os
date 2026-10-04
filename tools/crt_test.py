@@ -177,11 +177,11 @@ def main():
     bxm, bym, bwm, bhm = (int(v) for v in m.groups())
     dbg.logs("options:", clear=True)
     dbg.click(ox + bxm + bwm // 2, oy + bym + bhm // 2)
-    dbg.send("gui key 0xf791")               # Up twice: Exit, then Options...
-    dbg.send("gui key 0xf791")
+    dbg.send("gui key 0xf780")               # Up twice: Exit, then Options...
+    dbg.send("gui key 0xf780")
     dbg.send("gui key 0x0d")
     time.sleep(2)
-    dbg.send("gui key 0xf792")               # the sidebar: Appearance -> Screen effect
+    dbg.send("gui key 0xf781")               # the sidebar: Appearance -> Screen effect
     time.sleep(1)
     dbg.settle()
     ow = dbg.window("Terminal Options")

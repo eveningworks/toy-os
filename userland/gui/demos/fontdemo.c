@@ -36,6 +36,7 @@
 #include "ui/uui_textbox.h"
 #include "ui/uui_focus.h"
 #include "ui/utheme.h"
+#include "font_ttf.h"   // font_ttf_slot(): the shared slot layout
 #include <stdlib.h>
 #include <string.h>
 
@@ -114,7 +115,7 @@ static struct {
 
 static int glyph_ink(const struct ugfx_font *f, char c) {
     if (!f || !f->glyphs) return 0;
-    int slot = (int)(unsigned char)c - WIN_FONT_FIRST_CHAR;
+    int slot = font_ttf_slot((unsigned char)c);
     if (slot < 0 || slot >= f->count) return 0;
     const unsigned char *cell = f->glyphs + (unsigned long)slot * f->char_w * f->char_h;
     int ink = 0;
@@ -124,7 +125,7 @@ static int glyph_ink(const struct ugfx_font *f, char c) {
 
 static int glyph_bottom_slack(const struct ugfx_font *f, char c) {
     if (!f || !f->glyphs) return -1;
-    int slot = (int)(unsigned char)c - WIN_FONT_FIRST_CHAR;
+    int slot = font_ttf_slot((unsigned char)c);
     if (slot < 0 || slot >= f->count) return -1;
     const unsigned char *cell = f->glyphs + (unsigned long)slot * f->char_w * f->char_h;
     for (int row = f->char_h - 1; row >= 0; row--)

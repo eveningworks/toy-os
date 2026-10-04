@@ -73,8 +73,8 @@ K_ENTER = "0x0d"
 # is why nothing here depends on the guest's keyboard layout -- the trap
 # every QMP-typing tool here has paid for at least once.
 K_TAB, K_ENTER, K_ESC, K_BACKSPACE = "0x09", "0x0a", "0x1b", "0x08"
-K_DOWN, K_UP = "0xf792", "0xf791"
-K_LEFT, K_RIGHT = "0xf795", "0xf796"   # KEY_ARROW_LEFT/RIGHT (api/keyboard.h)
+K_DOWN, K_UP = "0xf781", "0xf780"
+K_LEFT, K_RIGHT = "0xf784", "0xf785"   # KEY_ARROW_LEFT/RIGHT (api/keyboard.h)
 
 # BUTTONS ARE ADDRESSED BY NAME, and the name maps to (strip, index) in
 # ONE place. The window has three strips -- Back/Forward/Up/Refresh
@@ -96,10 +96,10 @@ STRIP_COUNT = {"nav": 4, "tb": 12, "vb": 2}
 VIEW_ROW = {"large": 0, "icons": 1, "details": 2, "dpane": 4, "panes": 5, "tree": 6}
 NEW_ROW = {"folder": 0, "file": 1}
 MORE_ROW = {"options": 8}   # files.c's more_items, separators counted
-K_INSERT = "0xf7b3"
-K_HOME = "0xf797"
-K_F2, K_F5, K_F6, K_F7, K_F8 = "0xf79a", "0xf7ac", "0xf7ad", "0xf7ae", "0xf7af"
-K_F10, K_LEFT, K_RIGHT = "0xf7a4", "0xf795", "0xf796"
+K_INSERT = "0xf882"
+K_HOME = "0xf786"
+K_F2, K_F5, K_F6, K_F7, K_F8 = "0xf789", "0xf79b", "0xf79c", "0xf79d", "0xf79e"
+K_F10, K_LEFT, K_RIGHT = "0xf793", "0xf784", "0xf785"
 
 
 class Layout:
@@ -1016,7 +1016,7 @@ def run(dbg, qmp, tmp, res):
     # --- 9. an association opens the right app --------------------------
     dbg.click(*lay.pane_centre(0))
     lay = wait_layout(dbg, win, lambda l: l.active == 0) or lay
-    dbg.key("0xf798")  # End -- the last row is a file, whatever the sort
+    dbg.key("0xf787")  # End -- the last row is a file, whatever the sort
     lay = wait_layout(dbg, win, lambda l: l.selected not in (None, "-", "sub")) or lay
     opened = lay.selected
     dbg.key(K_ENTER)

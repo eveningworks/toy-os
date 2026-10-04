@@ -299,7 +299,8 @@ Staged in `docs/dynlink-design.md`, including the case against.
 - [ ] Console + `gfx_draw_string()` decoding multi-byte sequences
 - [ ] A font atlas keyed by codepoint rather than by byte -- `font_ttf_slot()` maps ASCII then Latin-1 0xA0-0xFF, so Latin-1 is the ceiling
 - [ ] Box-drawing for `ps --tree`, which draws `pstree -A`'s ASCII because U+2500's block is unreachable -- the first concrete caller
-- [ ] Keyboard layout files emitting codepoints, not Latin-1 bytes -- no Estonian; Polish/Romanian/Latvian lack AltGr letters
+- [ ] Keyboard layout files emitting codepoints, not Latin-1 bytes
+- [ ] Layouts waiting on codepoints: Estonian, Latvian, Polish, Romanian -- `tools/gen_kbs.py --check` names their letters
 - [ ] Filesystem path handling (both backends) audited for multi-byte names
 - [ ] A migration story for existing Latin-1 content on disk
 - [ ] Audit every `char`-sized assumption first
@@ -815,7 +816,7 @@ run on, not by order.
 - [ ] A clocksource watchdog, cross-checking the TSC against a second source the way Linux does
 - [ ] MSI-X vectors per QUEUE rather than one per device -- wanted by multi-queue virtio and NVMe, worth it once a second CPU is online
 - [x] ~~Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table~~ DONE 2026-09-12
-- [x] ~~Every XKB layout Latin-1 can type, with dead keys and Shift+AltGr~~ DONE 2026-10-04 -- 24 in `tools/gen_kbs.py`'s `LAYOUTS`
+- [x] ~~Every XKB layout Latin-1 can type, with dead keys and Shift+AltGr~~ DONE 2026-10-04 -- 21 in `tools/gen_kbs.py`'s `LAYOUTS`
 - [ ] Settings shows a picture of the chosen keyboard layout -- the layout data is in `/etc/kbs`; nothing draws it yet
 - [ ] Several layouts at once, switched with a shortcut and shown in the tray (Windows' Win+Space, GNOME's input sources)
 - [ ] The on-screen keyboard should draw the CONFIGURED layout, not its own copy of US QWERTY -- it still types US whatever is set

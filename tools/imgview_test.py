@@ -630,7 +630,7 @@ def check_features(dbg, qmp, tmp, res, content):
     before = dbg.window(TITLE_VIEWER)
     st = dbg.json("gui state --json")
     screen = (st["screen"]["w"], st["screen"]["h"])
-    key(0xf7b1)   # F11
+    key(0xf880)   # F11
     # The wait asks for the SIZE too: the chrome goes (the picture at
     # 0,0) a frame before the window has grown to the screen, and a
     # wait that stopped there read the window-sized frame as a failure.

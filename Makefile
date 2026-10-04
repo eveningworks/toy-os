@@ -2044,7 +2044,7 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	# notices travel with them: an image that has /etc/kbs has
 	# /usr/share/licenses/xkeyboard-config.txt (see LICENSE).
 	@if command -v xkbcli >/dev/null 2>&1; then \
-		python3 tools/gen_kbs.py --all --write; \
+		python3 tools/gen_kbs.py --all --write || exit 1; \
 		mkdir -p $(SEED_DIR)/sync/usr/share/licenses; \
 		cp data/licenses/xkeyboard-config.txt $(SEED_DIR)/sync/usr/share/licenses/; \
 	else \

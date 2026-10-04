@@ -70,9 +70,9 @@ SPAWN_PATH = "/bin/wm/apps/notepad"   # spawned directly -- see spawn()
 SPAWN_TIMEOUT_S = 20.0
 ENTER = "0x0d"
 ESC = "0x1b"
-F10 = "0xf7a4"        # KEY_F10 -- api/keyboard.h
-DOWN = "0xf792"       # KEY_ARROW_DOWN
-RIGHT = "0xf796"      # KEY_ARROW_RIGHT
+F10 = "0xf793"        # KEY_F10 -- api/keyboard.h
+DOWN = "0xf781"       # KEY_ARROW_DOWN
+RIGHT = "0xf785"      # KEY_ARROW_RIGHT
 
 # The popup card's ground (ui/uui_popup.h's uui_popup_bg(): the field
 # white a step toward the chrome), and uui_statusbar.c's bar.
@@ -530,7 +530,7 @@ def run(dbg, qmp, tmp, res):
     # above had already put it at Ln 1, Col 1, so a Home that followed it
     # changed nothing and this check failed against a perfectly working
     # indicator. Establish the state you are measuring from.
-    dbg.send("gui key 0xf797")   # KEY_HOME
+    dbg.send("gui key 0xf786")   # KEY_HOME
     dbg.settle()
     # A deliberate bounded wait, not a convertible one: the assertion is a
     # PIXEL diff of the status panes, and the cursor move has no layout
@@ -541,7 +541,7 @@ def run(dbg, qmp, tmp, res):
     msg_before = region(im5, lay.rect("status.pane 0"))
     ind_before = region(im5, lay.rect("status.pane 1"))
 
-    dbg.send("gui key 0xf798")   # KEY_END -- moves the cursor, nothing else
+    dbg.send("gui key 0xf787")   # KEY_END -- moves the cursor, nothing else
     dbg.settle()
     time.sleep(0.4)
     im6 = shot(qmp, tmp, "mb_status_b.png")

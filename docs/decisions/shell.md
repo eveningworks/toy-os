@@ -85,7 +85,7 @@ Ctrl/Alt went the other way, to what a real terminal does:
    `KEY_CTRL_*`/`KEY_ALT_*` block would have had to go above 0xFF,
    which means auditing every `(char)key` cast in the tree -- a bug
    class this project has been bitten by before. (Full Latin-1 forced
-   that audit anyway on 2026-10-04: the specials are 0xF791-0xF7B9 now,
+   that audit anyway on 2026-10-04: the specials are 0xF780-0xF79F and 0xF880-0xF888 now,
    docs/decisions/drivers.md's Nordic-keyboard entry.)
 3. **The decoder is one a serial terminal would need anyway**, so the
    line editor's ESC handling isn't throwaway.

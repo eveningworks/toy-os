@@ -57,6 +57,7 @@ int keyboard_layout_translate(uint16_t keycode, int shift, int altgr);
 // and whose shifted one is its capital (ASCII or Latin-1, so e-acute
 // capitalises and sharp s does not). Digits and punctuation are
 // untouched and Caps+Shift types lowercase, as on Windows and Linux.
+// With AltGr held Caps changes nothing: levels 3 and 4 never swap.
 int keyboard_layout_translate_caps(uint16_t keycode, int shift, int altgr, int caps);
 
 // --- dead keys -------------------------------------------------------

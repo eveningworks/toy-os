@@ -5,10 +5,6 @@
 // text when the control is a list. Which control a setting gets is
 // decided here from what its values ARE -- see pick_kind().
 #include "settings/settings_internal.h"
-#include "lib/usetting_schema.h"
-#include "lib/usetting_text.h"
-
-static void sort_choices(struct slot *sl, int idx);
 
 char g_status[160];
 int  g_loaded;
@@ -236,7 +232,6 @@ void load_slot(struct slot *sl, int idx) {
         sl->choice_ptr[c] = sl->choice[c];
         sl->choice_count = c + 1;
     }
-    sort_choices(sl, idx);
     sl->kind = pick_kind(sl, idx);
 
     sl->radio.options = sl->choice_ptr;
@@ -253,34 +248,6 @@ void load_slot(struct slot *sl, int idx) {
     uui_gallery_init(&sl->gallery, sl->choice_ptr, sl->choice_count, sl->staged);
     if (sl->kind == CTRL_GALLERY) preview_attach(sl, idx);
     set_slot_enabled(sl, idx);
-}
-
-// `Sort=label` (lib/usetting_text.h): an UNORDERED set -- the keyboard
-// layouts, whose registry order is the directory's -- shown A to Z by
-// what a person reads, as GNOME and Windows list input sources. An
-// ordered enum (off/low/high) never carries it.
-static void sort_choices(struct slot *sl, int idx) {
-    const char *name = g_name[idx];
-    size_t nl = strlen(g_ns[idx]);
-    if (nl && !strncmp(name, g_ns[idx], nl) && name[nl] == '.') name += nl + 1;
-    char word[8];
-    if (!uschema_text_word(g_ns[idx], name, SETTING_TEXT_KEY_SORT, word, sizeof word) ||
-        strcmp(word, "label") != 0)
-        return;
-    // Insertion sort, swapping both columns; a few dozen rows at most.
-    char tmp[SETTING_ABI_VALUE_MAX];
-    for (int i = 1; i < sl->choice_count; i++) {
-        for (int j = i; j > 0 && strcasecmp(sl->choice[j - 1], sl->choice[j]) > 0; j--) {
-            strlcpy(tmp, sl->choice[j], sizeof tmp);
-            strlcpy(sl->choice[j], sl->choice[j - 1], sizeof sl->choice[j]);
-            strlcpy(sl->choice[j - 1], tmp, sizeof sl->choice[j - 1]);
-            strlcpy(tmp, sl->choice_raw[j], sizeof tmp);
-            strlcpy(sl->choice_raw[j], sl->choice_raw[j - 1], sizeof sl->choice_raw[j]);
-            strlcpy(sl->choice_raw[j - 1], tmp, sizeof sl->choice_raw[j - 1]);
-        }
-    }
-    for (int c = 0; c < sl->choice_count; c++)
-        if (strcmp(sl->choice_raw[c], g_value[idx]) == 0) sl->baseline = sl->staged = c;
 }
 
 // The value this slot would store, whichever control it is showing -- the

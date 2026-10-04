@@ -303,6 +303,30 @@ def check_decisions_index_is_current(problems):
                         "tools/gen_decisions_index.py")
 
 
+def check_keyboard_layout_names(problems):
+    """tools/gen_kbs.py's LAYOUTS is the one list of shipped layouts; the
+    `Choice.<name>=` lines Settings shows must name exactly those, with
+    the same display names. Without this the two drift silently: a
+    layout with no line shows its raw XKB name, and a line with no layout
+    is dead text. Needs no xkbcli -- LAYOUTS is plain data."""
+    sys.path.insert(0, os.path.join(REPO, "tools"))
+    import gen_kbs
+    rel = "data/etc/settings.d/system.keyboard_layout"
+    have = {}
+    for line in read(rel).splitlines():
+        if line.startswith("Choice.") and "=" in line:
+            k, v = line[len("Choice."):].split("=", 1)
+            have[k.strip()] = v.strip()
+    if have != gen_kbs.LAYOUTS:
+        extra = sorted(set(have) - set(gen_kbs.LAYOUTS))
+        missing = sorted(set(gen_kbs.LAYOUTS) - set(have))
+        renamed = sorted(k for k in set(have) & set(gen_kbs.LAYOUTS)
+                         if have[k] != gen_kbs.LAYOUTS[k])
+        problems.append(f"{rel} disagrees with tools/gen_kbs.py's LAYOUTS -- "
+                        f"missing {missing}, extra {extra}, renamed {renamed}; "
+                        "`python3 tools/gen_kbs.py --choices` prints the lines")
+
+
 def check_next_up_is_current(problems):
     """docs/roadmap.md's "Next up" section is generated from the `**NEXT**`
     markers on the items themselves. A stale section is exactly what the
@@ -667,6 +691,7 @@ def main():
                   check_roadmap_items_are_one_line,
                   check_no_duplicated_sections,
                   check_decisions_index_is_current,
+                  check_keyboard_layout_names,
                   check_next_up_is_current,
                   check_toolkit_index_is_current,
                   check_internal_doc_links,
@@ -684,7 +709,8 @@ def main():
               "per roadmap item, the decisions index, Next up and the "
               "toolkit index are current, no broken "
               "doc links, every tool documented, every command has a page "
-              "and a link, every driver listed")
+              "and a link, every driver listed, the keyboard layout names "
+              "match gen_kbs.py")
         return 0
 
     print(f"check_docs: {len(problems)} problem(s)\n")

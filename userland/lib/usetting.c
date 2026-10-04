@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>   // strcasecmp
 
 // --- the merged registry ---------------------------------------------
 
@@ -67,6 +68,104 @@ static void fill_from_schema(const struct uschema *s, struct setting_msg *m) {
     if (uschema_unmet(s, m->unavailable, sizeof m->unavailable) && s->otherwise[0])
         strlcpy(m->value, s->otherwise, sizeof m->value);
     uschema_text(s, m);
+}
+
+// One choice in REGISTRY order: the kernel's or the schema's, with the
+// display name filled from /etc/settings.d.
+static int raw_choice(struct setting_msg *m, int kcount, uint32_t gen) {
+    if (m->index < kcount) {
+        int rc = sys_setting(m);
+        if (rc != 0) return rc;
+        uschema_choice_label_for(m->ns, m->name, m->value, m->label, sizeof m->label);
+        return 0;
+    }
+    struct uschema s;
+    if (!uschema_at(m->index - kcount, &s)) return -1;
+    m->generation = gen;
+    if (!uschema_choice(&s, m->choice, m->value, sizeof m->value)) return -1;
+    uschema_choice_label(&s, m->value, m->label, sizeof m->label);
+    return 0;
+}
+
+// --- `Sort=label`: the choice order every front end sees ---------------
+//
+// HERE, NOT IN A CLIENT, so System Settings, `config` and anything else
+// enumerating SETTING_OP_CHOICE agree. The order is worked out once per
+// (setting, generation) and kept: one read of the text file and one pass
+// over the choices, not one per choice asked for. A choice list can grow
+// without the generation moving (a file dropped into /etc/kbs); the
+// cache is per process, so a fresh process sees it.
+#define SORT_MAX   128   // = System Settings' MAX_CHOICES
+#define SORT_SLOTS 16
+struct sort_entry {
+    int used, index, sorted, count;
+    uint32_t gen;
+    uint8_t order[SORT_MAX];
+};
+static struct sort_entry g_sort[SORT_SLOTS];
+static int g_sort_next;
+static char g_sort_label[SORT_MAX][SETTING_ABI_LABEL_MAX];
+
+static const struct sort_entry *sort_entry_for(int index, int kcount, uint32_t gen) {
+    for (int i = 0; i < SORT_SLOTS; i++)
+        if (g_sort[i].used && g_sort[i].index == index && g_sort[i].gen == gen)
+            return &g_sort[i];
+
+    struct sort_entry *e = &g_sort[g_sort_next];
+    g_sort_next = (g_sort_next + 1) % SORT_SLOTS;
+    memset(e, 0, sizeof *e);
+    e->used = 1;
+    e->index = index;
+    e->gen = gen;
+
+    // Whose text file: the setting's own (ns, name).
+    struct setting_msg t;
+    memset(&t, 0, sizeof t);
+    if (index < kcount) {
+        t.op = SETTING_OP_INFO;
+        t.index = (uint32_t)index;
+        if (sys_setting(&t) != 0) return e;
+    } else {
+        struct uschema s;
+        if (!uschema_at(index - kcount, &s)) return e;
+        strlcpy(t.ns, s.ns, sizeof t.ns);
+        strlcpy(t.name, s.name, sizeof t.name);
+    }
+    char ns[SETTING_ABI_NS_MAX], name[SETTING_ABI_NAME_MAX];
+    strlcpy(ns, t.ns, sizeof ns);
+    strlcpy(name, t.name, sizeof name);
+    uschema_text_for(ns, name, &t);
+    if (!(t.sflags & SETTING_ABI_SF_SORTED)) return e;
+
+    for (int c = 0; c < SORT_MAX; c++) {
+        memset(&t, 0, sizeof t);
+        t.op = SETTING_OP_CHOICE;
+        t.index = (uint32_t)index;
+        t.choice = (uint32_t)c;
+        if (raw_choice(&t, kcount, gen) != 0) break;
+        strlcpy(g_sort_label[c], t.label[0] ? t.label : t.value, sizeof g_sort_label[c]);
+        e->order[c] = (uint8_t)c;
+        e->count = c + 1;
+    }
+    // Insertion sort by label; a few dozen rows at most.
+    for (int i = 1; i < e->count; i++)
+        for (int j = i; j > 0 && strcasecmp(g_sort_label[e->order[j - 1]],
+                                            g_sort_label[e->order[j]]) > 0; j--) {
+            uint8_t x = e->order[j];
+            e->order[j] = e->order[j - 1];
+            e->order[j - 1] = x;
+        }
+    e->sorted = 1;
+    return e;
+}
+
+static int sorted_choice(struct setting_msg *m, int kcount, uint32_t gen) {
+    const struct sort_entry *e = sort_entry_for((int)m->index, kcount, gen);
+    if (e->sorted) {
+        if (m->choice >= (uint32_t)e->count) return -1;
+        m->choice = e->order[m->choice];
+    }
+    return raw_choice(m, kcount, gen);
 }
 
 // Which half owns `name`, and the schema when it is this one.
@@ -130,8 +229,14 @@ int usetting_dispatch(struct setting_msg *m) {
         return 0;
     }
 
-    case SETTING_OP_INFO:
     case SETTING_OP_CHOICE: {
+        uint32_t gen = 0;
+        int kcount = kernel_count(&gen);
+        if (kcount < 0) return -1;
+        return sorted_choice(m, kcount, gen);
+    }
+
+    case SETTING_OP_INFO: {
         uint32_t gen = 0;
         int kcount = kernel_count(&gen);
         if (kcount < 0) return -1;
@@ -144,21 +249,14 @@ int usetting_dispatch(struct setting_msg *m) {
             // One parser for that directory instead of two.
             int rc = sys_setting(m);
             if (rc != 0) return rc;
-            if (m->op == SETTING_OP_INFO) uschema_text_for(m->ns, m->name, m);
-            else uschema_choice_label_for(m->ns, m->name, m->value,
-                                          m->label, sizeof m->label);
+            uschema_text_for(m->ns, m->name, m);
             return 0;
         }
 
         struct uschema s;
         if (!uschema_at(m->index - kcount, &s)) return -1;
         m->generation = gen;
-        if (m->op == SETTING_OP_INFO) {
-            fill_from_schema(&s, m);
-            return 0;
-        }
-        if (!uschema_choice(&s, m->choice, m->value, sizeof m->value)) return -1;
-        uschema_choice_label(&s, m->value, m->label, sizeof m->label);
+        fill_from_schema(&s, m);
         return 0;
     }
 

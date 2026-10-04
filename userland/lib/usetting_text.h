@@ -55,7 +55,8 @@
 //   Advanced=1 | 0
 //   Order=<integer, lower first>
 //   Sort=label         -- list the choices alphabetically by display name
-//                         (an unordered set, like keyboard layouts)
+//                         (an unordered set, like keyboard layouts);
+//                         SETTING_ABI_SF_SORTED, applied by lib/usetting.c
 //   Choice.<value>=<display name>
 //
 // A PAGE (a category's group) has its own file, named

@@ -307,8 +307,8 @@ def run(dbg, qmp, tmp, shot_dir, res):
     for ch in "zfile_test":
         key(dbg, HEX.get(ch, ch))
     dbg.settle()
-    key(dbg, "0xf797")   # KEY_HOME
-    key(dbg, "0xf799")   # KEY_DELETE
+    key(dbg, "0xf786")   # KEY_HOME
+    key(dbg, "0xf788")   # KEY_DELETE
     dbg.settle()
     key(dbg, "0x0d")
     time.sleep(2.5)
@@ -317,7 +317,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
 
     dbg.send("sh rm /filetest.txt")
     dbg.settle()
-    key(dbg, "0xf791")   # KEY_ARROW_UP -- recall the previous line
+    key(dbg, "0xf780")   # KEY_ARROW_UP -- recall the previous line
     dbg.settle()
     key(dbg, "0x0d")
     time.sleep(2.5)
@@ -540,9 +540,9 @@ def run(dbg, qmp, tmp, shot_dir, res):
               bar > 100 and bar > plain * 3,
               f"longest bar-coloured run was {plain}px before, {bar}px now")
 
-    key(dbg, "0xf79a")   # F2 -- save
+    key(dbg, "0xf789")   # F2 -- save
     time.sleep(1.5)
-    key(dbg, "0xf79b")   # F3 -- exit
+    key(dbg, "0xf78a")   # F3 -- exit
     time.sleep(1.5)
     out = dbg.send("sh cat /uterm_edit.txt") or ""
     res.check("a full-screen editor runs IN THE WINDOW and saves",
@@ -565,7 +565,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
     res.check("Esc does NOT close it", dbg.window(TITLE) is not None,
               "Esc must reach the shell, not the window")
 
-    dbg.send("gui key 0xf7a5 alt")
+    dbg.send("gui key 0xf794 alt")
     dbg.settle()
     deadline = time.time() + SPAWN_TIMEOUT_S
     gone = False
@@ -963,7 +963,7 @@ def check_chrome(dbg, qmp, res):
               layout_field(dbg, "chrome") < chrome_before,
               f"chrome {chrome_before} -> {layout_field(dbg, 'chrome')}")
 
-    dbg.send("gui key 0xf7a4")   # F10
+    dbg.send("gui key 0xf793")   # F10
     time.sleep(0.8)
     dbg.settle()
     res.check("c13. F10 brings a hidden menu bar back",
@@ -977,7 +977,7 @@ TB_NEWTAB, TB_FIND, TB_PANEL, TB_MENU = 0, 1, 2, 3
 # counted. If a row is added there, these move.
 BURGER_NEW_TAB = 0
 BURGER_OPTIONS = 14
-KEY_F9 = "0xf7b0"
+KEY_F9 = "0xf79f"
 
 
 def ctx_item(dbg, index):
@@ -1540,11 +1540,11 @@ def check_scrollbar(dbg, qmp, tmp, res):
     # Back to the bottom, so the trough check starts somewhere known --
     # by a KEY, not by dragging the thing under test. A test must not
     # assume the thing it is testing.
-    key(dbg, "0xf794")   # PageDown, repeatedly, to pin the view at 0
+    key(dbg, "0xf783")   # PageDown, repeatedly, to pin the view at 0
     for _ in range(40):
         if layout_field(dbg, "sbview") == 0:
             break
-        key(dbg, "0xf794")
+        key(dbg, "0xf783")
     dbg.settle()
     res.check("s4. PageDown returns the view to the live screen",
               layout_field(dbg, "sbview") == 0,
@@ -1561,7 +1561,7 @@ def check_scrollbar(dbg, qmp, tmp, res):
               paged is not None and paged >= rows - 1,
               f"sbview 0 -> {paged}, a page is {rows - 1}")
 
-    key(dbg, "0xf794")
+    key(dbg, "0xf783")
     dbg.settle()
     dbg.key("f4", mods="alt")
     dbg.settle()
@@ -1702,7 +1702,7 @@ def check_resize(dbg, qmp, tmp, res):
     dbg.settle()
 
 
-KEY_F10 = "0xf7a4"
+KEY_F10 = "0xf793"
 
 
 def prime_layout(dbg):

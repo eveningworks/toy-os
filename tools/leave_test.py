@@ -118,7 +118,7 @@ def run(dbg, qmp, tmp):
     check("a right-click under the page opens nothing", not m.get("open"), str(m)[:120])
 
     # --- 2. Esc is Cancel, and the keys move the focus ---------------
-    dbg.key("0xf796")   # Right: Exit to shell
+    dbg.key("0xf785")   # Right: Exit to shell
     check("Right moves the focus", leave(dbg).get("focus") == 2)
     dbg.key("0x1b")
     check("Esc closes it", leave(dbg).get("phase") == "closed")

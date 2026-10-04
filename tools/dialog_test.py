@@ -101,7 +101,7 @@ def main():
         return 1
     dbg.send(f"gui click {fi['x'] + fi['w'] // 2} {fi['y'] + fi['w'] // 2}")
     dbg.settle()
-    dbg.key("0xf799")   # Delete
+    dbg.key("0xf788")   # Delete
     dbg.settle()
     state = dbg.json("gui state --json")
     check("dialog opened", state["overlays"]["confirm_dialog"], str(state["overlays"]))

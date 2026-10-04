@@ -16,7 +16,7 @@
 // Evdev keycodes (abi/input_keys.h names them; the numbers are the ABI).
 enum { KC_2 = 3, KC_MINUS_ROW_END = 13, KC_Q = 16, KC_E = 18, KC_O = 24,
        KC_P_RIGHT = 26, KC_X = 45, KC_SEMI = 39, KC_APOS = 40, KC_SPACE = 57,
-       KC_BKSP = 14 };
+       KC_BKSP = 14, KC_M = 50 };
 
 // Feeds `sym` through the composer; returns how many characters came
 // out, with them in out[].
@@ -72,6 +72,9 @@ static int fixture_checks(void) {
     // Caps Lock capitalises a Latin-1 letter, as it does a-z.
     CHECK(keyboard_layout_translate_caps(KC_P_RIGHT, 0, 0, 1) == 0xC5);
     CHECK(keyboard_layout_translate_caps(KC_P_RIGHT, 1, 0, 1) == 0xE5);
+    // ...but never swaps the AltGr levels: Caps+AltGr+q is level 3.
+    CHECK(keyboard_layout_translate_caps(KC_Q, 0, 1, 1) == '@');
+    CHECK(keyboard_layout_translate_caps(KC_Q, 1, 1, 1) == 0xAE);
 
     int acute = keyboard_layout_translate(13, 0, 0);
     int grave = keyboard_layout_translate(13, 1, 0);
@@ -115,6 +118,9 @@ static int generated_checks(void) {
     CHECK(keyboard_layout_load("de") == 1);
     CHECK(keyboard_layout_translate(KC_Q, 0, 1) == '@');
     CHECK(keyboard_layout_translate(12, 0, 0) == 0xDF);
+    // Caps Lock leaves AltGr alone: Caps+AltGr+M is still mu, not the
+    // level-4 ordinal sign.
+    CHECK(keyboard_layout_translate_caps(KC_M, 0, 1, 1) == 0xB5);
     // German's acute is the dead key left of Backspace.
     int acute = keyboard_layout_translate(KC_MINUS_ROW_END, 0, 0);
     CHECK(KB_SYM_IS_DEAD(acute));
@@ -153,14 +159,25 @@ KTEST("kblayout", "generated de/fr/es/se: AltGr, Latin-1 base keys, dead acute")
     KTEST_ASSERT_EQ(line, 0);
 }
 
+// The listing, not a copy of it: /etc/kbs IS the layout list
+// (tools/gen_kbs.py's LAYOUTS writes it), so a name kept here would be a
+// third list to drift.
+struct kbs_list { int n; char name[64][KB_LAYOUT_NAME_MAX]; };
+static void kbs_cb(void *ctx, const char *name, uint32_t size, int is_dir) {
+    struct kbs_list *l = ctx;
+    (void)size;
+    if (is_dir || l->n >= 64) return;
+    k_strlcpy(l->name[l->n++], name, sizeof l->name[0]);
+}
+
 static int all_load_checks(void) {
-    static const char *const names[] = {
-        "al", "at", "be", "br", "ca", "ch", "de", "dk", "es", "fi", "fo", "fr",
-        "gb", "is", "it", "latam", "lv", "nl", "no", "pl", "pt", "ro", "se", "us",
-    };
-    for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++) {
-        CHECK(keyboard_layout_load(names[i]) == 1);
-        CHECK(k_strcmp(keyboard_layout_current(), names[i]) == 0);
+    static struct kbs_list l;   // 512 bytes: off the kernel stack
+    l.n = 0;
+    fs_list("/etc/kbs", kbs_cb, &l);
+    CHECK(l.n >= 2);
+    for (int i = 0; i < l.n; i++) {
+        CHECK(keyboard_layout_load(l.name[i]) == 1);
+        CHECK(k_strcmp(keyboard_layout_current(), l.name[i]) == 0);
         // Every layout types Space and Backspace.
         CHECK(keyboard_layout_translate(KC_SPACE, 0, 0) == ' ');
         CHECK(keyboard_layout_translate(KC_BKSP, 0, 0) == '\b');
@@ -168,7 +185,7 @@ static int all_load_checks(void) {
     return 0;
 }
 
-KTEST("kblayout", "every shipped layout loads from its own file") {
+KTEST("kblayout", "every layout in /etc/kbs loads from its own file") {
     if (!have("us") || !have("latam"))
         KTEST_SKIP("/etc/kbs not seeded (no xkbcli on the build host)");
     struct saved s;

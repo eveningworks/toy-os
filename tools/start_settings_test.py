@@ -46,11 +46,11 @@ from qmp_test import QMPSession  # noqa: E402
 from gui_debug import DebugConsole, enter_gui  # noqa: E402
 from harness import Results  # noqa: E402
 
-KEY_SUPER = "0xf7a6"
+KEY_SUPER = "0xf795"
 KEY_ESC = "0x1b"
-KEY_DOWN = "0xf792"
-KEY_UP = "0xf791"
-KEY_RIGHT = "0xf796"
+KEY_DOWN = "0xf781"
+KEY_UP = "0xf780"
+KEY_RIGHT = "0xf785"
 KEYS = ("start_list", "start_opens", "start_recent", "start_hover", "start_power")
 
 

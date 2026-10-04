@@ -137,3 +137,21 @@ KTEST("keycombo", "Ctrl matches the CONTROL CODE the driver actually sends") {
     // The control code alone, without Alt, is a different binding.
     KTEST_ASSERT(!keycombo_matches(&c, 0x14, KEY_MOD_CTRL));
 }
+
+KTEST("keycombo", "a Latin-1 key round-trips through format and parse") {
+    // A capture of Ctrl+e-acute formats as one Latin-1 byte; parse must
+    // read that byte back, or the setting can be recorded and never fire.
+    struct keycombo c = { .key = 0xE9, .mods = KEY_MOD_CTRL }, back;
+    char text[KEYCOMBO_TEXT_MAX];
+    KTEST_ASSERT(keycombo_format(&c, text, sizeof text));
+    KTEST_ASSERT(keycombo_parse(text, &back));
+    KTEST_ASSERT_EQ(back.key, 0xC9);           // stored upper-case, like ASCII
+    KTEST_ASSERT_EQ(back.mods, KEY_MOD_CTRL);
+    // ...and the live key (lower-case, as the keyboard sends it) matches.
+    KTEST_ASSERT(keycombo_matches(&back, 0xE9, KEY_MOD_CTRL));
+    KTEST_ASSERT(keycombo_matches(&back, 0xC9, KEY_MOD_CTRL));
+    KTEST_ASSERT(!keycombo_matches(&back, 'e', KEY_MOD_CTRL));
+    // A special with no name cannot be spelled, so it is refused.
+    struct keycombo nameless = { .key = KEY_SHIFT_END, .mods = 0 };
+    KTEST_ASSERT(!keycombo_format(&nameless, text, sizeof text));
+}

@@ -1490,7 +1490,9 @@ static inline int win_font_kern(const signed char *kern, int count,
 // told anything beyond the metrics WIN_REQ_FONT returns: glyphs are
 // stored back to back, each `h` rows of `w` bytes, row-major, one byte
 // of coverage per pixel (0 = background, 255 = fully ink). Glyph 0 is
-// ASCII 32 (space) and they run contiguously from there.
+// ASCII 32 (space); slots 0-94 are ASCII 32-126 and 95-190 are Latin-1
+// 0xA0-0xFF. **INDEX THROUGH api/font_ttf.h's font_ttf_slot()**, never
+// `c - WIN_FONT_FIRST_CHAR`: that is right only below 0x7F.
 #define WIN_FONT_FIRST_CHAR 32
 
 static inline uint64_t win_glyph_offset(uint32_t index, int w, int h) {

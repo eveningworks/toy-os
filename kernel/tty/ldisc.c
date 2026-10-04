@@ -232,7 +232,10 @@ unsigned tty_read(struct tty *t, char *dst, unsigned len) {
     if (!t || !t->used || !dst) return 0;
     unsigned got = 0;
     uint32_t ev;
-    while (got < len && dequeue(t, &ev)) dst[got++] = (char)(ev & 0xFF);
+    // A KEY_* special is not a byte (a bypassed terminal queues them
+    // whole): a byte reader gets nothing for it rather than its low byte.
+    while (got < len && dequeue(t, &ev))
+        if ((ev & 0xFFFF) <= 0xFF) dst[got++] = (char)(ev & 0xFF);
     return got;
 }
 

@@ -13,10 +13,13 @@ THE SHIPPED SET IS `LAYOUTS` BELOW, AND IT IS THE ONLY LIST. `--all`
 generates every one of them (the Makefile's seed step calls that); the
 display names Settings shows live in data/etc/settings.d/
 system.keyboard_layout as `Choice.<name>=` lines, which `--choices`
-prints from the same table. A layout is in the set when everything its
-base and Shift levels type is Latin-1 (toy-os's encoding, see
-docs/decisions/drivers.md) -- `--check` re-measures that against the
-host's XKB data and names any key that breaks it.
+prints from the same table (tools/check_docs.py fails when the two
+disagree). A layout is in the set when everything its base and Shift
+levels type is Latin-1 (toy-os's encoding, see docs/decisions/drivers.md)
+AND no level carries a national letter Latin-1 lacks -- a precomposed
+Latin letter such as Polish a-ogonek. `--check` re-measures both against
+the host's XKB data and names the keys that break them; XKB's shared
+AltGr extras (l-stroke, eng, dotless i...) are skipped without failing.
 
 WHAT A FILE CARRIES:
 
@@ -48,7 +51,7 @@ WHAT A FILE CARRIES:
 Usage:
     python3 tools/gen_kbs.py de              # one layout to stdout
     python3 tools/gen_kbs.py de --write      # into seed/sync/etc/kbs/de
-    python3 tools/gen_kbs.py --all --write   # every layout in LAYOUTS
+    python3 tools/gen_kbs.py --all --write   # every layout; prunes the rest
     python3 tools/gen_kbs.py --check         # does each still fit Latin-1?
     python3 tools/gen_kbs.py --choices       # the Choice.<name>= lines
 
@@ -65,9 +68,9 @@ import unicodedata
 
 # The shipped layouts: XKB name -> the display name Settings shows. ONE
 # place; keep data/etc/settings.d/system.keyboard_layout in step
-# (`--choices` prints its lines). NOT here, measured by --check: `ee`
-# (Estonian), whose unshifted TLDE is a dead caron -- s/z with caron are
-# not Latin-1, so a key on its base level would type nothing.
+# (`--choices` prints its lines). NOT here, measured by --check, until
+# the UTF-8 migration: `ee` (s/z-caron, its base TLDE is a dead caron),
+# `lv`, `pl` and `ro`, whose national letters are all outside Latin-1.
 LAYOUTS = {
     "al": "Albanian",
     "at": "German (Austria)",
@@ -85,12 +88,9 @@ LAYOUTS = {
     "is": "Icelandic",
     "it": "Italian",
     "latam": "Spanish (Latin America)",
-    "lv": "Latvian",
     "nl": "Dutch",
     "no": "Norwegian",
-    "pl": "Polish",
     "pt": "Portuguese",
-    "ro": "Romanian",
     "se": "Swedish",
     "us": "English (US)",
 }
@@ -191,6 +191,44 @@ def keysym_cp(name):
     return cp if (32 <= cp <= 126 or 0xA0 <= cp <= 0xFF) else None
 
 
+KEYSYMDEF = "/usr/include/X11/keysymdef.h"
+_KEYSYM_UNICODE = None
+
+
+def keysym_unicode(name):
+    """Any keysym's Unicode codepoint, or None: `Uxxxx`, a raw Unicode
+    keysym, or a named one by keysymdef.h's U+ comments (read lazily;
+    without the header only the first two are known)."""
+    global _KEYSYM_UNICODE
+    m = re.fullmatch(r"U([0-9A-Fa-f]{4,6})", name) or \
+        re.fullmatch(r"0x0*1([0-9A-Fa-f]{6})", name)
+    if m:
+        return int(m.group(1), 16)
+    if _KEYSYM_UNICODE is None:
+        _KEYSYM_UNICODE = {}
+        try:
+            with open(KEYSYMDEF, encoding="latin-1") as f:
+                for line in f:
+                    k = re.match(r"#define XK_(\w+)\s+0x[0-9a-fA-F]+\s*/\*[ (]*U\+([0-9A-Fa-f]+)", line)
+                    if k:
+                        _KEYSYM_UNICODE[k.group(1)] = int(k.group(2), 16)
+        except OSError:
+            print(f"gen_kbs: {KEYSYMDEF} not found -- named non-Latin-1 "
+                  "keysyms cannot be checked for national letters", file=sys.stderr)
+    return _KEYSYM_UNICODE.get(name)
+
+
+def is_national_letter(cp):
+    """A precomposed Latin letter -- a base letter plus marks (a-ogonek,
+    s-caron, t-comma). That is what a language's own alphabet adds; XKB's
+    shared AltGr extras (l-stroke, d-stroke, eng, dotless i, long s) do
+    not decompose and are not counted."""
+    ch = chr(cp)
+    d = unicodedata.normalize("NFD", ch)
+    return (len(d) > 1 and unicodedata.category(d[0]).startswith("L")
+            and "LATIN" in unicodedata.name(ch, ""))
+
+
 def fmt(cp):
     """A value as the file writes it: literal when that cannot be
     misread (ASCII alphanumerics and punctuation other than the
@@ -265,7 +303,8 @@ def compose_pairs():
 
 def generate(layout):
     """(file text, problems) -- a problem is a base/Shift symbol on the
-    alphanumeric block that Latin-1 cannot express."""
+    alphanumeric block that Latin-1 cannot express, or a national letter
+    (is_national_letter) on any level."""
     text = compile_keymap(layout)
     keycodes = parse_keycodes(text)
     key_syms = parse_key_symbols(text)
@@ -302,6 +341,10 @@ def generate(layout):
                 skipped.append((key, suffix or "_base", sym))
                 if lvl < 2 and key not in ("ESC", "BKSP", "TAB", "RTRN"):
                     problems.append(f"{key}{suffix or ''}: {sym}")
+                else:
+                    u = keysym_unicode(sym)
+                    if u is not None and is_national_letter(u):
+                        problems.append(f"{key}{suffix}: {sym} (a letter Latin-1 lacks)")
                 continue
             lines.append(f"kc_{keycode}{suffix}={fmt(cp)}")
 
@@ -331,6 +374,17 @@ def write(layout, content):
     return out_path
 
 
+def prune():
+    """Removes staged layouts no longer in LAYOUTS: the directory's
+    listing IS the Settings choice list. (An existing disk.img keeps its
+    copy -- the seed sync adds and replaces, never deletes.)"""
+    out_dir = os.path.join("seed", "sync", "etc", "kbs")
+    for name in os.listdir(out_dir) if os.path.isdir(out_dir) else ():
+        if name not in LAYOUTS:
+            os.remove(os.path.join(out_dir, name))
+            print(f"gen_kbs: removed retired layout {name}", file=sys.stderr)
+
+
 def main():
     args = sys.argv[1:]
     if "--choices" in args:
@@ -338,18 +392,31 @@ def main():
             print(f"Choice.{name}={LAYOUTS[name]}")
         return 0
     if "--all" in args or "--check" in args:
-        bad = 0
+        bad = failed = 0
         for layout in sorted(LAYOUTS):
-            content, problems = generate(layout)
+            # ONE LAYOUT FAILING IS LOUD, and the rest are still written:
+            # Settings lists /etc/kbs, so a silently missing file would be
+            # a choice that falls back to US when picked.
+            try:
+                content, problems = generate(layout)
+            except (subprocess.CalledProcessError, OSError) as e:
+                failed += 1
+                err = getattr(e, "stderr", "") or str(e)
+                print(f"gen_kbs: FAILED to compile '{layout}': {err.strip()}",
+                      file=sys.stderr)
+                continue
             if problems:
                 bad += 1
-                print(f"gen_kbs: {layout} types non-Latin-1 on base/Shift: "
+                print(f"gen_kbs: {layout} cannot be typed in Latin-1: "
                       + ", ".join(problems), file=sys.stderr)
             if "--write" in args:
                 write(layout, content)
         if "--write" in args:
-            print(f"gen_kbs: wrote {len(LAYOUTS)} layouts to seed/sync/etc/kbs",
-                  file=sys.stderr)
+            prune()
+            print(f"gen_kbs: wrote {len(LAYOUTS) - failed} layouts to "
+                  "seed/sync/etc/kbs", file=sys.stderr)
+        if failed:
+            return 1
         return 1 if (bad and "--check" in args) else 0
     names = [a for a in args if not a.startswith("--")]
     if len(names) != 1:
@@ -358,7 +425,7 @@ def main():
         return 1
     content, problems = generate(names[0])
     for p in problems:
-        print(f"gen_kbs: {names[0]}: non-Latin-1 on base/Shift: {p}", file=sys.stderr)
+        print(f"gen_kbs: {names[0]} cannot be typed in Latin-1: {p}", file=sys.stderr)
     if "--write" in args:
         print(f"gen_kbs: wrote {write(names[0], content)}", file=sys.stderr)
     else:

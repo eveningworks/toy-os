@@ -66,7 +66,7 @@ WIN_BIN = "/tests/winclient"
 HANG_TITLE = "Hang Test"
 CLIENT_TITLE = "Ring 3 Client"
 
-ALT_F4 = "gui key 0xf7a5 alt"
+ALT_F4 = "gui key 0xf794 alt"
 
 # The WM's not-responding timeout, shortened for this run.
 #

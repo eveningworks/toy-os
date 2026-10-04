@@ -682,3 +682,74 @@ KTEST("input", "the physical stream reports positions, both edges, and no repeat
     KTEST_ASSERT_EQ(kcs[3], INPUT_KEY_LEFTCTRL);
     KTEST_ASSERT_EQ(downs[3], 0);
 }
+
+// --- dead keys through the DRIVER: the release bookkeeping and the keypad ---
+//
+// The composer itself is kernel/lib/keyboard_layout_test.c's; these are
+// about what keyboard.c does with its output. A fixture layout, so no
+// XKB data is assumed, and the real one is put back before asserting.
+static const char DEAD_FIXTURE[] =
+    "kc_18=e\nkc_45=x\nkc_13=dead:acute\n"
+    "dead:acute=0xB4\ndead:acute:e=0xE9\n";
+
+struct drv_keys { int n, key[8]; int ups, up[8]; };
+
+static void tap(uint16_t kc) { input_report_key(kc, 1); input_report_key(kc, 0); }
+
+static void drain_all(struct drv_keys *k) {
+    uint8_t m;
+    uint16_t code; int down;
+    for (int c; (c = keyboard_try_getchar_mods(&m)) != -1; )
+        if (k->n < 8) k->key[k->n++] = c;
+    while (keyboard_try_get_transition(&code, &down, &m))
+        if (!down && k->ups < 8) k->up[k->ups++] = code;
+}
+
+static void dead_sequence(const uint16_t *kcs, int n, struct drv_keys *out) {
+    char name[KB_LAYOUT_NAME_MAX];
+    k_strlcpy(name, keyboard_layout_current(), sizeof name);
+    struct tty *t = tty_console();
+    int was = tty_bypassed(t);
+    k_memset(out, 0, sizeof *out);
+
+    scheduler_preempt_disable();
+    struct drv_keys junk = { 0 };
+    drain_all(&junk);
+    tty_set_bypass(t, 1);                 // a window's view: keys whole
+    keyboard_layout_load_text(DEAD_FIXTURE, sizeof DEAD_FIXTURE - 1);
+    for (int i = 0; i < n; i++) tap(kcs[i]);
+    drain_all(out);
+    keyboard_layout_compose_reset();
+    tty_set_bypass(t, was);
+    scheduler_preempt_enable();
+    // AFTER the guard drops: reloading reads /etc/kbs, and the mount's
+    // lock is a sleeping one (CLAUDE.md, the filesystem).
+    keyboard_layout_load(name);
+}
+
+KTEST("input", "dead key + a key it does not compose with: both characters come back UP") {
+    // Two characters from one press. The accent is synthesized, so it
+    // must go up at once; the key's own release must report the key --
+    // or a client tracking WIN_EV_KEY_UP holds 'x' forever.
+    static const uint16_t seq[] = { 13, 45 };          // dead acute, x
+    struct drv_keys k;
+    dead_sequence(seq, 2, &k);
+    KTEST_ASSERT_EQ(k.n, 2);
+    KTEST_ASSERT_EQ(k.key[0], 0xB4);
+    KTEST_ASSERT_EQ(k.key[1], 'x');
+    KTEST_ASSERT_EQ(k.ups, 2);
+    KTEST_ASSERT_EQ(k.up[0], 0xB4);
+    KTEST_ASSERT_EQ(k.up[1], 'x');
+}
+
+KTEST("input", "a keypad character ends a pending accent like any other key") {
+    // "dead acute, KP1, e" is "acute 1 e" -- the keypad is text, so the
+    // accent must not survive it and land on the e.
+    static const uint16_t seq[] = { 13, INPUT_KEY_KP1, 18 };
+    struct drv_keys k;
+    dead_sequence(seq, 3, &k);
+    KTEST_ASSERT_EQ(k.n, 3);
+    KTEST_ASSERT_EQ(k.key[0], 0xB4);
+    KTEST_ASSERT_EQ(k.key[1], '1');
+    KTEST_ASSERT_EQ(k.key[2], 'e');
+}

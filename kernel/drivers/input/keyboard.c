@@ -461,6 +461,7 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     // the exact case CLAUDE.md gives when it says a bounded branch set
     // should be waived rather than made a table; a table here would be
     // the same data with a level of indirection in front of it.
+    int kp = 0;   // a keypad character, composed with the layout's below
     switch (keycode) {
     case INPUT_KEY_UP:       ring_push(shift_pressed ? KEY_SHIFT_ARROW_UP : KEY_ARROW_UP); return;
     case INPUT_KEY_DOWN:     ring_push(shift_pressed ? KEY_SHIFT_ARROW_DOWN : KEY_ARROW_DOWN); return;
@@ -516,26 +517,31 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     // mode of getting it wrong is a keypad that types nothing while the
     // light says it should. Always-numeric is what a keypad is for, and
     // the arrows already exist a few inches to the left.
-    case INPUT_KEY_KP0: ring_push('0'); return;
-    case INPUT_KEY_KP1: ring_push('1'); return;
-    case INPUT_KEY_KP2: ring_push('2'); return;
-    case INPUT_KEY_KP3: ring_push('3'); return;
-    case INPUT_KEY_KP4: ring_push('4'); return;
-    case INPUT_KEY_KP5: ring_push('5'); return;
-    case INPUT_KEY_KP6: ring_push('6'); return;
-    case INPUT_KEY_KP7: ring_push('7'); return;
-    case INPUT_KEY_KP8: ring_push('8'); return;
-    case INPUT_KEY_KP9: ring_push('9'); return;
-    case INPUT_KEY_KPDOT:      ring_push('.'); return;
-    case INPUT_KEY_KPPLUS:     ring_push('+'); return;
-    case INPUT_KEY_KPMINUS:    ring_push('-'); return;
-    case INPUT_KEY_KPASTERISK: ring_push('*'); return;
-    case INPUT_KEY_KPSLASH:    ring_push('/'); return;
-    case INPUT_KEY_KPENTER:    ring_push('\n'); return;
+    //
+    // A keypad character is TEXT like any other, so it goes through the
+    // dead-key composer below rather than being pushed from here -- a
+    // pending accent must not survive it.
+    case INPUT_KEY_KP0: kp = '0'; break;
+    case INPUT_KEY_KP1: kp = '1'; break;
+    case INPUT_KEY_KP2: kp = '2'; break;
+    case INPUT_KEY_KP3: kp = '3'; break;
+    case INPUT_KEY_KP4: kp = '4'; break;
+    case INPUT_KEY_KP5: kp = '5'; break;
+    case INPUT_KEY_KP6: kp = '6'; break;
+    case INPUT_KEY_KP7: kp = '7'; break;
+    case INPUT_KEY_KP8: kp = '8'; break;
+    case INPUT_KEY_KP9: kp = '9'; break;
+    case INPUT_KEY_KPDOT:      kp = '.'; break;
+    case INPUT_KEY_KPPLUS:     kp = '+'; break;
+    case INPUT_KEY_KPMINUS:    kp = '-'; break;
+    case INPUT_KEY_KPASTERISK: kp = '*'; break;
+    case INPUT_KEY_KPSLASH:    kp = '/'; break;
+    case INPUT_KEY_KPENTER:    kp = '\n'; break;
     default: break;
     }
 
-    int sym = keyboard_layout_translate_caps(keycode, shift_pressed, altgr_pressed, caps_lock);
+    int sym = kp ? kp : keyboard_layout_translate_caps(keycode, shift_pressed,
+                                                        altgr_pressed, caps_lock);
     if (!sym) return;
 
     // DEAD KEYS COMPOSE HERE, for every driver at once -- the state is the
@@ -545,7 +551,15 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     if (!ctrl_pressed && !alt_pressed) {
         uint8_t out[2];
         int n = keyboard_layout_compose(sym, out);
-        for (int i = 0; i < n; i++) ring_push(out[i]);
+        // TWO CHARACTERS FROM ONE PRESS (an accent, then the key): the
+        // accent is synthesized, so it goes down AND up here, and the key
+        // is what this keycode's release reports -- otherwise a client
+        // tracking WIN_EV_KEY_UP sees the second character held forever.
+        for (int i = 0; i < n; i++) {
+            if (i == n - 1) first_push_done = 0;   // the last push is recorded
+            ring_push(out[i]);
+            if (i < n - 1) trans_push(out[i], 0);
+        }
         return;
     }
     int c = keyboard_layout_spacing(sym);

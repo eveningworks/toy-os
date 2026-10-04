@@ -331,11 +331,11 @@ wrapper struct does not fix arithmetic. Concretely, the two things that
 will actually hurt at `docs/roadmap.md` M37 are both already in the
 tree, and neither is a string type:
 
-- **`userland/ugfx.c`'s `int idx = (int)c - WIN_FONT_FIRST_CHAR;`** --
-  glyph lookup is ASCII-contiguous by construction, and
-  `abi/win_proto.h` bakes that into the protocol ("glyph 0 is ASCII 32
-  and they run contiguously from there"). This needs a real glyph map,
-  and it is a protocol change as well as a code change.
+- **Glyph lookup by byte** -- `font_ttf_slot()` (api/font_ttf.h) maps
+  ASCII then Latin-1 0xA0-0xFF to slots by arithmetic, and
+  `abi/win_proto.h` bakes that layout into the protocol. A codepoint
+  beyond 0xFF needs a real glyph map, and it is a protocol change as
+  well as a code change.
 - **`struct scrollback_cell { char ch; uint8_t fg; }`** -- 8192 fixed
   one-byte cells. The terminal's *storage* assumes one byte is one
   character and one column. This is the expensive one.

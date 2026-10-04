@@ -5,28 +5,31 @@
 
 // Special key codes pushed into the input stream alongside characters.
 //
-// **THEY LIVE AT 0xF791-0xF7B9, ABOVE EVERY CHARACTER THE KEYBOARD
-// TYPES**, in Unicode's Private Use Area -- the block macOS uses for its
-// function keys (NSUpArrowFunctionKey is 0xF700). They were 0x91-0xB9
-// until the layouts reached all of Latin-1, whose 0xA0-0xFF they
-// overlapped: AltGr+1 on a Spanish keyboard is 0xA1, which was Shift+End.
-// The low byte is the old code, so a key truncated to a byte somewhere
-// still lands outside ASCII rather than on Ctrl-C. A KEY IS AN `int` (or
-// at least a uint16_t) EVERYWHERE; a `uint8_t` key is a bug.
-#define KEY_SPECIAL_FIRST     KEY_ARROW_UP
-#define KEY_SPECIAL_LAST      KEY_PRINT_SCREEN
-#define IS_SPECIAL_KEY(k)     ((k) >= KEY_SPECIAL_FIRST && (k) <= KEY_SPECIAL_LAST)
-#define KEY_ARROW_UP    0xF791
-#define KEY_ARROW_DOWN  0xF792
-#define KEY_PAGE_UP     0xF793
-#define KEY_PAGE_DOWN   0xF794
-#define KEY_ARROW_LEFT  0xF795
-#define KEY_ARROW_RIGHT 0xF796
-#define KEY_HOME        0xF797
-#define KEY_END         0xF798
-#define KEY_DELETE      0xF799
-#define KEY_F2          0xF79A
-#define KEY_F3          0xF79B
+// **THEY LIVE ABOVE EVERY CHARACTER THE KEYBOARD TYPES**, in Unicode's
+// Private Use Area -- the block macOS uses for its function keys
+// (NSUpArrowFunctionKey is 0xF700). They were 0x91-0xB9 until the
+// layouts reached all of Latin-1, whose 0xA0-0xFF they overlapped:
+// German Shift+AltGr+1 types 0xA1, which was Shift+End.
+//
+// **EVERY LOW BYTE IS A C1 CONTROL (0x80-0x9F)**, so a key truncated to a
+// byte by mistake is something no font draws, IS_PRINTABLE_KEY refuses
+// and a terminal ignores -- never a Latin-1 letter, never Ctrl-C. C1 has
+// 32 slots for 41 keys, hence two runs: 0xF780-0xF79F and 0xF880-0xF888.
+// Nothing should truncate one at all: A KEY IS AN `int` (or at least a
+// uint16_t) EVERYWHERE, and a `uint8_t` key is a bug.
+#define IS_SPECIAL_KEY(k) \
+    ((((k) >= 0xF780 && (k) <= 0xF79F) || ((k) >= 0xF880 && (k) <= 0xF89F)))
+#define KEY_ARROW_UP    0xF780
+#define KEY_ARROW_DOWN  0xF781
+#define KEY_PAGE_UP     0xF782
+#define KEY_PAGE_DOWN   0xF783
+#define KEY_ARROW_LEFT  0xF784
+#define KEY_ARROW_RIGHT 0xF785
+#define KEY_HOME        0xF786
+#define KEY_END         0xF787
+#define KEY_DELETE      0xF788
+#define KEY_F2          0xF789
+#define KEY_F3          0xF78A
 // Shift+arrow/Home/End -- distinct codes rather than a separate
 // "modifier held" query, so apps that want selection (Notepad) just
 // switch on one more case, and apps that don't (Terminal, the CLI
@@ -36,25 +39,25 @@
 // for a letter key), not derived later from some live "is shift down
 // right now" state an app would have to poll itself -- see
 // docs/decisions.md for why that timing matters.
-#define KEY_SHIFT_ARROW_LEFT  0xF79C
-#define KEY_SHIFT_ARROW_RIGHT 0xF79D
-#define KEY_SHIFT_ARROW_UP    0xF79E
-#define KEY_SHIFT_ARROW_DOWN  0xF79F
-#define KEY_SHIFT_HOME        0xF7A0
-#define KEY_SHIFT_END         0xF7A1
+#define KEY_SHIFT_ARROW_LEFT  0xF78B
+#define KEY_SHIFT_ARROW_RIGHT 0xF78C
+#define KEY_SHIFT_ARROW_UP    0xF78D
+#define KEY_SHIFT_ARROW_DOWN  0xF78E
+#define KEY_SHIFT_HOME        0xF78F
+#define KEY_SHIFT_END         0xF790
 
 // Ctrl+Left/Right -- word motion in any readline-style line editor
 // (kernel/lib/klineedit.c). Distinct codes for the same reason the
 // Shift+arrow family above has them.
-#define KEY_CTRL_ARROW_LEFT   0xF7A2
-#define KEY_CTRL_ARROW_RIGHT  0xF7A3
+#define KEY_CTRL_ARROW_LEFT   0xF791
+#define KEY_CTRL_ARROW_RIGHT  0xF792
 
 // F10 -- focuses an application's menu bar (ui/uui_menubar.h), which is
 // what it does on Windows and in KDE. Alt+letter mnemonics are possible
 // now that Alt reaches a window as a bit (see "Ctrl and Alt" below) --
 // they were not while it was an ESC prefix -- but are not built; F10 is
 // the binding both of those desktops offer anyway.
-#define KEY_F10               0xF7A4
+#define KEY_F10               0xF793
 
 // F4 -- exists for Alt+F4, which CLOSES the focused window. That is a
 // window-manager shortcut (userland/wm/wm.c intercepts it before routing
@@ -63,7 +66,7 @@
 // given a combined KEY_ALT_F4 code the way the Shift+arrow family was:
 // nothing is folded for a function key, so the modifier bits are usable
 // here, and this generalises to a future Alt+F<n> for free.
-#define KEY_F4                0xF7A5
+#define KEY_F4                0xF794
 
 // Super (the Windows/Meta key). **IT IS BOTH A MODIFIER AND A KEY**,
 // which is the one place this driver reports a key twice over, and the
@@ -84,7 +87,7 @@
 //
 // Left and right Super send the SAME code. No desktop distinguishes
 // them, and the driver already makes that call for left/right Ctrl.
-#define KEY_SUPER             0xF7A6
+#define KEY_SUPER             0xF795
 
 // --- THE FOUR MODIFIER KEYS, AS KEYS ---------------------------------
 //
@@ -105,10 +108,10 @@
 // reason Super does not distinguish sides. AltGr stays separate from
 // Alt, which is the one distinction this driver has always made and the
 // one that matters on a Nordic layout.
-#define KEY_SHIFT             0xF7A7
-#define KEY_CTRL              0xF7A8
-#define KEY_ALT               0xF7A9 // LEFT Alt (Meta)
-#define KEY_ALTGR             0xF7AA
+#define KEY_SHIFT             0xF796
+#define KEY_CTRL              0xF797
+#define KEY_ALT               0xF798 // LEFT Alt (Meta)
+#define KEY_ALTGR             0xF799
 
 // --- THE REST OF THE FUNCTION ROW ------------------------------------
 //
@@ -124,14 +127,14 @@
 // the block reads as a row. F12 has no caller here and is included
 // anyway -- it is the one key whose absence from a complete-looking run
 // of F1-F11 would look like an oversight rather than a decision.
-#define KEY_F1                0xF7AB
-#define KEY_F5                0xF7AC
-#define KEY_F6                0xF7AD
-#define KEY_F7                0xF7AE
-#define KEY_F8                0xF7AF
-#define KEY_F9                0xF7B0
-#define KEY_F11               0xF7B1
-#define KEY_F12               0xF7B2
+#define KEY_F1                0xF79A
+#define KEY_F5                0xF79B
+#define KEY_F6                0xF79C
+#define KEY_F7                0xF79D
+#define KEY_F8                0xF79E
+#define KEY_F9                0xF79F
+#define KEY_F11               0xF880
+#define KEY_F12               0xF881
 
 // --- AND THE REST OF THE KEYBOARD ------------------------------------
 //
@@ -154,13 +157,13 @@
 // the keyboard layer keeps (keyboard.c): it capitalises letter keys and
 // lights the PS/2 keyboard's LED. Num Lock and Scroll Lock change
 // nothing -- the keypad is always numeric (keyboard.c says why).
-#define KEY_INSERT            0xF7B3
-#define KEY_MENU              0xF7B4 // the "context menu" key, right of AltGr
-#define KEY_CAPS_LOCK         0xF7B5
-#define KEY_NUM_LOCK          0xF7B6
-#define KEY_SCROLL_LOCK       0xF7B7
-#define KEY_PAUSE             0xF7B8
-#define KEY_PRINT_SCREEN      0xF7B9
+#define KEY_INSERT            0xF882
+#define KEY_MENU              0xF883 // the "context menu" key, right of AltGr
+#define KEY_CAPS_LOCK         0xF884
+#define KEY_NUM_LOCK          0xF885
+#define KEY_SCROLL_LOCK       0xF886
+#define KEY_PAUSE             0xF887
+#define KEY_PRINT_SCREEN      0xF888
 
 // ---- Ctrl and Alt ----
 //
