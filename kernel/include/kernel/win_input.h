@@ -23,8 +23,14 @@
 // notice is idempotent and coalesces, so at most WIN_INPUT_NOTICE_RESERVE
 // are ever queued; input never holds more than the rest, so a notice is
 // never refused, and a release is never shed (win_input.c says how).
+//
+// Full, input drops its OLDEST event that is not a release -- the old end
+// because for input the most recent state is the one that matters -- and
+// with only releases queued refuses the new one: a release is never shed,
+// or a client would hold the key or button forever.
+#define WIN_INPUT_MAX 32                             // raw input's share
 #define WIN_INPUT_NOTICE_RESERVE (3 + FSWATCH_MAX)   // FONT, SCREEN, SETTING, the watches
-#define WIN_INPUT_MAX (WIN_EVENT_QUEUE_MAX - WIN_INPUT_NOTICE_RESERVE)
+#define WIN_EVENT_QUEUE_MAX (WIN_INPUT_MAX + WIN_INPUT_NOTICE_RESERVE)
 
 // Polls the mouse and keyboard and queues WIN_EV_RAW_*. A no-op with no
 // compositor. Called from scheduler_idle(), the kernel's one owner of

@@ -55,7 +55,8 @@ static int g_enabled;
 // kbdtap_produced() can reach it without every one of emit()'s ~20
 // call sites having to carry it. The same shape as keyboard.c's
 // `emitting_keycode`, and safe for the same reason: both are set and
-// read inside one non-preemptible interrupt handler.
+// read inside keyboard.c's key_event(), which runs with interrupts off
+// (irq_save()) whichever driver -- IRQ or polled -- reported the key.
 static struct tap_rec *g_open;
 
 int kbdtap_enabled(void) { return g_enabled; }

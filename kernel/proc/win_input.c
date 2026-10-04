@@ -13,6 +13,8 @@
 #include "keyboard.h"
 #include "string.h"
 #include "irqflags.h" // irq_save(): every producer and the consumer share the queue
+#include "kfmt.h"     // klog_printf -- notices past their reserve are said
+#include "klog.h"     // KLOG_ERR
 
 // --- the queue --------------------------------------------------------
 //
@@ -46,9 +48,6 @@ static struct {
     int dropped; // overflow drops since the last reset
     int newest_edge; // the newest slot is a button EDGE: never merged into
 } q;
-
-_Static_assert(WIN_INPUT_MAX >= 8,
-               "the notice reserve leaves input too little of the queue");
 
 void win_input_reset(void) {
     uint64_t f = irq_save();
@@ -124,13 +123,19 @@ static int enqueue(const struct win_event *ev, int edge) {
             if (victim < 0) return 0;
             remove_at(victim);
         }
+        // Never overwrite: unreachable while notices stay within their
+        // reserve, refused rather than trusted.
+        if (q.count == WIN_EVENT_QUEUE_MAX) { q.dropped++; return 0; }
         q.ninput++;
     } else {
         for (int i = 0; i < q.count; i++)
             if (coalesces(&q.ring[(q.head + i) % WIN_EVENT_QUEUE_MAX], ev)) { remove_at(i); break; }
-        // Unreachable for the kernel's four notice types (the reserve
-        // covers them all); a notice of some new kind is refused here
-        // rather than written past the ring.
+        // The reserve covers the kernel's four notice types; more notices
+        // than that means a new kind that does not coalesce -- said
+        // loudly, and refused rather than written past the ring.
+        if (q.count - q.ninput >= WIN_INPUT_NOTICE_RESERVE)
+            klog_printf(KLOG_ERR "win_input: %d notices queued, past the reserve of %d (type %u)\n",
+                        q.count - q.ninput + 1, WIN_INPUT_NOTICE_RESERVE, ev->type);
         if (q.count == WIN_EVENT_QUEUE_MAX) { q.dropped++; return 0; }
     }
     int slot = (q.head + q.count) % WIN_EVENT_QUEUE_MAX;

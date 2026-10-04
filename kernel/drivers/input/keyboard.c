@@ -288,16 +288,8 @@ static int pause_swallow;
 // attached, to the console terminal otherwise -- never both, so the
 // terminal holds nothing stale when the keyboard comes back. `synthetic`
 // is a character with no key of its own (a dead key's accent), which goes
-// down and up at once.
-// What one key sends the console terminal, held until interrupts are
-// back on (key_event()): the line discipline echoes, and an echo can
-// scroll a 1080p console for milliseconds. The most one key produces is
-// a dead key's accent and the key; a few more slots cost nothing.
-#define TTY_DEFER_MAX 4
-static struct { uint16_t c; uint8_t mods; } g_tty_defer[TTY_DEFER_MAX];
-static int g_tty_defer_n;
-static int g_led_defer = -1;   // an LED mask to set after, or -1
-
+// down and up at once. Runs with interrupts off (key_event()), the
+// terminal's echo included -- see docs/roadmap.md for moving that out.
 static void emit(uint16_t c, int synthetic) {
     // The tap's view of the SAME push, so `kbd` can show a keycode and
     // the character it turned into on one line. Here rather than at the
@@ -307,10 +299,7 @@ static void emit(uint16_t c, int synthetic) {
         if (synthetic) kev_synthetic(c);
         else kev_press(emitting_keycode, c);
     } else if (!tty_bypassed(tty_console())) {
-        if (g_tty_defer_n < TTY_DEFER_MAX) {
-            g_tty_defer[g_tty_defer_n].c = c;
-            g_tty_defer[g_tty_defer_n++].mods = current_mods();
-        }
+        tty_input(tty_console(), c, current_mods());
     }
     // else: a held screen with no compositor yet -- the key goes nowhere
 }
@@ -455,24 +444,17 @@ void keyboard_key_event(uint16_t keycode, int down) {
 // is the property the input core exists to provide.
 static void key_event_body(uint16_t keycode, int down, uint16_t wire, int extended);
 
-// A KEY'S TRANSLATION WITH INTERRUPTS OFF: the modifier state,
-// `emitting_keycode`, the dead-key composer and both streams are shared
-// by IRQ producers (PS/2, virtio-input) and polled ones run from
-// scheduler_idle() (USB HID); one CPU, so this is what serialises them.
-// The SLOW halves -- the terminal's echo, the keyboard LED's i8042 wait --
-// are collected inside and done after interrupts come back.
+// A KEY'S WHOLE TRANSLATION WITH INTERRUPTS OFF: the modifier state,
+// `emitting_keycode`, the dead-key composer, both streams AND the console
+// terminal are shared by IRQ producers (PS/2, virtio-input) and polled
+// ones run from scheduler_idle() (USB HID); one CPU, so this is what
+// serialises them -- an IRQ key must not re-enter tty_input() mid-echo.
+// The echo and the LED's i8042 wait are slow to hold interrupts for; a
+// bottom half is on docs/roadmap.md.
 static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     uint64_t f = irq_save();
-    g_tty_defer_n = 0;
-    g_led_defer = -1;
     key_event_body(keycode, down, wire, extended);
-    int n = g_tty_defer_n, led = g_led_defer;
-    uint16_t out[TTY_DEFER_MAX];
-    uint8_t mods[TTY_DEFER_MAX];
-    for (int i = 0; i < n; i++) { out[i] = g_tty_defer[i].c; mods[i] = g_tty_defer[i].mods; }
     irq_restore(f);
-    for (int i = 0; i < n; i++) tty_input(tty_console(), out[i], mods[i]);
-    if (led >= 0) input_set_leds(led);
 }
 
 static void key_event_body(uint16_t keycode, int down, uint16_t wire, int extended) {
@@ -516,7 +498,7 @@ static void key_event_body(uint16_t keycode, int down, uint16_t wire, int extend
     if (keycode == INPUT_KEY_CAPSLOCK) {
         if (down && !caps_held) {
             caps_lock = !caps_lock;
-            g_led_defer = caps_lock ? INPUT_LED_CAPS : 0;   // an i8042 wait: after
+            input_set_leds(caps_lock ? INPUT_LED_CAPS : 0);
         }
         caps_held = down;
     }

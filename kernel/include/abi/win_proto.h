@@ -1499,15 +1499,7 @@ static inline uint64_t win_glyph_offset(uint32_t index, int w, int h) {
     return (uint64_t)index * (uint64_t)w * (uint64_t)h;
 }
 
-// How many events the kernel holds for the compositor, raw input and its
-// notices (WIN_EV_SCREEN, WIN_EV_FONT, WIN_EV_SETTING, WIN_EV_FSWATCH)
-// together, in arrival order. A notice coalesces with an older copy of
-// itself and always has a slot reserved; input full drops its OLDEST
-// event that is not a release -- the old end because for input the most
-// recent state is the one that matters -- and with only releases queued
-// refuses the new one: a release is never shed, or a client would hold
-// the key or button forever. Motion coalesces into one slot first.
-// (kernel/proc/win_input.c, kernel/win_input.h.)
-#define WIN_EVENT_QUEUE_MAX 32
+// The compositor's kernel event queue -- its depth, and what it sheds --
+// is kernel-internal: WIN_EVENT_QUEUE_MAX in kernel/win_input.h.
 
 #endif

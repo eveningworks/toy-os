@@ -6145,6 +6145,24 @@ frame), wait, `gui compositor`. The first frame of a session is excluded
 from any conclusion -- it measured 675 ms, because it decodes the
 wallpaper, the icons and the font.
 
+### Keyboard console echo and LED writes run from a bottom half, not with interrupts off
+
+`keyboard.c`'s `key_event()` runs whole with interrupts off -- that is
+what serialises the IRQ drivers (PS/2, virtio-input) with the polled
+one (USB HID) over the modifier state, the dead-key composer, the key
+streams and the console terminal. Two slow things ride inside it: the
+terminal's ECHO, which can scroll a 1080p console, and the Caps Lock
+LED, whose i8042 write busy-waits. Deferring them to just after
+`irq_restore()` was tried and rejected in review: an IRQ key could then
+re-enter `tty_input()` on the same terminal mid-echo, bytes reordered
+around a dead key, and PS/2 and virtio gain nothing (their handler is an
+interrupt gate). Linux's shape is a bottom half: atkbd sets LEDs from a
+workqueue, and the tty layer pushes input from a work item
+(`tty_flip_buffer_push()`). **Measure first, on the laptop**: how long
+interrupts stay off for one echoed key at 1080p, and whether that shows
+as input latency, before building a work-item mechanism this kernel does
+not have yet.
+
 ### Runtime mode switching: a display driver can set a mode after boot
 
 virtio-gpu can program a mode -- that is what its probe does, and what
