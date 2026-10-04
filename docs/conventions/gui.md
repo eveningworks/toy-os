@@ -3456,10 +3456,10 @@ real scanout hardware does. Do not write a pixel assertion for one.
   unchanged (X11's `KeyRelease`, Wayland's `wl_keyboard.key` state,
   Windows' `WM_KEYUP`; press-only was this protocol's outlier). Five
   things to know. **A release cannot ride the console byte stream** --
-  presses go through `tty_input()` and a terminal is bytes, so releases
-  take a parallel transition queue (`keyboard_try_get_transition()`)
-  carrying exactly what the byte stream cannot: all releases, and both
-  edges of the modifiers. **`KEY_SHIFT`/`KEY_CTRL`/`KEY_ALT`/`KEY_ALTGR`
+  a terminal is bytes -- so while a compositor holds the keyboard EVERY
+  key event goes to one ordered queue of edges instead
+  (`keyboard_try_get_key()`): presses, releases, and both edges of the
+  modifiers. **`KEY_SHIFT`/`KEY_CTRL`/`KEY_ALT`/`KEY_ALTGR`
   exist ONLY on that path** and are never pushed as bytes, or pressing
   Shift would put a character in front of every shell. **A release
   carries what the PRESS produced**, not what the key would produce now

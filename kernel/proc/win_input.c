@@ -2,7 +2,7 @@
 // win_role.c for who the compositor is.
 //
 // Reads here CONSUME (`mouse_get_wheel_delta()`,
-// `keyboard_try_getchar_mods()`), so there must be exactly one reader:
+// `keyboard_try_get_key()`), so there must be exactly one reader:
 // this poll, and only while a compositor holds the role.
 #include "win_input.h"
 #include "win_role.h"
@@ -112,6 +112,10 @@ static int queue_push(const struct win_event *ev, int edge) {
 
 int win_input_push(const struct win_event *ev) { return queue_push(ev, 0); }
 
+// Free slots in the compositor's queue: what a drain may take without
+// queue_push() evicting older input to fit it.
+static int queue_room(void) { return WIN_EVENT_QUEUE_MAX - q.count; }
+
 const void *win_input_wait_chan(void) { return &q; }
 
 int win_input_pop(struct win_event *out) {
@@ -200,31 +204,23 @@ void win_input_poll(void) {
     g_last_x = x;
     g_last_y = y;
 
-    // KEYS, PRESSES AND RELEASES IN THE ORDER THEY HAPPENED
-    // (keyboard_try_get_key()). This read one press from the ring per
-    // poll and then drained every release, so a press, its release and a
-    // second press queued between two polls reached the WM as press,
-    // release, RELEASE, and only on the next poll the second press -- held
-    // forever by a client tracking WIN_EV_KEY_UP. DRAINED, not sampled:
-    // the budget bounds the loop against a device reporting nonsense, at
-    // the two queues' combined depth.
+    // KEYS, in the order they happened (keyboard_try_get_key()), and
+    // ONLY AS MANY AS THE QUEUE HAS ROOM FOR: what does not fit stays in
+    // the keyboard's queue for the next poll, so input is never evicted
+    // here to make room for input.
     int kcode = 0, kdown = 0;
     uint8_t kmods = 0;
-    for (int budget = 128; budget > 0; budget--) {
-        if (!keyboard_try_get_key(&kcode, &kdown, &kmods)) break;
+    while (queue_room() > 0 && keyboard_try_get_key(&kcode, &kdown, &kmods))
         push(kdown ? WIN_EV_RAW_KEY : WIN_EV_RAW_KEY_UP, kcode, 0, kmods);
-    }
+
+    // THE SAME KEYS BY POSITION (api/keyboard.h), under the same room
+    // rule. Always pushed: whether any window wants them is the
+    // compositor's to know, not this queue's.
     uint16_t tcode = 0;
     int tdown = 0;
     uint8_t tmods = 0;
-
-    // THE SAME KEYS BY POSITION (api/keyboard.h), drained for the same
-    // reason. Always pushed: whether any window wants them is the
-    // compositor's to know, not this queue's.
-    for (int budget = 64; budget > 0; budget--) {
-        if (!keyboard_try_get_physical(&tcode, &tdown, &tmods)) break;
+    while (queue_room() > 0 && keyboard_try_get_physical(&tcode, &tdown, &tmods))
         push(WIN_EV_RAW_KEY_PHYS, (int)tcode, tdown, tmods);
-    }
 
     int wheel = mouse_get_wheel_delta();
     if (wheel != 0) push(WIN_EV_RAW_WHEEL, wheel, 0, 0);

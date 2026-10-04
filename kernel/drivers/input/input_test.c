@@ -22,6 +22,7 @@
 #include "kfmt.h"            // klog_printf -- name the unreachable key
 #include "mouse.h"
 #include "tty.h"              // the bypass: which side of the split a key lands on
+#include "win_proto.h"        // WIN_EVENT_QUEUE_MAX: how much one poll may take
 #include "scheduler.h"
 #include "ktest.h"
 #include "driver.h"
@@ -586,14 +587,28 @@ KTEST("input", "unregistering a source takes its `lsdrv` row with it") {
 
 // ONE KEY PRESS WITH A MODIFIER HELD, read back as (code, mods) pairs.
 // Returns how many codes arrived, up to `cap`.
+// A WINDOW reads the key event stream (presses only are counted here,
+// and the modifier keys' own edges are skipped); a TERMINAL reads bytes.
+static int is_modifier_code(int c) {
+    return c == KEY_SHIFT || c == KEY_CTRL || c == KEY_ALT || c == KEY_ALTGR || c == KEY_SUPER;
+}
+
 static int modified_key(uint16_t mod, uint16_t key, int *codes, uint8_t *mods, int cap) {
     uint8_t m = 0;
+    int window = tty_bypassed(tty_console());
     while (keyboard_try_getchar_mods(&m) != -1) { }
+    while (keyboard_try_get_key(0, 0, 0)) { }
     input_report_key(mod, 1);
     input_report_key(key, 1);
     input_report_key(key, 0);
     input_report_key(mod, 0);
     int n = 0;
+    if (window) {
+        int c, d;
+        while (keyboard_try_get_key(&c, &d, &m))
+            if (d && !is_modifier_code(c) && n < cap) { codes[n] = c; mods[n++] = m; }
+        return n;
+    }
     for (int c; n < cap && (c = keyboard_try_getchar_mods(&m)) != -1; n++) {
         codes[n] = c;
         mods[n] = m;
@@ -683,121 +698,144 @@ KTEST("input", "the physical stream reports positions, both edges, and no repeat
     KTEST_ASSERT_EQ(downs[3], 0);
 }
 
-// --- dead keys through the DRIVER: the release bookkeeping and the keypad ---
+// --- THE KEY EVENT STREAM, as a compositor reads it -----------------------
 //
-// The composer itself is kernel/lib/keyboard_layout_test.c's; these are
-// about what keyboard.c does with its output. A fixture layout, so no
-// XKB data is assumed, and the real one is put back before asserting.
+// keyboard_try_get_key(): one ordered queue of edges while the console is
+// bypassed. A fixture layout, so no XKB data is assumed; the real one is
+// reloaded after the preemption guard drops (it reads /etc/kbs, whose
+// mount lock sleeps). Nothing is asserted while preemption is off.
 static const char DEAD_FIXTURE[] =
     "kc_18=e\nkc_45=x\nkc_13=dead:acute\n"
     "dead:acute=0xB4\ndead:acute:e=0xE9\n";
 
-struct drv_keys { int n, key[8]; int ups, up[8]; };
+#define EVLOG_MAX 600
+struct evlog { int n, code[EVLOG_MAX], down[EVLOG_MAX]; };
+static struct evlog g_ev;   // ~5 KB: off the kernel stack
 
 static void tap(uint16_t kc) { input_report_key(kc, 1); input_report_key(kc, 0); }
 
-static void drain_all(struct drv_keys *k) {
-    uint8_t m;
-    uint16_t code; int down;
-    for (int c; (c = keyboard_try_getchar_mods(&m)) != -1; )
-        if (k->n < 8) k->key[k->n++] = c;
-    while (keyboard_try_get_transition(&code, &down, &m))
-        if (!down && k->ups < 8) k->up[k->ups++] = code;
-}
-
-static void dead_sequence(const uint16_t *kcs, int n, struct drv_keys *out) {
+// Runs `script` as a window would see it and records every event, read
+// the way win_input_poll() reads: at most WIN_EVENT_QUEUE_MAX per poll.
+static void window_events(void (*script)(void)) {
     char name[KB_LAYOUT_NAME_MAX];
     k_strlcpy(name, keyboard_layout_current(), sizeof name);
     struct tty *t = tty_console();
     int was = tty_bypassed(t);
-    k_memset(out, 0, sizeof *out);
+    k_memset(&g_ev, 0, sizeof g_ev);
 
     scheduler_preempt_disable();
-    struct drv_keys junk = { 0 };
-    drain_all(&junk);
-    tty_set_bypass(t, 1);                 // a window's view: keys whole
+    tty_set_bypass(t, 1);
+    while (keyboard_try_get_key(0, 0, 0)) { }
     keyboard_layout_load_text(DEAD_FIXTURE, sizeof DEAD_FIXTURE - 1);
-    for (int i = 0; i < n; i++) tap(kcs[i]);
-    drain_all(out);
+    script();
+    int c, d, more = 1;
+    uint8_t m;
+    while (more) {   // one "poll" per pass
+        more = 0;
+        for (int room = WIN_EVENT_QUEUE_MAX; room > 0; room--) {
+            if (!keyboard_try_get_key(&c, &d, &m)) break;
+            if (g_ev.n < EVLOG_MAX) { g_ev.code[g_ev.n] = c; g_ev.down[g_ev.n++] = d; }
+            if (room == 1) more = 1;
+        }
+    }
     keyboard_layout_compose_reset();
     tty_set_bypass(t, was);
     scheduler_preempt_enable();
-    // AFTER the guard drops: reloading reads /etc/kbs, and the mount's
-    // lock is a sleeping one (CLAUDE.md, the filesystem).
     keyboard_layout_load(name);
 }
 
+// Every code that went down ends up, and nothing comes up that was not
+// down (autorepeat is several presses before one release).
+static int every_down_has_up(void) {
+    static uint8_t down[256];
+    k_memset(down, 0, sizeof down);
+    for (int i = 0; i < g_ev.n; i++) {
+        int c = g_ev.code[i] & 0xFF;
+        if (g_ev.down[i]) down[c] = 1;
+        else if (!down[c]) return 0;         // a release with no press
+        else down[c] = 0;
+    }
+    for (int c = 0; c < 256; c++) if (down[c]) return 0;
+    return 1;
+}
+static int still_held(int code) {
+    int n = 0;
+    for (int i = 0; i < g_ev.n; i++)
+        if (g_ev.code[i] == code) n = g_ev.down[i] ? 1 : 0;
+    return n;
+}
+
+static void script_dead_x(void) { tap(13); tap(45); }
 KTEST("input", "dead key + a key it does not compose with: both characters come back UP") {
-    // Two characters from one press. The accent is synthesized, so it
-    // must go up at once; the key's own release must report the key --
-    // or a client tracking WIN_EV_KEY_UP holds 'x' forever.
-    static const uint16_t seq[] = { 13, 45 };          // dead acute, x
-    struct drv_keys k;
-    dead_sequence(seq, 2, &k);
-    KTEST_ASSERT_EQ(k.n, 2);
-    KTEST_ASSERT_EQ(k.key[0], 0xB4);
-    KTEST_ASSERT_EQ(k.key[1], 'x');
-    KTEST_ASSERT_EQ(k.ups, 2);
-    KTEST_ASSERT_EQ(k.up[0], 0xB4);
-    KTEST_ASSERT_EQ(k.up[1], 'x');
+    // Two characters from one press. The accent has no key, so it goes
+    // down and up at once; the key's own release reports the key.
+    window_events(script_dead_x);
+    KTEST_ASSERT_EQ(g_ev.n, 4);
+    KTEST_ASSERT(g_ev.code[0] == 0xB4 && g_ev.down[0] == 1);
+    KTEST_ASSERT(g_ev.code[1] == 0xB4 && g_ev.down[1] == 0);
+    KTEST_ASSERT(g_ev.code[2] == 'x' && g_ev.down[2] == 1);
+    KTEST_ASSERT(g_ev.code[3] == 'x' && g_ev.down[3] == 0);
 }
 
+static void script_dead_kp(void) { tap(13); tap(INPUT_KEY_KP1); tap(18); }
 KTEST("input", "a keypad character ends a pending accent like any other key") {
-    // "dead acute, KP1, e" is "acute 1 e" -- the keypad is text, so the
-    // accent must not survive it and land on the e.
-    static const uint16_t seq[] = { 13, INPUT_KEY_KP1, 18 };
-    struct drv_keys k;
-    dead_sequence(seq, 3, &k);
-    KTEST_ASSERT_EQ(k.n, 3);
-    KTEST_ASSERT_EQ(k.key[0], 0xB4);
-    KTEST_ASSERT_EQ(k.key[1], '1');
-    KTEST_ASSERT_EQ(k.key[2], 'e');
+    // "dead acute, KP1, e" is "acute 1 e" -- the keypad is text.
+    window_events(script_dead_kp);
+    KTEST_ASSERT_EQ(g_ev.n, 6);
+    KTEST_ASSERT_EQ(g_ev.code[0], 0xB4);
+    KTEST_ASSERT_EQ(g_ev.code[2], '1');
+    KTEST_ASSERT_EQ(g_ev.code[4], 'e');
 }
 
-// --- the compositor's read: keyboard_try_get_key(), as win_input_poll()
-// calls it -- in a loop, after everything below has queued.
-struct ordered { int n, code[12], down[12]; };
-
-static void ordered_sequence(const uint16_t *kcs, int n, struct ordered *out) {
-    char name[KB_LAYOUT_NAME_MAX];
-    k_strlcpy(name, keyboard_layout_current(), sizeof name);
-    struct tty *t = tty_console();
-    int was = tty_bypassed(t);
-    k_memset(out, 0, sizeof *out);
-
-    scheduler_preempt_disable();
-    int c, d;
-    uint8_t m;
-    while (keyboard_try_get_key(&c, &d, &m)) { }
-    tty_set_bypass(t, 1);
-    keyboard_layout_load_text(DEAD_FIXTURE, sizeof DEAD_FIXTURE - 1);
-    for (int i = 0; i < n; i++) tap(kcs[i]);
-    while (out->n < 12 && keyboard_try_get_key(&c, &d, &m)) {
-        out->code[out->n] = c;
-        out->down[out->n++] = d;
-    }
-    keyboard_layout_compose_reset();
-    tty_set_bypass(t, was);
-    scheduler_preempt_enable();
-    keyboard_layout_load(name);   // reads /etc/kbs: not under the guard
-}
-
-KTEST("input", "the compositor reads presses and releases in the order they happened") {
-    // Two ordinary keys typed between two polls, then a dead key's two
-    // characters: each press must come before ITS release, and the
-    // second press before the second release -- the old poll read one
-    // press then every release, so the second key arrived after its own
-    // release and stayed held.
-    static const uint16_t seq[] = { 18, 45, 13, 45 };   // e, x, dead acute, x
-    struct ordered o;
-    ordered_sequence(seq, 4, &o);
+static void script_interleave(void) { tap(18); tap(45); tap(13); tap(45); }
+KTEST("input", "a window gets presses and releases in the order they happened") {
+    // Each press before ITS release, the second key's press before the
+    // second key's release -- two queues read separately broke exactly that.
+    window_events(script_interleave);
     static const int want_code[] = { 'e', 'e', 'x', 'x', 0xB4, 0xB4, 'x', 'x' };
-    static const int want_down[] = { 1, 0, 1, 0, 1, 0, 1, 0 };
-    KTEST_ASSERT_EQ(o.n, 8);
+    KTEST_ASSERT_EQ(g_ev.n, 8);
     for (int i = 0; i < 8; i++) {
-        KTEST_ASSERT_EQ(o.code[i], want_code[i]);
-        KTEST_ASSERT_EQ(o.down[i], want_down[i]);
+        KTEST_ASSERT_EQ(g_ev.code[i], want_code[i]);
+        KTEST_ASSERT_EQ(g_ev.down[i], (i % 2) == 0);
     }
+}
+
+#define BURST 100
+static void script_burst(void) { for (int i = 0; i < BURST; i++) tap(i % 2 ? 45 : 18); }
+KTEST("input", "a burst typed between two polls all arrives, in order, every press released") {
+    // 200 events, far more than a compositor's queue holds: each poll
+    // takes what fits and the rest WAITS -- nothing evicted, nothing lost.
+    window_events(script_burst);
+    KTEST_ASSERT_EQ(g_ev.n, 2 * BURST);
+    KTEST_ASSERT(every_down_has_up());
+    for (int i = 0; i < BURST; i++) {
+        int want = i % 2 ? 'x' : 'e';
+        KTEST_ASSERT_EQ(g_ev.code[2 * i], want);
+        KTEST_ASSERT_EQ(g_ev.down[2 * i], 1);
+        KTEST_ASSERT_EQ(g_ev.code[2 * i + 1], want);
+        KTEST_ASSERT_EQ(g_ev.down[2 * i + 1], 0);
+    }
+}
+
+static void script_repeat(void) {
+    input_report_key(45, 1);                         // x held...
+    input_report_key(18, 1);                         // ...then e, which repeats
+    for (int i = 0; i < 400; i++) input_report_key(18, 1);
+    input_report_key(18, 0);
+    input_report_key(45, 0);
+}
+KTEST("input", "a long autorepeat cannot crowd out a release that is owed") {
+    // 400 repeats overflow the queue: the newest presses are refused,
+    // and both releases still arrive -- a queued press always has room
+    // for its release.
+    window_events(script_repeat);
+    KTEST_ASSERT(g_ev.n > 4);
+    KTEST_ASSERT(every_down_has_up());
+    KTEST_ASSERT(!still_held('e'));
+    KTEST_ASSERT(!still_held('x'));
+    KTEST_ASSERT_EQ(g_ev.code[0], 'x');
+    KTEST_ASSERT_EQ(g_ev.code[g_ev.n - 1], 'x');   // the last release, last
+    KTEST_ASSERT_EQ(g_ev.down[g_ev.n - 1], 0);
 }
 
 KTEST("input", "every KEY_* special has a C1 low byte and IS_SPECIAL_KEY knows it") {

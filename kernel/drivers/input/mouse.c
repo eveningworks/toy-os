@@ -301,7 +301,7 @@ void mouse_feed_abs(int x, int y, int max_x, int max_y) {
 // so a press and its release both landing between two passes read back
 // as "nothing happened". evdev emits BTN_* transitions and NT's mouse
 // class driver queues per-button DOWN/UP flags; keyboard.c beside this
-// file already does it (keyboard_try_get_transition). The thumb buttons
+// file already does it (keyboard_try_get_key). The thumb buttons
 // made it visible because a thumb tap is short.
 // Each edge keeps WHERE the pointer was when the driver reported it: a
 // press and a release a long way apart, drained in one pass, must not

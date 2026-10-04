@@ -83,8 +83,10 @@ static uint8_t current_mods(void) {
     return m;
 }
 
-// A key has been decoded. Hand it to the console terminal, which runs
-// the line discipline over it and queues what a reader should see.
+// A key has been decoded (ring_push()). Hand it to the console terminal,
+// which runs the line discipline over it and queues what a reader should
+// see -- or, while a compositor holds the keyboard, to the event stream
+// below instead.
 //
 // EVERY CHARACTER THIS DRIVER PRODUCES FITS IN A BYTE (Latin-1); a
 // KEY_* special does not (api/keyboard.h), and the terminal turns it
@@ -94,95 +96,102 @@ static uint8_t current_mods(void) {
 // The wake that used to be here is tty_enqueue()'s now, for the same
 // reason and with the same restraint: this runs in the IRQ1 handler, so
 // only scheduler state and an already-saved trapframe may be touched.
-// --- key transitions: what the byte stream cannot carry --------------
-//
-// See keyboard.h for the rule and the reasoning. Everything here runs in
-// the IRQ1 handler, so it does no more than the tty push beside it does:
-// no allocation, no wake, no lock.
 
-// What code each evdev keycode produced when it went DOWN, so its
-// release can carry the SAME one. Zero means "that key produced nothing
-// on the way down", which is the common case for a key with no glyph on
-// this layout -- and a release with nothing to report is dropped rather
-// than guessed at.
+// --- THE KEY EVENT STREAM: what a compositor reads ------------------
 //
-// Indexed by evdev keycode. 128 covers every code this kernel reports
-// (INPUT_KEY_COMPOSE, 127, is the highest); anything above it is
-// range-checked away rather than wrapped, because a driver reporting an
-// unexpected keycode must not be able to write past this array.
-#define KEY_DOWN_MAX 128
-static uint16_t down_code[KEY_DOWN_MAX]; // a KEY_* special is 16 bits
-
-// Sized so it cannot realistically fill: a human cannot have 32 keys
-// down, and the compositor drains this every frame. On overflow the
-// OLDEST is dropped, which is stated rather than silent -- a dropped
-// release is a key that stays down forever from the client's point of
-// view, so the choice matters even though nothing should reach it.
-#define TRANS_MAX 64
-struct key_transition {
+// See keyboard.h (keyboard_try_get_key()). While a compositor holds the
+// keyboard (the console tty is bypassed), EVERY key event goes here and
+// nowhere else, in the order it happened: each press as its translated
+// code -- autorepeats and dead-key output included -- and each release,
+// as one queue of down/up edges. Linux's evdev shape. Everything here
+// runs in the IRQ handler: no allocation, no wake, no lock.
+//
+// **THE INVARIANT: A PRESS THAT IS QUEUED ALWAYS HAS ROOM FOR ITS
+// RELEASE.** A press is admitted only while the free slots after it
+// still cover the release of every key whose press is queued and not
+// yet released (`kev_held`), so a release is never refused and never
+// evicts anything. Under overflow the NEWEST press is dropped, whole --
+// and a key whose press was dropped has its release dropped too
+// (`kev_delivered`), so a client never sees half of a key. Nothing
+// already queued is ever evicted.
+#define KEV_MAX 256          // a burst of a hundred-odd keys between two polls
+#define KEY_DOWN_MAX 128     // evdev keycodes tracked; INPUT_KEY_COMPOSE is 127
+struct key_event_rec {
     uint16_t code;
     uint8_t  down;
     uint8_t  mods;
 };
-static struct key_transition trans[TRANS_MAX];
-static unsigned trans_head, trans_tail;
+static struct key_event_rec kev[KEV_MAX];
+static unsigned kev_head, kev_tail;
+static uint8_t  kev_delivered[KEY_DOWN_MAX];   // this key's press is queued
+static uint16_t kev_code[KEY_DOWN_MAX];        // ...as this code: its release's
+static int kev_held;                           // keys with a release owed
+static unsigned kev_dropped;                   // presses refused, for diagnosis
 
-// `down` is 1/0 for an edge, or TRANS_RING: a MARKER saying "the next
-// key in the console's ring was pushed here" -- see keyboard_try_get_key().
-#define TRANS_RING 2
-
-static void trans_put(uint16_t code, int down) {
-    unsigned next = (trans_head + 1) % TRANS_MAX;
-    if (next == trans_tail) trans_tail = (trans_tail + 1) % TRANS_MAX; // drop oldest
-    trans[trans_head].code = code;
-    trans[trans_head].down = (uint8_t)down;
-    trans[trans_head].mods = current_mods();
-    trans_head = next;
+static int kev_free(void) {
+    return (int)((kev_tail + KEV_MAX - kev_head - 1) % KEV_MAX);
 }
 
-static void trans_push(uint16_t code, int down) {
+static void kev_put(uint16_t code, int down) {
+    if (kev_free() == 0) { kev_dropped++; return; }   // unreachable by the invariant
+    kev[kev_head] = (struct key_event_rec){ code, (uint8_t)(down ? 1 : 0), current_mods() };
+    kev_head = (kev_head + 1) % KEV_MAX;
+}
+
+// A press of `keycode` that produced `code`. A REPEAT (the key is
+// already delivered) costs one slot; a new hold costs one more, the
+// release it will owe. A RELEASE REPORTS WHAT THE FIRST PRESS PRODUCED:
+// hold W ('w'), press Shift, and the repeats say 'W' -- the release must
+// still say 'w', or a client that saw 'w' go down holds it forever.
+static void kev_press(uint16_t keycode, uint16_t code) {
     if (!code) return;
-    trans_put(code, down ? 1 : 0);
+    if (keycode >= KEY_DOWN_MAX) {            // untracked: down and up at once
+        if (kev_free() < kev_held + 2) { kev_dropped++; return; }
+        kev_put(code, 1);
+        kev_put(code, 0);
+        return;
+    }
+    int repeat = kev_delivered[keycode];
+    if (kev_free() < kev_held + (repeat ? 1 : 2)) { kev_dropped++; return; }
+    kev_put(code, 1);
+    if (!repeat) {
+        kev_delivered[keycode] = 1;
+        kev_code[keycode] = code;
+        kev_held++;
+    }
 }
 
-int keyboard_try_get_transition(uint16_t *out_code, int *out_down,
-                                 uint8_t *out_mods) {
-    while (trans_tail != trans_head) {
-        struct key_transition t = trans[trans_tail];
-        trans_tail = (trans_tail + 1) % TRANS_MAX;
-        if (t.down == TRANS_RING) continue;   // a position marker, not an edge
-        if (out_code) *out_code = t.code;
-        if (out_down) *out_down = t.down;
-        if (out_mods) *out_mods = t.mods;
-        return 1;
-    }
-    return 0;
+static void kev_release(uint16_t keycode) {
+    if (keycode >= KEY_DOWN_MAX || !kev_delivered[keycode]) return;
+    kev_delivered[keycode] = 0;
+    kev_held--;
+    kev_put(kev_code[keycode], 0);
+}
+
+// A character with no key of its own (a dead key's accent, typed before
+// the key that ended it): down and up together, or neither.
+static void kev_synthetic(uint16_t code) {
+    if (kev_free() < kev_held + 2) { kev_dropped++; return; }
+    kev_put(code, 1);
+    kev_put(code, 0);
+}
+
+// Emptied whenever the keyboard changes hands, so a new compositor is
+// never handed the last one's events -- or a release for a press it
+// never saw.
+static void kev_reset(void) {
+    kev_head = kev_tail = 0;
+    k_memset(kev_delivered, 0, sizeof kev_delivered);
+    kev_held = 0;
 }
 
 int keyboard_try_get_key(int *out_code, int *out_down, uint8_t *out_mods) {
-    // Transitions in order; a marker stands for the ring key pushed at
-    // that point, so a press, its release and the next press come out
-    // in the order they happened however many queued before a poll.
-    while (trans_tail != trans_head) {
-        struct key_transition t = trans[trans_tail];
-        trans_tail = (trans_tail + 1) % TRANS_MAX;
-        if (t.down != TRANS_RING) {
-            if (out_code) *out_code = t.code;
-            if (out_down) *out_down = t.down;
-            if (out_mods) *out_mods = t.mods;
-            return 1;
-        }
-        int c = keyboard_try_getchar_mods(out_mods);
-        if (c == -1) continue;              // the ring dropped it: nothing to report
-        if (out_code) *out_code = c;
-        if (out_down) *out_down = 1;
-        return 1;
-    }
-    // Ring keys with no marker (a marker dropped on overflow): still keys.
-    int c = keyboard_try_getchar_mods(out_mods);
-    if (c == -1) return 0;
-    if (out_code) *out_code = c;
-    if (out_down) *out_down = 1;
+    if (kev_tail == kev_head) return 0;
+    struct key_event_rec e = kev[kev_tail];
+    kev_tail = (kev_tail + 1) % KEV_MAX;
+    if (out_code) *out_code = e.code;
+    if (out_down) *out_down = e.down;
+    if (out_mods) *out_mods = e.mods;
     return 1;
 }
 
@@ -235,42 +244,16 @@ static uint16_t emitting_keycode;
 // Bytes still to drop from a Pause sequence -- see keyboard_feed_byte().
 static int pause_swallow;
 
-// Whether ring_push() has already run for THIS edge, which is what lets
-// the rule above be "first press, but last push within a press".
-static int first_push_done;
-
+// A press produced `c`: to the compositor's event stream while it holds
+// the keyboard, to the console terminal otherwise -- never both, so the
+// terminal holds nothing stale when the keyboard comes back.
 static void ring_push(uint16_t c) {
-    // REMEMBERED BEFORE IT IS SENT, so the release of this key can carry
-    // the same code.
-    //
-    // **THE FIRST PRESS OF A HELD KEY WINS, NOT THE LAST**, and the
-    // difference is autorepeat. Hold W (which reports 'w'), then press
-    // Shift: the repeats that follow report 'W', and recording each of
-    // them would make the eventual release report 'W' for a key the
-    // client watched go down as 'w' -- so it would clear nothing and
-    // hold 'w' forever. Keeping the first means the release always ends
-    // the hold it started. A non-zero entry IS "this key is already
-    // down", so no separate held flag is needed.
-    //
-    // Within a single press the LAST push still wins, which is what
-    // makes Alt-B (pushed as ESC then 'b') release as 'b' rather than as
-    // ESC -- those two pushes share one keycode and one edge.
-    if (emitting_keycode < KEY_DOWN_MAX &&
-        (!down_code[emitting_keycode] || !first_push_done)) {
-        down_code[emitting_keycode] = c;
-    }
-    first_push_done = 1;
     // The tap's view of the SAME push, so `kbd` can show a keycode and
     // the character it turned into on one line. Here rather than at the
     // ~20 call sites for the reason `emitting_keycode` is here.
     kbdtap_produced(c);
-    tty_input(tty_console(), c, current_mods());
-    // A COMPOSITOR READS PRESSES FROM THE RING AND RELEASES FROM `trans`:
-    // mark where this press fell among the releases, or a release queued
-    // behind it can overtake it (keyboard_try_get_key()). Only bypassed,
-    // where one push is exactly one ring entry; a terminal may make it
-    // several bytes or none.
-    if (tty_bypassed(tty_console())) trans_put(c, TRANS_RING);
+    if (tty_bypassed(tty_console())) kev_press(emitting_keycode, c);
+    else tty_input(tty_console(), c, current_mods());
 }
 
 // Defined below, beneath keyboard_key_event() which is its public face.
@@ -458,7 +441,11 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
         // answer and the one that makes a Shift line readable: the
         // character column is empty and the modifier column is not.
         kbdtap_key(wire, extended, keycode, down, current_mods());
-        trans_push(mod_code, down);
+        // A modifier's autorepeat is not an event (X11 and Wayland do not
+        // repeat one either): only its first press is queued.
+        if (!tty_bypassed(tty_console())) return;
+        if (!down) kev_release(keycode);
+        else if (keycode >= KEY_DOWN_MAX || !kev_delivered[keycode]) kev_press(keycode, mod_code);
         return;
     }
 
@@ -470,22 +457,16 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     // carry it.
     kbdtap_key(wire, extended, keycode, down, current_mods());
 
-    // A RELEASE REPORTS WHAT THE PRESS PRODUCED, and then forgets it.
-    // Clearing is what stops a key that is pressed, released, and then
-    // pressed again on a layout where it now produces nothing from
-    // reporting the OLD code on its second release.
+    // A RELEASE REPORTS WHAT THE PRESS PRODUCED (kev_release()) -- and
+    // nothing at all for a key whose press produced nothing.
     if (!down) {
-        if (keycode < KEY_DOWN_MAX) {
-            trans_push(down_code[keycode], 0);   // a 0 here is dropped by trans_push
-            down_code[keycode] = 0;
-        }
+        if (tty_bypassed(tty_console())) kev_release(keycode);
         return;
     }
 
     // Recorded by ring_push() below, whichever of the many paths out of
     // this function ends up taking it.
     emitting_keycode = keycode;
-    first_push_done = 0;
 
     // Ctrl+Left/Right are word motion in every readline-ish line editor,
     // so they get their own codes -- exactly the KEY_SHIFT_ARROW_*
@@ -596,14 +577,14 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
         uint8_t out[2];
         int n = keyboard_layout_compose(sym, out);
         // TWO CHARACTERS FROM ONE PRESS (an accent, then the key): the
-        // accent is synthesized, so it goes down AND up here, and the key
-        // is what this keycode's release reports -- otherwise a client
-        // tracking WIN_EV_KEY_UP sees the second character held forever.
-        for (int i = 0; i < n; i++) {
-            if (i == n - 1) first_push_done = 0;   // the last push is recorded
-            ring_push(out[i]);
-            if (i < n - 1) trans_push(out[i], 0);
+        // accent has no key of its own, so it goes down AND up at once,
+        // and the key is what this keycode's release reports.
+        if (n == 2) {
+            kbdtap_produced(out[0]);
+            if (tty_bypassed(tty_console())) kev_synthetic(out[0]);
+            else tty_input(tty_console(), out[0], current_mods());
         }
+        if (n > 0) ring_push(out[n - 1]);
         return;
     }
     int c = keyboard_layout_spacing(sym);
@@ -649,6 +630,7 @@ static int g_blocking_suspended;
 static int g_console_claimed;
 
 void keyboard_suspend_blocking(int on) {
+    int was = g_blocking_suspended;
     g_blocking_suspended = on ? 1 : 0;
     // ...AND THE CONSOLE'S LINE DISCIPLINE IS MUTED WITH IT. A
     // compositor reads raw input itself (win_input.c), so a discipline
@@ -659,6 +641,7 @@ void keyboard_suspend_blocking(int on) {
     // compositor's hold is recorded -- registering, deregistering, a
     // kill and a fault are all the same call.
     tty_set_bypass(tty_console(), g_blocking_suspended);
+    if (was != g_blocking_suspended) kev_reset();   // the keyboard changed hands
 }
 void keyboard_claim_console(int on)    { g_console_claimed = on ? 1 : 0; }
 int  keyboard_console_claimed(void)    { return g_console_claimed; }

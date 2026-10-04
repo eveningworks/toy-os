@@ -4457,8 +4457,10 @@ put bytes in front of every shell in the system to serve a consumer that
 is not a shell.
 
 So there is a second, parallel **transition queue**
-(`keyboard_try_get_transition()`), and its contents are defined by one
-rule: **everything the byte stream cannot represent** -- all releases,
+(`keyboard_try_get_transition()` -- since 2026-10-04 merged into ONE
+ordered event stream, `keyboard_try_get_key()`, because two queues read
+separately lost the order; docs/conventions/kernel.md), and its contents
+were defined by one rule: **everything the byte stream cannot represent** -- all releases,
 and both edges of the four modifier keys. Ordinary presses are not
 duplicated onto it. `win_input.c` turns a transition into
 `WIN_EV_RAW_KEY` (a modifier press) or `WIN_EV_RAW_KEY_UP` (any

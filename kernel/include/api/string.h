@@ -130,10 +130,9 @@ int k_isblank(char c);
 // re-checking against the code before believing it.)
 int k_tolower(int c);
 int k_toupper(int c);
-// The same over Latin-1 (one byte, 0..0xFF): ASCII, plus 0xC0-0xDE <->
-// 0xE0-0xFE less the multiplication/division signs. Sharp s and y-diaeresis
-// have no Latin-1 capital and are returned unchanged.
-int k_latin1_tolower(int c);
+// The same over Latin-1 (one byte, 0..0xFF): ASCII, plus 0xE0-0xFE ->
+// 0xC0-0xDE less the division sign. Sharp s and y-diaeresis have no
+// Latin-1 capital and are returned unchanged.
 int k_latin1_toupper(int c);
 
 // Like k_strcmp, but ASCII-case-insensitive, with the same sign

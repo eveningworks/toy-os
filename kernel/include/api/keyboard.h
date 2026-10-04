@@ -92,8 +92,8 @@
 
 // --- THE FOUR MODIFIER KEYS, AS KEYS ---------------------------------
 //
-// These exist ONLY on the transition path below
-// (keyboard_try_get_transition()) and are NEVER pushed into the console
+// These exist ONLY in the compositor's event stream below
+// (keyboard_try_get_key()) and are NEVER pushed into the console
 // byte stream. That restriction is the whole reason they can exist at
 // all: pressing Shift must not put a byte in front of a shell, and the
 // line editor would have to learn to ignore four new codes if it did.
@@ -368,50 +368,38 @@ int  keyboard_blocking_suspended(void);
 void keyboard_console_set_raw(int on);
 int keyboard_try_getchar_mods(uint8_t *out_mods);
 
-// --- KEY TRANSITIONS: everything the byte stream cannot say -----------
+// --- THE KEY EVENT STREAM: what a compositor reads -------------------
 //
-// **THE RULE, STATED ONCE: this queue carries every key event the
-// console byte stream cannot represent -- that is, ALL RELEASES, and
-// both edges of the four modifier keys.** Ordinary presses are not
-// duplicated here; they arrive as bytes, the way they always have.
+// **WHILE A COMPOSITOR HOLDS THE KEYBOARD** (the console tty is bypassed,
+// keyboard_suspend_blocking()), every key event goes to ONE ordered queue
+// of edges and nowhere else -- Linux evdev's shape: each press as its
+// translated code (a character or a KEY_* special, autorepeats and
+// dead-key output included, Ctrl folded as above), each release, and both
+// edges of the modifier keys. The console terminal gets nothing then, so
+// it holds nothing stale when the keyboard comes back.
 //
-// It is a SEPARATE queue rather than a flag on the existing one because
-// the existing one is a terminal's input (kernel/tty/), and a terminal
-// is a byte stream: every CHARACTER fits in a byte and a special key is
-// ANSI-encoded on the way to fd 0, which is what lets it be read with
-// read(). A
-// release is not a byte and a line discipline has no use for one --
-// nothing in `klineedit.c` would ever ask "has W come up?". Pushing
-// releases into that stream would put a byte in front of every shell in
-// the system to serve a consumer that is not a shell.
+// One queue rather than presses in one and releases in another, because
+// two queues lose the ORDER: a press, its release and a second press
+// queued between two reads came out press, release, release, press --
+// and the second key stayed held.
 //
-// WHO READS IT: the compositor path, via win_input.c, which turns a
-// transition into WIN_EV_RAW_KEY (a modifier press) or WIN_EV_RAW_KEY_UP
-// (any release) for a registered compositor. Non-blocking and drained
-// per frame, like the rest of that path.
+// **A QUEUED PRESS ALWAYS HAS ROOM FOR ITS RELEASE.** On overflow the
+// newest press is refused whole (and its release with it); nothing queued
+// is evicted and no release is ever refused. Emptied when the keyboard
+// changes hands.
 //
-// **THE CODE ON A RELEASE IS WHAT THE PRESS PRODUCED**, not what the
-// same physical key would produce now. Pressing W, holding it, pressing
-// Shift and then releasing W reports a release of 'w' -- because 'w' is
-// what went down, and a client that saw 'w' go down and 'W' come up
-// would hold the key forever. The driver remembers, per evdev keycode,
-// which code that key's press emitted; this is the job X11 and Wayland
-// give the client by delivering physical keycodes and letting XKB
-// translate, and doing it here keeps ONE vocabulary on the wire.
+// **THE CODE ON A RELEASE IS WHAT THE FIRST PRESS PRODUCED**, not what
+// the same physical key would produce now. Pressing W, holding it,
+// pressing Shift and then releasing W reports a release of 'w' --
+// because 'w' is what went down, and a client that saw 'w' go down and
+// 'W' come up would hold the key forever. This is the job X11 and
+// Wayland give the client by delivering physical keycodes and letting
+// XKB translate; doing it here keeps ONE vocabulary on the wire.
 //
-// Returns 1 and fills the outputs, or 0 when nothing is waiting. Any
-// output pointer may be NULL. `down` is 1 for a press (modifiers only)
-// and 0 for a release.
-int keyboard_try_get_transition(uint16_t *out_code, int *out_down,
-                                 uint8_t *out_mods);
-
-// THE COMPOSITOR'S READ: every key event in the ORDER IT HAPPENED --
-// ring presses and transitions merged, `down` 1 or 0. Reading the ring
-// and the transitions separately loses that order: with a press, its
-// release and a second press queued, the second press would arrive
-// after its own release and stay held. Same outputs as above; any may
-// be NULL. Consumes from both queues, so it is the ONE reader while a
-// compositor holds the keyboard (win_input.c).
+// WHO READS IT: win_input.c, for a registered compositor, and only as
+// much as the compositor's own queue has room for. Returns 1 with the
+// event (`down` 1 or 0, the KEY_MOD_* state after it), or 0 when nothing
+// is waiting. Any output may be NULL.
 int keyboard_try_get_key(int *out_code, int *out_down, uint8_t *out_mods);
 
 // EVERY KEY'S EDGES, BY POSITION: the evdev keycode (abi/input_keys.h),

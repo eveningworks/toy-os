@@ -1696,6 +1696,14 @@ an ANSI sequence by then (`api/termkey.h`) -- so `read()` on fd 0 is
 still a byte stream. Why the specials moved: docs/decisions/drivers.md,
 the Nordic-keyboard entry.
 
+**A COMPOSITOR READS ONE ORDERED STREAM OF EDGES**
+(`keyboard_try_get_key()`): while the console is bypassed every press
+and release goes there and nowhere else, so never pair the console's
+ring with a second queue to rebuild the order -- that lost releases. A
+queued press always has room for its release; overflow refuses the
+newest press, whole. `win_input_poll()` takes only what the
+compositor's queue has room for and leaves the rest queued.
+
 **A DEAD KEY TYPES NOTHING UNTIL THE NEXT KEY.** Composition is the
 layout's (`keyboard_layout_compose()`), behind every driver, so a test
 that presses a dead key and expects a character back on that press is
@@ -4562,7 +4570,7 @@ carries it. Both mistakes are silent.
 a wheel notch. Queue it, drain it, and never ask "has the state changed
 since I last looked" -- a press and its release inside one polling
 interval cancel, and the whole click disappears with nothing to see.
-`mouse_try_get_button_transition()` and `keyboard_try_get_transition()`
+`mouse_try_get_button_transition()` and `keyboard_try_get_key()`
 are the two queues; both are CONSUMING reads with exactly one reader.
 
 **Where the pointer IS is a level**: sample it, coalesce it, keep the

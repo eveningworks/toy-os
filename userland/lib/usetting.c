@@ -112,13 +112,26 @@ struct choice_info {
 static struct choice_info *g_ci;
 static int g_ci_cap;
 
+static void ci_forget_choices(struct choice_info *e) {
+    free(e->value);
+    free(e->label);
+    e->value = 0;
+    e->label = 0;
+    e->count = e->cap = 0;
+}
+
 // The entry for `index` at `gen`, reset if it describes another
-// generation; 0 when out of memory (the caller answers unsorted).
-static struct choice_info *ci_for(int index, uint32_t gen) {
-    if (index < 0) return 0;
+// generation; 0 for an index no setting has, or out of memory (the
+// caller answers unsorted). Checked against the registry BEFORE growing,
+// so a caller's bogus index cannot size the table.
+static struct choice_info *ci_for(int index, uint32_t gen, int kcount) {
+    if (index < 0 || index >= kcount + uschema_count()) return 0;
     if (index >= g_ci_cap) {
         int cap = g_ci_cap ? g_ci_cap : 64;
-        while (cap <= index) cap *= 2;
+        while (cap <= index) {
+            if (cap > (1 << 20)) return 0;   // no registry is this big
+            cap *= 2;
+        }
         struct choice_info *n = realloc(g_ci, (size_t)cap * sizeof *n);
         if (!n) return 0;
         memset(n + g_ci_cap, 0, (size_t)(cap - g_ci_cap) * sizeof *n);
@@ -127,16 +140,16 @@ static struct choice_info *ci_for(int index, uint32_t gen) {
     }
     struct choice_info *e = &g_ci[index];
     if (e->gen != gen || !e->known) {
-        free(e->value);
-        free(e->label);
+        ci_forget_choices(e);
         memset(e, 0, sizeof *e);
         e->gen = gen;
     }
     return e;
 }
 
-static void ci_learn(int index, uint32_t gen, const char *ns, const char *name, int sorted) {
-    struct choice_info *e = ci_for(index, gen);
+static void ci_learn(int index, uint32_t gen, int kcount, const char *ns,
+                     const char *name, int sorted) {
+    struct choice_info *e = ci_for(index, gen, kcount);
     if (!e || e->known) return;
     e->known = 1;
     e->sorted = sorted;
@@ -144,8 +157,10 @@ static void ci_learn(int index, uint32_t gen, const char *ns, const char *name, 
     strlcpy(e->name, name, sizeof e->name);
 }
 
-// Enumerate a sorted setting's choices once, in label order.
+// Enumerate a sorted setting's choices once, in label order. On failure
+// nothing is kept, so a retry starts from an empty list.
 static int ci_build(struct choice_info *e, int index, int kcount, uint32_t gen) {
+    ci_forget_choices(e);
     for (int c = 0; c < CHOICE_RUNAWAY; c++) {
         struct setting_msg t;
         memset(&t, 0, sizeof t);
@@ -156,10 +171,10 @@ static int ci_build(struct choice_info *e, int index, int kcount, uint32_t gen) 
         if (e->count == e->cap) {
             int cap = e->cap ? e->cap * 2 : 32;
             void *v = realloc(e->value, (size_t)cap * sizeof *e->value);
-            if (!v) return 0;
+            if (!v) { ci_forget_choices(e); return 0; }
             e->value = v;
             void *l = realloc(e->label, (size_t)cap * sizeof *e->label);
-            if (!l) return 0;
+            if (!l) { ci_forget_choices(e); return 0; }
             e->label = l;
             e->cap = cap;
         }
@@ -184,7 +199,7 @@ static int ci_build(struct choice_info *e, int index, int kcount, uint32_t gen) 
 
 static int sorted_choice(struct setting_msg *m, int kcount, uint32_t gen) {
     int index = (int)m->index;
-    struct choice_info *e = ci_for(index, gen);
+    struct choice_info *e = ci_for(index, gen, kcount);
     if (e && e->known && !e->sorted) return raw_choice(m, kcount, gen);
 
     if (e && !e->known) {
@@ -205,7 +220,7 @@ static int sorted_choice(struct setting_msg *m, int kcount, uint32_t gen) {
         char word[8];
         int sorted = ns[0] && uschema_text_word(ns, name, SETTING_TEXT_KEY_SORT, word, sizeof word)
                      && !strcmp(word, "label");
-        ci_learn(index, gen, ns, name, sorted);
+        ci_learn(index, gen, kcount, ns, name, sorted);
         if (!sorted) return index < kcount ? rc : raw_choice(m, kcount, gen);
     }
     if (!e || !e->sorted) return raw_choice(m, kcount, gen);
@@ -302,7 +317,7 @@ int usetting_dispatch(struct setting_msg *m) {
             int rc = sys_setting(m);
             if (rc != 0) return rc;
             uschema_text_for(m->ns, m->name, m);
-            ci_learn((int)m->index, gen, m->ns, m->name, !!(m->sflags & SETTING_ABI_SF_SORTED));
+            ci_learn((int)m->index, gen, kcount, m->ns, m->name, !!(m->sflags & SETTING_ABI_SF_SORTED));
             return 0;
         }
 
@@ -310,7 +325,7 @@ int usetting_dispatch(struct setting_msg *m) {
         if (!uschema_at(m->index - kcount, &s)) return -1;
         m->generation = gen;
         fill_from_schema(&s, m);
-        ci_learn((int)m->index, gen, s.ns, s.name, !!(m->sflags & SETTING_ABI_SF_SORTED));
+        ci_learn((int)m->index, gen, kcount, s.ns, s.name, !!(m->sflags & SETTING_ABI_SF_SORTED));
         return 0;
     }
 
