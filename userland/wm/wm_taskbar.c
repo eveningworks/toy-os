@@ -451,19 +451,9 @@ static int make_label(char *dst, int cap, const char *src, int w, int count) {
     int nameavail = avail - sufw;
     if (nameavail < 0) nameavail = 0;
 
-    int len = src ? (int)k_strlen(src) : 0;
-    int nameroom = src ? ugfx_text_fit_chars(src, nameavail) : 0;
-    int elided = nameroom < len;
-    if (elided) {
-        nameroom = ugfx_text_fit_chars(src, nameavail - ugfx_text_width(".."));
-        if (nameroom < 1) nameroom = 1;   // one letter and the mark beats the mark alone
-    }
-    if (nameroom > cap - 3 - sn) { nameroom = cap - 3 - sn; elided = 1; }
-    if (nameroom < 0) nameroom = 0;
-
-    int n = 0;
-    for (; src && src[n] && n < nameroom; n++) dst[n] = src[n];
-    if (elided) { dst[n++] = '.'; dst[n++] = '.'; }
+    // The name in what is left of the bytes too, then the count.
+    int elided = ugfx_text_elide(dst, cap - sn, src, nameavail);
+    int n = (int)k_strlen(dst);
     for (int k = 0; k < sn && n < cap - 1; k++) dst[n++] = suffix[k];
     dst[n] = '\0';
     return elided;
@@ -586,18 +576,33 @@ void taskbar_overflow_metrics(struct taskbar_ovf_metrics *m) {
     m->w = 2 * m->pad + 2 * m->k + m->gap + ugfx_text_width(widest);
 }
 
-// The windows behind the overflow button, in strip order: every listed
-// window no placed button stands for. ONE walk after placement, so a
-// hidden group costs no walk of its own.
-static void note_hidden(const struct taskbar_button *out, int count, int grouped) {
-    uint32_t seq = 0;
-    for (int j; g_hidden_n < TB_HIDDEN_MAX && (j = next_in_order(&seq)) >= 0; ) {
-        if (unlisted(j)) continue;
-        int shown = 0;
-        for (int k = 0; k < count && !shown; k++)
-            shown = out[k].first == j || (grouped && same_app(j, out[k].first));
-        if (!shown) g_hidden_seq[g_hidden_n++] = windows[j].open_seq;
+// Records the windows behind the overflow button, in STRIP order: the
+// hidden buttons as the layout meets them, a hidden group's members in
+// rank order. A group is gathered by ONE scan of windows[] and
+// insertion-sorted into place -- each window is in one group, so the
+// whole strip costs O(N^2), not a next_in_order() walk per group.
+static void note_hidden(int starter, int grouped) {
+    static int idx[TB_HIDDEN_MAX];   // the slots' windows, for their ranks
+    if (!grouped) {
+        if (g_hidden_n < TB_HIDDEN_MAX) g_hidden_seq[g_hidden_n++] = windows[starter].open_seq;
+        return;
     }
+    int from = g_hidden_n, n = g_hidden_n;
+    for (int j = 0; j < window_count; j++) {
+        if (unlisted(j) || !same_app(j, starter)) continue;
+        uint32_t r = windows[j].task_rank;
+        int at = n;
+        if (n == TB_HIDDEN_MAX) {   // full: keep the earliest ranks
+            if (n == from || r > windows[idx[n - 1]].task_rank) continue;
+            at = n - 1;
+        } else {
+            n++;
+        }
+        for (; at > from && windows[idx[at - 1]].task_rank > r; at--) idx[at] = idx[at - 1];
+        idx[at] = j;
+    }
+    for (int k = from; k < n; k++) g_hidden_seq[k] = windows[idx[k]].open_seq;
+    g_hidden_n = n;
 }
 
 int taskbar_layout(struct taskbar_button *out, int max) {
@@ -622,8 +627,6 @@ int taskbar_layout(struct taskbar_button *out, int max) {
 
     int listed = listed_count();
     if (!out || max <= 0 || listed <= 0 || avail <= 0) { g_hidden = listed; return 0; }
-    struct taskbar_ovf_metrics om;
-    taskbar_overflow_metrics(&om);
 
     // THE WIDTH, and whether to group -- `desktop.taskbar_combine`.
     // `full`: labelled buttons shrink first and group only if shrinking
@@ -658,16 +661,23 @@ int taskbar_layout(struct taskbar_button *out, int max) {
     }
     // THE OVERFLOW BUTTON takes its room from the row only when something
     // will not fit -- Windows 11's "..." at the end of the strip.
-    // Too narrow for even one button, it stands ALONE -- every window
-    // keeps a handle -- and too narrow for that, nothing does.
+    // WHENEVER ANYTHING IS HIDDEN IT IS THERE, the buttons giving way to
+    // it down to none -- every window keeps a handle. Only a strip too
+    // narrow for the overflow button alone places nothing at all.
     int fit = (avail + TB_GAP) / (w + TB_GAP);
     if (fit > max) fit = max;
     int ovf = 0;
-    if (n > fit && avail >= om.w) {
-        ovf = om.w;
-        fit = (avail - ovf) / (w + TB_GAP);
-        if (fit > max) fit = max;
-        if (fit < 0) fit = 0;
+    if (n > fit) {
+        struct taskbar_ovf_metrics om;
+        taskbar_overflow_metrics(&om);
+        if (avail >= om.w) {
+            ovf = om.w;
+            fit = (avail - ovf) / (w + TB_GAP);
+            if (fit > max) fit = max;
+            if (fit < 0) fit = 0;
+        } else {
+            fit = 0;
+        }
     }
     if (n > fit) n = fit;
 
@@ -693,12 +703,15 @@ int taskbar_layout(struct taskbar_button *out, int max) {
         if (unlisted(i)) continue;
         if (grouped && !starts_group(i)) continue;
         int members = grouped ? group_size(i) : 1;
-        if (count >= n) { g_hidden += members; continue; }
+        if (count >= n) {
+            g_hidden += members;
+            note_hidden(i, grouped);
+            continue;
+        }
         fill_button(&out[count], i, grouped ? group_front(i) : i, members,
                     x + count * (w + TB_GAP), w, !icons);
         count++;
     }
-    if (g_hidden) note_hidden(out, count, grouped);
     if (g_hidden && ovf) {
         g_ovf_x = x + count * (w + TB_GAP);
         g_ovf_w = ovf;
@@ -1005,12 +1018,13 @@ static void commit_order(void) {
         for (int j = 0; j < m; j++) windows[members[j]].task_rank = wm_next_open_seq();
     }
     if (!first_new) return;
-    // Every listed window still ranked below the row is a hidden one.
-    // The walk stops at the first new rank, which is where it would
-    // otherwise meet the windows it has just re-ranked.
+    // Every strip window still ranked below the row is a hidden one --
+    // or one unlisted for now (a screenshot hiding its tool), which would
+    // otherwise come back at the front. The walk stops at the first new
+    // rank, where it would meet the windows it has just re-ranked.
     uint32_t seq = 0;
     for (int i; (i = next_in_order(&seq)) >= 0 && seq < first_new; )
-        if (!unlisted(i)) windows[i].task_rank = wm_next_open_seq();
+        if (!windows[i].popup && !windows[i].dialog) windows[i].task_rank = wm_next_open_seq();
 }
 
 // Raise without the toggle a click has: a drag-over wants the window IN

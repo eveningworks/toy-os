@@ -414,8 +414,9 @@ int ugfx_draw_string_elided(struct ugfx_surface *s, int x, int y, int max_w,
 
 // The same rule into a BUFFER, for text measured now and drawn later --
 // a title inside a sentence that must keep its end: `src` as it fits in
-// `max_w` pixels and `cap` bytes, ending in `..` when cut. Returns 1
-// when it cut.
+// `max_w` pixels and `cap` bytes, ending in `..` when cut, and keeping
+// at least ONE letter before the mark (cap allowing) -- so it may then
+// be wider than `max_w`. Returns 1 when it cut.
 int ugfx_text_elide(char *dst, int cap, const char *src, int max_w);
 
 // How many leading characters of `str` fit within `max_w` pixels, whole

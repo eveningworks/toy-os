@@ -42,7 +42,9 @@ int close_batch_ask(struct close_batch *b) {
         int i = close_batch_window(b, k);
         if (i >= 0) { wm_request_close(i); asked++; }
     }
-    b->deadline_ns = sys_monotonic_ns() + CLOSE_BATCH_WAIT_NS;
+    // Only a NEW ask restarts the wait: a repeated click that asks
+    // nobody must not keep pushing the notice back.
+    if (asked) b->deadline_ns = sys_monotonic_ns() + CLOSE_BATCH_WAIT_NS;
     return asked;
 }
 
@@ -143,14 +145,17 @@ static void tell_stayed(void) {
     if (name) snprintf(title, sizeof title, "%d %s window%s stayed open", left, name,
                        left == 1 ? "" : "s");
     else snprintf(title, sizeof title, "%d window%s stayed open", left, left == 1 ? "" : "s");
-    // THE COUNT MUST SURVIVE: the titles give way, a character at a
-    // time, until the whole sentence shows in the card's two lines.
-    int tw = ugfx_text_width(first);
-    if (second && ugfx_text_width(second) > tw) tw = ugfx_text_width(second);
+    // THE COUNT MUST SURVIVE: the titles give way, ONE CHARACTER of the
+    // wider at a time, down to a letter and the mark, until the whole
+    // sentence shows in the card's two lines.
+    const char *wide = second && ugfx_text_width(second) > ugfx_text_width(first) ? second : first;
+    int keep = (int)k_strlen(wide);
     for (;;) {
+        int tw = keep == (int)k_strlen(wide) ? ugfx_text_width(wide)
+               : ugfx_text_width_n(wide, keep) + ugfx_text_width("..");
         int len = stayed_sentence(sub, sizeof sub, first, second, left, asking, closed, tw);
-        if (tw <= 0 || (len < (int)sizeof sub && crash_notice_sub_fits(sub))) break;
-        tw -= ugfx_char_w();
+        if (keep <= 1 || (len < (int)sizeof sub && crash_notice_sub_fits(sub))) break;
+        keep--;
     }
     crash_notice_stayed(title, sub, g_icon[0] && !g_mixed ? g_icon : 0, seq, n);
 }

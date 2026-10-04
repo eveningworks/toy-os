@@ -1667,7 +1667,9 @@ this the obvious way), not from how much history it accumulated.
   against a 5 s deadline. **Each window is asked ONCE**
   (`close_batch_ask()` skips an entry already asked): a second Close all
   joining a waiting batch must not re-send WIN_EV_CLOSE to a window
-  already asking to save. What is still open then is the CALLER's to
+  already asking to save, and only an ask of someone restarts the wait;
+  once it is over the batch resets, so a later Close all asks again.
+  What is still open then is the CALLER's to
   present: the Leave page lists it, Close all puts a notice card up
   (`crash_notice_stayed()`: Show it, Force Quit) that leaves by itself
   once those windows close. A third batch close uses the same tracker.

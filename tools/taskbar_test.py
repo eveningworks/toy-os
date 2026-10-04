@@ -59,7 +59,8 @@ a guest whose desktop was not up yet, so every check errored -- which is
 why a control's FAILING CHECK is read, not just its exit status.
 The join, names and draghidden sections were seen red too: re-asking
 already-asked entries logs "asking 3" for the second Close all; skipping
-the title elision cuts the card's sentence at "The "; leaving hidden
+the title elision cuts the card's sentence at "The "; restarting the
+wait on an ask of nobody puts the card at +8.5 s; leaving hidden
 windows un-ranked after a drop puts them at the FRONT of the row.
 
 CAVEAT
@@ -581,9 +582,12 @@ def check_drag_hidden(dbg, qmp, res):
     dbg.warp_cursor(qmp, end, src["cy"])
     time.sleep(0.4)
     qmp.mouse_up()
-    time.sleep(0.4)
-    dbg.settle()
-    tb = strip(dbg)
+
+    def dropped():
+        t = strip(dbg)
+        keys = [b["key"] for b in t["buttons"]]
+        return t if not t["armed"] and keys[:2] == [before[1], before[0]] else None
+    tb = poll(dropped, 4) or strip(dbg)
     after = [b["key"] for b in tb["buttons"]]
     res.check("drag with windows hidden: the drop reordered the row",
               after[:2] == [before[1], before[0]], f"keys {before} -> {after}")
@@ -592,28 +596,55 @@ def check_drag_hidden(dbg, qmp, res):
               f"keys {before} -> {after}, hidden {hidden} -> {tb['hidden']}")
 
 
+def poll(fn, timeout, step=0.2):
+    """fn() until it is truthy or `timeout` passes; its last answer. The
+    condition is the one the caller then asserts, never a weaker one."""
+    deadline = time.time() + timeout
+    while True:
+        v = fn()
+        if v or time.time() >= deadline:
+            return v
+        time.sleep(step)
+
+
+def asks(dbg):
+    return [line for line in dbg.logs("closeall:", clear=False) if "asking" in line]
+
+
+def focused_title(dbg):
+    return next((w.get("title", "") for w in dbg.windows() if w.get("focused")), "")
+
+
+def spawn_calculator(dbg):
+    before = dbg.state()["windows"]
+    dbg.send("gui spawn " + CALCULATOR)
+    poll(lambda: dbg.state()["windows"] > before, 15)
+    dbg.settle()
+
+
+def force_quit_notice(dbg, nt):
+    fq = {b["label"]: b for b in nt.get("buttons", [])}.get("Force Quit")
+    if fq:
+        dbg.click(fq["x"] + fq["w"] // 2, fq["y"] + fq["h"] // 2)
+        poll(lambda: not notepads(dbg), 6)
+
+
 def check_close_all_join(dbg, qmp, res):
     """A second Close all while one waits JOINS it and asks only the
     windows it adds: the window already asking to save is not sent a
-    second close."""
+    second close. Once the wait is over, a Close all asks it again."""
     close_everything(dbg)
     spawn_notepads(dbg, 2)
     qmp.send_text("unsaved")   # the front Notepad, which will refuse
-    dbg.settle()
-    time.sleep(0.5)
+    dirty = poll(lambda: focused_title(dbg).startswith("*"), 6)
     for _ in range(2):
-        before = dbg.state()["windows"]
-        dbg.send("gui spawn " + CALCULATOR)
-        deadline = time.time() + 15
-        while time.time() < deadline and dbg.state()["windows"] <= before:
-            time.sleep(0.2)
-        dbg.settle()
+        spawn_calculator(dbg)
     tb = strip(dbg)
     note = next((b for b in tb["buttons"] if b["app_id"] == "notepad"), None)
     calc = next((b for b in tb["buttons"] if b["app_id"] == "calculator"), None)
-    if not note or not calc:
-        res.check("join: a Notepad and a Calculator button", False,
-                  f"app ids {[b['app_id'] for b in tb['buttons']]}")
+    if not dirty or not note or not calc:
+        res.check("join: a dirty Notepad, and a Notepad and a Calculator button", False,
+                  f"dirty {dirty}, app ids {[b['app_id'] for b in tb['buttons']]}")
         return
     dbg.logs("closeall:", clear=True)
     window_menu_for_button(dbg, note)
@@ -621,33 +652,42 @@ def check_close_all_join(dbg, qmp, res):
     if row:
         dbg.click(*row)
         dbg.settle()
-    wait_log(dbg, "asking", 4)
-    time.sleep(0.5)   # the clean Notepad closes; the other asks to save
+    # The clean Notepad closes; the other asks to save.
+    poll(lambda: asks(dbg) and len(notepads(dbg)) == 1, 4)
     window_menu_for_button(dbg, strip_button(dbg, "calculator") or calc)
     row = dbg.ctxmenu_row("Close all 2 windows")
     if row:
         dbg.click(*row)
         dbg.settle()
-    time.sleep(0.5)
-    asks = [line for line in dbg.logs("closeall:", clear=False) if "asking" in line]
+    seen = poll(lambda: len(asks(dbg)) >= 2 and asks(dbg), 4) or asks(dbg)
     stopped = [line for line in dbg.logs("closeall:", clear=False) if "did not close" in line]
     res.check("a second Close all, while the first waits, asks only its own two",
-              len(asks) == 2 and "asking 2 " in asks[0] and "asking 2 " in asks[1] and not stopped,
-              f"asks {asks}, already ended {stopped}")
+              len(seen) == 2 and "asking 2 " in seen[0] and "asking 2 " in seen[1] and not stopped,
+              f"asks {seen}, already ended {stopped}")
     said = wait_log(dbg, "did not close", 12)
     res.check("...and the joined batch ends as one: 1 of 4 stayed",
               bool(said) and "1 of 4" in said, f"log {said!r}")
-    time.sleep(0.3)
-    nt = dbg.state().get("notice") or {}
+    nt = poll(lambda: dbg.state().get("notice"), 3) or {}
     res.check("...its notice counts the three that closed",
               "The other 3 closed" in nt.get("sub", ""), f"notice {nt}")
-    btns = {b["label"]: b for b in nt.get("buttons", [])}
-    fq = btns.get("Force Quit")
-    if fq:
-        dbg.click(fq["x"] + fq["w"] // 2, fq["y"] + fq["h"] // 2)
-        deadline = time.time() + 6
-        while time.time() < deadline and notepads(dbg):
-            time.sleep(0.3)
+
+    # AFTER the wait the batch is over: a Close all asks the window that
+    # stayed again, as a user who cancelled its prompt means it to.
+    spawn_notepads(dbg, 1)
+    tb = strip(dbg)
+    note = next((b for b in tb["buttons"] if b["app_id"] == "notepad"), None)
+    dbg.logs("closeall:", clear=True)
+    if note:
+        window_menu_for_button(dbg, note)
+    row = dbg.ctxmenu_row("Close all 2 windows")
+    if row:
+        dbg.click(*row)
+        dbg.settle()
+    again = poll(lambda: asks(dbg), 4)
+    res.check("...and once that wait is over, a Close all asks it again",
+              bool(again) and "asking 2 " in again[-1], f"asks {again}")
+    nt = poll(lambda: dbg.state().get("notice"), 3) or {}
+    force_quit_notice(dbg, nt)
 
 
 LONG_NAMES = ["/tmp/close-all-notice-check-a-rather-long-name-%d.txt" % k for k in range(3)]
@@ -658,17 +698,16 @@ def check_stayed_sentence(dbg, qmp, res):
     TITLES, never its end -- "and 1 more did not close. The other 1
     closed." -- where a fixed buffer used to cut it mid-word."""
     close_everything(dbg)
+    dirty = 0
     for path in LONG_NAMES:
         dbg.send(f"sh write {path} hello")
         before = dbg.state()["windows"]
         dbg.send(f"gui spawn {NOTEPAD} {path}")
-        deadline = time.time() + 15
-        while time.time() < deadline and dbg.state()["windows"] <= before:
-            time.sleep(0.2)
+        poll(lambda: dbg.state()["windows"] > before and
+             os.path.basename(path)[:8] in focused_title(dbg), 15)
         dbg.settle()
-        time.sleep(0.5)
         qmp.send_text("x")   # dirty: it will ask to save
-        dbg.settle()
+        dirty += bool(poll(lambda: focused_title(dbg).startswith("*"), 6))
     spawn_notepads(dbg, 1)   # the one that closes
     tb = strip(dbg)
     dbg.logs("closeall:", clear=True)
@@ -678,21 +717,31 @@ def check_stayed_sentence(dbg, qmp, res):
     if row:
         dbg.click(*row)
         dbg.settle()
+    # A REPEATED Close all that asks nobody must not push the card back:
+    # half-way through the wait, ask the three that are still open again.
+    poll(lambda: not notepads(dbg), 4)   # the clean one, "untitled", has closed
+    t0 = time.time()
+    time.sleep(2.5)   # the gap under test, not a wait for state
+    tb = strip(dbg)
+    if tb["buttons"]:
+        window_menu_for_button(dbg, tb["buttons"][0])
+    row = dbg.ctxmenu_row("Close all 3 windows")
+    if row:
+        dbg.click(*row)
+    t1 = time.time()
     said = wait_log(dbg, "did not close", 12)
-    time.sleep(0.3)
-    nt = dbg.state().get("notice") or {}
+    t2 = time.time()
+    again = asks(dbg)
+    res.check("a repeated Close all asks nobody and does not restart the wait",
+              len(again) == 2 and "asking 0 " in again[1] and bool(said) and t2 < t1 + 4.0,
+              f"asks {again}; repeat at +{t1 - t0:.1f}s, card at +{t2 - t0:.1f}s")
+    nt = poll(lambda: dbg.state().get("notice"), 3) or {}
     sub = nt.get("sub", "")
     res.check("three long titles stayed: the sentence keeps its count and its end",
-              bool(said) and "3 of 4" in said and
+              dirty == 3 and bool(said) and "3 of 4" in said and
               sub.endswith("and 1 more did not close. The other 1 closed.") and ".." in sub,
-              f"log {said!r}, notice {nt}")
-    btns = {b["label"]: b for b in nt.get("buttons", [])}
-    fq = btns.get("Force Quit")
-    if fq:
-        dbg.click(fq["x"] + fq["w"] // 2, fq["y"] + fq["h"] // 2)
-        deadline = time.time() + 6
-        while time.time() < deadline and dbg.state()["windows"]:
-            time.sleep(0.3)
+              f"{dirty} made dirty, log {said!r}, notice {nt}")
+    force_quit_notice(dbg, nt)
     for path in LONG_NAMES:
         dbg.send(f"sh rm {path}")
 

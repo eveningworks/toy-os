@@ -81,6 +81,8 @@ int ugfx_text_elide(char *dst, int cap, const char *src, int max_w) {
         if (cap < 3) return 1;   // no room for the mark: nothing, never a cut without it
         int cut_w = max_w - ugfx_text_width("..");
         n = ugfx_text_fit_chars(src, cut_w < 0 ? 0 : cut_w);
+        if (n < 1) n = 1;   // one letter and the mark beats the mark alone
+        if (n > len) n = len;
         if (n > cap - 3) n = cap - 3;
     }
     for (int i = 0; i < n; i++) dst[i] = src[i];
