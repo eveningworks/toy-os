@@ -259,8 +259,9 @@ static void dd_ops_set_focused(void *w, int focused) {
     d->focused = focused;
     // Focus leaving CLOSES the popup. A popup left open while the keys
     // go somewhere else is a menu nobody is driving, and it would still
-    // be drawn over the rest of the window.
-    if (!focused) dd_close(d);
+    // be drawn over the rest of the window. NOT under a press it is
+    // tracking: that press is choosing a row, and its release closes it.
+    if (!focused && !d->tracking) dd_close(d);
 }
 
 const struct uui_widget_ops uui_dropdown_focus_ops = {

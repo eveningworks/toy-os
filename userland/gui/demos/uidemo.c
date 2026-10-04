@@ -587,7 +587,7 @@ static void on_press(struct uapp *a, int cx, int cy, unsigned buttons) {
     layout();
     // Focus follows the click. uui_focus_click() only MOVES focus; it
     // never consumes the press, which the toolkit has already routed.
-    if (uui_focus_click(&g.focus, cx, cy)) log_focus();
+    if (!uapp_press_on_popup(a) && uui_focus_click(&g.focus, cx, cy)) log_focus();
 }
 
 // Painted OVER the widgets -- a status readout a widget would otherwise

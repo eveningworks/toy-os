@@ -1203,7 +1203,7 @@ static void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
                      ? uui_router_press(&w->router, ev->a, ev->b, kmods, &changed) : 0;
         if (changed) w->dirty = 1;
         tell_window(w, id, UUI_REASON_PRESS, 0);
-        if (d->focus && uui_focus_click(d->focus, ev->a, ev->b)) w->dirty = 1;
+        if (d->focus && !g_press_slot && uui_focus_click(d->focus, ev->a, ev->b)) w->dirty = 1;
         return;
     }
     case WIN_EV_MOUSE_MOVE: {
@@ -1267,6 +1267,11 @@ static void popup_dismissed(int id) {
     bufs_release(s);
     if (done) done(owner);
     g_app.dirty = 1;
+}
+
+int uapp_press_on_popup(struct uapp *a) {
+    (void)a;
+    return g_press_slot != 0;
 }
 
 int uapp_drag_active(struct uapp *a) {
@@ -1888,8 +1893,11 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             tell_app(a, id, UUI_REASON_PRESS, 0);
             // Keyboard focus follows the click, after the widgets have had
             // the press (a widget takes the pointer grab; this only moves
-            // which one keys go to). See uui_focus_click().
-            if (d->focus && uui_focus_click(d->focus, ev->a, ev->b)) a->dirty = 1;
+            // which one keys go to). See uui_focus_click(). NOT for a
+            // press on a popup: it is its owner's, and whatever lies
+            // under it in the window took nothing -- moving focus there
+            // closed a dropdown under the press choosing its row.
+            if (d->focus && !g_press_slot && uui_focus_click(d->focus, ev->a, ev->b)) a->dirty = 1;
             if (d->buttons && uui_button_group_press(d->buttons, ev->a, ev->b)) a->dirty = 1;
         }
         if (d->on_press) d->on_press(a, ev->a, ev->b, ev->mods);

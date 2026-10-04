@@ -570,6 +570,11 @@ void uapp_set_cursor(struct uapp *a, int cursor);
 const struct uui_drag *uapp_drag(struct uapp *a);
 int uapp_drag_active(struct uapp *a);   // a drag is in flight right now
 
+// The press being handled landed on a POPUP (a dropdown's list, a menu):
+// it is that popup's owner's, so an app moving keyboard focus on a click
+// (uui_focus_click()) leaves focus alone for it.
+int uapp_press_on_popup(struct uapp *a);
+
 // Bracket a blocking stretch: the busy pointer, then whatever was there
 // before. The toolkit remembers, because "restore to what" is a
 // question every app would otherwise answer differently and wrongly.
