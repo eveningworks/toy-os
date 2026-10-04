@@ -444,6 +444,8 @@ whenever a headline here tells you something you did not already know.
   app**
 - **THE TASKBAR'S LAYOUT IS FOUR INDEPENDENT SETTINGS, AND EVERY RECT
   COMES FROM `taskbar_geom()`**
+- **A CLIENT IS TOLD FOCUS BY `wm_focus_sync()`, NEVER BY A MUTATION
+  ASSUMING THE LAST SLOT**
 - **A WINDOW HELD ACROSS FRAMES IS HELD BY `open_seq`, OR ITS INDEX IS
   RENUMBERED IN `wm_windows_moving()`**
 - **TASKBAR PEEK IS AN OVERLAY THAT HOLDS WINDOWS BY `open_seq`**

@@ -722,7 +722,7 @@ static char g_row_label[TB_GROUP_ROWS][WIN_LABEL_MAX_CHARS * 3];
 static void row_raise(void *ctx) {
     int i = wm_window_by_seq(*(uint32_t *)ctx);
     if (i < 0) return;   // it closed while the menu was open
-    if (windows[i].state == WIN_MINIMIZED) { wm_anim_restore(i); windows[i].state = WIN_NORMAL; }
+    wm_window_unminimize(i);
     wm_ensure_reachable(i);
     raise_with_dialogs(i);
     redraw_pending = 1;
@@ -760,8 +760,7 @@ static void open_group_menu(const struct taskbar_button *b) {
 void taskbar_activate(int i) {
     if (i < 0 || i >= window_count) return;
     if (windows[i].state == WIN_MINIMIZED) {
-        wm_anim_restore(i);
-        windows[i].state = WIN_NORMAL;
+        wm_window_unminimize(i);
         wm_ensure_reachable(i);
         raise_with_dialogs(i);
     } else if (wm_ensure_reachable(i)) {
@@ -772,8 +771,7 @@ void taskbar_activate(int i) {
         // button is the only handle such a window has left.
         raise_with_dialogs(i);
     } else if (i == wm_focus_index()) {
-        wm_anim_minimize(i);
-        windows[i].state = WIN_MINIMIZED;
+        wm_window_minimize(i);
     } else {
         raise_with_dialogs(i);
     }
@@ -837,10 +835,7 @@ static void commit_order(void) {
 // the opposite of what the drop needs.
 static void bring_forward(int i) {
     if (i < 0 || i >= window_count) return;
-    if (windows[i].state == WIN_MINIMIZED) {
-        wm_anim_restore(i);
-        windows[i].state = WIN_NORMAL;
-    }
+    wm_window_unminimize(i);
     wm_ensure_reachable(i);
     raise_with_dialogs(i);
     redraw_pending = 1;

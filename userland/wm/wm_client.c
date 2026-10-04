@@ -244,11 +244,7 @@ static int on_window_created(int pid, uint32_t id,
     for (; deflt[i] && i < WIN_TITLE_MAX - 1; i++) win->title[i] = deflt[i];
     win->title[i] = '\0';
 
-    // A new window steals focus, so the one losing it has to be told.
-    // (The new window itself does not need an event: a client that has
-    // just created a window and been made frontmost can assume it has
-    // focus, and uapp starts in that state.)
-    if (window_count > 0) wm_client_send_focus(&windows[window_count - 1], 0);
+    // A new window steals focus; wm_focus_sync() tells both clients.
 
     windows[window_count].open_seq = wm_next_open_seq();
     window_count++;
@@ -403,8 +399,8 @@ static int on_dialog_created(int pid, uint32_t id, uint32_t owner_id,
     win->client_last_my = INT32_MIN;
     k_strlcpy(win->title, (title && title[0]) ? title : "Dialog", sizeof win->title);
 
-    // The owner is losing focus to it, and its title bar says so.
-    wm_client_send_focus(&windows[window_count - 1], 0);
+    // The owner is losing focus to it (wm_focus_sync() says so), and its
+    // title bar shows it.
     wm_damage_window_rect(windows[window_count - 1].x, windows[window_count - 1].y,
                           windows[window_count - 1].w, windows[window_count - 1].h);
 
@@ -788,7 +784,7 @@ static int raise_window_at(int i) {
         wm_damage_window_rect(losing->x, losing->y, losing->w, losing->h);
     }
 
-    if (windows[i].state == WIN_MINIMIZED) { wm_anim_restore(i); windows[i].state = WIN_NORMAL; }
+    wm_window_unminimize(i);
     bring_to_front(i);
     // bring_to_front() renumbers, so the window is at the top now --
     // damage it there rather than at the index just used.

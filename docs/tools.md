@@ -4359,6 +4359,16 @@ window without going through it will find its layout polls timing out.
   notification is the signal, and a waiter beside it is redundant even
   when it works (CLAUDE.md). Named by no runner -- it is a helper, not a
   test.
+- **`focus_state_test.py`** -- the focus a CLIENT is told matches
+  the focus the WM routes keys by, and minimize/restore keeps a
+  maximized window maximized. Focus is read from the client's side --
+  uapp logs `uapp: pid N focus F` on every change -- so a check names
+  the pid that must, and must not, hear an event: minimizing the focused
+  window, and closing the front window above a minimized one. State
+  goes through the taskbar and the window menu (maximize, minimize,
+  restore, then Restore to the original rect). Its control is
+  `mutate.py` restoring to WIN_NORMAL and disabling `wm_focus_sync()`:
+  6 checks go red. In `gui_regress.py`.
 - **`window_identity_test.py`** -- a window held across frames stays
   the SAME window when `windows[]` is renumbered under it: the window
   menu across a close below it (its Close must close its own window) and

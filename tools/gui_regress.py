@@ -189,6 +189,7 @@ TOOLS = [
     ("thumbcache", "thumbcache_test.py", "thumbnail decode rate, and the disk cache under it"),
     ("shortcut", "shortcut_test.py", "global keyboard shortcuts, and rebinding them"),
     ("identity", "window_identity_test.py", "a held window survives a close or raise that renumbers windows[]"),
+    ("focusstate", "focus_state_test.py", "clients hear the WM's focus; minimize/restore keeps maximized"),
 ]
 
 # Roughly how long each tool takes, in seconds, used ONLY to decide what

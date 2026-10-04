@@ -1655,6 +1655,19 @@ this the obvious way), not from how much history it accumulated.
   (`apply_drag()`) and the release commits into ranks. Buttons are
   DRAWN at `taskbar_draw_x()` (a glide) and HIT at their layout x. `gui taskbar --json` reports all of it;
   `tools/taskbar_style_test.py` checks each where it is drawn.
+- **A CLIENT IS TOLD FOCUS BY `wm_focus_sync()`, NEVER BY A MUTATION
+  ASSUMING THE LAST SLOT.** It compares `wm_focus_index()`'s window, by
+  `open_seq`, against the one last told and sends the loss and the gain;
+  it runs after a raise or a close, before a key is routed, and once a
+  frame, so a minimize, a restore or a new window needs no send of its
+  own. The per-site sends it replaced told a minimized window it had
+  focus and told no one about a minimize. **Minimize and restore go
+  through `wm_window_minimize()`/`wm_window_unminimize()`**: `min_prev`
+  remembers maximized (Windows' `WPF_RESTORETOMAXIMIZED`; EWMH keeps
+  HIDDEN beside MAXIMIZED), and `wm_window_maximized()` is the
+  restore-to state the layout refit and the saved geometry read. Keys go
+  to a popup only when it GRABS and hangs off the focused window.
+  `tools/focus_state_test.py`.
 - **A WINDOW HELD ACROSS FRAMES IS HELD BY `open_seq`, OR ITS INDEX IS
   RENUMBERED IN `wm_windows_moving()`.** `windows[]` is z-order and two
   functions move entries: `close_window()` compacts it and

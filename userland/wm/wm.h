@@ -70,6 +70,10 @@ struct window {
     // screen and there is no chrome (window_content_*, wm.c).
     int fullscreen;
     enum window_state fs_prev;
+    // What a MINIMIZED window restores to -- normal or maximized, the
+    // shape of Windows' WPF_RESTORETOMAXIMIZED. Set and read only by
+    // wm_window_minimize()/wm_window_unminimize() (wm_input.c).
+    enum window_state min_prev;
     // The client said it draws write-only (WIN_HINT_SCANOUT), so while
     // fullscreen it may be lent the display's buffers -- wm_scanout.c.
     int scanout_ok;

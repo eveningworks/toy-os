@@ -459,12 +459,29 @@ static void ctx_close_window(void *ctx) {
     if (i >= 0) wm_request_close(i);
 }
 
-static void ctx_minimize_window(void *ctx) {
-    int i = ctx_target(ctx);
-    if (i < 0) return;
+void wm_window_minimize(int i) {
+    if (windows[i].state == WIN_MINIMIZED) return;
     wm_anim_minimize(i);
+    windows[i].min_prev = windows[i].state;
     windows[i].state = WIN_MINIMIZED;
     redraw_pending = 1;
+}
+
+void wm_window_unminimize(int i) {
+    if (windows[i].state != WIN_MINIMIZED) return;
+    wm_anim_restore(i);
+    windows[i].state = windows[i].min_prev == WIN_MAXIMIZED ? WIN_MAXIMIZED : WIN_NORMAL;
+    redraw_pending = 1;
+}
+
+int wm_window_maximized(const struct window *w) {
+    return w->state == WIN_MAXIMIZED ||
+           (w->state == WIN_MINIMIZED && w->min_prev == WIN_MAXIMIZED);
+}
+
+static void ctx_minimize_window(void *ctx) {
+    int i = ctx_target(ctx);
+    if (i >= 0) wm_window_minimize(i);
 }
 
 // Maximize, or restore a maximized window. One implementation, called
@@ -595,8 +612,7 @@ static void ctx_add_to_desktop(void *ctx) { desktop_add_launcher((const struct g
 static void ctx_restore_window(void *ctx) {
     int i = ctx_target(ctx);
     if (i < 0 || windows[i].state != WIN_MINIMIZED) return;
-    wm_anim_restore(i);
-    windows[i].state = WIN_NORMAL;
+    wm_window_unminimize(i);
     wm_ensure_reachable(i);
     raise_with_dialogs(i);
     redraw_pending = 1;
@@ -1218,8 +1234,7 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
     if (now_over) {
         int idx = title_btn_armed_win;
         if (title_btn_armed_kind == 0) {
-            wm_anim_minimize(idx);
-            windows[idx].state = WIN_MINIMIZED;
+            wm_window_minimize(idx);
         } else if (title_btn_armed_kind == 1) {
             // Fixed-size apps (Calculator -- see gui_apps.h) get a
             // disabled maximize button: focus the window like any other

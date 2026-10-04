@@ -192,14 +192,53 @@ int wm_focus_index(void) {
     return -1;
 }
 
-// Where a KEY goes: the focused toplevel's topmost popup if it has one
-// up -- an open menu owns the keyboard, as xdg_popup's grab gives the
-// popup keyboard focus -- else the toplevel itself.
+// Does popup p hang, through any chain of popups, off windows[focus]?
+static int popup_of(int p, int focus) {
+    int pid = windows[focus].client_pid;
+    for (int depth = 0; depth < 8 && windows[p].popup; depth++) {
+        if (windows[p].popup_parent == windows[focus].client_win) return 1;
+        int up = -1;
+        for (int j = 0; j < window_count; j++)
+            if (windows[j].client_pid == pid && windows[j].client_win == windows[p].popup_parent)
+                up = j;
+        if (up < 0) return 0;
+        p = up;
+    }
+    return 0;
+}
+
+// Where a KEY goes: the focused window's topmost GRABBING popup if it
+// has one up -- an open menu owns the keyboard, as xdg_popup's grab gives
+// the popup keyboard focus -- else the window itself. A popup without
+// the grab (a tooltip) takes no input at all (abi/win_proto.h).
 int wm_key_target(int focus) {
     if (focus < 0) return -1;
     for (int i = window_count - 1; i > focus; i--)
-        if (windows[i].popup && windows[i].client_pid == windows[focus].client_pid) return i;
+        if (windows[i].popup && windows[i].popup_grab && windows[i].state != WIN_MINIMIZED &&
+            windows[i].client_pid == windows[focus].client_pid && popup_of(i, focus))
+            return i;
     return focus;
+}
+
+// THE CLIENTS' VIEW OF FOCUS FOLLOWS wm_focus_index(), by identity. It
+// used to be sent from each mutation on the assumption that the last
+// slot is focused, which a minimized window or a popup there falsified:
+// a close told a minimized window it had focus, and a minimize told no
+// one. Called after every mutation that can move focus and once a frame;
+// a no-op when nothing changed.
+static uint32_t g_focus_told;
+
+void wm_focus_sync(void) {
+    int f = wm_focus_index();
+    if (f >= 0 && !windows[f].open_seq) windows[f].open_seq = wm_next_open_seq();
+    uint32_t seq = f >= 0 ? windows[f].open_seq : 0;
+    if (seq == g_focus_told) return;
+    int old = wm_window_by_seq(g_focus_told);
+    if (old >= 0) wm_client_send_focus(&windows[old], 0);
+    if (f >= 0) wm_client_send_focus(&windows[f], 1);
+    g_focus_told = seq;
+    // AN INHIBITOR DIES WITH ITS WINDOW'S FOCUS (abi/win_proto.h).
+    wm_shortcut_focus_changed(f);
 }
 
 void window_invalidate(struct window *win) {
@@ -277,7 +316,7 @@ static void wm_windows_moving(int idx, int to_front) {
 }
 
 void bring_to_front(int idx) {
-    if (idx == window_count - 1) return;
+    if (idx == window_count - 1) { wm_focus_sync(); return; }
 
     // A real reorder -- this window's own footprint is now drawn on
     // top of whatever it overlaps instead of wherever it was in
@@ -305,20 +344,11 @@ void bring_to_front(int idx) {
     wm_damage_window_rect(windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h);
     wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
 
-    // Tell the clients involved, BEFORE the reorder -- prev_front is
-    // still the front window here, and windows[idx] is still the one
-    // being promoted. A client cannot work focus out for itself: it
-    // sees keys only while focused, and "no keys" looks the same as
-    // "the user is thinking".
-    if (prev_front != &windows[idx]) {
-        wm_client_send_focus(prev_front, 0);
-        wm_client_send_focus(&windows[idx], 1);
-    }
-
     wm_windows_moving(idx, 1);
     struct window tmp = windows[idx];
     for (int i = idx; i < window_count - 1; i++) windows[i] = windows[i + 1];
     windows[window_count - 1] = tmp;
+    wm_focus_sync();
 }
 
 // A window AND its dialogs, promoted together -- the dialogs last, so
@@ -390,10 +420,7 @@ void open_app(const struct gui_app *app) {
     if (!app->multi_instance) {
         int existing = find_window_for_app(app);
         if (existing >= 0) {
-            if (windows[existing].state == WIN_MINIMIZED) {
-                wm_anim_restore(existing);
-                windows[existing].state = WIN_NORMAL;
-            }
+            wm_window_unminimize(existing);
             bring_to_front(existing);
             redraw_pending = 1;
             return;
@@ -426,14 +453,7 @@ void open_app(const struct gui_app *app) {
         struct window *losing_focus = &windows[window_count - 1];
         wm_damage_window_rect(losing_focus->x, losing_focus->y,
                                losing_focus->w, losing_focus->h);
-        // ...and if it is a CLIENT, it has to be TOLD, not just
-        // repainted: a client sees nothing but its own event queue, so
-        // an unannounced focus loss leaves it drawing a caret for input
-        // that is going somewhere else. wm_client.c's own create path
-        // has always done this; opening a kernel-space app over a client
-        // did not, which is a path nothing exercised until a test
-        // stopped opening its second window first.
-        wm_client_send_focus(losing_focus, 0);
+        // A client is TOLD by wm_focus_sync(), once this one is added.
     }
 
     int content_w, content_h;
@@ -629,14 +649,6 @@ void close_window(int idx) {
     // bottom of this function is what would lose it.
     if (!windows[idx].popup && !windows[idx].dialog) wm_geometry_save(&windows[idx]);
 
-    // If the FRONT window is going away, whatever ends up frontmost
-    // gains keyboard focus -- and a client has to be told, since it
-    // sees keys only while focused. Sent before the shift, while the
-    // indices still mean what they say.
-    if (idx == window_count - 1 && window_count > 1) {
-        wm_client_send_focus(&windows[window_count - 2], 1);
-    }
-
     // Report the closing window's own rect as damage BEFORE the array
     // shift below removes it -- whatever's now revealed there (desktop
     // or another window) needs repainting. Skipped if it was minimized
@@ -690,6 +702,7 @@ void close_window(int idx) {
     for (int i = idx; i < window_count - 1; i++) windows[i] = windows[i + 1];
     window_count--;
     redraw_pending = 1;
+    wm_focus_sync();   // whoever inherits it is told, minimized or not
 
 }
 
@@ -842,7 +855,7 @@ void wm_layout_changed(void) {
             else { w->w = screen_w; w->h = screen_h; }
             continue;
         }
-        if (w->state == WIN_MAXIMIZED) {
+        if (wm_window_maximized(w)) {
             w->x = 0; w->y = 0;
             if (is_client)
                 wm_client_send_resize(w, screen_w - 2, screen_h - taskbar_h - WM_TITLEBAR_H - 2);
@@ -1405,14 +1418,10 @@ void wm_run(void) {
         if (wheel != 0 && wm_overlay_wheel(mx, my, wheel)) wheel = 0;
 
         if (key != -1 || wheel != 0) {
+            // Before routing: a client must hear it is focused before
+            // its first key, and the inhibitor must not outlive focus.
+            wm_focus_sync();
             int f = wm_focus_index();
-            // AN INHIBITOR DIES WITH ITS WINDOW'S FOCUS. Checked here,
-            // on every pass, rather than hooked to a focus-change event:
-            // this is the one place the focused window is already known,
-            // and "the holder is no longer focused" is the whole rule
-            // (abi/win_proto.h). A window that vanished is not focused
-            // either, so the crash case falls out of the same test.
-            wm_shortcut_focus_changed(f);
             int kt = wm_key_target(f); // a popup of f's client, or f
 
             // Alt+F4 closes the focused window, and is handled HERE
@@ -1577,6 +1586,7 @@ void wm_run(void) {
         // run. Anything earlier cannot see it (measured: the check sat
         // with the other polls and never fired once).
         wm_overlay_poll_geometry();
+        wm_focus_sync();   // a minimize, a restore or a new window this frame
 
         wmwd_phase("render");
         int rendered = 0;

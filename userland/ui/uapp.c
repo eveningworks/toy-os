@@ -1732,6 +1732,10 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         // Recorded and repainted for the app, so the common case --
         // "stop drawing my caret when I am not focused" -- needs no
         // callback, just uapp_focused() in on_draw.
+        // Logged on a CHANGE only: what the client was told is the oracle
+        // for the compositor's focus events (tools/focus_state_test.py).
+        if (a->focused != (ev->a ? 1 : 0))
+            ulogf("uapp: pid %d focus %d\n", (int)sys_getpid(), ev->a ? 1 : 0);
         a->focused = ev->a ? 1 : 0;
         if (d->on_focus) d->on_focus(a, a->focused);
         a->dirty = 1;

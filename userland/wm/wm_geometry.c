@@ -88,12 +88,12 @@ void wm_geometry_save(const struct window *win) {
     // and covers the taskbar. The restore rect is already maintained
     // for the un-maximize path (wm_input.c), so it costs nothing.
     int x = win->x, y = win->y, w = win->w, h = win->h;
-    if (win->state == WIN_MAXIMIZED || win->fullscreen) {
+    if (wm_window_maximized(win) || win->fullscreen) {
         x = win->saved_x; y = win->saved_y;
         w = win->saved_w; h = win->saved_h;
     }
     // A MINIMIZED window keeps its real geometry -- minimizing does not
-    // move it -- so there is nothing to special-case there.
+    // move it -- and one minimized from maximized is caught above.
     if (w <= 0 || h <= 0) return;
 
     char value[40];

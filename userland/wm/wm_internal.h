@@ -103,6 +103,17 @@ int wm_index_after_move(int v, int idx, int to_front);
 void wm_open_window_menu(int idx, int mx, int my);
 // windows[idx] is closing: drop the window menu if it is that window's.
 void wm_window_menu_forget(int idx);
+
+// Tell the clients a focus change, by identity -- see wm.c.
+void wm_focus_sync(void);
+
+// Minimize, and restore to what the window was before -- maximized
+// stays maximized. Every minimize and restore goes through these two;
+// a bare `state = WIN_NORMAL` forgets a maximized window's state.
+void wm_window_minimize(int i);
+void wm_window_unminimize(int i);
+// Maximized, or minimized from maximized -- the window's restore-to state.
+int wm_window_maximized(const struct window *w);
 int btn_size(void);
 
 // THE RESIZE BORDER IS MOSTLY OUTSIDE THE WINDOW, which is how
