@@ -71,9 +71,7 @@ def main():
     def raw(cmd):
         return dbg.send(cmd)
 
-    def repaints():
-        m = re.search(r"scene repaints: (\d+)", raw("gui state"))
-        return int(m.group(1)) if m else -1
+    repaints = dbg.scene_repaints
 
     print("hover_test: a hover change repaints, it does not just damage")
 

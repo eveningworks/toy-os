@@ -147,8 +147,7 @@ void wm_peek_close(void) {
     g_hot_entry = -1;
     g_hot_close = 0;
     g_grace_since = 0;
-    set_highlight(0);
-    redraw_pending = 1;
+    set_highlight(0);   // the dim it lifts is not the card: damaged here
 }
 
 static int same_button(const int *wins, int n, int bx) {

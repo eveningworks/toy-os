@@ -176,12 +176,22 @@ void wm_overlay_draw(int mx, int my) {
 // and is shut now has its last drawn rect, shadow included, damaged here
 // -- whoever closed it, by whatever path. Before the frame's damage is
 // final, so after input and before wm_overlay_draw() clears the record.
+// Drawn by the last pass and shut now: the ONE copy of "this close still
+// needs its frame", read by the render gate and by the frame itself.
+static int closed_since_drawn(int i) { return g_was_open[i] && !g_overlays[i].is_open(); }
+
+int wm_overlay_close_pending(void) {
+    for (int i = 0; i < OVERLAY_COUNT; i++)
+        if (closed_since_drawn(i)) return 1;
+    return 0;
+}
+
 int wm_overlay_frame_begin(void) {
     int full = 0;
     for (int i = 0; i < OVERLAY_COUNT; i++) {
         int now = g_overlays[i].is_open();
         int r = g_overlays[i].repaint;
-        if (g_was_open[i] && !now) {
+        if (closed_since_drawn(i)) {
             if (g_drawn[i].w > 0)
                 wm_damage_window_rect(g_drawn[i].x, g_drawn[i].y, g_drawn[i].w, g_drawn[i].h);
             if (r) full = 1;
@@ -213,9 +223,6 @@ void wm_overlay_reset(void) {
 void wm_overlay_poll_geometry(void) {
     for (int i = 0; i < OVERLAY_COUNT; i++) {
         const struct wm_overlay *o = &g_overlays[i];
-        // A CLOSE ASKS FOR THE FRAME as well as being damaged by it
-        // (wm_overlay_frame_begin()): no close path needs to do either.
-        if (g_was_open[i] && !o->is_open()) { redraw_pending = 1; continue; }
         if (!o->is_open() || !o->rect) continue;
         if (g_drawn[i].w <= 0) continue;      // never drawn: nothing to cover
         int x, y, w, h;

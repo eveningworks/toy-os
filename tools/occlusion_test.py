@@ -199,11 +199,11 @@ def calendar_closed_by_flyout(dbg, qmp, tmp, res):
               "; ".join(bugs)[:400])
 
 
-def scene_repaints(dbg):
-    for line in (dbg.send("gui state") or "").splitlines():
-        if line.startswith("scene repaints:"):
-            return int(line.split(":")[1])
-    return -1
+# How soon after a click outside the flyout's close must be on screen. The
+# tray clock repaints once a second, so a close that asked for no frame is
+# drawn by the next tick -- ~1 s after the click, given it lands just after
+# one. Under this bound, over it.
+CLOSE_FRAME_S = 0.5
 
 
 def flyout_closed_by_click(dbg, qmp, tmp, res, name):
@@ -215,9 +215,10 @@ def flyout_closed_by_click(dbg, qmp, tmp, res, name):
     THE TRAY CLOCK DRAWS A FRAME EVERY SECOND and the core damages a
     closed overlay in whatever frame comes next, so a close that asked for
     no frame still clears within a second, and a settled picture cannot
-    tell the two apart. So the check that matters is the TIMING: a scene
-    repaint between the click and a query a few hundred ms later, three
-    closes running (a clock tick landing inside every window is ~1%)."""
+    tell the two apart. So the check that matters is the TIMING: the click
+    lands just after a clock tick, and a scene repaint must follow within
+    CLOSE_FRAME_S -- well inside the second the next tick needs, and slack
+    enough for TCG -- three closes running."""
     j = dbg.json(f"gui {name} --json")
     t = j.get("tray") or {}
     if not t.get("w") or j.get("tray_hidden"):
@@ -242,14 +243,18 @@ def flyout_closed_by_click(dbg, qmp, tmp, res, name):
         dbg.settle(1.0)
         # A REAL button press where the pointer already is, not `gui
         # click`: nothing about it but the close may ask for a frame.
-        s0 = scene_repaints(dbg)
+        # Click just AFTER a clock tick, so the next one is ~1 s away and
+        # cannot stand in for a frame the close failed to ask for.
+        dbg.wait_scene_repaint(dbg.scene_repaints(), 1.5)
+        s0 = dbg.scene_repaints()
         qmp.click(settle=0.02)
-        s1 = scene_repaints(dbg)
-        prompt.append(s1 > s0)
+        took = dbg.wait_scene_repaint(s0, CLOSE_FRAME_S)
+        prompt.append(round(took, 3) if took is not None else None)
         dbg.settle(1.0)
     shut = not dbg.json(f"gui {name} --json").get("open")
     res.check(f"{name}: every close drew a frame at once, not at the next clock tick",
-              all(prompt), f"frame within the query window: {prompt}")
+              all(p is not None for p in prompt),
+              f"seconds to the next scene repaint (bound {CLOSE_FRAME_S}): {prompt}")
     after = shot(qmp, tmp, f"{name}_closed")
     pts = [(x, y) for x in range(j["x"] + 6, j["x"] + j["w"] - 6, 14)
            for y in range(j["y"] + 6, j["y"] + j["h"] - 6, 14)]
@@ -268,9 +273,10 @@ def unchanged_present(dbg, res):
     on a setting notice (uapp redraws on WIN_EV_SETTING), almost always an
     identical frame; with the damage list empty, the compositor must not
     turn it into a full-screen repaint. Judged by the compositor's own
-    attribution (`presents_full`: frames that ONLY presents asked for and
-    that went full-screen), not by the global full-frame count, which a
-    debug command may move for its own reasons."""
+    attribution (`presents_full`: presents that asked for a frame while
+    damaging nothing of their own -- the only way a present makes a frame
+    full-screen), not by the global full-frame count, which a debug
+    command may move for its own reasons."""
     def counts():
         c = dbg.json("gui compositor --json")["windows"]
         return c["presents_full"], c["presents_unchanged"]

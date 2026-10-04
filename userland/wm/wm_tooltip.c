@@ -47,13 +47,9 @@ void wm_tooltip_track(const char *text, int x, int y, int w, int h) {
     // which is how this fails if the comparison is forgotten.
     if (k_strcmp(tip_text, text) == 0 && x == tip_x && y == tip_y) return;
 
-    if (wm_tooltip_open) {
-        // Moving to another row takes the old one down FIRST -- a
-        // tooltip whose text changed under it reads as a glitch, and
-        // the rect it vacates has to be declared either way.
-        wm_tooltip_damage();
-        redraw_pending = 1;
-    }
+    // Moving to another row takes the old one down FIRST -- a tooltip
+    // whose text changed under it reads as a glitch. The rect it vacates
+    // is the core's to damage (wm_overlay.h's close contract).
     k_strlcpy(tip_text, text, sizeof tip_text);
     tip_x = x; tip_y = y; tip_w = w; tip_h = h;
     hot_since = sys_ticks();

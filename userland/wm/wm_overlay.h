@@ -199,10 +199,15 @@ struct wm_overlay {
 #define WM_OVERLAY_REPAINT_ON_CLOSE  1
 #define WM_OVERLAY_REPAINT_WHILE_OPEN 2
 
-// Once a frame, before its damage is final: damages the last drawn rect
-// of every overlay that has CLOSED since it was drawn -- so no overlay
-// damages its own close -- and returns 1 when the frame must be a full
-// repaint for an overlay's sake (see `repaint`).
+// THE CLOSE CONTRACT: an overlay's close path only drops its `_open` flag.
+// The core does the rest -- wm.c's render gate asks for a frame while
+// wm_overlay_close_pending() says a drawn overlay has closed (never during
+// a scanout lease, when no frame is drawn and asking would spin), and
+// that frame's wm_overlay_frame_begin() damages the overlay's last drawn
+// rect, shadow included.
+int wm_overlay_close_pending(void);
+// Once a frame, before its damage is final: the damage above, and 1 when
+// the frame must be a full repaint for an overlay's sake (see `repaint`).
 int wm_overlay_frame_begin(void);
 // A new GUI session: nothing is open and nothing has been drawn.
 void wm_overlay_reset(void);

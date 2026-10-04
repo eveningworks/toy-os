@@ -618,6 +618,26 @@ class DebugConsole:
      CURSOR_TEXT, CURSOR_WAIT, CURSOR_DIAG2,
      CURSOR_HAND, CURSOR_MOVE, CURSOR_NOT_ALLOWED, CURSOR_CROSSHAIR) = range(11)
 
+    def scene_repaints(self):
+        """The WM's SCENE repaint count (`gui state`'s `scene repaints`), or
+        -1 when the reply has none. Cursor-only moves do not count -- which
+        is what makes it the answer to "did that input repaint anything?"."""
+        m = re.search(r"scene repaints: (\d+)", self.send("gui state") or "")
+        return int(m.group(1)) if m else -1
+
+    def wait_scene_repaint(self, after, timeout):
+        """Poll until the scene repaint count passes `after`. Returns the
+        seconds it took, or None once `timeout` has passed -- BOUNDED, so a
+        caller can assert "a frame came at once" against a tight bound."""
+        t0 = time.time()
+        while True:
+            n = self.scene_repaints()
+            if n > after:
+                return time.time() - t0
+            if time.time() - t0 >= timeout:
+                return None
+            time.sleep(0.01)
+
     def cursor_shape(self):
         """The shape the compositor would DRAW under the pointer right
         now -- the frame's edge rules and the client's WIN_REQ_CURSOR

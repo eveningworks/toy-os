@@ -5227,8 +5227,10 @@ for DAMAGE. **EVERY ROW SAYS WHEN IT COSTS A FULL FRAME** (`repaint`,
 the last column): `WM_OVERLAY_REPAINT_ON_CLOSE` for one whose action
 may change the scene undeclared (the context menu, the confirm dialog),
 `WHILE_OPEN` for one that IS the screen (the Leave page), 0 for the
-rest. **A CLOSE IS THE CORE'S**: `wm_overlay_poll_geometry()` asks for
-the frame and `wm_overlay_frame_begin()` damages the last drawn rect,
+rest. **A CLOSE IS THE CORE'S**: `wm.c`'s render gate asks for the
+frame while `wm_overlay_close_pending()` says so (not during a scanout
+lease, when no frame is drawn and asking would spin), and
+`wm_overlay_frame_begin()` damages the last drawn rect,
 shadow included, of every overlay that closed since it was drawn --
 whoever closed it -- so a close path neither damages nor sets
 `redraw_pending`. Only the context menu, which has no `rect`,

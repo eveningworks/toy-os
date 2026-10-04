@@ -2741,7 +2741,8 @@ window without going through it will find its layout polls timing out.
   calendar, closed by opening the network flyout, leaves its rect
   wallpaper again; so does the network flyout dismissed by a real click
   outside with the pointer still -- by pixels with the verifier OFF, and
-  by a scene repaint landing at once, three closes running, because the
+  by a scene repaint within 0.5 s of a click made just after a clock
+  tick (`DebugConsole.wait_scene_repaint()`), three closes running, because the
   tray clock's once-a-second frame clears a close that asked for no
   frame within a second and a settled picture cannot tell them apart
   (the remote flyout too where the guest shows its tray item); and
@@ -3825,7 +3826,11 @@ window without going through it will find its layout polls timing out.
   the client's own flips), the Start menu taking the lease and giving
   it back, F11 and Alt+F4. Its positive control was the overlay rule
   dropped from the policy, which left the lease standing under the
-  Start menu -- one check red, the right one.
+  Start menu -- one check red, the right one. After the lease returns
+  it also counts WM loop iterations over 2 s (`gui latency`'s `work`):
+  the closed menu's frame is still owed and no leased frame draws, so a
+  render gate that kept asking for it spins -- the control (the lease
+  exception dropped from `overlay_close_frame()`) reddens that check.
 - **`virtio_gpu_test.py`** -- the ONLY thing here that boots
   `-vga virtio`, which is the whole reason it exists: every other GUI
   tool and `make test` launch the default adapter, so the virtio-gpu

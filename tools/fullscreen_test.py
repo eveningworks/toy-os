@@ -38,6 +38,9 @@ from harness import Results  # noqa: E402
 TITLE = "Fullscreen Client"
 FILL = (0x30, 0x60, 0xC0)   # fsclient.c's FILL, as RGB
 KEY_F11 = 0xf880
+# WM loop iterations in 2 s under a lease with nothing happening. An idle
+# loop parks between frames; one asking for a frame every pass does not.
+LEASE_IDLE_ITERS = 400
 KEY_F4 = 0xf794
 KEY_SUPER = 0xf795
 
@@ -179,6 +182,15 @@ def run(dbg, qmp, tmp, res):
         dbg.key(KEY_SUPER, mods="up")
         fb = wait_lease(dbg, pid)
         res.check("closing the menu leases again", fb.get("lease") == pid, fb)
+        # ...AND THE COMPOSITOR IDLES UNDER IT. The menu closed but was
+        # never drawn closed (a leased frame draws nothing), so its close
+        # is still owed; a gate that kept asking for that frame would spin
+        # the loop for as long as the lease lasts.
+        dbg.send("gui latency reset")
+        time.sleep(2.0)
+        n = dbg.json("gui latency --json")["work"]["n"]
+        res.check("...and the compositor idles under the lease rather than spinning",
+                  n < LEASE_IDLE_ITERS, f"{n} loop iterations in 2 s (bound {LEASE_IDLE_ITERS})")
 
     dbg.key(KEY_F11)
     win = wait_state(dbg, "normal")

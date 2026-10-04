@@ -2157,13 +2157,6 @@ void wm_frame_stats_reset(void) {
 
 uint32_t wm_scene_frames(void) { return g_scene_frames; }
 
-// A frame only client presents asked for (wm.c), and how many such went
-// full-screen: a present's damage is always a rect, so none should.
-static int g_present_only;
-static unsigned g_presents_full;
-void wm_render_set_present_only(int only) { g_present_only = only; }
-unsigned wm_render_presents_full(void) { return g_presents_full; }
-
 void wm_render_frame(int mx, int my) {
     g_scene_frames++;
     // The lease decision first: while a client holds the display's
@@ -2207,8 +2200,6 @@ void wm_render_frame(int mx, int my) {
     // the first frame) means "unknown, be safe" -- full screen.
     if (damage_x1 > damage_x0) grow_damage_for_glass();
     int has_damage = damage_x1 > damage_x0;
-    if (g_present_only && !has_damage) g_presents_full++;
-    g_present_only = 0;
 
     render_scene(mx, my, has_damage);
     g_cull.drawn = g_win_drawn;

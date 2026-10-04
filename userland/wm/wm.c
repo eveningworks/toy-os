@@ -911,6 +911,13 @@ void wm_layout_changed(void) {
     redraw_pending = 1;
 }
 
+// A drawn overlay has closed and its frame is owed (wm_overlay.h's close
+// contract). Not during a scanout lease: no frame is drawn then, so the
+// close stays owed and asking every iteration would spin the loop.
+static int overlay_close_frame(void) {
+    return wm_overlay_close_pending() && !wm_scanout_active();
+}
+
 void wm_run(void) {
     // Claim the compositor role, then take the framebuffer grant it
     // gates. Both can be refused -- another process may already hold the
@@ -1088,7 +1095,7 @@ void wm_run(void) {
                 uint64_t in_ms = due > now_ns ? (due - now_ns + 999999) / 1000000 : 0;
                 if (in_ms < wait_ms) wait_ms = (uint32_t)in_ms;
             }
-            if (redraw_pending || wm_client_present_frame_pending() ||
+            if (redraw_pending || overlay_close_frame() ||
                 wm_debug_work_pending() || wm_rawin_pending()) wait_ms = 0;
             // A ghost in flight wants a frame every WM_ANIM_FRAME_MS, not
             // the idle park (wm_anim.h).
@@ -1644,11 +1651,7 @@ void wm_run(void) {
 
         wmwd_phase("render");
         int rendered = 0;
-        int by_present = wm_client_take_present_frame();
-        if (redraw_pending || by_present) {
-            // Asked for by presents ALONE: such a frame must be damage-
-            // limited, and wm_render.c counts any that is not.
-            wm_render_set_present_only(by_present && !redraw_pending);
+        if (redraw_pending || overlay_close_frame()) {
             redraw_pending = 0;
             wm_render_frame(mx, my);
             rendered = 1;
