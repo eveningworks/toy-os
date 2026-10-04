@@ -17,9 +17,10 @@
 // (userland/lib/uchan.h's inbox).
 //
 // What rides it besides raw input: the kernel's own notices to the
-// compositor -- WIN_EV_FONT, WIN_EV_SCREEN -- and a `gui` diagnostic
-// command. A full queue sheds INPUT first and a notice last, because
-// a notice is a fact the receiver cannot re-derive by looking.
+// compositor -- WIN_EV_FONT, WIN_EV_SCREEN, window lifecycle -- and a
+// `gui` diagnostic command. Notices have their own queue, popped first,
+// so input pressure never costs one; in the input queue a release is
+// never shed (win_input.c says how).
 
 // Polls the mouse and keyboard and queues WIN_EV_RAW_*. A no-op with no
 // compositor. Called from scheduler_idle(), the kernel's one owner of
@@ -29,11 +30,17 @@ void win_input_poll(void);
 // Queues `ev` for the compositor and wakes it (its wait channel and its
 // wakeword both). Returns 1 if queued, 0 with no compositor. Safe from
 // an interrupt handler: the wake only flips scheduler state. Motion
-// with the same buttons as the newest queued motion REPLACES it; a
-// full queue drops the oldest input, or the oldest of all if none.
+// with the same buttons as the newest queued motion REPLACES it; a full
+// input queue drops its oldest event that is not a release, or refuses
+// the new one. A notice goes to the notice queue.
 int win_input_push(const struct win_event *ev);
 
-// Pops the oldest event into `out`; 1 if one was waiting, 0 if empty.
+// win_input_poll()'s key half: the key and positional streams, in turn,
+// as far as the input queue has room. Exported for its KTEST.
+void win_input_drain_keys(void);
+
+// Pops the oldest notice, else the oldest input, into `out`; 1 if one
+// was waiting, 0 if empty.
 int win_input_pop(struct win_event *out);
 
 // The wait channel the compositor parks on -- the queue's own address.

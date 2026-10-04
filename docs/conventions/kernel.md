@@ -910,10 +910,10 @@ Five things to know:
 - **NumLock's off-state is deliberately not modelled.** It needs lock
   STATE this kernel does not keep for Caps Lock either, and the failure
   mode is a keypad that types nothing while the light says otherwise.
-- **Pause is six bytes and has no release** (`E1 1D 45 E1 9D C5`), so it
-  is the one key that reports a press with no matching release. A client
-  tracking held keys must tolerate that -- and already must, for the
-  reason `abi/win_proto.h` gives about grabs.
+- **Pause is six bytes and has no break code** (`E1 1D 45 E1 9D C5`), so
+  the PS/2 parser reports its release itself, at once, with no wire byte
+  -- every layer above sees a press and a release. The swallow count is
+  checked BEFORE the `E1` test: the sequence carries a second `E1`.
 - **The fake shifts around Print Screen are dropped.** PS/2 brackets
   PrtSc with `E0 2A` / `E0 AA`; taking them at face value reports a
   Shift nobody pressed, and leaves `shift_pressed` stuck on if the
@@ -1708,10 +1708,11 @@ While a compositor is attached every press and release goes there and
 nowhere else, so never pair the console's ring with a second queue to
 rebuild the order -- that lost releases. A queued press always has room
 for its release; overflow refuses the newest press, whole. In the
-compositor's queue (`kernel/proc/win_input.c`) a release -- a key's, a
-position's, a button's -- is marked and never evicted; `win_input_poll()`
-reads each source only while there is room short of a notice reserve,
-and leaves the rest queued. The streams are emptied on EVERY compositor
+compositor's input queue (`kernel/proc/win_input.c`) a release -- a
+key's, a position's, a button's -- is marked and never evicted;
+`win_input_poll()` reads each source only while there is room, leaves
+the rest queued, and alternates which key stream goes first each poll.
+Notices have their own queue, popped first. The streams are emptied on EVERY compositor
 role change (`keyboard_events_attach()`), and are touched only with
 interrupts off. docs/decisions/gui.md, "One ordered key stream", has why.
 

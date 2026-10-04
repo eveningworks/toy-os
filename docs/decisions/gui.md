@@ -4574,12 +4574,14 @@ unreleased; on overflow the newest press is refused whole, with its
 release, and nothing queued is evicted. The positional stream
 (`keyboard_try_get_physical()`, `WIN_EV_KEY_PHYS`) keeps the same rule.
 `win_input_poll()` reads every input source only while the compositor's
-own queue has room short of a small reserve for notices, leaving the
-rest queued, and takes keys and positional edges in turn (which goes
-first alternating) so neither starves the other. In that queue a
-release -- a key's, a position's, a button-up edge -- is never evicted:
-a full queue sheds only other input, and with none refuses the new
-event; idempotent notices (SCREEN, FONT) coalesce. A lost release (an
+own input queue has room, leaving the rest queued, and takes keys and
+positional edges in turn (which goes first alternating each poll) so
+neither starves the other. In that queue a release -- a key's, a
+position's, a button-up edge -- is never evicted: a full queue sheds
+only other input, and with none refuses the new event. Notices (SCREEN,
+FONT, window lifecycle) have a queue of their own, popped first, so
+input pressure can never cost one; the idempotent ones coalesce by
+moving the newest to the end. A lost release (an
 i8042 overrun) costs one slot until the key is pressed again, bounded by
 the keys tracked, which each ring is sized to exceed twice over. PS/2
 Pause, which has no break code, gets its release from the wire driver

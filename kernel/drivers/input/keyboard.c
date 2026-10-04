@@ -60,7 +60,7 @@ static int extended_prefix = 0;
 #define CTRL_PRESS         0x1D
 #define CTRL_RELEASE       0x9D
 
-// The modifiers physically held RIGHT NOW. Sampled by ring_push() at
+// The modifiers physically held RIGHT NOW. Sampled by emit() at
 // the moment a key is pushed -- i.e. at scancode-processing time, the
 // same instant the layout table decides between 'a' and 'A'.
 //
@@ -84,7 +84,7 @@ static uint8_t current_mods(void) {
     return m;
 }
 
-// A key has been decoded (ring_push()). Hand it to the console terminal,
+// A key has been decoded (emit()). Hand it to the console terminal,
 // which runs the line discipline over it and queues what a reader should
 // see -- or, while a compositor holds the keyboard, to the event stream
 // below instead.
@@ -274,10 +274,11 @@ void keyboard_events_attach(int on) {
 
 int keyboard_events_attached(void) { return g_attached; }
 
-// THE KEYCODE CURRENTLY BEING TRANSLATED, so ring_push() can record what
-// this key produced without every one of its ~20 call sites having to
-// pass it. Set once at the top of keyboard_key_event() and read only
-// from there, both in the same non-preemptible IRQ handler.
+// THE KEYCODE CURRENTLY BEING TRANSLATED, so emit() can tell the key
+// stream which key a character came from without every one of its ~20
+// call sites passing it. Set at the top of key_event() and read only
+// beneath it -- all of it with interrupts off (key_event()), since a
+// polled source runs it from scheduler_idle() where IRQ1 could cut in.
 static uint16_t emitting_keycode;
 
 // Bytes still to drop from a Pause sequence -- see keyboard_feed_byte().
@@ -301,7 +302,6 @@ static void emit(uint16_t c, int synthetic) {
     }
     // else: a held screen with no compositor yet -- the key goes nowhere
 }
-static void ring_push(uint16_t c) { emit(c, 0); }
 
 // Defined below, beneath keyboard_key_event() which is its public face.
 // Declared here because the PS/2 path is the one caller that has a wire
@@ -393,7 +393,7 @@ void keyboard_feed_byte(uint8_t sc) {
     if (sc == 0xE1) {
         pause_swallow = 5;
         key_event(INPUT_KEY_PAUSE, 1, 0xE1, 0);
-        key_event(INPUT_KEY_PAUSE, 0, 0xE1, 0);
+        key_event(INPUT_KEY_PAUSE, 0, 0, 0);   // invented: no wire byte
         return;
     }
 
@@ -441,7 +441,20 @@ void keyboard_key_event(uint16_t keycode, int down) {
 // PS/2 wire that said it. Split out for the keyboard TAP alone: nothing
 // else in this file wants to know which encoding a key arrived in, which
 // is the property the input core exists to provide.
+static void key_event_body(uint16_t keycode, int down, uint16_t wire, int extended);
+
+// ALL OF A KEY'S TRANSLATION WITH INTERRUPTS OFF: the modifier state,
+// `emitting_keycode`, the dead-key composer and both streams are shared
+// by IRQ producers (PS/2, virtio-input) and polled ones run from
+// scheduler_idle() (USB HID); one CPU, so this is what serialises them.
+// It is short -- a table lookup and a few queue writes.
 static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
+    uint64_t f = irq_save();
+    key_event_body(keycode, down, wire, extended);
+    irq_restore(f);
+}
+
+static void key_event_body(uint16_t keycode, int down, uint16_t wire, int extended) {
     // Modifiers first, and they are the only keys whose RELEASE matters.
     //
     // LEFT ALT AND RIGHT ALT ARE DIFFERENT KEYS HERE, deliberately: left
@@ -468,7 +481,7 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     case INPUT_KEY_LEFTALT:    alt_pressed = down;   mod_code = KEY_ALT;   break;
     case INPUT_KEY_RIGHTALT:   altgr_pressed = down; mod_code = KEY_ALTGR; break;
     // SUPER JOINED THIS SWITCH when shortcuts landed, and that is what
-    // took it out of the byte stream: it used to ring_push(KEY_SUPER) on
+    // took it out of the byte stream: it used to push KEY_SUPER on
     // the press, which is why the Start menu opened the instant the key
     // went down. It is a modifier now (api/keyboard.h), so it reaches
     // the compositor as a TRANSITION and the "Super alone" gesture is
@@ -516,7 +529,7 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
         return;
     }
 
-    // Recorded by ring_push() below, whichever of the many paths out of
+    // Recorded by emit() below, whichever of the many paths out of
     // this function ends up taking it.
     emitting_keycode = keycode;
 
@@ -524,8 +537,8 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     // so they get their own codes -- exactly the KEY_SHIFT_ARROW_*
     // precedent below, resolved here from live modifier state at
     // keypress time for the same reason (see docs/decisions.md).
-    if (ctrl_pressed && keycode == INPUT_KEY_LEFT)  { ring_push(KEY_CTRL_ARROW_LEFT); return; }
-    if (ctrl_pressed && keycode == INPUT_KEY_RIGHT) { ring_push(KEY_CTRL_ARROW_RIGHT); return; }
+    if (ctrl_pressed && keycode == INPUT_KEY_LEFT)  { emit(KEY_CTRL_ARROW_LEFT, 0); return; }
+    if (ctrl_pressed && keycode == INPUT_KEY_RIGHT) { emit(KEY_CTRL_ARROW_RIGHT, 0); return; }
 
     // Shift+arrow/Home/End get their own codes, decided right here from
     // the live `shift_pressed` state -- same timing as the layout lookup
@@ -540,45 +553,45 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     // the same data with a level of indirection in front of it.
     int kp = 0;   // a keypad character, composed with the layout's below
     switch (keycode) {
-    case INPUT_KEY_UP:       ring_push(shift_pressed ? KEY_SHIFT_ARROW_UP : KEY_ARROW_UP); return;
-    case INPUT_KEY_DOWN:     ring_push(shift_pressed ? KEY_SHIFT_ARROW_DOWN : KEY_ARROW_DOWN); return;
-    case INPUT_KEY_LEFT:     ring_push(shift_pressed ? KEY_SHIFT_ARROW_LEFT : KEY_ARROW_LEFT); return;
-    case INPUT_KEY_RIGHT:    ring_push(shift_pressed ? KEY_SHIFT_ARROW_RIGHT : KEY_ARROW_RIGHT); return;
-    case INPUT_KEY_HOME:     ring_push(shift_pressed ? KEY_SHIFT_HOME : KEY_HOME); return;
-    case INPUT_KEY_END:      ring_push(shift_pressed ? KEY_SHIFT_END : KEY_END); return;
-    case INPUT_KEY_PAGEUP:   ring_push(KEY_PAGE_UP); return;
-    case INPUT_KEY_PAGEDOWN: ring_push(KEY_PAGE_DOWN); return;
-    case INPUT_KEY_DELETE:   ring_push(KEY_DELETE); return;
+    case INPUT_KEY_UP:       emit(shift_pressed ? KEY_SHIFT_ARROW_UP : KEY_ARROW_UP, 0); return;
+    case INPUT_KEY_DOWN:     emit(shift_pressed ? KEY_SHIFT_ARROW_DOWN : KEY_ARROW_DOWN, 0); return;
+    case INPUT_KEY_LEFT:     emit(shift_pressed ? KEY_SHIFT_ARROW_LEFT : KEY_ARROW_LEFT, 0); return;
+    case INPUT_KEY_RIGHT:    emit(shift_pressed ? KEY_SHIFT_ARROW_RIGHT : KEY_ARROW_RIGHT, 0); return;
+    case INPUT_KEY_HOME:     emit(shift_pressed ? KEY_SHIFT_HOME : KEY_HOME, 0); return;
+    case INPUT_KEY_END:      emit(shift_pressed ? KEY_SHIFT_END : KEY_END, 0); return;
+    case INPUT_KEY_PAGEUP:   emit(KEY_PAGE_UP, 0); return;
+    case INPUT_KEY_PAGEDOWN: emit(KEY_PAGE_DOWN, 0); return;
+    case INPUT_KEY_DELETE:   emit(KEY_DELETE, 0); return;
     // THE WHOLE FUNCTION ROW. It was four -- F2/F3 (the file manager),
     // F10 (the menu bar) and F4 (Alt+F4) -- added one per caller; Doom
     // binds F1 through F11 and made the rest worth having. A KEY_*
     // special is never meta-prefixed, even on a terminal (tty_input()),
     // so Alt+F4 is always one key with KEY_MOD_ALT set.
-    case INPUT_KEY_F1:  ring_push(KEY_F1); return;
-    case INPUT_KEY_F2:  ring_push(KEY_F2); return;
-    case INPUT_KEY_F3:  ring_push(KEY_F3); return;
-    case INPUT_KEY_F4:  ring_push(KEY_F4); return;
-    case INPUT_KEY_F5:  ring_push(KEY_F5); return;
-    case INPUT_KEY_F6:  ring_push(KEY_F6); return;
-    case INPUT_KEY_F7:  ring_push(KEY_F7); return;
-    case INPUT_KEY_F8:  ring_push(KEY_F8); return;
-    case INPUT_KEY_F9:  ring_push(KEY_F9); return;
-    case INPUT_KEY_F10: ring_push(KEY_F10); return;
-    case INPUT_KEY_F11: ring_push(KEY_F11); return;
-    case INPUT_KEY_F12: ring_push(KEY_F12); return;
+    case INPUT_KEY_F1:  emit(KEY_F1, 0); return;
+    case INPUT_KEY_F2:  emit(KEY_F2, 0); return;
+    case INPUT_KEY_F3:  emit(KEY_F3, 0); return;
+    case INPUT_KEY_F4:  emit(KEY_F4, 0); return;
+    case INPUT_KEY_F5:  emit(KEY_F5, 0); return;
+    case INPUT_KEY_F6:  emit(KEY_F6, 0); return;
+    case INPUT_KEY_F7:  emit(KEY_F7, 0); return;
+    case INPUT_KEY_F8:  emit(KEY_F8, 0); return;
+    case INPUT_KEY_F9:  emit(KEY_F9, 0); return;
+    case INPUT_KEY_F10: emit(KEY_F10, 0); return;
+    case INPUT_KEY_F11: emit(KEY_F11, 0); return;
+    case INPUT_KEY_F12: emit(KEY_F12, 0); return;
 
     // --- THE KEYS THAT USED TO REPORT NOTHING AT ALL ------------------
     //
     // See keyboard.h. Each of these was silently dropped: the layout
     // has no entry for it, so keyboard_layout_translate() returned 0 and
     // the key was indistinguishable from one that was never pressed.
-    case INPUT_KEY_INSERT:     ring_push(KEY_INSERT); return;
-    case INPUT_KEY_COMPOSE:    ring_push(KEY_MENU); return;
-    case INPUT_KEY_CAPSLOCK:   ring_push(KEY_CAPS_LOCK); return;
-    case INPUT_KEY_NUMLOCK:    ring_push(KEY_NUM_LOCK); return;
-    case INPUT_KEY_SCROLLLOCK: ring_push(KEY_SCROLL_LOCK); return;
-    case INPUT_KEY_PAUSE:      ring_push(KEY_PAUSE); return;
-    case INPUT_KEY_SYSRQ:      ring_push(KEY_PRINT_SCREEN); return;
+    case INPUT_KEY_INSERT:     emit(KEY_INSERT, 0); return;
+    case INPUT_KEY_COMPOSE:    emit(KEY_MENU, 0); return;
+    case INPUT_KEY_CAPSLOCK:   emit(KEY_CAPS_LOCK, 0); return;
+    case INPUT_KEY_NUMLOCK:    emit(KEY_NUM_LOCK, 0); return;
+    case INPUT_KEY_SCROLLLOCK: emit(KEY_SCROLL_LOCK, 0); return;
+    case INPUT_KEY_PAUSE:      emit(KEY_PAUSE, 0); return;
+    case INPUT_KEY_SYSRQ:      emit(KEY_PRINT_SCREEN, 0); return;
 
     // --- THE NUMERIC KEYPAD, AS THE CHARACTERS ON ITS KEYCAPS ---------
     //
@@ -632,7 +645,7 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
         // accent has no key of its own, so it goes down AND up at once,
         // and the key is what this keycode's release reports.
         if (n == 2) emit(out[0], 1);
-        if (n > 0) ring_push(out[n - 1]);
+        if (n > 0) emit(out[n - 1], 0);
         return;
     }
     int c = keyboard_layout_spacing(sym);
@@ -654,11 +667,11 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended) {
     if (ctrl_pressed) {
         int lower = c < 0x80 ? k_tolower((unsigned char)c) : c;
         if (lower >= 'a' && lower <= 'z') {
-            ring_push((uint16_t)(lower - 'a' + 1));
+            emit((uint16_t)(lower - 'a' + 1), 0);
             return;
         }
     }
-    ring_push((uint16_t)c);
+    emit((uint16_t)c, 0);
 }
 
 // See keyboard.h. Not static state the shell can reach around: the

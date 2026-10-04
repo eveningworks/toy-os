@@ -5524,10 +5524,10 @@ Two scancode wrinkles worth knowing, both in `keyboard_feed_byte()`:
 
 - **Pause is six bytes and has no release.** `E1 1D 45 E1 9D C5`, and
   nothing else uses the `E1` prefix -- so the press is reported when the
-  prefix arrives and the five bytes behind it are counted out. It is the
-  one key that reports a press with no matching release, which a client
-  tracking held keys must tolerate (and already must, for the reason
-  `abi/win_proto.h` gives about grabs).
+  prefix arrives and the five bytes behind it are counted out. Since
+  2026-10-05 the parser also reports the release Pause never sends, at
+  once: a press with no release had cost a reserved slot in the key
+  streams and a stuck key in the positional one.
 - **The fake shifts around Print Screen are dropped.** A PS/2 keyboard
   brackets PrtSc with `E0 2A` / `E0 AA` so a DOS-era reader saw a
   shifted key. Taking those at face value would report a Shift nobody

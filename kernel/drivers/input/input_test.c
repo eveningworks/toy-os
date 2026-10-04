@@ -22,7 +22,8 @@
 #include "kfmt.h"            // klog_printf -- name the unreachable key
 #include "mouse.h"
 #include "tty.h"              // the bypass: which side of the split a key lands on
-#include "win_proto.h"        // WIN_EVENT_QUEUE_MAX: how much one poll may take
+#include "win_proto.h"        // the raw event types a compositor is handed
+#include "win_input.h"        // the real drain and queue, for window_events()
 #include "win_role.h"         // win_server_compositor_pid(): a live desktop's streams
 
 // THE KEY STREAMS BELONG TO A LIVE COMPOSITOR when one holds the role:
@@ -734,38 +735,38 @@ static struct evlog g_ev, g_ph;   // keys, and the same keys by position
 
 static void tap(uint16_t kc) { input_report_key(kc, 1); input_report_key(kc, 0); }
 
-// Runs `script` as a window would see it and records every event, read
-// the way win_input_poll() reads: at most WIN_EVENT_QUEUE_MAX per poll.
+// Runs `script` as a window would see it -- under a stand-in compositor,
+// through the real drain into the real queue -- and records every key
+// event (g_ev) and positional edge (g_ph).
 static void window_events(void (*script)(void)) {
     char name[KB_LAYOUT_NAME_MAX];
     k_strlcpy(name, keyboard_layout_current(), sizeof name);
-    struct tty *t = tty_console();
-    int was = tty_bypassed(t), was_att = keyboard_events_attached();
     k_memset(&g_ev, 0, sizeof g_ev);
     k_memset(&g_ph, 0, sizeof g_ph);
+    int pid = 0;
+    for (int p = SCHED_PID_MAX - 1; p > 0 && !pid; p--)   // a pid nobody holds
+        if (!scheduler_pid_valid(p)) pid = p;
+    if (!pid) return;                    // the caller's count assertion fails
 
     scheduler_preempt_disable();
-    tty_set_bypass(t, 1);
-    keyboard_events_attach(1);
-    while (keyboard_try_get_key(0, 0, 0)) { }
+    win_server_set_compositor(pid, 0);   // attaches the keyboard, empties the queues
     keyboard_layout_load_text(DEAD_FIXTURE, sizeof DEAD_FIXTURE - 1);
     script();
-    int c, d, more = 1;
-    uint8_t m;
-    while (more) {   // one "poll" per pass
-        more = 0;
-        for (int room = WIN_EVENT_QUEUE_MAX; room > 0; room--) {
-            if (!keyboard_try_get_key(&c, &d, &m)) break;
-            if (g_ev.n < EVLOG_MAX) { g_ev.code[g_ev.n] = c; g_ev.down[g_ev.n++] = d; }
-            if (room == 1) more = 1;
+    // THE REAL DRAIN: win_input_poll()'s key half, then the compositor
+    // consumes what it queued -- round after round until nothing is left.
+    for (int took = 1; took; ) {
+        took = 0;
+        win_input_drain_keys();
+        struct win_event e;
+        while (win_input_pop(&e)) {
+            took = 1;
+            struct evlog *l = e.type == WIN_EV_RAW_KEY_PHYS ? &g_ph : &g_ev;
+            int down = e.type == WIN_EV_RAW_KEY_PHYS ? e.b : e.type == WIN_EV_RAW_KEY;
+            if (l->n < EVLOG_MAX) { l->code[l->n] = e.a; l->down[l->n++] = down; }
         }
     }
-    uint16_t pk;
-    while (keyboard_try_get_physical(&pk, &d, &m))
-        if (g_ph.n < EVLOG_MAX) { g_ph.code[g_ph.n] = pk; g_ph.down[g_ph.n++] = d; }
     keyboard_layout_compose_reset();
-    keyboard_events_attach(was_att);
-    tty_set_bypass(t, was);
+    win_server_set_compositor(0, 0);
     scheduler_preempt_enable();
     keyboard_layout_load(name);
 }

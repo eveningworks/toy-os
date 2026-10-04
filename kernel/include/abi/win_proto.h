@@ -1499,16 +1499,14 @@ static inline uint64_t win_glyph_offset(uint32_t index, int w, int h) {
     return (uint64_t)index * (uint64_t)w * (uint64_t)h;
 }
 
-// How many events the server will hold for one client before it starts
-// dropping the OLDEST INPUT event (and only with none of those queued,
-// the oldest of all). Dropping the oldest rather than the newest
-// is deliberate: for input, the most recent state is the one that
-// matters, and a client that has fallen far enough behind to overflow
-// is better served by current events than by a backlog it will never
-// catch up on. Mouse motion (raw, and a client's WIN_EV_MOUSE_MOVE) is
-// coalesced into one slot before any of this applies (win_events.c),
-// and a notification such as WIN_EV_SCREEN is never the one shed while
-// input is waiting.
+// How many RAW INPUT events the kernel holds for the compositor. Full,
+// it drops the OLDEST event that is not a release -- the old end because
+// for input the most recent state is the one that matters -- and with
+// only releases queued it refuses the new event: a release is never shed,
+// or a client would hold the key or button forever. Motion is coalesced
+// into one slot first. Notices (WIN_EV_SCREEN, WIN_EV_FONT, window
+// lifecycle) do not count against this: they have their own queue,
+// delivered first (kernel/proc/win_input.c).
 #define WIN_EVENT_QUEUE_MAX 32
 
 #endif

@@ -154,20 +154,20 @@ KTEST("win_input", "overflow sheds input before a notification") {
     k_memset(&screen, 0, sizeof screen);
     screen.type = WIN_EV_SCREEN; screen.a = 1280; screen.b = 1024;
     KTEST_ASSERT(win_input_push(&screen));
-    // The queue fills with keys behind it; the notification is the
-    // OLDEST event and must still not be the one dropped.
+    // The input queue fills with keys behind it; the notification has
+    // a queue of its own, so it is neither shed nor counted against them.
     for (int i = 0; i < WIN_EVENT_QUEUE_MAX; i++) {
         struct win_event ev = key_event(i);
         KTEST_ASSERT(win_input_push(&ev));
     }
-    KTEST_ASSERT_EQ(win_input_pending(), WIN_EVENT_QUEUE_MAX);
-    KTEST_ASSERT_EQ(win_input_dropped(), 1);
+    KTEST_ASSERT_EQ(win_input_pending(), WIN_EVENT_QUEUE_MAX + 1);
+    KTEST_ASSERT_EQ(win_input_dropped(), 0);
     struct win_event got;
     KTEST_ASSERT(win_input_pop(&got));
     KTEST_ASSERT_EQ((int)got.type, WIN_EV_SCREEN);
     KTEST_ASSERT_EQ(got.a, 1280);
     KTEST_ASSERT(win_input_pop(&got));
-    KTEST_ASSERT_EQ(got.a, 1);   // key 0 was the one shed
+    KTEST_ASSERT_EQ(got.a, 0);   // nothing shed
     win_server_set_compositor(0, 0);
 }
 
@@ -347,34 +347,103 @@ KTEST("win_input", "a compositor change empties the keyboard's stream and its ow
     KTEST_ASSERT_EQ(queued, 0);
 }
 
-KTEST("win_input", "a full queue of releases sheds nothing; a screen notice coalesces") {
-    // A release is never evicted: with nothing else to shed, the NEW
-    // event is the one refused. And a screen notice is a state, so a
-    // second one replaces the first rather than taking a slot.
+// These record what they see and restore the role BEFORE asserting:
+// a failed assertion returns from the test, and a stand-in pid left
+// holding the role would make every later test skip and keep keys from
+// the console.
+
+KTEST("win_input", "a full queue of releases sheds nothing, and notices still arrive") {
+    // A release is never evicted: with nothing else to shed, a new INPUT
+    // event is refused. A notice has its own queue, so input pressure
+    // cannot cost one -- six window-lifecycle notices over a full queue
+    // all arrive, first, and in order.
+    SKIP_IF_ROLE_HELD;
+    int pid = spare_pid();
+    if (!pid) KTEST_SKIP("no spare pid");
+    win_server_set_compositor(pid, 0);
+    int pushed_ups = 0, took_press, took_notices = 0, ups = 0, notices_first = 1;
+    int seen_notices = 0, in_order = 1;
+    for (int i = 0; i < WIN_EVENT_QUEUE_MAX; i++) {
+        struct win_event up = { .type = WIN_EV_RAW_KEY_UP, .a = 'a' + i % 26 };
+        pushed_ups += win_input_push(&up);
+    }
+    struct win_event press = { .type = WIN_EV_RAW_KEY, .a = 'z' };
+    took_press = win_input_push(&press);
+    for (int i = 0; i < 6; i++) {
+        struct win_event gone = { .type = WIN_EV_CLOSE, .a = 100 + i };
+        took_notices += win_input_push(&gone);
+    }
+    struct win_event got;
+    while (win_input_pop(&got)) {
+        if (got.type == WIN_EV_RAW_KEY_UP) ups++;
+        if (got.type == WIN_EV_CLOSE) {
+            if (ups) notices_first = 0;
+            if (got.a != 100 + seen_notices) in_order = 0;
+            seen_notices++;
+        }
+    }
+    win_server_set_compositor(0, 0);
+    KTEST_ASSERT_EQ(pushed_ups, WIN_EVENT_QUEUE_MAX);
+    KTEST_ASSERT(!took_press);
+    KTEST_ASSERT_EQ(ups, WIN_EVENT_QUEUE_MAX);   // every release survived
+    KTEST_ASSERT_EQ(took_notices, 6);
+    KTEST_ASSERT_EQ(seen_notices, 6);
+    KTEST_ASSERT(notices_first);
+    KTEST_ASSERT(in_order);
+}
+
+KTEST("win_input", "a coalesced notice moves to the END, behind what came after it") {
+    // SCREEN, then a lifecycle notice, then a newer SCREEN: the compositor
+    // must see the lifecycle notice before the new mode, not after it.
     SKIP_IF_ROLE_HELD;
     int pid = spare_pid();
     if (!pid) KTEST_SKIP("no spare pid");
     win_server_set_compositor(pid, 0);
     struct win_event scr = { .type = WIN_EV_SCREEN, .a = 640, .b = 480 };
-    KTEST_ASSERT(win_input_push(&scr));
+    struct win_event gone = { .type = WIN_EV_CLOSE, .a = 7 };
+    win_input_push(&scr);
+    win_input_push(&gone);
     scr.a = 800;
-    KTEST_ASSERT(win_input_push(&scr));
-    KTEST_ASSERT_EQ(win_input_pending(), 1);
-    struct win_event got;
-    KTEST_ASSERT(win_input_pop(&got));
-    KTEST_ASSERT_EQ(got.a, 800);              // the newest won
-
-    for (int i = 0; i < WIN_EVENT_QUEUE_MAX; i++) {
-        struct win_event up = { .type = WIN_EV_RAW_KEY_UP, .a = 'a' + i % 26 };
-        KTEST_ASSERT(win_input_push(&up));
-    }
-    struct win_event press = { .type = WIN_EV_RAW_KEY, .a = 'z' };
-    int took_press = win_input_push(&press);
-    int took_notice = win_input_push(&scr);
-    int ups = 0;
-    while (win_input_pop(&got)) if (got.type == WIN_EV_RAW_KEY_UP) ups++;
+    win_input_push(&scr);
+    int pending = win_input_pending();
+    struct win_event a = { 0 }, b = { 0 };
+    win_input_pop(&a);
+    win_input_pop(&b);
     win_server_set_compositor(0, 0);
-    KTEST_ASSERT(!took_press);
-    KTEST_ASSERT(!took_notice);
-    KTEST_ASSERT_EQ(ups, WIN_EVENT_QUEUE_MAX);   // every release survived
+    KTEST_ASSERT_EQ(pending, 2);                  // the older SCREEN is gone
+    KTEST_ASSERT_EQ((int)a.type, WIN_EV_CLOSE);
+    KTEST_ASSERT_EQ((int)b.type, WIN_EV_SCREEN);
+    KTEST_ASSERT_EQ(b.a, 800);
+}
+
+KTEST("win_input", "with one free slot per poll, keys and positions both drain") {
+    // THE REAL DRAIN (win_input_drain_keys()), one slot at a time: which
+    // stream goes first must alternate per poll, or one starves.
+    SKIP_IF_ROLE_HELD;
+    int pid = spare_pid();
+    if (!pid) KTEST_SKIP("no spare pid");
+    scheduler_preempt_disable();
+    win_server_set_compositor(pid, 0);
+    for (int i = 0; i < WIN_EVENT_QUEUE_MAX - 1; i++) {
+        struct win_event filler = { .type = WIN_EV_RAW_KEY, .a = 0x7F };
+        win_input_push(&filler);
+    }
+    for (int i = 0; i < 3; i++) {                     // both streams backlogged
+        input_report_key(INPUT_KEY_A, 1);
+        input_report_key(INPUT_KEY_A, 0);
+    }
+    struct win_event got;
+    for (int round = 0; round < 6; round++) {
+        win_input_pop(&got);                          // the compositor takes one...
+        win_input_drain_keys();                       // ...and a poll refills one
+    }
+    int keys = 0, phys = 0;
+    while (win_input_pop(&got)) {
+        if (got.type == WIN_EV_RAW_KEY_PHYS) phys++;
+        else if ((got.type == WIN_EV_RAW_KEY && got.a != 0x7F) || got.type == WIN_EV_RAW_KEY_UP) keys++;
+    }
+    win_server_set_compositor(0, 0);
+    scheduler_preempt_enable();
+    KTEST_ASSERT(keys >= 2);
+    KTEST_ASSERT(phys >= 2);
 }
