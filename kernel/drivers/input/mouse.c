@@ -1,5 +1,4 @@
 #include "mouse.h"
-#include "i8042.h"  // i8042_present(): the handshake needs a controller
 #include "io.h"
 #include "klog.h"
 
@@ -74,14 +73,6 @@ void mouse_set_bounds(int width, int height) {
 }
 
 void mouse_init(void) {
-    // NO 8042, NO HANDSHAKE: every step below would run out its timeout
-    // against a port nothing decodes. A virtio or USB mouse still needs
-    // the pointer centred.
-    if (!i8042_present()) {
-        mouse_x = bound_w / 2;
-        mouse_y = bound_h / 2;
-        return;
-    }
     // mouse_read()/mouse_write() busy-poll ports 0x64/0x60 directly,
     // synchronously, outside of interrupt context. If a keyboard (or
     // stray mouse) IRQ fires during that window, i8042_poll() drains

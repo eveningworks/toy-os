@@ -6163,6 +6163,24 @@ interrupts stay off for one echoed key at 1080p, and whether that shows
 as input latency, before building a work-item mechanism this kernel does
 not have yet.
 
+### PS/2 LED writes with no 8042 busy-wait per Caps Lock -- probe like Linux's i8042 (retried CTR read, process context)
+
+`i8042.c`'s `kbd_write()` waits for the controller's input buffer with a
+bare loop of 10000 status reads, and `key_event()` runs with interrupts
+off -- so on a machine whose firmware decodes no 8042 at all, every Caps
+Lock spends that loop with interrupts off. A first fix (11d5d081,
+28a59900, reverted) decided absence from one write timeout and from a
+single command-byte probe with a time budget, and was rejected in
+review: with the PIT as clocksource there is no time bound with
+interrupts off; a controller slow at boot became a permanently absent
+keyboard; a key byte landing during the probe could leave the output
+buffer full and the keyboard dead; and a wedged controller cost 500 ms
+inside IRQ1. Linux's i8042 is the shape to copy: probe from process
+context, before the IRQs are wired, with a RETRIED control-register
+read and the output buffer flushed around it, and only then register
+the ports. Every machine this OS runs on today has a controller, so
+nothing here is broken in practice.
+
 ### Runtime mode switching: a display driver can set a mode after boot
 
 virtio-gpu can program a mode -- that is what its probe does, and what

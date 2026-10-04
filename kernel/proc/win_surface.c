@@ -7,6 +7,7 @@
 // g_comp_pid), so a table here could only ever hold one row, and a
 // second row would mean two processes writing the same screen.
 
+#include "ratelimit.h"   // the rotation and fallback lines, once a second
 #include "win_surface.h"
 #include "win_proto.h"
 #include "vmm.h"
@@ -18,7 +19,6 @@
 #include "pmm.h"
 #include "string.h"
 #include "scheduler.h" // the preemption guard around a page-table walk
-#include "timer.h"     // coarse_ticks -- rate-limiting the free_back probe
 #include "debugflags.h" // `debug wm on` -- the rotation trace
 
 static int      g_holder;      // pid holding the grant, or 0
@@ -99,7 +99,8 @@ static void unmap_scanouts(uint64_t pml4, int count, uint64_t pages) {
 // or live/front are lying, and the compositor is about to paint into
 // something the panel is reading. Counted rather than assumed away:
 // "a window drawn in front of you" is what that looks like.
-static unsigned long long g_back_fallback, g_back_calls, g_back_last_log;
+static unsigned long long g_back_fallback, g_back_calls;
+static struct ratelimit g_back_rl;   // both lines below share one a second
 
 void win_surface_back_stats(unsigned long long *calls, unsigned long long *fallback) {
     if (calls)    *calls    = g_back_calls;
@@ -116,9 +117,7 @@ static int free_back(void) {
     // WM moved to ring 3 (nothing in userland/ can read a kernel flag),
     // and this is the half of the WM that stayed behind.
     if (dbgflag_enabled(DBGFLAG_WM)) {
-        uint64_t t = coarse_ticks();
-        if (t - g_back_last_log >= 100) {
-            g_back_last_log = t;
+        if (ratelimit_ok(&g_back_rl, 0)) {
             klog_printf("win_surface: rotate front %d live %d of %d (presents %llu, fallback %llu)\n",
                         g_front, live, g_count, g_back_calls, g_back_fallback);
         }
@@ -126,9 +125,7 @@ static int free_back(void) {
     for (int b = 0; b < g_count; b++)
         if (b != g_front && b != live) return b;
     g_back_fallback++;
-    uint64_t now = coarse_ticks();
-    if (now - g_back_last_log >= 100) {   // 100 Hz: one line a second
-        g_back_last_log = now;
+    if (ratelimit_ok(&g_back_rl, 0)) {
         klog_printf("win_surface: no free buffer (front %d live %d of %d) -- handing back 0, "
                     "%llu of %llu\n", g_front, live, g_count, g_back_fallback, g_back_calls);
     }

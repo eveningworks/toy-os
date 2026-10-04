@@ -818,6 +818,7 @@ run on, not by order.
 - [x] ~~Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table~~ DONE 2026-09-12
 - [x] ~~Every XKB layout Latin-1 can type, with dead keys and Shift+AltGr~~ DONE 2026-10-04 -- `tools/gen_kbs.py`'s `LAYOUTS`
 - [ ] Keyboard console echo and LED writes run from a bottom half, not with interrupts off
+- [ ] PS/2 LED writes with no 8042 busy-wait per Caps Lock -- probe like Linux's i8042 (retried CTR read, process context)
 - [ ] Settings shows a picture of the chosen keyboard layout -- the layout data is in `/etc/kbs`; nothing draws it yet
 - [ ] Several layouts at once, switched with a shortcut and shown in the tray (Windows' Win+Space, GNOME's input sources)
 - [ ] The on-screen keyboard should draw the CONFIGURED layout, not its own copy of US QWERTY -- it still types US whatever is set

@@ -47,9 +47,17 @@ void win_input_poll(void);
 // Safe from an interrupt handler: the wake only flips scheduler state.
 // Motion with the same buttons as the newest queued motion REPLACES it;
 // input past WIN_INPUT_MAX drops its oldest event that is not a release.
-// A RAW_MOUSE whose mask drops a button held by the last one is a release
-// too. A notice replaces an older copy of itself, moving to the end.
+// A notice replaces an older copy of itself, moving to the end. A
+// RAW_MOUSE pushed here is MOTION; a button edge goes through
+// win_input_push_mouse_edge(), which says which kind it is.
 int win_input_push(const struct win_event *ev);
+
+// A RAW_MOUSE button edge: WIN_INPUT_EDGE_DOWN (a press) or
+// WIN_INPUT_EDGE_UP (a release -- kept like a key release, never shed).
+// Never merged with motion. Same return as win_input_push().
+#define WIN_INPUT_EDGE_DOWN 1
+#define WIN_INPUT_EDGE_UP   2
+int win_input_push_mouse_edge(const struct win_event *ev, int edge);
 
 // win_input_poll()'s key half: the key and positional streams, in turn,
 // as far as input's share of the queue allows. Exported for its KTEST.

@@ -48,7 +48,6 @@ static struct {
     int ninput;  // ...of which raw input
     int dropped; // overflow drops since the last reset
     int newest_edge; // the newest slot is a button EDGE: never merged into
-    uint8_t last_buttons; // the mask of the newest RAW_MOUSE queued
 } q;
 
 void win_input_reset(void) {
@@ -93,9 +92,11 @@ static void remove_at(int i) {
     q.count--;
 }
 
-// `edge`: 0 for no button edge, EDGE_DOWN or EDGE_UP for one.
-#define EDGE_DOWN 1
-#define EDGE_UP   2
+// `edge`: 0 for no button edge, EDGE_DOWN or EDGE_UP for one -- always
+// the CALLER's truth (the poll knows its edges; a direct push says so
+// through win_input_push_mouse_edge()), never guessed from the bits.
+#define EDGE_DOWN WIN_INPUT_EDGE_DOWN
+#define EDGE_UP   WIN_INPUT_EDGE_UP
 
 // The one way an event is refused: counted, and a RELEASE said (at most
 // a line a second, kernel/ratelimit.h) -- a client will hold that key or
@@ -114,13 +115,6 @@ static int refuse(const struct win_event *ev, int release) {
 static int enqueue(const struct win_event *ev, int edge) {
     int release = is_release(ev) || edge == EDGE_UP;
     if (is_input(ev->type)) {
-        if (ev->type == WIN_EV_RAW_MOUSE) {
-            // A DIRECT push carries no edge flag, so a button-up is told
-            // from the bits: one held by the last mouse event and not by
-            // this one. It is kept like any release.
-            if (!edge && (q.last_buttons & (uint8_t)~ev->mods)) release = 1;
-            q.last_buttons = (uint8_t)ev->mods;
-        }
         // MOTION IS A STATE, NOT A BACKLOG (Windows holds one WM_MOUSEMOVE
         // per queue; X compresses MotionNotify). A move with the same
         // buttons as the NEWEST queued move replaces it. Only the newest
@@ -194,6 +188,11 @@ static int queue_push(const struct win_event *ev, int edge) {
 }
 
 int win_input_push(const struct win_event *ev) { return queue_push(ev, 0); }
+
+int win_input_push_mouse_edge(const struct win_event *ev, int edge) {
+    if (!ev || ev->type != WIN_EV_RAW_MOUSE) return 0;
+    return queue_push(ev, edge == EDGE_UP ? EDGE_UP : EDGE_DOWN);
+}
 
 // What an input drain may take: input's share of the queue, unused.
 // Taking only this, a poll never evicts.

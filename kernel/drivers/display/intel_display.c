@@ -17,6 +17,7 @@
 // Register offsets are from Intel's public Broadwell PRM (Vol 2c) and
 // agree with Linux's i915_reg.h; pipe B and C are +0x1000 and +0x2000
 // from pipe A.
+#include "ratelimit.h"   // the miss line, at most once a second
 #include "intel_display.h"
 #include "display.h"
 #include "pci.h"
@@ -28,7 +29,6 @@
 #include "kfmt.h"
 #include "string.h"   // k_memset
 #include "driver.h" // DRIVER_DECLARE -- `lsdrv -v` names THIS file
-#include "timer.h"  // coarse_ticks -- rate-limiting the live-scanout probe
 #include "intel_internal.h"
 #include "edid.h"     // the mode list: the EDID's listed modes and DMT timings
 
@@ -391,7 +391,8 @@ static int intel_flip(int index) {
 // a window drawn in front of you instead of appearing whole. The
 // counter is how a session tells that from a present-path fault; the
 // log line is rate-limited because a present runs at frame rate.
-static unsigned long long g_live_miss, g_live_calls, g_live_last_log;
+static unsigned long long g_live_miss, g_live_calls;
+static struct ratelimit g_live_rl;
 static uint32_t g_live_last_raw;
 
 void intel_display_live_stats(unsigned long long *calls, unsigned long long *miss,
@@ -411,9 +412,7 @@ static int intel_scanout_live(void) {
     for (int b = 0; b < g_scanouts; b++)
         if (g_scanout_ggtt[b] == live) return b;
     g_live_miss++;
-    uint64_t now = coarse_ticks();
-    if (now - g_live_last_log >= 100) {     // 100 Hz: one line a second
-        g_live_last_log = now;
+    if (ratelimit_ok(&g_live_rl, 0)) {      // one line a second
         klog_printf("intel-display: DSPSURFLIVE %#x matches no scanout (%llu of %llu) -- "
                     "assuming 0; scanouts %#x %#x %#x\n",
                     live, g_live_miss, g_live_calls,

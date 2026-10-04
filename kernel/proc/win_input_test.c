@@ -487,7 +487,9 @@ KTEST("win_input", "at the full ring, a release still evicts a press rather than
     KTEST_ASSERT_EQ(first_key, 1);   // press 0 was the one evicted
 }
 
-KTEST("win_input", "a release with nowhere to go is refused and SAID") {
+KTEST("win_input", "a release with nowhere to go is refused and counted") {
+    // Counted in win_input_dropped(); the log line beside it is limited
+    // to one a second, so this asserts the count, not the log.
     SKIP_IF_ROLE_HELD;
     int pid = spare_pid();
     if (!pid) KTEST_SKIP("no spare pid");
@@ -497,18 +499,32 @@ KTEST("win_input", "a release with nowhere to go is refused and SAID") {
         win_input_push(&up);
     }
     int dropped_before = win_input_dropped();
-    uint64_t log_from = klog_total_bytes();
     struct win_event up = { .type = WIN_EV_RAW_KEY_UP, .a = 'z' };
     int took = win_input_push(&up);
-    static char tail[512];
-    uint64_t first = 0;
-    uint32_t n = klog_read(log_from, tail, sizeof tail - 1, &first);
-    tail[n] = 0;
     int dropped_after = win_input_dropped();
     win_server_set_compositor(0, 0);
     KTEST_ASSERT(!took);
     KTEST_ASSERT_EQ(dropped_after, dropped_before + 1);
-    // Nothing else in the suite refuses a release, so the once-a-second
-    // limit has nothing to hold this line back for.
-    KTEST_ASSERT(k_strstr(tail, "found no room") != 0);
+}
+
+KTEST("win_input", "a button-up edge is kept like a key release; motion is not") {
+    // The caller says which pushes are edges; a button-up is never shed.
+    SKIP_IF_ROLE_HELD;
+    int pid = spare_pid();
+    if (!pid) KTEST_SKIP("no spare pid");
+    win_server_set_compositor(pid, 0);
+    int took_ups = 0;
+    for (int i = 0; i < WIN_INPUT_MAX; i++) {
+        struct win_event up = raw_mouse(i, i, 0);
+        took_ups += win_input_push_mouse_edge(&up, WIN_INPUT_EDGE_UP);
+    }
+    struct win_event move = raw_mouse(500, 500, 0);
+    int took_move = win_input_push(&move);       // nothing unkept to evict
+    int ups = 0;
+    struct win_event got;
+    while (win_input_pop(&got)) if (got.type == WIN_EV_RAW_MOUSE && got.a < WIN_INPUT_MAX) ups++;
+    win_server_set_compositor(0, 0);
+    KTEST_ASSERT_EQ(took_ups, WIN_INPUT_MAX);
+    KTEST_ASSERT(!took_move);
+    KTEST_ASSERT_EQ(ups, WIN_INPUT_MAX);
 }
