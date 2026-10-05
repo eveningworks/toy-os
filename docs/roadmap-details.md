@@ -6175,7 +6175,7 @@ missing probe: `mouse.c`'s `mouse_init()` runs its full PS/2 handshake
 exchange (`g_led_state`) waiting for an ACK that never comes, so the
 next stray ACK is taken as its reply.
 
-A first fix (ef31a422, eebc82d7, reverted) decided absence from one
+A first fix (fad8259c, 72f47ac2, reverted) decided absence from one
 write timeout and from a single command-byte probe with a time budget,
 and was rejected in review: with the PIT as clocksource there is no time
 bound with interrupts off; a controller slow at boot became a

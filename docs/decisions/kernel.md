@@ -5525,7 +5525,7 @@ Two scancode wrinkles worth knowing, both in `keyboard_feed_byte()`:
 - **Pause is six bytes and has no break code, so the parser reports its
   release.** `E1 1D 45 E1 9D C5`, and nothing else uses the `E1` prefix
   -- so the press is reported when the prefix arrives, the release at
-  once after it (137dd67c; a press with no release had cost a reserved
+  once after it (e08a7073; a press with no release had cost a reserved
   slot in the key streams and a stuck key in the positional one), and
   the five bytes behind it are counted out.
 - **The fake shifts around Print Screen are dropped.** A PS/2 keyboard
