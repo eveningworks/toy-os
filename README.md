@@ -22,9 +22,8 @@
 > **Built with [Claude Code](https://claude.com/claude-code)**, Anthropic's
 > agentic coding tool. A human makes the design calls; Claude does the
 > implementation and the testing. The conventions it works under are in
-> [CLAUDE.md](CLAUDE.md), the reasoning behind the design is in
-> [docs/decisions.md](docs/decisions.md), and `tools/preflight.sh` is the
-> gate every change passes before it lands.
+> [CLAUDE.md](CLAUDE.md), and the reasoning behind the design is in
+> [docs/decisions.md](docs/decisions.md).
 
 <p align="center">
   <img src="screenshots/readme/desktop.png" alt="toy-os desktop: the Start menu open on All Apps, over the Image Viewer, the File Manager, DOOM and a Terminal" width="49%">
