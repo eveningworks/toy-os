@@ -48,11 +48,15 @@
 // without assuming a particular timer rate or emulation speed.
 #define MIN_OBSERVED_TICKS 3
 
-// Hard bound on the whole test, in 100Hz ticks (~5s). A process that
+// Hard bound on the whole test, in 100Hz ticks (~30s). A process that
 // never exits must fail this test, not hang the suite -- the loop below
 // is a busy-wait by design (that's the point: it's competing for the
 // CPU), so nothing else would ever break it out.
-#define TIMEOUT_TICKS 500
+//
+// A HANG GUARD, NOT A SPEED LIMIT: spin_test takes 3.5-4 s under TCG on
+// the development host, so the 5 s this used to be failed on GitHub's
+// slower runner (2 of 2 runs of the v0.4.0 tag) and now and then here.
+#define TIMEOUT_TICKS 3000
 
 KTEST("sched", "kernel context keeps running while a process is ready") {
     // A RAM-only boot has no /tests -- skip rather than fail, same
