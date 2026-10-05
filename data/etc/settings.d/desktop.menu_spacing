@@ -1,0 +1,13 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Menu spacing
+Category=Appearance
+Group=Windows
+Default=comfortable
+Choices=comfortable,compact,dense
+Description=How tall each row is in menus: right-click menus, the taskbar's and every app's menu bar
+Widget=radio
+Order=22
+Choice.comfortable=Comfortable
+Choice.compact=Compact
+Choice.dense=Dense

@@ -3008,7 +3008,10 @@ window without going through it will find its layout polls timing out.
   plain `ugfx_blit()` satisfies by writing black, and only the positive
   control found that. In `gui_regress.py`.
 - **`desktop_menu_test.py`** -- the desktop's menus, glass, Rename and
-  Properties (23 checks), from the WM's own geometry (`gui ctxmenu
+  Properties (26 checks; the last three are `desktop.menu_spacing`: the
+  rows shrink in order, the card is DRAWN shorter -- the comfortable
+  card's last row is wallpaper under the compact one -- and Notepad's
+  File menu shrinks with it), from the WM's own geometry (`gui ctxmenu
   --json` now reports each row's rect, `disabled`, and a second submenu
   level as `sub2`; `gui icons --json` reports `hovered`/`renaming`).
   Paste greys and un-greys, Open > reaches every desktop app through its

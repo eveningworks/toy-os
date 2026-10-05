@@ -541,7 +541,12 @@ taskbar's are all `uui_menubar`, so they are one design -- Windows 11's
   the widget drew; a menu drawn in-window rounds itself.
 - **Rows twice the line height plus air** (32 px at 14 px) -- a pointer
   aims at them. Hover is a rounded grey PILL inset from the card's edge,
-  not a band across it.
+  not a band across it. **`desktop.menu_spacing` tightens every menu
+  at once** (Appearance > Windows): comfortable (that), compact (the line
+  plus 12, Windows 11's mouse menus) or dense (plus 8, Windows 10's
+  classic ones) -- the row, the card's air and the icon, nothing
+  horizontal, and never the menu BAR's own strip. Read when a menu
+  opens, so a menu and its submenus keep one spacing while up.
 - **An icon gutter**: a row may carry an icon, tinted by the ACTION ROLE
   of what it does, exactly as a command bar's buttons are (`icon`,
   `tint` on `uui_menu_item`); a tick takes the gutter in the accent. A

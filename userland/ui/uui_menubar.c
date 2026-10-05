@@ -3,6 +3,7 @@
 #include "ui/uui_popup.h" // each level is a popup surface when one is granted
 #include "ui/utheme.h"
 #include "lib/icon_cache.h" // row icons, as uui_toolbar draws them
+#include "lib/usetting.h"   // desktop.menu_spacing
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 #include <string.h>
 #include <ctype.h> // tolower() -- the toolkit's, over k_tolower
@@ -32,15 +33,44 @@ static int unit(void) {
 // a pointer can aim at, a hover that is a rounded pill INSET from the
 // edge, an icon gutter, separators edge to edge. Every number below is
 // a share of the line height, so 14 px gives Win11's own 32 px rows.
-static int air(void)      { int a = ugfx_char_h() / 3; return a < 3 ? 3 : a; } // card padding, pill inset
+//
+// `desktop.menu_spacing` tightens three of them -- the row, the air and
+// the icon -- and nothing horizontal. It is read when a menu OPENS
+// (open_level() at level 0), so a menu and its submenus keep one
+// spacing while they are up, and hit-testing never disagrees with the
+// drawing. The bar's own strip is a separate height and never changes.
+enum { SPACING_COMFORTABLE, SPACING_COMPACT, SPACING_DENSE };
+static int g_spacing = SPACING_COMFORTABLE;
+
+static void read_spacing(void) {
+    char v[16];
+    g_spacing = SPACING_COMFORTABLE;   // also when the registry cannot be asked
+    if (!usetting_get("desktop.menu_spacing", v, sizeof v)) return;
+    if (!strcmp(v, "compact"))    g_spacing = SPACING_COMPACT;
+    else if (!strcmp(v, "dense")) g_spacing = SPACING_DENSE;
+}
+
+static int air(void) {   // card padding, pill inset
+    int c = ugfx_char_h();
+    int a = g_spacing == SPACING_DENSE ? c / 5 : g_spacing == SPACING_COMPACT ? c / 4 : c / 3;
+    return a < 3 ? 3 : a;
+}
 static int row_pad(void)  { return unit() + unit() / 4; } // inside the pill, either side
-static int icon_px(void)  { return ugfx_char_h() + 3; }
+static int icon_px(void)  {
+    int c = ugfx_char_h();
+    return g_spacing == SPACING_DENSE ? c : g_spacing == SPACING_COMPACT ? c + 2 : c + 3;
+}
 static int gutter(void)   { return icon_px() + unit() * 3 / 2; } // icon/tick + gap to the label
 static int arrow_col(void){ return unit() * 2; } // the submenu chevron, with air before it
 static int accel_gap(void){ return unit() * 5 / 2; }
 static int pill_r(void)   { return air(); }
 
-static int row_height(void) { return ugfx_char_h() * 2 + 6; }
+// 38 px at the default 16 px line; compact is about Windows 11's mouse
+// menus (28), dense about Windows 10's classic ones (24).
+static int row_height(void) {
+    int c = ugfx_char_h();
+    return g_spacing == SPACING_DENSE ? c + 8 : g_spacing == SPACING_COMPACT ? c + 12 : c * 2 + 6;
+}
 
 // A separator is a hairline with air above and below it, not a row.
 static int sep_height(void) { return 2 * air() + 1; }
@@ -229,6 +259,7 @@ static void open_level(struct uui_menubar *m, int l,
                         const struct uui_menu_item *items, int count,
                         int ax, int ay, int aw, int ah, int side, int parent) {
     set_depth(m, l);
+    if (l == 0) read_spacing();   // once per menu, never under an open one
 
     int w, h;
     level_size(items, count, &w, &h);

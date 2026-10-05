@@ -33,6 +33,9 @@ This drives each through the WM's own geometry (`gui ctxmenu --json`,
   9. An APP's popup surface has round corners, cut by the compositor:
      Notepad's File menu reads the scene at its corner pixel and its own
      ground one radius in.
+ 10. `desktop.menu_spacing`: comfortable > compact > dense rows, in the
+     report AND the drawn card (the comfortable card's last row is
+     wallpaper under the compact one), and in Notepad's File menu too.
 
     python3 tools/vm.py start
     python3 tools/desktop_menu_test.py --instance 0
@@ -46,7 +49,9 @@ POSITIVE CONTROLS, run against this tool when it was written:
     red ("Icon size > did not open").
   * the glass selection replaced by a solid ugfx_fill_rect -> check 8
     goes red and check 7's control stays green.
-  * corners_round() skipped for popups -> check 9 goes red. Its first
+  * corners_round() skipped for popups -> check 9 goes red.
+  * the menu never reading desktop.menu_spacing -> exactly check 10's
+    three go red. Its first
     version asked only that the corner be darker than the card's inside,
     which the uncut EDGE also is, and stayed green.
 
@@ -426,6 +431,67 @@ def check_app_popup_corners(dbg, qmp, res, tmp):
     time.sleep(0.5)
 
 
+def notepad_file_menu_h(dbg, qmp):
+    """Open Notepad's File menu, return its popup surface's height, close
+    both again. 0 when it did not open."""
+    dbg.send("gui open Notepad")
+    w = None
+    for _ in range(20):
+        w = dbg.window("untitled")
+        if w:
+            break
+        time.sleep(0.3)
+    if not w:
+        return 0
+    menu = dbg.widgets("untitled").get("menu") or {}
+    scr = menu.get("screen") or {}
+    dbg.click(scr.get("x", w["content"]["x"]) + 16, scr.get("y", w["content"]["y"]) + 8)
+    dbg.settle()
+    h = max([win["h"] for win in dbg.windows() if win.get("popup")] + [0])
+    dbg.key("0x1b")
+    for i, win in enumerate(dbg.windows()):
+        if win["title"] == "untitled":
+            dbg.send(f"gui close {i}")
+            break
+    time.sleep(0.5)
+    return h
+
+
+def check_menu_spacing(dbg, qmp, res, tmp):
+    """`desktop.menu_spacing`: every menu's rows shrink -- the WM's and an
+    app's, which are one toolkit menu -- and the card is DRAWN shorter."""
+    got = {}
+    for word in ("comfortable", "compact", "dense"):
+        dbg.send(f"sh config set desktop.menu_spacing {word}")
+        close_menu(dbg)
+        dbg.rclick(*EMPTY)
+        m = dbg.ctxmenu()
+        a, b = row(m, "Refresh"), row(m, "Sort by name")
+        last = (m.get("rows") or [{}])[-1]
+        # The probe's x is the card's right end, past every label.
+        got[word] = {"item_h": m.get("item_h", 0), "pitch": (b["y"] - a["y"]) if a and b else 0,
+                     "x": m.get("x", 0) + m.get("w", 0) - 12, "last_cy": last.get("cy", 0),
+                     "img": shot(qmp, tmp, f"spacing-{word}.png"),
+                     "app_h": 0}
+        close_menu(dbg)
+        got[word]["app_h"] = notepad_file_menu_h(dbg, qmp)
+    c, k, d = got["comfortable"], got["compact"], got["dense"]
+    res.check("menu spacing shrinks the rows, comfortable > compact > dense",
+              c["item_h"] > k["item_h"] > d["item_h"] > 0
+              and all(g["pitch"] == g["item_h"] for g in (c, k, d)),
+              f"rows {[g['item_h'] for g in (c, k, d)]}, pitch {[g['pitch'] for g in (c, k, d)]}")
+    # Where the comfortable card's last row is, the compact card has
+    # already ended: card there in one frame, wallpaper in the other.
+    probe = (c["x"], c["last_cy"])
+    card, gone = c["img"].getpixel(probe), k["img"].getpixel(probe)
+    res.check("...and the card is drawn shorter",
+              lum(card) > 230 and lum(gone) < 200, f"at {probe}: comfortable {card}, compact {gone}")
+    res.check("...in an app's menu too (Notepad's File)",
+              c["app_h"] > k["app_h"] > d["app_h"] > 0,
+              f"popup heights {[g['app_h'] for g in (c, k, d)]}")
+    dbg.send("sh config unset desktop.menu_spacing")
+
+
 def run(dbg, qmp, tmp, res):
     check_background_menu(dbg, res)
     check_open_by_category(dbg, res)
@@ -435,6 +501,7 @@ def run(dbg, qmp, tmp, res):
     check_properties(dbg, res)
     check_hover_and_glass(dbg, qmp, res, tmp)
     check_app_popup_corners(dbg, qmp, res, tmp)
+    check_menu_spacing(dbg, qmp, res, tmp)
     dbg.send("sh rm -f /home/desktop/menutest.txt")
 
 
