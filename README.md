@@ -106,8 +106,8 @@ apps; processes with pipes, signals, threads, job control, `mmap` and
 dynamic linking; loadable kernel modules; pseudo-terminals; USB with
 hubs, hot-plug, HID, Ethernet and audio; sound on three device classes,
 including DOOM with music; an Intel display driver with backlight
-control; ACPI shutdown; and networking good enough for `wget` to fetch a
-real page and a browser to read `httpd`.
+control; ACPI shutdown; and networking good enough for `wget` to fetch
+a real page over HTTPS and for `httpd` to serve the machine's own files.
 
 **Known gaps:**
 
