@@ -26,6 +26,8 @@ static const struct date_style DATES[] = {
     { "dmy_dot",   "%-d.%-m.%Y", "%A %-d %B %Y" },
     { "dmy_dot0",  "%d.%m.%Y",   "%A %-d %B %Y" },
     { "mdy_slash", "%-m/%-d/%Y", "%A, %B %-d, %Y" },
+    { "dmy_slash0", "%d/%m/%Y",  "%A %-d %B %Y" },
+    { "dmy_dash0",  "%d-%m-%Y",  "%A %-d %B %Y" },
 };
 
 struct time_style { const char *word, *t_fmt, *t_fmt_hm; };
@@ -41,6 +43,7 @@ static const struct num_style NUMBERS[] = {
     { "space_comma", ",", " " },
     { "comma_point", ".", "," },
     { "point_comma", ",", "." },
+    { "apostrophe_point", ".", "'" },   // Switzerland; glibc's is U+2019
 };
 
 // The row of `table` whose word is `w`, or -1.
@@ -113,7 +116,7 @@ static void setting_value(const char *name, char *out, size_t cap) {
 
 // A region's words, from its /etc/locales row. 0 when no row names
 // it, or the row is short.
-struct region { char date[16], time[16], number[16], week[16], weeknum[8]; };
+struct region { char date[24], time[24], number[24], week[24], weeknum[8]; };
 
 static int region_row(const char *name, struct region *r) {
     FILE *f = fopen(LOCALES_DB, "r");
@@ -216,7 +219,7 @@ static int load_named(const char *name, struct time_loc *t, struct num_loc *nl) 
 // The SYSTEM's locale: the region System Settings chose, with its
 // overrides applied.
 static int load_system(struct time_loc *t, struct num_loc *nl) {
-    char region[NAME_MAX_LOC], date[16], time[16], number[16], week[16], weeknum[8];
+    char region[NAME_MAX_LOC], date[24], time[24], number[24], week[24], weeknum[8];
     setting_value("region", region, sizeof region);
     setting_value("date_format", date, sizeof date);
     setting_value("time_format", time, sizeof time);

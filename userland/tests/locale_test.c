@@ -59,7 +59,7 @@ int main(void) {
     str_is(buf, "2026-10-01 09:05", "udate in C is the ISO every caller printed before");
 
     // --- refused, never guessed ----------------------------------------
-    utest_check(setlocale(LC_ALL, "de") == 0, "a region /etc/locales lacks is refused");
+    utest_check(setlocale(LC_ALL, "xx") == 0, "a region /etc/locales lacks is refused");
     utest_check(setlocale(LC_ALL, "fi@time=25hour") == 0, "...as is an unknown override word");
     utest_check(setlocale(LC_ALL, "fi@colour=red") == 0, "...and an unknown override key");
     utest_check(strcmp(setlocale(LC_ALL, 0), "C") == 0, "...and a refusal changed nothing");
@@ -87,6 +87,21 @@ int main(void) {
         udate_format_tm(buf, sizeof buf, &t, UDATE_DATE | UDATE_LONG);
         str_is(buf, "Thursday, October 1, 2026", "us's long date");
     } else utest_check(0, "us is a locale");
+
+    // --- the words the wider region list added ------------------------
+    if (setlocale(LC_ALL, "de")) {
+        fmt_is("%x %X", "01.10.2026 09:05:07", "de keeps the zeroes, 24-hour with colons");
+        num_is("1234567.89", UNUM_GROUP, "1.234.567,89", "de groups with points");
+    } else utest_check(0, "de is a locale");
+    if (setlocale(LC_ALL, "ch")) {
+        num_is("1234567.89", UNUM_GROUP, "1'234'567.89", "ch groups with apostrophes");
+    } else utest_check(0, "ch is a locale");
+    if (setlocale(LC_ALL, "nl")) {
+        fmt_is("%x", "01-10-2026", "nl's date is dashed");
+    } else utest_check(0, "nl is a locale");
+    if (setlocale(LC_ALL, "gb")) {
+        fmt_is("%x", "01/10/2026", "gb's date is day first with slashes, four-digit year");
+    } else utest_check(0, "gb is a locale");
 
     // --- @modifiers override one field and keep the rest ---------------
     if (setlocale(LC_ALL, "fi@time=24colon,week=sunday,weeknum=off")) {

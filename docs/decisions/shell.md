@@ -254,6 +254,15 @@ format strings in `userland/libc/locale.c`. Overrides travel in POSIX's
 `@modifier` slot (`fi@time=24colon`) so a preview can ask for formats
 nobody has applied. A name that is not a locale is still REFUSED.
 
+**The regions' formats are glibc's** (`/usr/share/i18n/locales`, read
+2026-10-05 for 27 regions), with two deliberate departures: **a year is
+always four digits** -- glibc's short date is `05/10/26` for the UK,
+Spain and the Netherlands, which reads three ways, and the maintainer
+chose `05/10/2026` -- and a grouping space is ASCII where glibc uses
+U+202F, since text here is Latin-1. Where glibc's `d_fmt` names the
+month or mixes separators (Iceland, Norway, the Faroe Islands) the
+region takes the numeric short date CLDR gives instead.
+
 **Who follows it.** A program that never calls `setlocale()` stays in
 "C", as POSIX says, and `LC_ALL=C` puts one back -- what a script parsing
 output sets. Every GUI app opts in through `uapp` and re-reads on the

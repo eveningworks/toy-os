@@ -2,6 +2,32 @@
 #   name,date,time,number,week,weeknumbers
 # each field a word from libc's tables (userland/libc/locale.c). The
 # region's display name is its Choice.<name> in settings.d/locale.region.
+# Formats follow glibc's locale data (/usr/share/i18n/locales), with
+# four-digit years throughout and ASCII where glibc uses U+202F.
 iso,iso,24colon,point,monday,on
+au,dmy_slash0,24colon,comma_point,monday,off
+at,iso,24colon,point_comma,monday,on
+be,dmy_slash0,24colon,point_comma,monday,on
+br,dmy_slash0,24colon,point_comma,sunday,off
+ca,iso,12,comma_point,sunday,off
+ca_fr,iso,24colon,space_comma,sunday,off
+cz,dmy_dot,24colon,space_comma,monday,on
+dk,dmy_dash0,24colon,point_comma,monday,on
+ee,dmy_dot0,24colon,space_comma,monday,on
+fo,dmy_dot0,24colon,point_comma,monday,on
 fi,dmy_dot,24dot,space_comma,monday,on
+fr,dmy_slash0,24colon,space_comma,monday,on
+de,dmy_dot0,24colon,point_comma,monday,on
+is,dmy_dot,24colon,point_comma,monday,on
+ie,dmy_slash0,24colon,comma_point,monday,on
+it,dmy_slash0,24colon,point_comma,monday,on
+nl,dmy_dash0,24colon,point_comma,monday,on
+nz,dmy_slash0,24colon,comma_point,monday,off
+no,dmy_dot0,24colon,space_comma,monday,on
+pl,dmy_dot0,24colon,space_comma,monday,on
+pt,dmy_slash0,24colon,space_comma,monday,on
+es,dmy_slash0,24colon,point_comma,monday,on
+se,iso,24colon,space_comma,monday,on
+ch,dmy_dot0,24colon,apostrophe_point,monday,on
+gb,dmy_slash0,24colon,comma_point,monday,on
 us,mdy_slash,12,comma_point,sunday,off

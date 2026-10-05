@@ -436,7 +436,7 @@ No dependency on the phases above; ordered among themselves.
 ### Regional formats
 
 - [x] ~~A region plus per-format overrides, via libc's `setlocale()`~~ DONE 2026-10-01 -- ISO 8601, Finland, United States
-- [ ] More regions -- a row in `/etc/locales` and a `Choice` in `settings.d/locale.region`, no code
+- [x] ~~More regions~~ DONE 2026-10-05 -- 27, from glibc's locale data; three new format words
 - [ ] Month and day names in the region's language, which needs translated messages and a wider codeset first
 
 ### Real mount points
