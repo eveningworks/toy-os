@@ -246,10 +246,16 @@ def notepad():
 
 
 def files():
+    # The folder with a magnifier on its front: the File Manager, told
+    # apart from a plain folder in a listing (chosen from mockups, F1).
     im, _ = folder((250, 192, 60), (226, 156, 34))
-    d = D4(im)
-    d.rounded_rectangle((6, 44, 58, 54), radius=5, fill=(46, 112, 220, 255))
-    d.rectangle((6, 44, 58, 47), fill=(46, 112, 220, 255))
+    lens = canvas()
+    D4(lens).line([(46, 46), (55, 55)], fill=(60, 70, 90, 255), width=5)
+    fill(lens, m_minus(m_ellipse(26, 26, 50, 50), m_ellipse(30.5, 30.5, 45.5, 45.5)),
+         ((86, 146, 255), (40, 96, 220)))
+    fill(lens, m_ellipse(30.5, 30.5, 45.5, 45.5), (226, 240, 255))
+    D4(lens).arc((33, 33, 43, 43), 200, 260, fill=WHITE, width=1.5)
+    im = Image.alpha_composite(im, shadow(lens, dy=1, blur=1.2, alpha=80))
     return finish(shadow(im))
 
 
