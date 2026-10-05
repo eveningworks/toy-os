@@ -3184,6 +3184,19 @@ window without going through it will find its layout polls timing out.
   The positive half (a real panel dimming) runs on the bare-metal
   laptop by hand: `config set brightness 40` reads the PWM back. In
   `gui_regress.py`.
+- **`keyboard_layouts_test.py`** -- several keyboard layouts end to end:
+  `system.keyboard_layouts` refuses a layout with no file, switching the
+  active layout writes nothing to `/etc`, the tray item hides with one
+  layout, Super+Space walks with Super HELD and commits on its release
+  (a tap is the next layout, Esc cancels), a click switches, and the
+  Settings page's preview CHANGES with the selection while the Add
+  button beside it does not. Try it must make the previewed layout
+  active and give the old one back; Move up plus Apply must store the
+  order. **Super is held with `QMPSession.key_down()`** -- `send-key`
+  releases everything at once and can only test the tap. In
+  `gui_regress.py` as `kblayouts`; its controls (release not switching,
+  Try it not switching) each turn exactly their own check red.
+
 - **`network_tray_test.py`** -- the taskbar's network item: the icon's
   state, the card behind it, its adapter switch, `/bin/netctl`'s
   `down`/`up`/`renew` through netd, and the visibility setting. The

@@ -40,8 +40,12 @@ accent back. On Swedish and Finnish that means `~`, `^`, `` ` `` and
 `´` are dead keys too, as on those keyboards -- press Space after one
 to get the plain character.
 
-The choice is **persisted** as `keyboard_layout=<name>` in
-`/etc/toyos.conf` and re-applied at boot, so it survives a reboot.
+The choice becomes the layout a boot **starts with**: it moves to the
+front of `keyboard_layouts=` in `/etc/toyos.conf` (added there if it was
+not in the list), so it survives a reboot. The list itself, Super+Space
+and dead keys on or off are System Settings' Input > Keyboard page, or
+`config set system.keyboard_layouts us,fi,de` and
+`config set system.keyboard_dead_keys off`.
 Setting and saving are separate steps underneath, and only a FAILED
 save is reported -- ` (NOT saved -- /etc unwritable, see dmesg)` is
 appended when the write did not land, and silence means it did.

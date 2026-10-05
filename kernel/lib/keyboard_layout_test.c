@@ -25,13 +25,18 @@ static int feed(int sym, uint8_t out[2]) {
     return keyboard_layout_compose(sym, out);
 }
 
-struct saved { char name[KB_LAYOUT_NAME_MAX]; };
+// The dead-keys switch is saved too: the checks assume it ON, and a
+// machine whose setting says off must still pass them.
+struct saved { char name[KB_LAYOUT_NAME_MAX]; int dead_keys; };
 static void save(struct saved *s) {
     k_strlcpy(s->name, keyboard_layout_current(), sizeof s->name);
+    s->dead_keys = keyboard_layout_dead_keys();
+    keyboard_layout_set_dead_keys(1);
     keyboard_layout_compose_reset();
 }
 static void restore(const struct saved *s) {
     keyboard_layout_load(s->name);
+    keyboard_layout_set_dead_keys(s->dead_keys);
     keyboard_layout_compose_reset();
 }
 
@@ -100,6 +105,32 @@ static int fixture_checks(void) {
     // Nothing pending: a character is itself.
     CHECK(feed(0xE5, o) == 1 && o[0] == 0xE5);
     return 0;
+}
+
+// Dead keys off: the accent at once, nothing pending, the next letter
+// plain -- and back on, the same key composes again.
+static int dead_off_checks(void) {
+    CHECK(keyboard_layout_load_text(FIXTURE, sizeof FIXTURE - 1));
+    int acute = keyboard_layout_translate(13, 0, 0);
+    uint8_t o[2];
+    keyboard_layout_set_dead_keys(0);
+    CHECK(feed(acute, o) == 1 && o[0] == 0xB4 && !keyboard_layout_dead_pending());
+    CHECK(feed('e', o) == 1 && o[0] == 'e');
+    keyboard_layout_set_dead_keys(1);
+    CHECK(feed(acute, o) == 0 && feed('e', o) == 1 && o[0] == 0xE9);
+    // Switching off drops an accent already pending.
+    CHECK(feed(acute, o) == 0);
+    keyboard_layout_set_dead_keys(0);
+    CHECK(!keyboard_layout_dead_pending());
+    return 0;
+}
+
+KTEST("kblayout", "dead keys off: the accent types at once, and on composes again") {
+    struct saved s;
+    save(&s);
+    int line = dead_off_checks();
+    restore(&s);
+    KTEST_ASSERT_EQ(line, 0);
 }
 
 KTEST("kblayout", "the fixture: four levels, Latin-1 caps, every dead-key rule") {

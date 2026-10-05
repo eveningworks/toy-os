@@ -1,0 +1,3 @@
+Description=An accent key waits for the letter it goes on. Off: it types the accent at once
+Choice.on=On
+Choice.off=Off

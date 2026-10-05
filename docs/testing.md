@@ -578,6 +578,8 @@ gui compositor [--json]  the registered compositor pid, queue depth, drops,
 gui compositor reset     zero the frame-cost stats, to scope a measurement to an
                          interval instead of averaging since boot
 gui fb [--json]          the framebuffer grant: scanouts, back index, flips
+gui layout [--json]      the keyboard-layout tray item: the list, the active one,
+                         the Super+Space pick, and where to click
 gui spawn PATH [args]    run a ring-3 binary directly -- no Terminal in the loop
 gui watchdog [<ms>|off]  slow-frame threshold, plus how often it fired
 gui pingtimeout [<ticks>] not-responding timeout -- a TEST LEVER, see below

@@ -89,6 +89,7 @@ enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST,
        ID_OPTS, ID_OPTS_OK, ID_OPTS_CANCEL, ID_SEARCH, ID_RESET, ID_APPLY,
        ID_ASK, ID_FOOTER, ID_SI_COPY, ID_SI_DEVMGR, ID_SI_DEBUG, ID_CLOCK_CHANGE,
        ID_SU_DEFAULT, ID_SU_TIMEOUT, ID_SU_NEXT, ID_SU_OPEN,
+       ID_KB_LIST, ID_KB_ADD, ID_KB_REMOVE, ID_KB_UP, ID_KB_DOWN, ID_KB_TRY,
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
 
 // The focus ring: FOCUS_LEAD entries before the page's controls (search,
@@ -303,6 +304,20 @@ const char *slot_kind_name(const struct slot *sl);
 void preview_attach(struct slot *sl, int idx);
 void preview_reset(void);
 int slot_disabled(const struct slot *sl);
+
+// set_keyboard.c -- Input > Keyboard's layout list, preview and Try it.
+// kbd_emit_slot() returns -1 for a slot it leaves to emit_slot().
+extern int g_kbd_page;
+void kbd_init(void);
+void kbd_page_opened(void);
+int  kbd_emit_slot(struct uui_item *out, int n, int i,
+                   struct uui_focusable *focus, int *nfocus);
+int  kbd_emit_after(struct uui_item *out, int n, int i,
+                    struct uui_focusable *focus, int *nfocus);
+int  kbd_on_widget(struct uapp *a, int id);
+int  kbd_on_action(struct uapp *a, int code);
+int  kbd_tick(void);
+void kbd_shutdown(void);
 
 // set_clock.c -- Time & Locale's live clock, Change... and preview
 extern int g_clock_page, g_region_page;

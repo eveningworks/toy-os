@@ -37,6 +37,7 @@ static int on_tick(struct uapp *a) {
     (void)a;
     if (g_show_sysinfo && sysinfo_tick()) return 1;
     int clock = clock_tick();   // the live clock's second moved
+    clock |= kbd_tick();        // Try it took or left focus
     if (registry_generation() == g_generation && !g_stale) return clock;
     if (page_dirty() || uui_dialog_is_open(&g_ask) ||
         (g_opts_win && uapp_window_is_open(g_opts_win))) {
@@ -202,7 +203,7 @@ static void leave(struct uapp *a) {
 
 static int on_close(struct uapp *a) {
     if (uapp_question_open(a)) return 0;   // its answer decides (uapp_desc.on_close)
-    if (!page_dirty()) return 1;
+    if (!page_dirty()) { kbd_shutdown(); return 1; }
     ask_leave(a, -1);
     uapp_redraw(a);
     return 0;
@@ -255,6 +256,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
         uapp_redraw(a);
         return;
     }
+    if (kbd_on_widget(a, id)) { uapp_redraw(a); return; }
 
     switch (id) {
     case ID_SIDE_SPLIT:
@@ -312,6 +314,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
 // Settings..., Change..., System Information's two). Their codes are their
 // ids.
 static void on_action(struct uapp *a, int code) {
+    if (kbd_on_action(a, code)) { uapp_redraw(a); return; }
     switch (code) {
     case ID_RESET:
         if (page_dirty() && g_page_group >= 0) {
@@ -646,6 +649,7 @@ int main(int argc, char **argv) {
     uui_dialog_init(&g_ask);
     sysinfo_init();
     clock_init();
+    kbd_init();
     startup_init();
 
     // Apply is the PRIMARY action, so it wears the accent.

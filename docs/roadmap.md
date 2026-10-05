@@ -820,8 +820,9 @@ run on, not by order.
 - [x] ~~Every XKB layout Latin-1 can type, with dead keys and Shift+AltGr~~ DONE 2026-10-04 -- `tools/gen_kbs.py`'s `LAYOUTS`
 - [ ] Keyboard console echo and LED writes run from a bottom half, not with interrupts off
 - [ ] PS/2 LED writes with no 8042 busy-wait per Caps Lock -- probe like Linux's i8042 (retried CTR read, process context)
-- [ ] Settings shows a picture of the chosen keyboard layout -- the layout data is in `/usr/share/kbs`; nothing draws it yet
-- [ ] Several layouts at once, switched with a shortcut and shown in the tray (Windows' Win+Space, GNOME's input sources)
+- [x] ~~Settings shows a picture of the chosen keyboard layout~~ DONE 2026-10-05 -- `uui_keymap`, with a Try it field
+- [x] ~~Several layouts at once, switched with a shortcut and shown in the tray~~ DONE 2026-10-05 -- Super+Space, `layout_popup.c`
+- [x] ~~Dead keys on or off~~ DONE 2026-10-05 -- `system.keyboard_dead_keys`, for every layout at once
 - [ ] The on-screen keyboard should draw the CONFIGURED layout, not its own copy of US QWERTY -- it still types US whatever is set
 - [ ] A virtual-keyboard protocol, so the on-screen keyboard can be a ring-3 app instead of compositor code
 

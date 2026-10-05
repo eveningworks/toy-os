@@ -46,6 +46,7 @@
 #include "close_batch.h"
 #include "network_popup.h"
 #include "remote_popup.h"
+#include "layout_popup.h"
 #include "wm_overlay.h"
 #include "osk.h"
 #include "confirm_dialog.h"
@@ -1042,6 +1043,7 @@ void wm_run(void) {
     // freshly opened.
     wm_overlay_reset();
     tray_init();
+    layout_tray_init();   // the active layout's code, left of the keyboard icon
     osk_init();   // its tray item, beside the clock's
     volume_tray_init();   // the tray's second item, after the clock takes slot 0
     brightness_tray_init();
@@ -1431,6 +1433,7 @@ void wm_run(void) {
             g_clock_ticks++;
             volume_tray_update(); // the speaker icon follows the level
             remote_poll();        // who is on this machine, and what they did
+            layout_poll();        // the layout list, or the active one, changed
             // A CADENCE, not a generation compare, and network_popup.c
             // says why: there is no netdev generation in the ABI, and
             // the read is a memcpy out of a kernel table with no I/O.
@@ -1536,6 +1539,11 @@ void wm_run(void) {
                     // every Super shortcut.
                     if (key_down) {
                         g_super_used = 0;
+                    } else if (layout_switching()) {
+                        // SUPER+SPACE ENDS ON SUPER'S RELEASE: the
+                        // picked layout becomes the active one.
+                        layout_switch_commit();
+                        redraw_pending = 1;
                     } else if (!g_super_used && !wm_overlay_modal_open() &&
                                !wm_shortcut_inhibited(f)) {
                         if (start_menu_open) start_menu_close();
@@ -1560,6 +1568,15 @@ void wm_run(void) {
                         wm_client_is_client_window(&windows[kt])) {
                         wm_client_send_key_up(&windows[kt], key, key_mods);
                     }
+                } else if (key == ' ' && (key_mods & KEY_MOD_SUPER) &&
+                           !(key_mods & (KEY_MOD_CTRL | KEY_MOD_ALT)) &&
+                           !wm_shortcut_inhibited(f) &&
+                           layout_switch_step((key_mods & KEY_MOD_SHIFT) ? -1 : 1)) {
+                    // SUPER+SPACE walks the keyboard layouts; Super's
+                    // release takes the pick (layout_popup.h). Before the
+                    // overlays, because the switcher IS one and its next
+                    // Space must reach this branch, not its key handler.
+                    redraw_pending = 1;
                 } else if (wm_overlay_key(key, key_mods)) {
                     // AN OPEN OVERLAY OWNS THE KEYBOARD, which is what lets
                     // the Start menu be typed into -- xdg_popup's grab, and

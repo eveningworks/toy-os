@@ -85,6 +85,11 @@ int keyboard_layout_compose(int sym, uint8_t out[2]);
 // pressed with Ctrl or Alt, which is a shortcut rather than text.
 int keyboard_layout_spacing(int sym);
 
+// Dead keys on (the default) or off. Off, a dead key types its accent
+// alone at once and nothing pends; switching drops a pending accent.
+void keyboard_layout_set_dead_keys(int on);
+int keyboard_layout_dead_keys(void);
+
 // The pending dead key's symbol, or 0; and a way to drop it. For tests.
 int keyboard_layout_dead_pending(void);
 void keyboard_layout_compose_reset(void);

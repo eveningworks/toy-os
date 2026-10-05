@@ -942,7 +942,7 @@ EXTRA_OBJS_toywm      = wm/wm wm/wm_rawin wm/wm_render wm/wm_input wm/wm_client 
                         wm/wm_tooltip \
                         wm/wm_peek \
                         wm/volume_popup wm/brightness_popup wm/tray_slider_popup wm/crash_notice \
-                        wm/network_popup wm/remote_popup \
+                        wm/network_popup wm/remote_popup wm/layout_popup \
                         wm/wm_overlay wm/osk \
                         wm/confirm_dialog wm/leave_page wm/close_batch wm/cursor_theme \
                         wm/gui_apps wm/wm_log wm/wm_fs wm/wm_conf \
@@ -1166,7 +1166,7 @@ EXTRA_OBJS_files = fm/fm_view fm/fm_jobs fm/fm_tree fm/fm_thumbs fm/fm_modal \
                    fm/fm_history fm/fm_details fm/fm_options
 # System Settings, the same way: userland/settings/ is its parts.
 EXTRA_OBJS_settings = settings/set_registry settings/set_page settings/set_owner \
-                      settings/set_sysinfo settings/set_clock settings/set_preview settings/set_startup
+                      settings/set_sysinfo settings/set_clock settings/set_preview settings/set_startup settings/set_keyboard
 # The Audio Player, the same way: userland/player/ is its playlist and stage.
 EXTRA_OBJS_player = player/pl_list player/pl_stage
 # Task Manager, the same way: userland/taskmgr/ is its pages.

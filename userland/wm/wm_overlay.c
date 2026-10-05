@@ -13,6 +13,7 @@
 #include "brightness_popup.h"
 #include "network_popup.h"
 #include "remote_popup.h"
+#include "layout_popup.h"
 #include "confirm_dialog.h"
 #include "leave_page.h"
 #include "osk.h"
@@ -31,6 +32,7 @@ static int open_volume(void)  { return volume_open; }
 static int open_brightness(void) { return brightness_open; }
 static int open_network(void) { return network_open; }
 static int open_remote(void)  { return remote_open; }
+static int open_layout(void)  { return layout_open; }
 static int open_confirm(void) { return confirm_dialog_open; }
 static int open_leave(void) { return leave_page_open; }
 static int open_osk(void)     { return osk_open; }
@@ -92,6 +94,8 @@ static const struct wm_overlay g_overlays[] = {
       network_hover_at,          network_damage,          network_rect, 0, 0, 0, network_close, 0, 0, 0, 0, 0 },
     { "remote",   open_remote,   remote_draw,      remote_handle_click,
       remote_hover_at,           remote_damage,           remote_rect, 0, 0, 0, remote_close, 0, 0, 0, 0, 0 },
+    { "layout",   open_layout,   layout_draw,      layout_handle_click,
+      layout_hover_at,           layout_damage,           layout_rect, 0, 0, layout_key, layout_close, 0, 0, 0, 0, 0 },
     // Under every menu (drawn before them), above the windows: a crash
     // notice in the corner. Passive -- see wm_overlay.h.
     { "notice",   open_notice,   crash_notice_draw, crash_notice_handle_click,

@@ -1,34 +1,29 @@
 #ifndef KEYBOARD_CONFIG_H
 #define KEYBOARD_CONFIG_H
 
-// Keyboard layout persistence, layered on top of
-// keyboard_layout_load() (kernel/lib/keyboard_layout.c) -- a
-// "keyboard_layout=<name>" key in the shared /etc/toyos.conf every
-// setting lives in by default (see etc_config.h), read/applied once at
-// boot. Same split as font_config.c/tz.c: this file only selects +
-// persists, it doesn't touch the scancode tables themselves -- that's
-// keyboard_layout.c's job, and it works from a plain layout NAME now
-// (whatever /usr/share/kbs/<name> exists), not a fixed compiled-in enum.
+// Keyboard layout configuration in /etc/toyos.conf, layered on top of
+// keyboard_layout_load() (kernel/lib/keyboard_layout.c), which owns the
+// tables. Three registry settings, all in Input > Keyboard:
+//   system.keyboard_layouts   the list Super+Space cycles, "fi,us,de";
+//                             the FIRST is what a boot starts with
+//   system.keyboard_layout    the ACTIVE one -- live, never persisted
+//   system.keyboard_dead_keys on|off, for every layout at once
 
-// Call once at boot, after fs_init()/fs_mkdir("/etc") (same ordering as
-// the other /etc readers -- see kernel.c) -- loads the persisted
-// keyboard_layout key if present and applies it via
-// keyboard_layout_load(). Falls back to "us" (see
-// keyboard_layout_load()'s own fallback chain) if no config exists yet.
+// Call once at boot, after the /etc readers' prerequisites (kernel.c):
+// the dead-keys switch, then the list (or a pre-list machine's single
+// `keyboard_layout` key), then the `kbd=` override or the list's first.
 void keyboard_config_init(void);
 
-// Persists `name` as /etc/toyos.conf's "keyboard_layout=<name>" key so
-// it survives a reboot. Does NOT call keyboard_layout_load() itself --
-// same split as font_config_save(); the shell's
-// `keyboard` command calls keyboard_layout_load() itself and this
-// separately.
-// Returns an `enum setting_result` (etc_config.h): SETTING_INVALID for
-// an empty name, SETTING_SAVED if written, SETTING_UNSAVED if the write
-// failed.
+// The live list, comma-separated. Never NULL or empty after init.
+const char *keyboard_config_layouts(void);
+
+// Makes `name` the layout a boot starts with: moved to the front of the
+// list, or put there, and persisted. Does NOT load it -- the shell's
+// `keyboard` command does that itself. Returns an `enum setting_result`
+// (etc_config.h).
 int keyboard_config_save(const char *name);
 
-// Announces this setting to the registry (setting.h). Its choice list
-// is read from /usr/share/kbs at call time -- see keyboard_config.c.
+// Announces the three settings to the registry (setting.h).
 void keyboard_config_setting_register(void);
 
 #endif

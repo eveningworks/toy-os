@@ -3004,3 +3004,37 @@ error at all.
 bit says whether the controller has one; without it a completed write is
 already durable, the block layer's flush is correctly a no-op, and
 claiming BLK_CAP_FLUSH would only add a command that does nothing.
+
+## The keyboard's active layout is a live setting; the LIST is what persists
+
+**Decided 2026-10-05**, with several layouts and Super+Space. Three
+settings in Input > Keyboard: `system.keyboard_layouts` (the ordered
+list, `fi,us,de`, persisted, the FIRST is what a boot starts with),
+`system.keyboard_layout` (the ACTIVE one -- applying it loads the tables
+and writes NOTHING), and `system.keyboard_dead_keys` (on/off, for every
+layout).
+
+**Why the active one is not persisted.** Super+Space is pressed many
+times a day; writing `/etc/toyos.conf` on each would make a keystroke a
+filesystem transaction, and would make "what a boot starts with" depend
+on whichever layout happened to be active at shutdown. Windows keeps a
+default input method separate from the current one, and KDE starts from
+the first configured layout; both are this shape. Before the list
+existed, `keyboard_layout=` WAS the persisted choice -- a machine that
+has only that key boots with it as a list of one, and the in-kernel
+shell's `keyboard <name>` now moves the name to the front of the list.
+
+**Why it is still a registry setting rather than a new syscall.** Setting
+it moves the registry generation, which is the one change signal ring 3
+already polls: the WM's tray indicator and System Settings both learn of
+a switch the way they learn of every other change, with no new channel.
+The cost is the trap System Settings works around in `set_keyboard.c`:
+its Try it field switches the layout itself, and a page whose generation
+moved is reloaded, so it marks that generation as seen.
+
+**Why dead keys are one switch, not per layout.** XKB does this per
+layout (`de(nodeadkeys)`), Windows and macOS not at all (a different
+layout, US-International). The maintainer chose one switch: 20 of the 21
+layouts have dead keys, English (US) none, and the per-layout form needed
+a setting per list entry for a distinction few want.
+

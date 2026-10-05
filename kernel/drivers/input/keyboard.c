@@ -638,10 +638,11 @@ static void key_event_body(uint16_t keycode, int down, uint16_t wire, int extend
     if (!sym) return;
 
     // DEAD KEYS COMPOSE HERE, for every driver at once -- the state is the
-    // layout's (keyboard_layout.h). A key with Ctrl or Alt held is a
-    // shortcut, not text: it neither composes nor disturbs a pending
-    // accent, and a dead key under it is its accent alone.
-    if (!ctrl_pressed && !alt_pressed) {
+    // layout's (keyboard_layout.h). A key with Ctrl, Alt or Super held
+    // is a shortcut, not text: it neither composes nor disturbs a pending
+    // accent, and a dead key under it is its accent alone -- so
+    // Super+Space switches layout without typing a pending accent.
+    if (!ctrl_pressed && !alt_pressed && !super_pressed) {
         uint8_t out[2];
         int n = keyboard_layout_compose(sym, out);
         // TWO CHARACTERS FROM ONE PRESS (an accent, then the key): the

@@ -12,6 +12,7 @@
 #include "brightness_popup.h"
 #include "network_popup.h"
 #include "remote_popup.h"
+#include "layout_popup.h"
 #include "wm_overlay.h"
 #include "crash_notice.h"
 #include "osk.h"
@@ -1778,6 +1779,35 @@ static void cmd_network(struct dbg_out *o, int json) {
                  g.x, g.y, g.w, g.h, g.tray_x, g.tray_y, g.tray_w, g.tray_h);
 }
 
+// `gui layout [--json]`: the keyboard-layout item -- the list, which is
+// active, the switcher's pick, and where to click.
+static void cmd_layout(struct dbg_out *o, int json) {
+    int n = layout_count(), tx = 0, ty = 0, bx = 0, by = 0;
+    layout_tray_center(&tx, &ty);
+    layout_button_center(&bx, &by);
+    if (json) {
+        dbg_out_printf(o, "{\"open\":%s,\"switching\":%s,\"tray_hidden\":%s,\"active\":%d,\"pick\":%d,\"codes\":[",
+                     layout_open ? "true" : "false", layout_switching() ? "true" : "false",
+                     layout_tray_hidden() ? "true" : "false", layout_active(), layout_pick());
+        for (int i = 0; i < n; i++) dbg_out_printf(o, "%s\"%s\"", i ? "," : "", layout_code(i));
+        dbg_out_printf(o, "],\"rows\":[");
+        for (int i = 0; i < n; i++) {
+            int x = 0, y = 0;
+            layout_row_center(i, &x, &y);
+            dbg_out_printf(o, "%s{\"cx\":%d,\"cy\":%d}", i ? "," : "", x, y);
+        }
+        dbg_out_printf(o, "],\"tray\":{\"cx\":%d,\"cy\":%d},\"settings\":{\"cx\":%d,\"cy\":%d}}\r\n",
+                     tx, ty, bx, by);
+        return;
+    }
+    dbg_out_printf(o, "layout: %s%s  %s  active %s\r\n", layout_open ? "open" : "closed",
+                 layout_switching() ? " (switching)" : "",
+                 layout_tray_hidden() ? "tray hidden" : "tray shown", layout_code(layout_active()));
+    for (int i = 0; i < n; i++)
+        dbg_out_printf(o, "  %s%s%s\r\n", layout_code(i), i == layout_active() ? "  active" : "",
+                     i == layout_pick() ? "  picked" : "");
+}
+
 static void cmd_remote(struct dbg_out *o, int json) {
     struct remote_geom g;
     remote_geometry(&g);
@@ -1852,6 +1882,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  latency [reset] [--json]  frame work, wake overshoot and ping, as distributions\r\n");
     dbg_out_write(o, "  network [--json]      the tray's network item: state, address, panel rect\r\n");
     dbg_out_write(o, "  remote [--json]       the tray's remote-activity item: sessions and what they did\r\n");
+    dbg_out_write(o, "  layout [--json]       the keyboard-layout item: the list, the active one, the switcher\r\n");
     dbg_out_write(o, "  pingtimeout [<ticks>] not-responding timeout (a TEST lever)\r\n");
     dbg_out_write(o, "  pinginterval [<ticks>] how often every client is asked (a TEST lever)\r\n");
     dbg_out_write(o, "Injected input enters at the WM loop, below the PS/2 driver -- it tests\r\n");
@@ -2092,6 +2123,10 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
 
     if (k_strcmp(sub, "remote") == 0) {
         cmd_remote(o, wants_json(p));
+        return 1;
+    }
+    if (k_strcmp(sub, "layout") == 0) {
+        cmd_layout(o, wants_json(p));
         return 1;
     }
 

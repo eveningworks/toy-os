@@ -45,6 +45,7 @@
 | `uimg.h` | uimg -- decoding an image file into pixels, in RING 3. |
 | `uinflate.h` | DEFLATE, both directions, in ring 3 -- RFC 1951, plus the zlib (RFC 1950) and gzip (RFC 1952) wrappers around it. |
 | `uinitctl.h` | The control protocol between `/bin/service` and init, over uchan. |
+| `ukeymap.h` | A keyboard layout read from /usr/share/kbs/<name>, for SHOWING it -- which character each key gives on each level, and which keys are dead. |
 | `uline.h` | uline -- the PAINTING half of a ring-3 line-editing front end. |
 | `umd.h` | umd -- rendering Markdown as text for a terminal. |
 | `umemcomp.h` | Where the memory in use is, as four rows that SUM to it: Apps (every process's private bytes, QUERY_PROCMEM), Shared (shm objects, each once), Graphics (RAM held for the screen) and Kernel (the res... |
@@ -110,6 +111,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_gallery.h` | uui_gallery -- one choice out of a few, each shown as a CARD: a picture the caller paints and a label under it. |
 | `uui_image.h` | A decoded picture, in a layout. |
 | `uui_keycapture.h` | A CONTROL THAT RECORDS A KEY COMBINATION BY HAVING YOU PRESS IT. |
+| `uui_keymap.h` | keymap -- a picture of a keyboard layout: the 105-key ISO board's four typing rows, each cap showing what its key types. |
 | `uui_keysheet.h` | keysheet -- an app's keyboard shortcuts as a sheet: groups of rows, each an action on the left and its keys on the right, drawn as caps. |
 | `uui_label.h` | A line of text the LAYOUT knows about. |
 | `uui_layout.h` | uui_layout -- places widgets so apps stop doing coordinate arithmetic. |

@@ -185,6 +185,7 @@ TOOLS = [
     ("traypress", "tray_press_test.py", "the tray's hover and pressed fills, and that neither latches"),
     ("brightness", "brightness_test.py", "the tray brightness flyout, and its answer with no backlight"),
     ("network", "network_tray_test.py", "the tray network item: its state, card, switch (netctl down/up) and visibility"),
+    ("kblayouts", "keyboard_layouts_test.py", "several keyboard layouts: the list, the tray item, Super+Space, the Settings page and Try it"),
     ("modeset", "modeset_test.py", "a runtime resolution change: device, desktop and setting agree"),
     ("wallpaper", "wallpaper_mode_test.py", "fit vs fill, at a mode where they differ, and when the picture is decoded"),
     ("thumbcache", "thumbcache_test.py", "thumbnail decode rate, and the disk cache under it"),
