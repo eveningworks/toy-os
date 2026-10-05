@@ -1176,6 +1176,10 @@ static int dialog_open_in(struct uui_item *items, int count) {
     return 0;
 }
 
+// Set while uapp dispatches the close IT made up because the compositor
+// is gone: nothing may be asked of a compositor that is not there.
+static int g_close_synth;
+
 int uapp_inwindow_question_open(struct uapp *a) {
     const struct uapp_desc *d = a ? a->desc : 0;
     if (!d) return 0;
@@ -1775,9 +1779,13 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         }
         // A REFUSED close's question has to be SEEN, and the compositor
         // cannot see one drawn in here: ask for THIS window to come
-        // forward. A batch's close is declined there (win_proto.h).
-        if (asking && wmchan_call(WIN_REQ_ACTIVATE, a->window, WIN_ACTIVATE_OWN, 0, 0, 0) == 1)
-            ulogf("uapp: brought forward for its question\n");
+        // forward. One-way; the compositor grants it only in answer to
+        // a single close it just sent (win_proto.h). Never for the close
+        // uapp makes up when the compositor is gone -- nobody to ask.
+        if (asking && !g_close_synth) {
+            wmchan_send(WIN_REQ_ACTIVATE_OWN, a->window, 0, 0, 0, 0);
+            ulogf("uapp: asked to be brought forward for its question\n");
+        }
         break;
     }
 
@@ -2234,7 +2242,9 @@ static int uapp_pump(struct uapp *a, int block) {
                 memset(&ev, 0, sizeof ev);
                 ev.type = WIN_EV_CLOSE;
                 ev.window = a->window;
+                g_close_synth = 1;
                 dispatch(a, &ev);
+                g_close_synth = 0;
                 if (!a->running) return 0;
             }
         }

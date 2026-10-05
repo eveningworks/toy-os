@@ -374,8 +374,8 @@ void close_window(int idx);
 // (wm_bring_forward()): the app ignores a close while it asks, and that
 // dialog is the answer to "why did it not close?". A prompt drawn INSIDE
 // a window is invisible to the WM; the CLIENT that refuses for one asks
-// to be brought forward (WIN_REQ_ACTIVATE naming its window), which the
-// WM grants unless that window's last close was a batch's. A BATCH close
+// to be brought forward (WIN_REQ_ACTIVATE_OWN), which the WM grants only
+// for a single close sent within the last few seconds. A BATCH close
 // (Close all, the Leave page, End Task) uses wm_request_close_quiet():
 // no raise, no focus change, and its own list names what stayed.
 void wm_request_close(int idx);

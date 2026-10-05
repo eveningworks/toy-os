@@ -7165,3 +7165,29 @@ command is consumed by something else, was not measured.
 **The code:** `xhci_deferred_work()`'s halted-endpoint loop, after `recover_halted()`: `for (b < EP_DEPTH) ep_post(e, b)` posts the interrupt-IN buffer pool for any endpoint, and the in-flight bulk TRBs (named by `buf_of_trb_phys[]`) are dropped with no `bulk_done(ctx, phys, 0, 0)`. The driver-side contract that makes reporting them enough: `rtl_usb.c`'s `tx_done` frees the slot on any result, and its receive completion re-posts the buffer.
 
 **Open:** why the OUT endpoint halted. Candidates: the adapter itself under sustained transmit; `rtl_transmit()` calling `xhci_service()` when its ring is full (added 2026-09-30 for 64 KiB datagrams); the completion code that halted it (the log does not print it -- worth adding). The ASUS's RTL8153 has not shown it.
+
+## Close-all follow-ups: dialogs-first in close_batch, deferred close order, refusal logging, Boot Manager raise, sweep skips
+
+Left from the review of the Close-all / close-while-asking work
+(2026-10-05), none of them a regression:
+
+- **Dialogs first in `close_batch`.** End Task (`wm_end_task()`) asks a
+  window's modal dialogs before their owner, so the owner is not refused
+  for a dialog on its way out. Close all and the Leave page ask the
+  listed (owner) windows only; they should ask each one's dialogs first
+  the same way.
+- **Deferred close order.** A close the event queue cannot take is
+  parked (`WM_PEND_CLOSE`) and flushed by `wm_client_flush_pending()` in
+  `windows[]` order -- owner before its dialog. Flush dialogs first, or
+  hold an owner's close while its dialog's is still pending.
+- **Refusal logging.** uapp logs `close refused -- a question is open`
+  only for its own default refusal; an app's `on_close` refusal logs
+  nothing. Log both, distinguishably (`devmgr_test` keys on the first).
+- **Boot Manager's note.** Its `on_close` refuses with a status-bar note
+  rather than a question, so the client never asks to be brought
+  forward (`WIN_REQ_ACTIVATE_OWN` is sent only with a question open).
+  The raise could follow any refusal of a single close.
+- **Sweep skip reporting.** `gui_regress.py`'s "all clear" names a
+  skipped tool with the literal "nothing judged" rather than the tool's
+  own SKIP reason; `ondemand_sweep.py` should count a `DIRTIES_IMAGE`
+  tool that exited 77 as having dirtied the image.

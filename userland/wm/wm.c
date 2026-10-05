@@ -636,8 +636,8 @@ static void wm_offer_force_quit(int idx) {
 static void send_close(int idx, int quiet) {
     if (idx < 0 || idx >= window_count) return;
     if (wm_client_is_client_window(&windows[idx])) {
-        windows[idx].close_quiet = (uint8_t)quiet;
-        wm_client_send_close(&windows[idx]);
+        windows[idx].close_single = (uint8_t)!quiet;
+        wm_client_send_close(&windows[idx]);   // stamps close_asked_tick
         return;
     }
     close_window(idx); // shifts windows[] -- no caller may touch idx again

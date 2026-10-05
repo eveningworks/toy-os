@@ -2565,7 +2565,7 @@ window without going through it will find its layout polls timing out.
   nothing, and Notepad exits; a held close given up with Cancel leaves
   File > Exit to write the session with both tabs; and a minimized dirty
   Notepad closed from the taskbar comes forward with its prompt (the
-  client's WIN_REQ_ACTIVATE for its own window). Tab 2 is saved by its
+  client's WIN_REQ_ACTIVATE_OWN). Tab 2 is saved by its
   FULL PATH first, so the session checks can see a tab that was closed,
   and the cleanup removes exactly that file.
 - **`clipboard_test.py`** -- drives the system TEXT clipboard across two

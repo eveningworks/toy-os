@@ -594,8 +594,6 @@ struct win_event {
                            // win_font_kern_offset() below is the one
                            // place that arithmetic is written down.
 
-#define WIN_ACTIVATE_OWN 1   // WIN_REQ_ACTIVATE's `a`: this window of mine
-
 #define WIN_REQ_CLOSE_PID  12 // a: the pid whose window(s) should be
                            // ASKED to close. Returns 1 if at least one
                            // window was asked, 0 if that pid has none.
@@ -617,23 +615,12 @@ struct win_event {
                            // same reason -- and strictly weaker than it,
                            // since the target may decline.
 
-#define WIN_REQ_ACTIVATE   13 // `a` 0: "Is a window of MY program
+#define WIN_REQ_ACTIVATE   13 // NO INPUTS. "Is a window of MY program
                            // already open?" If one is, raise it
                            // (un-minimizing it if needed), give it
                            // focus, and return 1. Return 0 if not.
-                           //
-                           // `a` == WIN_ACTIVATE_OWN: `window` names one
-                           // of the CALLER'S OWN windows (slot 0 is a
-                           // real window, hence a flag and not a nonzero
-                           // id): bring it forward (unminimize,
-                           // raise with its dialogs, focus) and return 1.
-                           // What a client sends when it refuses a close
-                           // because it is asking something IN that
-                           // window, which the compositor cannot see.
-                           // Declined (0) when the window's last close
-                           // came from a batch (Close all, the Leave
-                           // page, End Task), which raises nothing. An
-                           // older client sends `a` 0 and is unaffected.
+                           // (Raising ONE OF MY OWN windows is
+                           // WIN_REQ_ACTIVATE_OWN, below.)
                            //
                            // **THE CALLER NAMES NOTHING**, and that is
                            // the point. It used to pass an app id in
@@ -950,6 +937,23 @@ struct win_event {
                            // uapp_set_cursor() drops the no-op rather
                            // than sending one per mouse move. An unknown
                            // shape is refused, not clamped.
+#define WIN_REQ_ACTIVATE_OWN 40 // `window`: one of the CALLER'S OWN windows.
+                           // "I refused the close you just sent this
+                           // window -- I am asking something in it --
+                           // bring it forward so it is seen." No reply:
+                           // ONE-WAY, so a compositor that predates it
+                           // (toywm still running while System Update
+                           // has replaced libuapp) drops it as unknown
+                           // and nobody waits.
+                           //
+                           // GRANTED ONLY IN ANSWER TO A CLOSE: the
+                           // window must have been sent a SINGLE close
+                           // (the X, Alt+F4, the window menu, the
+                           // taskbar -- not Close all, the Leave page or
+                           // End Task, which raise nothing) within the
+                           // last few seconds, and once per close. A
+                           // client cannot raise itself at will.
+
 #define WIN_REQ_TIMER      14 // `window`: which one; a: the repeat
                            // interval in MILLISECONDS, or 0 to cancel.
                            // Delivers WIN_EV_TIMER every `a` ms until

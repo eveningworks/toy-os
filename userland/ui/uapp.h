@@ -326,8 +326,8 @@ struct uapp_desc {
     // ACCEPTED -- unless a uui_dialog is open IN the window, which uapp
     // refuses for it; a separate chooser window guards no data. A refused
     // close with a question open in the window asks the compositor to
-    // bring the window forward (WIN_REQ_ACTIVATE naming it) -- a batch
-    // close is declined there, so a batch still raises nothing.
+    // bring the window forward (WIN_REQ_ACTIVATE_OWN) -- granted only for
+    // a single close, so a batch still raises nothing.
     int (*on_close)(struct uapp *a);
 
     // Called on a cadence; repaints if it returns 1. WITH `tick_ms`

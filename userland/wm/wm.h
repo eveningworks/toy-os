@@ -50,11 +50,10 @@ struct window {
     // then renumbered from the same counter, so a window opened later
     // still lands at the end.
     uint32_t task_rank;
-    // Its last close came from a BATCH (wm_request_close_quiet()): a
-    // client's "bring my question forward" (WIN_REQ_ACTIVATE with a window)
-    // is then declined, since a batch raises nothing. A single close
-    // clears it.
-    uint8_t close_quiet;
+    // Its last close was a SINGLE one (wm_request_close()), not a batch's:
+    // with close_asked_tick, what WIN_REQ_ACTIVATE_OWN is granted on --
+    // a single close within the last few seconds, once.
+    uint8_t close_single;
 
     // THE CLIENT'S WIDGET MAP, for `gui probe` and `gui widgets`.
     // ALLOCATED ON FIRST REPORT, not inline: a window is not otherwise

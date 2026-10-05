@@ -859,13 +859,17 @@ static int activate_twin_of(int asking_pid) {
     return 0;
 }
 
-// WIN_REQ_ACTIVATE naming ONE OF THE CALLER'S OWN windows: a client that
-// refused a close because it is asking in that window wants it seen.
-// Declined (0) when that window's last close was a batch's, which raises
-// nothing (wm.h, close_quiet).
+// WIN_REQ_ACTIVATE_OWN: a client that refused a close because it is
+// asking in that window wants it seen. Granted only for a SINGLE close
+// sent within ACTIVATE_OWN_TICKS, once -- never at will, and never for a
+// batch's close, which raises nothing (wm.h, close_single).
+#define ACTIVATE_OWN_TICKS (5 * USER_HZ)
 static int activate_own(int pid, uint32_t win) {
     int i = find_client_window(pid, win);
-    if (i < 0 || windows[i].close_quiet) return 0;
+    if (i < 0 || !windows[i].close_single || !windows[i].close_asked_tick ||
+        sys_ticks() - windows[i].close_asked_tick > ACTIVATE_OWN_TICKS)
+        return 0;
+    windows[i].close_single = 0;   // once per close
     wm_bring_forward(i);
     wm_logf("wm: brought pid %d's window %u forward for its question\n", pid, (unsigned)win);
     return 1;
@@ -1213,6 +1217,9 @@ void wm_client_chan_pump(void) {
             // is ASKED, and may refuse.
             wm_end_task(m.a);
             break;
+        case WIN_REQ_ACTIVATE_OWN:   // one-way: nothing is sent back
+            activate_own(from, m.window);
+            break;
         case WIN_REQ_ACTIVATE: {
             // **THE ONE MESSAGE HERE THAT ANSWERS.** A single-instance
             // app asks this before it opens anything; the reply decides
@@ -1222,7 +1229,7 @@ void wm_client_chan_pump(void) {
             struct wmchan_msg r;
             k_memset(&r, 0, sizeof r);
             r.type = WIN_REQ_ACTIVATE;
-            r.a = m.a == WIN_ACTIVATE_OWN ? activate_own(from, m.window) : activate_twin_of(from);
+            r.a = activate_twin_of(from);
             uchan_server_reply(&g_chan, from, &r, sizeof r);
             break;
         }
