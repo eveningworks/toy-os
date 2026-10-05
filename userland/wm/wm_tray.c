@@ -214,11 +214,20 @@ static int tray_icon_size(void) {
 
 // The clock takes two lines -- time over date, as Windows 11's and
 // Plasma's do -- whenever the buttons are tall enough to hold them.
-static int clock_two_lines(void) {
+//
+// THE LINES MAY OVERLAP BY A QUARTER. A line box holds an accent above
+// the capitals and a tail below the baseline, and digits and the date's
+// separators use neither; demanding two full lines dropped the date at
+// font size 18 on a 40 px button once the UI font took its full ascent.
+static int clock_pitch(void) {
     struct taskbar_geom g;
     taskbar_geom(&g);
-    return clock_date[0] && g.btn_h >= 2 * ugfx_char_h() + 2;
+    int ch = ugfx_char_h();
+    int pitch = g.btn_h - ch < ch ? g.btn_h - ch : ch;
+    return pitch >= ch * 3 / 4 ? pitch : 0;
 }
+
+static int clock_two_lines(void) { return clock_date[0] && clock_pitch() > 0; }
 
 static int item_width(int i) {
     if (tray_items[i].icon) return tray_icon_size();
@@ -395,11 +404,13 @@ static void tray_draw_item(int id, int x, int w, void *vctx) {
     // its own ground. On glass, an unlit item's text blends against it.
     bg = wm_glass_ink_bg(WM_GLASS_TASKBAR, bg, p->bar);
     if (id == clock_tray_id && clock_two_lines()) {
-        int y = g->btn_y + (g->btn_h - 2 * ch) / 2;
+        int pitch = clock_pitch();
+        int y = g->btn_y + (g->btn_h - pitch - ch) / 2;
         const char *t = tray_items[id].text;
-        // Right-aligned, both lines, against the screen edge.
+        // Right-aligned, both lines, against the screen edge. The date
+        // last: its cell's empty top may cover the time's empty tail.
         ugfx_draw_string_clipped(wm_surface(), x + w - ugfx_text_width(t), y, w, t, p->text, bg);
-        ugfx_draw_string_clipped(wm_surface(), x + w - ugfx_text_width(clock_date), y + ch, w,
+        ugfx_draw_string_clipped(wm_surface(), x + w - ugfx_text_width(clock_date), y + pitch, w,
                                  clock_date, p->dim, bg);
         return;
     }
