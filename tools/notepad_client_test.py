@@ -738,7 +738,7 @@ def history_and_find_checks(dbg, res):
     res.check("find counts every match", matches == 3, f"matches {matches}")
     key(dbg, ESC)
 
-    dbg.send("gui key 0xf794 alt")              # Alt+F4 -> ask -> Don't Save
+    dbg.send("gui key 0xf794 alt")            # Alt+F4 -> ask -> Don't Save
     dbg.settle()
     time.sleep(0.8)
     btns = dialog_buttons(dbg)
@@ -952,11 +952,11 @@ def held_close_cancelled(dbg, res, pids):
         return
     key(dbg, "0x17")                          # Ctrl-W on tab 2: asks
     poll(lambda: len(dialog_buttons(dbg)) == 3, 6)
-    dbg.send("gui key 0xa5 alt")              # held
+    dbg.send("gui key 0xf794 alt")            # held
     held = poll(lambda: held_closes(dbg) >= 1, 6)
     _click_ask(dbg, pid, 2)                   # Cancel: tab and window close given up
     poll(lambda: not dialog_buttons(dbg), 6)
-    for k in ("0xA4", "e"):                   # F10, e: File > Exit
+    for k in ("0xf793", "e"):                 # F10, e: File > Exit
         dbg.send(f"gui key {k}")
         dbg.settle(0.3)
     for _ in range(2):                        # Don't Save, for each tab it asks about
@@ -1031,7 +1031,7 @@ def second_close_tab(dbg, res, pids):
               f"title {title()!r}, tabs {tabs_now(dbg)}, buttons {btns}")
     if not btns:
         return
-    dbg.send("gui key 0xa5 alt")              # Alt+F4 while that prompt is up
+    dbg.send("gui key 0xf794 alt")            # Alt+F4 while that prompt is up
     held = poll(lambda: held_closes(dbg) >= 1, 6)
     res.check("...a window close while it asks is held, not acted on",
               bool(held) and tabs_now(dbg) == (2, 1), f"held {held}, tabs {tabs_now(dbg)}")
@@ -1093,7 +1093,7 @@ def end_task_is_quiet(dbg, res, pids):
     the Calculator stays in front."""
     pid = spawn_notepad(dbg)
     pids.append(pid)
-    for k in ("0xA4", "0x96", "o"):           # F10, Right, o: Edit > Options...
+    for k in ("0xf793", "0xf785", "o"):       # F10, Right, o: Edit > Options...
         dbg.send(f"gui key {k}")
         dbg.settle(0.3)
     poll(lambda: any("Notepad Options" in w.get("title", "") for w in windows_of(dbg, pid)), 12)
@@ -1131,7 +1131,7 @@ def end_task_is_quiet(dbg, res, pids):
 def second_close_brings_forward(dbg, res, pids):
     pid = spawn_notepad(dbg)
     pids.append(pid)
-    for k in ("0xA4", "0x96", "o"):           # F10, Right, o: Edit > Options...
+    for k in ("0xf793", "0xf785", "o"):       # F10, Right, o: Edit > Options...
         dbg.send(f"gui key {k}")
         dbg.settle(0.3)
     opts = poll(lambda: next((w for w in windows_of(dbg, pid)

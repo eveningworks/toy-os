@@ -205,7 +205,7 @@ def run(dbg, qmp, tmp):
         time.sleep(0.3)
     dbg.open_app("Notepad")
     dbg.settle()
-    for k in ("0xA4", "0x96", "o"):   # F10, Right, o: Edit > Options...
+    for k in ("0xf793", "0xf785", "o"):   # F10, Right, o: Edit > Options...
         dbg.send(f"gui key {k}")
         dbg.settle(0.3)
     deadline = time.time() + 12
