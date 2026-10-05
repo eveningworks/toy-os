@@ -262,7 +262,10 @@ def parse_key_symbols(keymap_text):
     sym = keymap_text[keymap_text.index("xkb_symbols"):]
     for m in re.finditer(r"key\s*<(\w+)>\s*\{(.*?)\};", sym, re.S):
         body = m.group(2)
-        g = re.search(r"symbols\[1\]\s*=\s*\[([^\]]*)\]", body) or \
+        # libxkbcommon 1.6 (Ubuntu 24.04, CI) writes `symbols[Group1]`, 1.13
+        # `symbols[1]` -- matching only the second dropped every key with
+        # a type block (German's sharp s, Norway's Space) on Ubuntu 24.04.
+        g = re.search(r"symbols\[(?:Group)?1\]\s*=\s*\[([^\]]*)\]", body) or \
             re.match(r"\s*\[([^\]]*)\]", body)
         if g:
             syms[m.group(1)] = [s.strip() for s in g.group(1).split(",")]

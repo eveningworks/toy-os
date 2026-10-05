@@ -73,7 +73,10 @@ jobs:
           # Without it that step SKIPS SILENTLY, so CI was building images
           # with no keyboard layouts at all -- which nothing noticed until
           # check_layout.py started comparing the image against its doc.
-          sudo apt-get install -y -qq -o Acquire::Retries=3 nasm grub-pc-bin grub-common xorriso qemu-system-x86 mtools libxkbcommon-tools
+          # libx11-data carries X11's Compose table, which gen_kbs.py reads
+          # for dead-key pairs; without it the pairs come from unicodedata
+          # and a few (circumflex + digit -> superscript) go missing.
+          sudo apt-get install -y -qq -o Acquire::Retries=3 nasm grub-pc-bin grub-common xorriso qemu-system-x86 mtools libxkbcommon-tools libx11-data
 
       - name: make clean && make all
         run: make clean && make all
