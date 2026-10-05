@@ -29,6 +29,7 @@
 #include "keyboard.h"
 #include "fswatch.h"   // FSWATCH_MAX: the most watch notices there can be
 #include "input.h"   // input_report_key(): a key, as a driver reports one
+#include "mouse.h"   // mouse_feed_buttons(): edges for the poll to drain
 
 #define EVENT_PATH "/tests/event_test"
 #define READY_PATH "/tests/waitready_test"
@@ -513,7 +514,8 @@ KTEST("win_input", "a release with nowhere to go is refused and counted") {
 
 KTEST("win_input", "a button-up edge is kept like a key release; motion is the one evicted") {
     // Motion first, then a full share of button-up edges: the last edge
-    // needs a slot, and the motion -- unkept -- is the one that goes.
+    // needs a slot, and the motion -- unkept -- is the one that goes. Then
+    // motion into that share of releases has nothing to evict: refused.
     SKIP_IF_ROLE_HELD;
     int pid = spare_pid();
     if (!pid) KTEST_SKIP("no spare pid");
@@ -525,20 +527,166 @@ KTEST("win_input", "a button-up edge is kept like a key release; motion is the o
         struct win_event up = raw_mouse(i, i, 0);
         took_ups += win_input_push_mouse_edge(&up, WIN_INPUT_EDGE_UP);
     }
-    int bad = win_input_push_mouse_edge(&move, 3)          // not an edge value
-            + win_input_push_mouse_edge(&(struct win_event){ .type = WIN_EV_RAW_KEY }, WIN_INPUT_EDGE_UP);
+    struct win_event late = raw_mouse(2000, 2000, 0);
+    int took_late = win_input_push(&late);
     int ups = 0, moves = 0;
     struct win_event got;
     while (win_input_pop(&got)) {
-        if (got.a == 1000) moves++;
+        if (got.a == 1000 || got.a == 2000) moves++;
         else if (got.type == WIN_EV_RAW_MOUSE) ups++;
     }
+    // ON AN EMPTY QUEUE, so a refusal is the entry point's own and not
+    // the full share's.
+    int bad = win_input_push_mouse_edge(&move, 3)          // not an edge value
+            + win_input_push_mouse_edge(&(struct win_event){ .type = WIN_EV_RAW_KEY }, WIN_INPUT_EDGE_UP);
+    int after_bad = win_input_pending();
     win_server_set_compositor(0, 0);
     KTEST_ASSERT(took_move);
     KTEST_ASSERT_EQ(took_ups, WIN_INPUT_MAX);
+    KTEST_ASSERT(!took_late);                   // a share of releases: refused
     KTEST_ASSERT_EQ(ups, WIN_INPUT_MAX);
     KTEST_ASSERT_EQ(moves, 0);                  // evicted, not a release
     KTEST_ASSERT_EQ(bad, 0);                    // both refused outright
+    KTEST_ASSERT_EQ(after_bad, 0);
+}
+
+// THROUGH win_input_poll(), the device's edge queue to the compositor's.
+// Preemption is off while the poll is driven by hand (scheduler_idle()
+// runs the same poll), so nothing is asserted until it is back on.
+#define POLL_LOG_MAX 64
+static struct { int n; struct win_event ev[POLL_LOG_MAX]; } g_plog;
+
+static void poll_log_drain(void) {
+    struct win_event e;
+    while (win_input_pop(&e))
+        if (e.type == WIN_EV_RAW_MOUSE && g_plog.n < POLL_LOG_MAX) g_plog.ev[g_plog.n++] = e;
+}
+
+// A known start: no edges waiting, every button up and TOLD up (an edge
+// to 0x10 and back moves the poll's last mask to 0 whatever it was), the
+// pointer at (x, y) and that position already reported.
+static void poll_baseline(int x, int y) {
+    while (mouse_try_get_button_edge(0, 0, 0)) ;
+    mouse_set_position(x, y);
+    mouse_feed_buttons(0x10);
+    mouse_feed_buttons(0);
+    win_input_poll();
+    win_input_poll();
+    struct win_event e;
+    while (win_input_pop(&e)) ;
+    g_plog.n = 0;
+}
+
+KTEST("win_input", "the poll turns 0 -> 1 -> 2 into DOWN 1, UP 0, DOWN 2") {
+    SKIP_IF_ROLE_HELD;
+    int pid = spare_pid();
+    if (!pid) KTEST_SKIP("no spare pid");
+    scheduler_preempt_disable();
+    int x0 = 0, y0 = 0;
+    uint8_t before = 0;
+    mouse_get_state(&x0, &y0, &before);
+    win_server_set_compositor(pid, 0);
+    poll_baseline(x0, y0);
+    mouse_feed_buttons(1);
+    mouse_feed_buttons(2);
+    win_input_poll();
+    poll_log_drain();
+    mouse_feed_buttons(0);
+    win_input_poll();
+    poll_log_drain();
+    win_server_set_compositor(0, 0);
+    mouse_feed_buttons(before);
+    while (mouse_try_get_button_edge(0, 0, 0)) ;
+    scheduler_preempt_enable();
+    KTEST_ASSERT_EQ(g_plog.n, 4);               // no motion, no bogus edge
+    KTEST_ASSERT_EQ((int)g_plog.ev[0].mods, 1); // DOWN 1
+    KTEST_ASSERT_EQ((int)g_plog.ev[1].mods, 0); // 1 -> 2: UP, nothing held...
+    KTEST_ASSERT_EQ((int)g_plog.ev[2].mods, 2); // ...then DOWN 2
+    KTEST_ASSERT_EQ((int)g_plog.ev[3].mods, 0); // UP
+}
+
+KTEST("win_input", "an overflowed button ring invents no edge") {
+    // A burst longer than the device's transition ring drops its oldest
+    // edges, so the first one left can repeat the mask the client was
+    // last told -- that must push nothing, not a DOWN with no button.
+    // Two bursts of opposite parity, so one of them lands there whatever
+    // the ring's size.
+    SKIP_IF_ROLE_HELD;
+    int pid = spare_pid();
+    if (!pid) KTEST_SKIP("no spare pid");
+    scheduler_preempt_disable();
+    int x0 = 0, y0 = 0;
+    uint8_t before = 0;
+    mouse_get_state(&x0, &y0, &before);
+    win_server_set_compositor(pid, 0);
+    int first_bad = 0, repeats = 0, logged = 0;
+    for (int burst = 64; burst <= 65; burst++) {
+        poll_baseline(x0, y0);
+        for (int i = 0; i < burst; i++) mouse_feed_buttons(i % 2 ? 0 : 1);
+        mouse_feed_buttons(0);
+        for (int round = 0; round < 4; round++) {
+            win_input_poll();
+            poll_log_drain();
+        }
+        if (g_plog.n && g_plog.ev[0].mods == 0) first_bad++;   // told 0, then "0" again
+        for (int i = 1; i < g_plog.n; i++)
+            if (g_plog.ev[i].mods == g_plog.ev[i - 1].mods) repeats++;
+        logged += g_plog.n;
+    }
+    win_server_set_compositor(0, 0);
+    mouse_feed_buttons(before);
+    while (mouse_try_get_button_edge(0, 0, 0)) ;
+    scheduler_preempt_enable();
+    KTEST_ASSERT(logged > 0);
+    KTEST_ASSERT_EQ(first_bad, 0);
+    KTEST_ASSERT_EQ(repeats, 0);
+}
+
+KTEST("win_input", "with one free slot a waiting click holds back the motion after it") {
+    // A press at A, then the pointer moves to B; the poll has ONE slot.
+    // The press needs two and waits -- and the move to B must wait with
+    // it, or the client sees the pointer at B before the click at A.
+    SKIP_IF_ROLE_HELD;
+    int pid = spare_pid();
+    if (!pid) KTEST_SKIP("no spare pid");
+    scheduler_preempt_disable();
+    int x0 = 0, y0 = 0, bw = 0, bh = 0;
+    uint8_t before = 0;
+    mouse_get_state(&x0, &y0, &before);
+    win_server_set_compositor(pid, 0);
+    win_input_poll();                           // armed: the bounds are the display's
+    mouse_get_bounds(&bw, &bh);
+    int ax = bw / 4, ay = bh / 4, bx = bw / 2, by = bh / 2;
+    poll_baseline(ax, ay);
+    for (int i = 0; i < WIN_INPUT_MAX - 1; i++) {
+        struct win_event filler = key_event(0x7F);
+        win_input_push(&filler);
+    }
+    mouse_feed_buttons(1);                      // press at A
+    mouse_set_position(bx, by);                 // ...then the move to B
+    win_input_poll();
+    int held_back = win_input_pending();        // still only the fillers
+    struct win_event e;
+    while (win_input_pop(&e)) ;
+    for (int round = 0; round < 3; round++) {
+        win_input_poll();
+        poll_log_drain();
+    }
+    mouse_feed_buttons(0);
+    win_input_poll();
+    poll_log_drain();
+    win_server_set_compositor(0, 0);
+    mouse_set_position(x0, y0);
+    mouse_feed_buttons(before);
+    while (mouse_try_get_button_edge(0, 0, 0)) ;
+    scheduler_preempt_enable();
+    if (bw < 4 || bh < 4) KTEST_SKIP("no pointer bounds on this boot");
+    KTEST_ASSERT_EQ(held_back, WIN_INPUT_MAX - 1);
+    KTEST_ASSERT(g_plog.n >= 2);
+    KTEST_ASSERT_EQ(g_plog.ev[0].a, ax);        // the press, where it happened...
+    KTEST_ASSERT_EQ((int)g_plog.ev[0].mods, 1);
+    KTEST_ASSERT_EQ(g_plog.ev[1].a, bx);        // ...then the move, holding it
+    KTEST_ASSERT_EQ((int)g_plog.ev[1].mods, 1);
 }
 
 KTEST("win_input", "a refused release is logged") {

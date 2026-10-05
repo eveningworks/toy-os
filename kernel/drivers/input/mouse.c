@@ -339,6 +339,8 @@ int mouse_try_get_button_edge(uint8_t *out_mask, int *out_x, int *out_y) {
     return 1;
 }
 
+int mouse_button_edge_pending(void) { return btn_trans_tail != btn_trans_head; }
+
 int mouse_try_get_button_transition(uint8_t *out_mask) {
     return mouse_try_get_button_edge(out_mask, 0, 0);
 }

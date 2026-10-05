@@ -229,38 +229,44 @@ int win_input_dropped(void) { return q.dropped; }
 // would overflow the queue in a fraction of a second while the user sat
 // still.
 static int g_last_x = -1, g_last_y = -1;
-static uint8_t g_last_buttons;   // the mask last PUSHED -- only an edge changes it
+static uint8_t g_last_buttons;   // the mask the client was last TOLD -- only a queued edge changes it
 
-static void push(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
+static struct win_event make_event(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
     struct win_event ev;
     k_memset(&ev, 0, sizeof ev);
     ev.type = type;
     ev.a = a;
     ev.b = b;
     ev.mods = mods;
+    return ev;
+}
+
+static void push(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
+    struct win_event ev = make_event(type, a, b, mods);
     queue_push(&ev, 0);
 }
 
 // One button transition, as the edges a client needs: the buttons it
-// LIFTS as a release (mask without them), then the ones it PRESSES as a
-// press (the new mask) -- so 01 -> 10 is an up AND a down, and the up is
-// kept like any release. Through win_input_push_mouse_edge(), the same
-// door a direct push uses. Needs two slots; the caller checks.
-static void push_button_edge(int x, int y, uint8_t from, uint8_t to) {
-    struct win_event ev;
-    k_memset(&ev, 0, sizeof ev);
-    ev.type = WIN_EV_RAW_MOUSE;
-    ev.a = x;
-    ev.b = y;
+// LIFTS as a release (the buttons still held), then the ones it PRESSES
+// as a press (the new mask) -- so 01 -> 10 is an up AND a down, and the
+// up is kept like any release. Through win_input_push_mouse_edge(), the
+// same door a direct push uses. Needs two slots; the caller checks.
+// Returns the mask the client has now been TOLD: an edge that was
+// refused is not, and the press after a refused release is not tried
+// (it would claim a button the client still sees held is up). from ==
+// to -- possible once the device's transition ring dropped an edge --
+// pushes nothing.
+static uint8_t push_button_edge(int x, int y, uint8_t from, uint8_t to) {
     uint8_t lifted = from & (uint8_t)~to, pressed = to & (uint8_t)~from;
     if (lifted) {
-        ev.mods = from & (uint8_t)~lifted;
-        win_input_push_mouse_edge(&ev, EDGE_UP);
+        struct win_event up = make_event(WIN_EV_RAW_MOUSE, x, y, from & to);
+        if (!win_input_push_mouse_edge(&up, EDGE_UP)) return from;
     }
-    if (pressed || !lifted) {
-        ev.mods = to;
-        win_input_push_mouse_edge(&ev, EDGE_DOWN);
+    if (pressed) {
+        struct win_event down = make_event(WIN_EV_RAW_MOUSE, x, y, to);
+        if (!win_input_push_mouse_edge(&down, EDGE_DOWN)) return from & to;
     }
+    return to;
 }
 
 static int take_key(void) {
@@ -327,11 +333,17 @@ void win_input_poll(void) {
     // two slots.
     int ex = 0, ey = 0;
     while (input_room() >= 2 && mouse_try_get_button_edge(&edge, &ex, &ey)) {
-        push_button_edge(ex, ey, g_last_buttons, edge);
-        g_last_buttons = edge;
-        lx = ex;
-        ly = ey;
+        uint8_t told = push_button_edge(ex, ey, g_last_buttons, edge);
+        if (told != g_last_buttons) {
+            lx = ex;
+            ly = ey;
+        }
+        g_last_buttons = told;
     }
+    // AN EDGE LEFT WAITING HOLDS THE MOTION BACK TOO: a move sampled
+    // after it, queued now in the one free slot, would reach the client
+    // ahead of the click.
+    int edge_waits = mouse_button_edge_pending();
 
     int x = 0, y = 0;
     uint8_t buttons = 0;
@@ -347,7 +359,7 @@ void win_input_poll(void) {
 
     // Motion is a state: unsent for want of room, it goes next poll.
     int moved = (x != lx || y != ly);
-    if (moved && input_room() > 0) {
+    if (moved && !edge_waits && input_room() > 0) {
         push(WIN_EV_RAW_MOUSE, x, y, g_last_buttons);
         moved = 0;
     }

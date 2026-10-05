@@ -72,6 +72,9 @@ int mouse_try_get_button_transition(uint8_t *out_mask);
 // The same, with the position the pointer had when the edge was
 // reported -- what an event for it must carry.
 int mouse_try_get_button_edge(uint8_t *out_mask, int *out_x, int *out_y);
+// Whether an edge is waiting, WITHOUT consuming it -- for a reader that
+// must not let later state overtake it while it has no room to take it.
+int mouse_button_edge_pending(void);
 
 // The bounds the pointer is clamped to. These are NOT always the
 // display size -- they are whatever mouse_set_bounds() was last given,
