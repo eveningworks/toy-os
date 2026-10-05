@@ -132,7 +132,7 @@ static int publish(int family, int weight) {
     }
 
     struct font_atlas_plan plan;
-    if (!font_atlas_plan(&t, g_px, weight, synthesizing, &plan)) {
+    if (!font_atlas_plan(&t, g_px, weight, synthesizing, 0, &plan)) {
         printf("fontd: %s refused at %dpx\n", face, g_px);
         free(bytes);
         return 0;

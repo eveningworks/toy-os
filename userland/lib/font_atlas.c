@@ -56,7 +56,7 @@ static void lift_into_line_box(uint8_t *cell, int cell_w, int cell_h, int line_h
 }
 
 int font_atlas_plan(const struct ttf_font *t, int px, int weight,
-                    int synthesizing, struct font_atlas_plan *p) {
+                    int synthesizing, int tight, struct font_atlas_plan *p) {
     if (!t || !p || px <= 0) return 0;
 
     p->px = px;
@@ -66,20 +66,16 @@ int font_atlas_plan(const struct ttf_font *t, int px, int weight,
 
     fx_t scale = ttf_scale_for_px(t, px);
 
-    // genttf.py's formula, repeated here rather than using the font's
-    // raw ascent and descent: those fit every glyph with no clipping and
-    // produce a visibly taller, looser cell than a terminal font has.
-    // The cost is the slight descender/accent clipping every fixed-cell
-    // terminal font accepts.
-    int baseline = fx_round(fx_mul(fx_mul(fx_from_int(t->ascent), scale),
-                                    (fx_t)(FX_ONE * 89 / 100)));
-    int below = fx_round(fx_mul(fx_mul(fx_from_int(t->descent), scale),
-                                 (fx_t)(FX_ONE * 60 / 100)));
-
-    // THE LINE PITCH IS THE SQUEEZED HEIGHT, UNCHANGED. Every
-    // font-derived measurement on the machine comes from this, so it
-    // must stay exactly what genttf.py's formula produced or the whole
-    // UI reflows and stops matching the baked tables.
+    // fontd's atlases take the font's FULL ascent and descent, as Qt sizes
+    // a line (Konsole's cell is QFontMetrics::height()), so every Latin-1
+    // capital's accent fits. TIGHT is genttf.py's squeezed cell -- 89% of
+    // the ascent, 60% of the descent -- which the kernel's baked console
+    // tables still use and which clips the ring of a capital Å; it stays
+    // here so a test can compare an atlas against those tables.
+    fx_t up = tight ? (fx_t)(FX_ONE * 89 / 100) : FX_ONE;
+    fx_t down = tight ? (fx_t)(FX_ONE * 60 / 100) : FX_ONE;
+    int baseline = fx_round(fx_mul(fx_mul(fx_from_int(t->ascent), scale), up));
+    int below = fx_round(fx_mul(fx_mul(fx_from_int(t->descent), scale), down));
     int line_h = baseline + below;
     if (line_h < 2) return 0;
 

@@ -62,10 +62,14 @@ uint32_t font_atlas_slot_codepoint(int slot);
 // set `synthesizing` when there is not and the regular outlines are to
 // be smeared instead.
 //
+// `tight` asks for the terminal cell (the baked tables' squeezed
+// ascent and descent, clipping capital accents); 0 gives UI text the
+// font's full ascent and descent.
+//
 // Returns 1, or 0 when the result would be unusable -- a line under two
 // pixels, or a cell wider than the rasteriser's accumulator.
 int font_atlas_plan(const struct ttf_font *t, int px, int weight,
-                    int synthesizing, struct font_atlas_plan *p);
+                    int synthesizing, int tight, struct font_atlas_plan *p);
 
 // Renders the plan into `out`, which must be at least `p->total_bytes`
 // and ZEROED by the caller. `sc` is scratch the caller owns.
