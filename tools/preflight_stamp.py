@@ -38,7 +38,13 @@ def tree_state():
         try:
             subprocess.run(["git", "read-tree", "HEAD"], cwd=REPO, env=env, check=True,
                            capture_output=True)
-            subprocess.run(["git", "add", "-A", "--", ".", *EXCLUDE], cwd=REPO, env=env,
+            # An exclude git ALREADY ignores must not be named: `git add`
+            # refuses a pathspec that names an ignored file, and the stamp
+            # silently went unwritten once .mcp.json was in info/exclude.
+            excl = [e for e in EXCLUDE
+                    if subprocess.run(["git", "check-ignore", "-q", e[2:]], cwd=REPO,
+                                      capture_output=True).returncode != 0]
+            subprocess.run(["git", "add", "-A", "--", ".", *excl], cwd=REPO, env=env,
                            check=True, capture_output=True)
             return subprocess.run(["git", "write-tree"], cwd=REPO, env=env, check=True,
                                   capture_output=True, text=True).stdout.strip()

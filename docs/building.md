@@ -161,7 +161,10 @@ boot, and [boot-flags.md](boot-flags.md) lists the escape hatches
 (`nousb`, `noahci`, `nomsi`, `nogpe`, `nokaslr`). It does not flash
 firmware, write EFI variables or touch anything outside the disk you
 point it at, so the realistic worst case is a disk you told it to erase.
-The MIT licence's warranty disclaimer applies, as to everything here.
+**It is used at your own risk:** toy-os comes with no warranty (the MIT
+licence's disclaimer applies, as to everything here), and nobody behind
+this project takes responsibility for data lost or hardware affected by
+running or installing it.
 
 Releases before v0.3.0 shipped `toy-os.iso` plus a gzipped `disk.img`
 instead; `run_release.sh` still understands that pair.
