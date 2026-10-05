@@ -157,20 +157,18 @@ static int kc_key(void *w, int key, unsigned mods) {
         return 1;
 
     struct keycombo c = { .key = (uint16_t)key, .mods = (uint8_t)mods };
+    // **THE CONTROL CODE BECOMES A LETTER AGAIN, BEFORE ANY FORMAT.**
+    // Ctrl+T reaches us as 0x14 (api/keyboard.h), which keycombo_format()
+    // REFUSES as unspellable; the combination a person means is "Ctrl+T",
+    // so the letter is recovered first -- the exact inverse of the fold
+    // keycombo_matches() undoes on the way back in.
+    if ((mods & KEY_MOD_CTRL) && key >= 1 && key <= 26)
+        c.key = (uint16_t)('A' + key - 1);
     char text[KEYCOMBO_TEXT_MAX];
     if (!keycombo_format(&c, text, sizeof text)) {
         // Nothing this grammar can spell -- keep listening rather than
         // recording something that will not parse back.
         return 1;
-    }
-    // **THE CONTROL CODE HAS TO BECOME A LETTER AGAIN.** Ctrl+T reaches
-    // us as 0x14 (api/keyboard.h), which formats as an unprintable
-    // character; the combination a person means is "Ctrl+T", so the
-    // letter is recovered here -- the exact inverse of the fold
-    // keycombo_matches() undoes on the way back in.
-    if ((mods & KEY_MOD_CTRL) && key >= 1 && key <= 26) {
-        c.key = (uint16_t)('A' + key - 1);
-        if (!keycombo_format(&c, text, sizeof text)) return 1;
     }
 
     strlcpy(k->text, text, sizeof k->text);
