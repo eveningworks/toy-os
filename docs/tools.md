@@ -3020,7 +3020,7 @@ window without going through it will find its layout polls timing out.
   popup's compositor-cut corner. **It establishes an empty clipboard by
   spending a cut**: the clipboard outlives a run, and a second run on
   the same guest inherited the first one's copy. In `gui_regress.py`.
-- **`mines_test.py`** -- Minesweeper (20 checks), and the protocol
+- **`mines_test.py`** -- Minesweeper (29 checks), and the protocol
   property it was built to prove: **a secondary click reaching a ring-3
   client**. The check that matters is a PAIR -- a right-click on the
   BOARD must flag a cell and leave no context menu open, and a
@@ -3041,8 +3041,15 @@ window without going through it will find its layout polls timing out.
   half real time under load. Both positive controls were run -- disabling
   the WM's content forwarding reddens four checks and nothing else;
   narrowing the first-click safe zone from the 3x3 neighbourhood to the
-  clicked cell reddens exactly one, on the right assertion. In
-  `gui_regress.py`.
+  clicked cell reddens exactly one, on the right assertion. **It plays
+  a game to a WIN** from the minefield the client logs (layout log
+  only), checks the "Solved in" note is drawn -- POLLED, because the
+  win's effects run in stages with still gaps between them and a
+  settled frame taken in one is not a finished win -- and that a new
+  process reads the best time back; removing the note's fill reddens
+  that one check. **Its clicks are PACED** -- one, then the state line
+  it produces -- because `gui click`s sent back to back are lost
+  (`docs/bugs.md`). In `gui_regress.py`.
 - **`calendar_test.py`** -- the tray clock's calendar popup: opening,
   the grid, paging, `locale.week_start`, `locale.week_numbers` (the
   column's own pixels, not the flag) and the "Date & time settings..."

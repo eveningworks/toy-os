@@ -112,6 +112,8 @@ in check_layout.py changes with it.)
 | `/var/lib/update/servers` | The update servers used recently, newest first, for System Update's Change... row and `update --server` | app | optional |
 | `/var/lib/diskmark` | Disk Mark's state: the run history, below. Created by the first finished run | app | optional |
 | `/var/lib/diskmark/history` | Disk Mark's finished runs, one line each, oldest first: when, MiB, volume, device, the four throughputs and the random IOPS and latencies. Kept because a benchmark is read AGAINST the last one; the History table compares each run with the one before on the same volume and size | app | optional |
+| `/var/lib/mines` | Minesweeper's kept state, below. Created by the first best time | app | optional |
+| `/var/lib/mines/best` | Minesweeper's best time per level, one `<level> <seconds>` line each (`beginner 37`); Game > Best Times... shows and resets them | app | optional |
 | `/var/lib/notepad` | Notepad's kept state, below. Created on first use | app | optional |
 | `/var/lib/notepad/recent` | File > Recent files, one path a line, newest first, as many as Notepad Options keeps (up to ten) | app | optional |
 | `/var/lib/notepad/session` | The named tabs open when Notepad's window last started closing, one path a line -- reopened at start when Options say "Reopen the last tabs". Unnamed tabs are not kept | app | optional |

@@ -7319,3 +7319,18 @@ Left from the review of the Close-all / close-while-asking work
   skipped tool with the literal "nothing judged" rather than the tool's
   own SKIP reason; `ondemand_sweep.py` should count a `DIRTIES_IMAGE`
   tool that exited 77 as having dirtied the image.
+
+## `gui click`s injected back to back are lost
+
+Boot a guest (`tools/vm.py start`, TCG), enter the desktop, `gui spawn
+/bin/wm/apps/mines`, then send 81 `gui click X Y` debug-console
+commands at the 81 cell centres of the Beginner board without waiting
+between them (the cell centres come from the client's `mines: layout
+board`/`cell` lines). Every completed click logs a `mines: state dig`
+(or `lost`/`won`) line; count them after 15 s. Measured 2026-10-05:
+23 of 81 at `576a02d1`, 33 with the Minesweeper redesign, and 27 of 71
+with `desktop.animations` off. Not yet narrowed to the debug console's
+injection, the window server's queue or the client's event loop, and
+not tried with real input; a positive check would replay the burst
+through QMP's `input-send-event` instead of `gui click`.
+

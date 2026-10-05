@@ -3602,18 +3602,25 @@ real scanout hardware does. Do not write a pixel assertion for one.
 
 - **MINESWEEPER IS THE FIRST GAME, AND IT IS AN ORDINARY CLIENT**
   (`userland/gui/apps/mines.c`, `/bin/wm/apps/mines`). It draws its own
-  board rather than introducing a `uui_grid`, because one grid-shaped
-  app does not justify a widget (the second-real-caller bar); a second
-  one -- Sudoku, a memory game, a chess board -- is where that widget
-  comes from. Two things worth knowing. **Its board palette is NOT the
-  theme's**: the numbers 1-8 keep Minesweeper's own colours, because
-  those are CONTENT a player reads the board with rather than chrome,
-  the same argument syntax highlighting makes; the window, panel, menu
-  bar and borders are all themed, and the 3D bevel is dropped for the
-  flat look `docs/gui-guidelines.md` requires. And **flagging commits on
-  PRESS**, the same documented exception a menu gets: a flag is instant
-  in every implementation of this game, and it is undone by
-  right-clicking again rather than by dragging off.
+  board rather than introducing a `uui_grid`: the board's drawing and
+  rules are app-shaped, and a second grid game -- Sudoku, a memory game,
+  a chess board -- is where that widget comes from. What its win shows
+  IS generic, so it is shared: `uui_confetti` and `uui_toast`. Three
+  things worth knowing. **Its numbers' palette is NOT the theme's**:
+  1-8 keep Minesweeper's own colours, because those are CONTENT a
+  player reads the board with rather than chrome, the same argument
+  syntax highlighting makes; the window, panel, tiles and borders are
+  all themed. The look is the classic one modernised (chosen from
+  mockups, 2026-10-05): the face and the two counters stay, the bevel
+  becomes a rounded tile lit along its top edge. **Every animation is a
+  cell's START TIME** -- a dig schedules each cell it opens by its ring
+  from the click, a loss each mine by its distance from the one hit --
+  and the draw derives the rest from the clock, so nothing is stepped
+  and `uui_anim_ms()` returning 0 (animations off) simply schedules
+  nothing. And **flagging commits on PRESS**, the same documented
+  exception a menu gets: a flag is instant in every implementation of
+  this game, and it is undone by right-clicking again rather than by
+  dragging off.
 - **A DIRECTORY LISTING IS A WIDGET, `uui_fileview`, AND FOUR THINGS
   SHOULD BE DRAWING ONE.** Before it, three places listed a directory
   and every one was written from scratch: the WM's file picker

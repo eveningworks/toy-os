@@ -1221,6 +1221,12 @@ added. macOS exposes the effect but not the speed; Windows exposes
 neither. A duration per effect was rejected because the set of effects
 is the thing that grows.
 
+- **An app's own motion asks `uui_anim_ms(base)`** (`ui/uui_anim.h`),
+  the toolkit's copy of the same scale: 0 means skip the effect, which
+  is what "off" and "instant" both answer. Ask once per effect, not
+  per frame -- it reads the registry. Minesweeper's reveals and win are
+  the first callers.
+
 - **`instant` is not a very short animation.** It skips the ghost
   entirely -- nothing is snapshotted, nothing allocated, and the real
   window is never hidden for a frame. `desktop.animations=off` takes
