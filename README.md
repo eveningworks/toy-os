@@ -1,7 +1,8 @@
 <h1 align="center">toy-os</h1>
 
 <p align="center">
-  A hobby x86-64 operating system, written from scratch in C and assembly.<br>
+  A hobby x86-64 operating system, written from scratch in C and assembly —
+  an experiment in how far an OS can be built with Claude.<br>
   Boots via GRUB into a 64-bit kernel with a ring-3 desktop, networking,
   USB, sound and a journaling disk-backed filesystem.
 </p>
@@ -19,10 +20,14 @@
 </p>
 
 > [!NOTE]
-> **Built with [Claude Code](https://claude.com/claude-code)**, Anthropic's
-> agentic coding tool. A human makes the design calls; Claude does the
-> implementation and the testing. The conventions it works under are in
-> [CLAUDE.md](CLAUDE.md), and the reasoning behind the design is in
+> **An experiment in building an operating system with Claude.** All of
+> toy-os is written by [Claude Code](https://claude.com/claude-code),
+> Anthropic's agentic coding tool, except the third-party ports under
+> `userland/ports/` (DOOM, Mbed TLS, dash, cJSON): a human makes the
+> design calls and decides what ships; Claude does the implementation,
+> the testing and the documentation. The conventions it works under are
+> in [CLAUDE.md](CLAUDE.md), and the reasoning behind every design choice
+> — including the ones that turned out wrong — is in
 > [docs/decisions.md](docs/decisions.md).
 
 <p align="center">
