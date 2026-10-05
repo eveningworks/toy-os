@@ -348,3 +348,107 @@ in-kernel suites stay a QEMU or physical-console job. What hardware
 uniquely proves is the DRIVER-facing half: on a real r8153 the
 connection log showed the boot DHCP, the inbound telnet connections
 `remote.py` itself was making, and an outgoing ICMP flow.
+
+## Steps 5 and 6 in full (moved from SKILL.md, 2026-10-05)
+
+The long form of the playbook's docs and ship steps; SKILL.md keeps the
+short version.
+
+5. **Write the docs, in the existing style, not a new one.** THERE IS
+   NO CHANGELOG -- it was deleted on 2026-08-18 (see CLAUDE.md). What
+   changed goes in the COMMIT MESSAGE, file by file, and `git log` is
+   the chronological record.
+
+   **THE MESSAGE IS PROBLEM, THEN CHANGE, THEN FILES** (2026-08-24, at
+   the maintainer's request): imperative subject under ~72 chars with
+   the area as a prefix (`settings:`, `wm:`), a short paragraph on what
+   was wrong and what caused it, a bullet per change, then every file
+   with a one-line note -- plus what was verified and what was NOT
+   established. **No capitalised lede sentences and no war stories**:
+   the bodies had grown into forty-line essays repeating what
+   `docs/decisions.md` and the code comments already said. Read a
+   commit from after that date rather than an older one, since the
+   earlier bodies are deliberately not rewritten; CLAUDE.md and
+   `docs/decisions.md`'s versioning entry carry the worked example. Add a `docs/decisions.md` entry only when the change answers
+   a "why does toy-os work this way" question a future session would
+   plausibly hit again -- most changes don't need one.
+
+   **A NEW COMMAND NEEDS ITS PAGE IN `docs/commands/` IN THE SAME
+   CHANGE.** Every `/bin` program and every shell builtin has one, and
+   `tools/check_docs.py` fails the build without it -- so this is not a
+   thing to remember, it is a thing the gate will tell you. What the
+   gate cannot tell you is the part worth having: a page should say what
+   the command is FOR, what it deliberately does NOT do, and the trap in
+   it. Written a week later by somebody reconstructing that, it is worth
+   much less. Where the program declares a `cmd_usage()` string the page
+   must carry it verbatim; the prose is unchecked on purpose.
+
+   Update
+   `docs/roadmap.md` (checkbox list, `- [ ]`/`- [x]`) if this session
+   only planned something rather than building it, striking it through
+   once it actually ships; update `docs/features.md`'s description of that area
+   instead if it actually got built (README.md is a front page: its Highlights
+   change only for a headline-level capability). See `references/doc-templates.md` for the
+   exact shapes and real excerpts to copy the tone from -- don't
+   freehand these from scratch, and double-check the template still
+   matches the live files (see the note at the top of this skill about
+   conventions changing).
+
+
+6. **Ship it -- usually without a version bump.** Most changes are a
+   commit under the current `-dev` version, not a release.
+   - List every file you added or edited in your response to the user --
+     standing instruction, keep it compact. `git status --short` is
+     the list.
+   - **END WITH A SHORT "TRY IT YOURSELF" GUIDE** (standing instruction,
+     2026-08-22, asked for twice -- once for the change, then again to
+     make it permanent). A few lines saying how to reach the change on a
+     real boot: the `make run` flags if it needs particular ones, which
+     app or command, what to type, what should happen. Say plainly when
+     a feature is NOT reachable from the default boot -- several are not
+     (`Ctrl-C` needs a `text` target; the ATA/PIO control only greys out
+     under `DISK=virtio`), and a guide that assumes the default sends
+     the reader looking for something that cannot be there. CLAUDE.md
+     carries the full version.
+   - **Urgent follow-on work is marked `**NEXT**` on the roadmap item
+     itself**, then `tools/gen_next_up.py --write`. Never hand-write a
+     priority list at the top of the roadmap.
+   - Rebuild (`make all && make iso`) and re-run the boot smoke test one
+     more time against the final state (`tools/preflight.sh` again is
+     the fastest way to do this), so what you deliver is what you
+     actually verified.
+   - Never write PII into any file; if a change seems to need it, ask
+     first or anonymize and say so.
+   - Any genuinely reusable tooling from this session belongs in
+     `tools/`, not left as scratch -- see CLAUDE.md's `## tools/`
+     section for the bar, and give a new tool its `docs/tools.md` entry
+     (`tools/check_docs.py` enforces it) and a row in CLAUDE.md's
+     question-to-tool table if it answers a new question.
+   - **AND A NEW TEST TOOL MUST BE NAMED BY A RUNNER, or nothing ever
+     runs it again.** `preflight.sh`, `gui_regress.py` or
+     `ondemand_sweep.py` -- one of the three, or the sweep's
+     deliberate-exclusions list WITH a reason. Nothing checks this:
+     five tools were found outside every runner in one sweep audit,
+     one of them red and pre-existing, and the way to find them is to
+     enumerate `tools/*_test.py` and subtract what each runner names.
+   - **No git tag for a routine change.** Tags (`v<version>`) only
+     happen when actually cutting a release via
+     `tools/set_version.sh <version>` -- that's a separate judgment
+     call (does this feel milestone-worthy enough to want a pinned,
+     downloadable version), not something to do by default per change.
+     If the user does want to cut a release as part of this change, see
+     `references/delivery-checklist.md` for the full mechanics.
+
+   - `git add` the changed/added files and commit with plain `git`
+     (identity is already configured, see CLAUDE.md). The commit
+     message body lists each changed/added file with a one-line note,
+     subject line a short summary -- see
+     `references/delivery-checklist.md` for the exact shape.
+   - **Push policy (user's standing grant, 2026-08-14, reaffirmed in
+     session): push ordinary commits to `origin/main` WITHOUT asking**
+     when the change is clear-cut -- built, tested, in scope of what
+     was asked. From a worktree-isolated background session that means
+     `git push origin HEAD:main` (a fast-forward), since the worktree's
+     branch isn't `main`. What still gets confirmed first: tags,
+     GitHub releases, force-pushes, history rewrites, and anything the
+     user framed as tentative.
