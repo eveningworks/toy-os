@@ -2,7 +2,7 @@
 
 <p align="center">
   A hobby x86-64 operating system, written from scratch in C and assembly —
-  an experiment in how far an OS can be built with Claude.<br>
+  built with Claude.<br>
   Boots via GRUB into a 64-bit kernel with a ring-3 desktop, networking,
   USB, sound and a journaling disk-backed filesystem.
 </p>
@@ -20,7 +20,8 @@
 </p>
 
 > [!NOTE]
-> **An experiment in building an operating system with Claude.** All of
+> **An experiment in building an operating system with Claude, and in how
+> far it can get.** All of
 > toy-os is written by [Claude Code](https://claude.com/claude-code),
 > Anthropic's agentic coding tool, except the third-party ports under
 > `userland/ports/` (DOOM, Mbed TLS, dash, cJSON): a human makes the
@@ -29,6 +30,9 @@
 > in [CLAUDE.md](CLAUDE.md), and the reasoning behind every design choice
 > — including the ones that turned out wrong — is in
 > [docs/decisions.md](docs/decisions.md).
+>
+> It is also almost certainly insecure in ways nobody has looked for yet —
+> please don't run it in production, or anywhere you'd mind losing.
 
 <p align="center">
   <img src="screenshots/readme/desktop.png" alt="toy-os desktop: the Start menu, frosted glass, open on All Apps over the Image Viewer, the File Manager, DOOM and a Terminal" width="49%">
