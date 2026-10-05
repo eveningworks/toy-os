@@ -4,8 +4,9 @@
 // TASKBAR PEEK: resting the pointer on a window button shows a card
 // above it with a scaled image of the window -- Windows 11's taskbar
 // preview, Plasma's task tooltip. A grouped button shows one entry per
-// window. Clicking an entry activates that window; its x asks the window
-// to close. `desktop.taskbar_peek`:
+// window. Clicking an entry activates that window and closes the card;
+// its x asks the window to close and leaves the card up, so a group can
+// be closed one x after another. `desktop.taskbar_peek`:
 //
 //   off        the plain title tooltip, as before
 //   preview    the card (the DEFAULT)

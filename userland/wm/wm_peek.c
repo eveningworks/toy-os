@@ -209,13 +209,33 @@ void wm_peek_hover(const int *wins, int n, int bx, int bw, int mx, int my) {
     }
 
     if (!wm_peek_open) return;
-    // Every entry's window must still exist; one closing under the card
-    // takes the card down rather than leaving a hole in it.
-    int changed = 0;
+    // A WINDOW THAT CLOSED UNDER THE CARD LEAVES IT, and the rest close
+    // up behind it -- so after one x the next is a click away, as on
+    // Windows 11. The card goes only with its last entry.
+    int kept = 0, gone = 0;
     for (int k = 0; k < g_n; k++) {
-        if (find_seq(g_e[k].seq) < 0) { wm_peek_close(); return; }
-        changed |= rescale(k, now);
+        if (find_seq(g_e[k].seq) < 0) {
+            if (g_e[k].thumb.px) uimg_free(&g_e[k].thumb);
+            g_e[k].thumb.px = 0;
+            gone = 1;
+            continue;
+        }
+        if (kept != k) {
+            g_e[kept] = g_e[k];   // the thumbnail moves with it
+            g_e[k].thumb.px = 0;
+        }
+        kept++;
     }
+    if (gone) {
+        if (!kept) { wm_peek_close(); return; }
+        wm_peek_damage();         // the wider card it was
+        g_n = kept;
+        g_hot_entry = -1;         // indices moved; the next hover re-asks
+        g_hot_close = 0;
+        set_highlight(0);
+    }
+    int changed = gone;
+    for (int k = 0; k < g_n; k++) changed |= rescale(k, now);
     if (changed) wm_peek_damage();
 }
 
@@ -260,19 +280,23 @@ int wm_peek_hover_at(int mx, int my) {
 
 int wm_peek_click(int mx, int my) {
     if (!wm_peek_open) return 0;
-    g_suppress = 1;
     int cl;
     int k = entry_at(mx, my, &cl);
     int inside = on_card(mx, my);
     int idx = k >= 0 ? find_seq(g_e[k].seq) : -1;
+    // AN x LEAVES THE CARD UP: the window drops out of it once it has
+    // actually gone (wm_peek_hover()), and a client that asks "save
+    // first?" or refuses simply stays in it.
+    if (inside && idx >= 0 && cl) {
+        wm_request_close(idx);   // ASKS the client, as every close here does
+        return 1;
+    }
+    g_suppress = 1;
     wm_peek_close();
     // Outside the card the click FALLS THROUGH -- to the taskbar button
     // under it, most often, which then acts on the same click.
     if (!inside) return 0;
-    if (idx >= 0) {
-        if (cl) wm_request_close(idx);   // ASKS the client, as every close here does
-        else taskbar_activate(idx);
-    }
+    if (idx >= 0) taskbar_activate(idx);
     return 1;
 }
 

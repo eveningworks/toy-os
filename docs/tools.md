@@ -3163,9 +3163,11 @@ window without going through it will find its layout polls timing out.
   once and leaving for the desktop closes it; clicking the entry
   activates the window; in `highlight` a wallpaper pixel darkens by a
   quarter while one inside the lifted window keeps its value; the x
-  closes the window; `off` opens nothing. Positive control: restoring
-  the alpha-weighted scale reddens exactly the thumbnail check. In
-  `gui_regress.py`.
+  closes the window; a GROUP closes one x after another -- the card
+  stays up holding the window left, and the last x takes it down;
+  `off` opens nothing. Positive controls: restoring the alpha-weighted
+  scale reddens exactly the thumbnail check, and an x that closes the
+  card again reddens exactly the stays-up check. In `gui_regress.py`.
 - **`taskbar_drag_test.py`** -- dragging taskbar buttons: mid-drag the
   reported row has the dragged button under the pointer and the one it
   passed in its old slot, and a screenshot has it drawn lifted; the drop

@@ -1771,7 +1771,11 @@ this the obvious way), not from how much history it accumulated.
   rescaled on the client's present and at most every 200 ms, never per
   frame. It opens after the tooltip's delay, switches between buttons at
   once, survives a short grace crossing the gap to the card, and stays
-  shut after a click until the pointer leaves the button. Highlight is
+  shut after a click until the pointer leaves the button. **An x is not
+  that click**: it asks the window to close and leaves the card up; the
+  window drops out of the card once it has actually gone (a client that
+  asks "save first?" stays in it), and the card goes with its last
+  entry -- Windows 11's shape, so a group closes one x after another. Highlight is
   drawn by `render_scene()`: every other window, a dim, then the lifted
   one again through `draw_one_window()`. **A client buffer is
   `0x00RRGGBB`** -- scale one through `uimg_scale()` with `has_alpha`

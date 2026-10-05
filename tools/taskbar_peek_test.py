@@ -13,6 +13,8 @@ WHAT THIS ASSERTS THAT "IT OPENS" WOULD NOT
 * IT SWITCHES without the delay once open, and CLOSES after a short
   grace when the pointer goes to empty desktop.
 * A CLICK ON AN ENTRY ACTIVATES that window; its x CLOSES it.
+* A GROUP CLOSES ONE x AFTER ANOTHER: after an x the card stays up
+  holding the window that is left, and the last x takes it down.
 * HIGHLIGHT dims the desktop -- a wallpaper pixel darkens -- while a
   pixel inside the lifted window keeps its value.
 * OFF opens nothing.
@@ -21,8 +23,10 @@ WHAT THIS ASSERTS THAT "IT OPENS" WOULD NOT
     python3 tools/taskbar_peek_test.py
     echo $?
 
-POSITIVE CONTROL: the black-thumbnail build above reddens "the
-thumbnail is a picture" and nothing else. Leaves every setting unset.
+POSITIVE CONTROLS: the black-thumbnail build above reddens "the
+thumbnail is a picture" and nothing else; an x that closes the card
+again reddens "the card stays up with the other" and nothing else.
+Leaves every setting unset.
 """
 
 import argparse
@@ -194,6 +198,50 @@ def main():
                       f"{n_before} windows before, {len(dbg.windows())} after")
         else:
             res.check("the preview opens in highlight mode", False, str(pk))
+
+        # --- a group: one x after another --------------------------------
+        #
+        # THE CARD STAYS UP after an x, minus the closed window, so the
+        # next is one more click -- and goes with its last entry. The two
+        # Notepads are empty, so neither asks before closing.
+        print("group")
+        dbg.send("sh config set desktop.taskbar_peek preview")
+        dbg.send("sh config set desktop.taskbar_combine always")
+        wait_for(lambda: peek().get("mode") == "preview", 6)
+        dbg.warp_cursor(qmp, 640, 250)
+        grp = wait_for(lambda: next((b for b in dbg.json("gui taskbar --json")["buttons"]
+                                     if b["count"] == 2), None), 6)
+        res.check("the two Notepads share one button", bool(grp),
+                  str(dbg.json("gui taskbar --json")["buttons"]))
+        if grp:
+            dbg.warp_cursor(qmp, grp["cx"], grp["cy"])
+            pk = wait_for(lambda: peek().get("open") and len(peek().get("entries", [])) == 2 and peek(), 4)
+            res.check("its preview shows both", bool(pk), f"peek: {peek()}")
+            if pk:
+                keep = pk["entries"][1]["title"]
+                c = pk["entries"][0]["close"]
+                n_before = len(dbg.windows())
+                dbg.warp_cursor(qmp, c["x"] + c["s"] // 2, c["y"] + c["s"] // 2)
+                time.sleep(0.3)
+                dbg.click(c["x"] + c["s"] // 2, c["y"] + c["s"] // 2)
+                gone = wait_for(lambda: len(dbg.windows()) < n_before, 4)
+                time.sleep(0.3)
+                pk = peek()
+                res.check("an x closes one window and the card stays up with the other",
+                          bool(gone) and pk.get("open") and len(pk.get("entries", [])) == 1
+                          and pk["entries"][0]["title"] == keep,
+                          f"closed={bool(gone)} peek: {pk}")
+                if pk.get("open") and pk.get("entries"):
+                    c = pk["entries"][0]["close"]
+                    n_before = len(dbg.windows())
+                    dbg.warp_cursor(qmp, c["x"] + c["s"] // 2, c["y"] + c["s"] // 2)
+                    time.sleep(0.3)
+                    dbg.click(c["x"] + c["s"] // 2, c["y"] + c["s"] // 2)
+                    gone = wait_for(lambda: len(dbg.windows()) < n_before, 4)
+                    shut = wait_for(lambda: not peek().get("open"), 2)
+                    res.check("...and the last x takes the card with it", bool(gone) and bool(shut),
+                              f"closed={bool(gone)} peek: {peek()}")
+        dbg.send("sh config unset desktop.taskbar_combine")
 
         # --- off -------------------------------------------------------
         print("off")
