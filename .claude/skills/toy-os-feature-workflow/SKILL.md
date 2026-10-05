@@ -92,6 +92,11 @@ reader pays for them):
 
 ## Delegating to agents (2026-10-05, after one night burned a session limit twice)
 
+- **Default: do the work yourself.** Delegate only a big multi-file build,
+  a genuinely parallel independent track, or broad research on a cheap
+  model -- never a focused fix whose files you have already read (a cold
+  agent re-pays CLAUDE.md and the reading). When the main session has
+  grown very long, suggest a fresh session instead of offloading.
 - **Fresh agent, short brief** -- branch, SHA, the exact list, where to
   test, which slots. Never keep resuming a large agent: it re-reads its
   whole history every round.
