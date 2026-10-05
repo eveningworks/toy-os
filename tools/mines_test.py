@@ -264,7 +264,16 @@ def play_to_win(dbg, qmp, tmp, res, lay):
     # rise and the confetti are over) has the pill's dark ink where the
     # client says the note is, and the board's first cell -- a flag on
     # a covered tile, nowhere near the note -- stays light.
-    note = Layout({"x": lay.ox, "y": lay.oy, "w": lay.cw, "h": lay.ch}, acc).toast
+    #
+    # Its layout line follows the state line and can land in a later
+    # read, so it is waited for in its own right.
+    note = None
+    for _ in range(15):
+        note = Layout({"x": lay.ox, "y": lay.oy, "w": lay.cw, "h": lay.ch}, acc).toast
+        if note:
+            break
+        time.sleep(0.2)
+        acc += dbg.logs("mines:", clear=True)
     res.check("the win puts up its 'Solved in' note", note is not None, f"toast={note}")
     if note:
         shot = os.path.abspath(os.path.join(tmp, "mines_won.png"))
