@@ -2424,6 +2424,49 @@ reasonable template, and the existing `*_test.c` diagnostic pattern is a
 natural fit for early loopback/ARP verification -- but this is its own
 multi-session project with its own milestones, not a single build bump.
 
+### An update server list fetched from GitHub, with `update.server` as the override
+
+Asked for 2026-10-05: System Update should find its servers without each
+machine being told an address, while a private build PC (the dev host's
+`update_server.py` today) can still be set by hand. The shape is
+Windows Update's -- fixed endpoints, a WSUS server set by policy wins --
+and apt's or dnf's mirror list (`mirror://`, Fedora's metalink).
+
+- A small list over HTTPS from a fixed raw GitHub URL (the TLS client
+  and CA bundle exist): one line per server, its channel (stable, dev)
+  and a name System Update shows. Cached on disk, so a machine still
+  updates when GitHub cannot be reached.
+- `update.server`, when set, WINS over the list -- the private-network
+  case, unchanged for the machines that use it today.
+- System Update lists the servers to pick from; `update --server` with
+  no address prints them.
+- Open: a raw GitHub URL is readable without a login only for a public
+  repository -- check `eveningworks/toy-os`'s visibility before choosing
+  where the list lives.
+
+**Not safe alone beyond the LAN.** Today's check is CRC32 over plain
+http, integrity and not authenticity (`docs/update-design.md`): a list
+that points machines across the internet needs the next item first.
+
+### Signed update snapshots: `--publish` signs, `update` verifies against a key in the image
+
+What makes a mirror list safe in every real updater: mirrors are not
+trusted, the build is -- apt's signed Release files, dnf's signed
+metadata, Microsoft's signed packages. Here: `update_server.py
+--publish` signs a snapshot's manifest with an ed25519 key that stays on
+the build host; the image carries the public key; `update` refuses a
+manifest whose signature does not verify. The vendored mbedTLS should
+cover ed25519, but whether toy-os's build enables it is not yet checked.
+A choice to make when building: whether a server set by hand
+(`update.server`) may stay unsigned on a private network.
+
+### Public builds on a server the list names (GitHub Releases or similar)
+
+Somewhere outside the LAN for the list to name, once snapshots are
+signed -- GitHub Releases is the obvious host, and publishing one is a
+release, confirmed with the maintainer each time. Until it exists the
+list names only private servers, which `update.server` already covers.
+
 ### An AQC113 (Aquantia AQtion, 10G) driver for the desktop's XG-C100C V2, so its onboard r8169 can be the `kdebug=net` card
 
 The Kaby Lake desktop (.159) has an ASUS XG-C100C V2 at `01:00.0`, read

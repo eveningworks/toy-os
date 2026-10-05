@@ -916,6 +916,9 @@ run on, not by order.
 - [x] ~~USB Ethernet (CDC-ECM), and the BULK transfer type it needed~~ DONE 2026-08-31 -- `net_usb_ecm.c`; RX untested, see `docs/bugs.md`
 - [x] ~~Remote access: a shell and file transfer over the network~~ DONE 2026-08-31 -- `telnetd`, `tftpd`, `tools/remote.py`
 - [x] ~~`/bin/update`: a machine updates itself from an HTTP manifest~~ DONE 2026-09-30 -- plus System Update and `update_server.py`
+- [ ] An update server list fetched from GitHub, with `update.server` as the override
+- [ ] Signed update snapshots: `--publish` signs, `update` verifies against a key in the image -- before any server outside the LAN
+- [ ] Public builds on a server the list names (GitHub Releases or similar)
 - [x] ~~Refresh the PCI/USB id databases from the internet~~ DONE 2026-09-07 -- `/bin/hwdata`; `lspci --update` hands off to it
 - [x] ~~Per-volume state in filesystem backends~~ done -- `struct t3_state`/`fat32_state`/`ramfs_state`, switched at `FS_OP`
 - [x] ~~A self-hosted installer: partition, format, copy the running system, write the bootloader~~ done -- `/bin/install`
