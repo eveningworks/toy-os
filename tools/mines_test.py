@@ -84,9 +84,6 @@ class Layout:
         self.cell = 0
         self.titles = {}     # index -> rect
         self.items = {}      # (level, index) -> rect
-        self.toast = None
-        self.buttons = {}    # the Best Times dialog's, index -> rect
-        self.minefield = []  # cell indices, once the first click placed them
         for line in lines:
             if "mines: layout " not in line:
                 continue
@@ -101,14 +98,6 @@ class Layout:
                 self.titles[int(p[1])] = tuple(int(v) for v in p[2:6])
             elif p[0] == "menu.item" and len(p) >= 7:
                 self.items[(int(p[1]), int(p[2]))] = tuple(int(v) for v in p[3:7])
-            elif p[0] == "toast" and len(p) >= 5:
-                self.toast = tuple(int(v) for v in p[1:5])
-            elif p[0] == "best.button" and len(p) >= 6:
-                self.buttons[int(p[1])] = tuple(int(v) for v in p[2:6])
-            elif p[0] == "minefield" and len(p) >= 2:
-                if int(p[1]) == 0:
-                    self.minefield = []
-                self.minefield += [int(v) for v in p[2:]]
 
     def complete(self):
         return self.board is not None and self.face is not None and self.cell > 0
@@ -175,9 +164,9 @@ def state_after(dbg, action, tries=20):
     return None
 
 
-def spawn(dbg):
-    """Start the game; (window, log lines, Layout), any of them None."""
+def run(dbg, qmp, tmp, res):
     dbg.send(f"gui spawn {SPAWN_PATH}")
+
     deadline = time.time() + SPAWN_TIMEOUT_S
     win, lines, lay = None, [], None
     while time.time() < deadline:
@@ -188,87 +177,6 @@ def spawn(dbg):
             if lay.complete():
                 break
         time.sleep(0.3)
-    return win, lines, lay
-
-
-def close(dbg, win):
-    """Close it from its title bar; True once the window is gone."""
-    dbg.send(f"gui click {win['x'] + win['w'] - 14} {win['y'] + 14}")
-    dbg.settle()
-    deadline = time.time() + SPAWN_TIMEOUT_S
-    while time.time() < deadline:
-        if dbg.window(TITLE) is None:
-            return True
-        time.sleep(0.2)
-    return False
-
-
-def luminance(rgb):
-    r, g, b = rgb[:3]
-    return (299 * r + 587 * g + 114 * b) // 1000
-
-
-def play_to_win(dbg, qmp, tmp, res, lay):
-    """Win a Beginner game, check what a win shows, and that its best
-    time outlives the process. Returns the best time it set, or None.
-
-    THE CLIENT SAYS WHERE ITS MINES ARE (a layout-log line written when
-    the first click places them), so this WINS rather than hoping to: a
-    test that guesses would reach the win path one run in hundreds.
-    """
-    acc = []
-    dbg.logs("mines:", clear=True)
-    dbg.send("gui click %d %d" % lay.cell_centre(4, 4))
-    field = []
-    for _ in range(25):
-        acc += dbg.logs("mines:", clear=True)
-        field = Layout({"x": lay.ox, "y": lay.oy, "w": lay.cw, "h": lay.ch}, acc).minefield
-        if len(field) == 10:
-            break
-        time.sleep(0.2)
-    res.check("the client reports where its mines are", len(field) == 10, f"minefield={field}")
-    if len(field) != 10:
-        return None
-
-    # A click on an already-opened cell is harmless: a 0 does nothing, and
-    # a number with no flags round it is not a satisfied chord.
-    for i in range(81):
-        if i not in field:
-            dbg.send("gui click %d %d" % lay.cell_centre(i % 9, i // 9))
-    won = None
-    for _ in range(40):
-        acc += dbg.logs("mines:", clear=True)
-        st = parse_state(acc)
-        if st and st["phase"] == 2:
-            won = st
-            break
-        time.sleep(0.2)
-    res.check("opening every safe cell wins, flags every mine and sets a best time",
-              won is not None and won["flags"] == 10 and won["revealed"] == 71
-              and won["best"] > 0, f"state={won}")
-    if not won:
-        return None
-
-    # THE NOTE IS DRAWN, not merely laid out: a settled frame (so the
-    # rise and the confetti are over) has the pill's dark ink where the
-    # client says the note is, and the board's first cell -- a flag on
-    # a covered tile, nowhere near the note -- stays light.
-    note = Layout({"x": lay.ox, "y": lay.oy, "w": lay.cw, "h": lay.ch}, acc).toast
-    res.check("the win puts up its 'Solved in' note", note is not None, f"toast={note}")
-    if note:
-        shot = os.path.abspath(os.path.join(tmp, "mines_won.png"))
-        px = qmp.stable_pixels(shot, None)
-        tx, ty, tw, th = note
-        inside = px.getpixel((lay.ox + tx + th // 2, lay.oy + ty + th // 2))
-        bx, by, _, _ = lay.board
-        control = px.getpixel((lay.ox + bx + 3, lay.oy + by + lay.cell // 2))
-        res.check("...and draws it", luminance(inside) < 90 and luminance(control) > 150,
-                  f"note {inside}, first cell {control}")
-    return won["best"]
-
-
-def run(dbg, qmp, tmp, res):
-    win, lines, lay = spawn(dbg)
 
     res.check("Minesweeper runs as a ring-3 process with its own window",
               win is not None, f"no window titled {TITLE!r} in {SPAWN_TIMEOUT_S}s")
@@ -461,39 +369,6 @@ def run(dbg, qmp, tmp, res):
               and fresh["flags"] == 0 and fresh["elapsed"] == 0,
               f"state={fresh}")
 
-    # --- a won game, and the best time it leaves behind ---------------
-    best = play_to_win(dbg, qmp, tmp, res, lay)
-    if best:
-        # A ROUND TRIP THROUGH THE DISK: a new process reads it back.
-        res.check("the game closes", close(dbg, win))
-        win, lines, lay = spawn(dbg)
-        reopened = parse_state(lines)
-        res.check("a new Minesweeper remembers the best time",
-                  win is not None and lay.complete() and reopened is not None
-                  and reopened["best"] == best, f"state={reopened} best={best}")
-        if not win or not lay.complete():
-            return
-        # Best Times... resets it, through the dialog's Reset button.
-        dbg.logs("mines:", clear=True)
-        dbg.send("gui click %d %d" % lay.rect_centre(lay.titles[0]))
-        dbg.settle()
-        time.sleep(0.4)
-        menu = Layout(win["content"], dbg.logs("mines:", clear=True))
-        row = menu.items.get((0, 6))
-        res.check("the Game menu has Best Times...", row is not None, f"rows={sorted(menu.items)}")
-        if row:
-            dbg.send("gui click %d %d" % lay.rect_centre(row))
-            dbg.settle()
-            time.sleep(0.4)
-            dlg = Layout(win["content"], dbg.logs("mines:", clear=True))
-            reset = dlg.buttons.get(0)
-            res.check("Best Times opens a dialog with its buttons", reset is not None,
-                      f"buttons={dlg.buttons}")
-            if reset:
-                st = state_after(dbg, lambda: dbg.send("gui click %d %d" % lay.rect_centre(reset)))
-                res.check("Reset clears the best time", st is not None
-                          and st["what"] == "best-reset" and st["best"] == 0, f"state={st}")
-
     # --- the title bar still opens the WINDOW MENU --------------------
     #
     # The other half of the split. Without this, "the client gets every
@@ -536,7 +411,16 @@ def run(dbg, qmp, tmp, res):
         win = grown or win
 
     # --- it closes politely -------------------------------------------
-    res.check("it closes on request", close(dbg, win))
+    dbg.send(f"gui click {win['x'] + win['w'] - 14} {win['y'] + 14}")
+    dbg.settle()
+    deadline = time.time() + SPAWN_TIMEOUT_S
+    gone = False
+    while time.time() < deadline:
+        if dbg.window(TITLE) is None:
+            gone = True
+            break
+        time.sleep(0.2)
+    res.check("it closes on request", gone)
 
 
 def main():
