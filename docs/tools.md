@@ -558,15 +558,15 @@ manual steps to be worth automating:
 - **`remote.py`** -- drive a toy-os machine over the NETWORK: run
   commands, push and pull files, or open an interactive session.
 
-      python3 tools/remote.py --host 192.168.200.104 exec "lsusb" "dmesg"
-      python3 tools/remote.py --host 192.168.200.104 put build/userland/bin/ls /bin/ls
-      python3 tools/remote.py --host 192.168.200.104 get /tmp/crash.log ./crash.log
-      python3 tools/remote.py --host 192.168.200.104 screenshot shot.png
-      python3 tools/remote.py --host 192.168.200.104 shell      # Ctrl-] quits
-      python3 tools/remote.py --host 192.168.200.104 sync seed/sync/bin /bin
-      python3 tools/remote.py --host 192.168.200.104 --timeout 60 flash build/kernel.bin
-      python3 tools/remote.py --host 192.168.200.112 reboot --list
-      python3 tools/remote.py --host 192.168.200.112 reboot --entry "toy-os (no kernel debugger)" --wait 120
+      python3 tools/remote.py --host <machine-ip> exec "lsusb" "dmesg"
+      python3 tools/remote.py --host <machine-ip> put build/userland/bin/ls /bin/ls
+      python3 tools/remote.py --host <machine-ip> get /tmp/crash.log ./crash.log
+      python3 tools/remote.py --host <machine-ip> screenshot shot.png
+      python3 tools/remote.py --host <machine-ip> shell      # Ctrl-] quits
+      python3 tools/remote.py --host <machine-ip> sync seed/sync/bin /bin
+      python3 tools/remote.py --host <machine-ip> --timeout 60 flash build/kernel.bin
+      python3 tools/remote.py --host <machine-ip> reboot --list
+      python3 tools/remote.py --host <machine-ip> reboot --entry "toy-os (no kernel debugger)" --wait 120
 
   **`reboot --entry` is one boot**: GRUB clears the choice before it
   boots it (`docs/commands/reboot.md`), so a session can take a laptop

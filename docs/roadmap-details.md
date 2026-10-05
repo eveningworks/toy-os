@@ -6480,7 +6480,7 @@ re-derive: what was measured, and what was not.
     python3 tools/vm.py --usb-host 2357:0601 start
 
 **What was proven, on the maintainer's own segment.** `PLA_IDR` read
-back `b4:b0:24:86:bd:3a` -- the checkpoint that says the register layer
+back the adapter's own MAC -- the checkpoint that says the register layer
 is honest, and without which nothing after it would have been. Then a
 real DHCP lease, ICMP 3/3 to the gateway, an HTTP response fetched from
 it, and 730,605 bytes served OUT of the guest by `/bin/httpd` and

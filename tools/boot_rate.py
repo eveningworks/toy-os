@@ -8,7 +8,7 @@ hand is a dozen commands that are easy to get subtly wrong (reading
 dmesg before the boot finished, counting a line the previous boot left,
 losing the run because one reboot took longer than a fixed sleep).
 
-    python3 tools/boot_rate.py --host 192.168.200.107 -n 10 \
+    python3 tools/boot_rate.py --host <machine-ip> -n 10 \
         --grep "enumeration failed"
 
 It prints a line per boot and a rate at the end. The per-boot lines are

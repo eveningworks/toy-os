@@ -599,7 +599,9 @@ and push verified work.
   (virtio: one transport stack; virtio-blk into `block_device`,
   virtio-gpu into `display_driver`).
 - **Never write personal information into any file** -- ask first, or
-  anonymise and say so plainly.
+  anonymise and say so plainly. **The repo is public: this network's
+  addresses, MACs and hostnames live in `local_info.txt`** (untracked);
+  a tracked file says `<asus-ip>`, `<lenovo-ip>`, `<machine-ip>`.
 - **Reusable tooling goes in `tools/`**, with `docs/tools.md` updated --
   and **A NEW TEST TOOL MUST BE NAMED BY A RUNNER** (`preflight.sh`,
   `gui_regress.py`, `ondemand_sweep.py`, or the sweep's exclusions with

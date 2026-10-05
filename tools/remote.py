@@ -16,11 +16,11 @@ curl": the two halves are always used together, the telnet negotiation
 has to be answered before a command can be sent, and getting either
 wrong looks like the guest being broken.
 
-    python3 tools/remote.py --host 192.168.200.104 exec "lsusb" "dmesg"
-    python3 tools/remote.py --host 192.168.200.104 put build/userland/bin/ls /bin/ls
-    python3 tools/remote.py --host 192.168.200.104 get /tmp/crash.log ./crash.log
-    python3 tools/remote.py --host 192.168.200.104 screenshot shot.png
-    python3 tools/remote.py --host 192.168.200.104 shell     # interactive
+    python3 tools/remote.py --host <machine-ip> exec "lsusb" "dmesg"
+    python3 tools/remote.py --host <machine-ip> put build/userland/bin/ls /bin/ls
+    python3 tools/remote.py --host <machine-ip> get /tmp/crash.log ./crash.log
+    python3 tools/remote.py --host <machine-ip> screenshot shot.png
+    python3 tools/remote.py --host <machine-ip> shell     # interactive
 
 WHAT IT IS NOT
 --------------

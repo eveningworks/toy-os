@@ -385,9 +385,9 @@ time. `local_info.txt` has the addresses (the ASUS is normally up; the
 Lenovo is not always).
 
 ```
-python3 tools/gui_regress.py --host 192.168.200.107 --logs /tmp/hw
-python3 tools/gui_regress.py --host 192.168.200.107 --only startmenu
-TOYOS_REMOTE_HOST=192.168.200.107 python3 tools/start_menu_test.py   # one tool
+python3 tools/gui_regress.py --host <machine-ip> --logs /tmp/hw
+python3 tools/gui_regress.py --host <machine-ip> --only startmenu
+TOYOS_REMOTE_HOST=<machine-ip> python3 tools/start_menu_test.py   # one tool
 ```
 
 **The tools are not ported, they are POINTED.** `tools/remote_gui.py`

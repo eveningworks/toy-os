@@ -46,7 +46,7 @@ run this at all still has its log somewhere.
     $ dmesg -T -n 3
     [2026-09-01 14:09:01] usb: slot 2: bound as usb-keyboard on endpoint 0x81
     [2026-09-01 14:09:01] usb: slot 2: bound as usb-mouse on endpoint 0x82
-    [2026-09-01 14:09:02] dhcp: net0: 192.168.200.107 netmask 255.255.255.0
+    [2026-09-01 14:09:02] dhcp: net0: 192.0.2.50 netmask 255.255.255.0
 
 **Nothing stores a wall clock per line.** `klog_write()` stamps each
 logical line with MONOTONIC time, as *text* — `[5068.88] ` is characters
