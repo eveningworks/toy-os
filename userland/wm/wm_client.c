@@ -1043,6 +1043,203 @@ void wm_client_chan_wait(int timeout_ms) {
     uchan_server_wait(&g_chan, timeout_ms);
 }
 
+// THE PAYLOAD IS HERE, which is the point: each of these took a
+// "something changed" event through the kernel and then a
+// WIN_REQ_WINDOW_INFO to read the detail back, because struct
+// win_event is 24 bytes and none of them fits.
+static void req_title(int from, struct wmchan_msg *m) {
+    on_window_title(from, m->window, m->text);
+}
+
+static void req_notice(int from, struct wmchan_msg *m) {
+    crash_notice_piece(from, m->a, m->b, (unsigned)m->c, m->text);
+}
+
+static void req_hints(int from, struct wmchan_msg *m) {
+    on_window_hints(from, m->window, (unsigned)m->a, m->b, m->c);
+}
+
+static void req_fullscreen(int from, struct wmchan_msg *m) {
+    int idx = find_client_window(from, m->window);
+    if (idx >= 0) wm_set_fullscreen(idx, m->a);
+}
+
+static void req_cursor(int from, struct wmchan_msg *m) {
+    on_window_cursor(from, m->window, m->a);
+}
+
+static void req_drag_start(int from, struct wmchan_msg *m) {
+    wm_dnd_start(from, m->a);
+}
+
+static void req_drag_end(int from, struct wmchan_msg *m) {
+    wm_dnd_end(from);
+}
+
+// A CAPTURE ROUND-TRIPS, because the client has to know what it
+// got: a WINDOW capture's size is the compositor's answer, not
+// the client's question, and a refusal has to be told apart
+// from an unwritten buffer.
+static void req_screenshot(int from, struct wmchan_msg *m) {
+    struct wmchan_msg r;
+    k_memset(&r, 0, sizeof r);
+    r.type = WIN_REQ_SCREENSHOT;
+    r.shot = m->shot;
+    r.a = wm_screenshot_capture(from, m->a, (unsigned)m->b, m->c, &r.shot);
+    uchan_server_reply(&g_chan, from, &r, sizeof r);
+}
+
+// **CREATE IS THE ONLY REQUEST THAT ALLOCATES.** The client
+// proposes a slot -- its buffer objects are already named after
+// it -- and this accepts unless that (pid, slot) is already
+// open. Refusing is a -1 rather than silence: a client with no
+// answer would sit out its whole timeout and then open nothing,
+// which is the same outcome reached slowly.
+static void req_create(int from, struct wmchan_msg *m) {
+    struct wmchan_msg r;
+    k_memset(&r, 0, sizeof r);
+    r.type = WIN_REQ_CREATE;
+    r.a = -1;
+    if (find_client_window(from, m->window) < 0 &&
+        on_window_created(from, m->window, m->a, m->b, 0, 0,
+                          m->text, identity_for_pid(from))) {
+        r.a = (int)m->window;
+        // A SAVER IS A SAVER WHOEVER STARTED IT (wm_idle.h), so
+        // the Test button and a shell prompt get the same
+        // dismiss-on-input the idle clock's own does.
+        if (wm_pid_is_screensaver(from)) wm_idle_adopt_saver(from);
+    }
+    uchan_server_reply(&g_chan, from, &r, sizeof r);
+}
+
+// **THE FRAME BRINGS ITS OWN GEOMETRY**, which is what retired
+// WIN_REQ_RESIZE and WIN_REQ_BUFFER: there is no second record
+// of a buffer's size to keep in step, so there is none to go
+// stale. Ownership is checked the way every request here is --
+// `from` is the ring's pid and cannot be forged.
+static void req_present(int from, struct wmchan_msg *m) {
+    on_window_present(from, m->window, WIN_PRESENT_BUF(m->a),
+                      WIN_PRESENT_GEN(m->a),
+                      WIN_PRESENT_W((uint32_t)m->b),
+                      WIN_PRESENT_H((uint32_t)m->b), (uint32_t)m->c);
+}
+
+static void req_popup(int from, struct wmchan_msg *m) {
+    // The third round trip: the client draws its menu at the
+    // answer, so it has to have one. Refused as -1 for a parent
+    // that is not the sender's, a slot already open, or nothing
+    // to map.
+    struct wmchan_msg r;
+    k_memset(&r, 0, sizeof r);
+    r.type = WIN_REQ_POPUP;
+    r.a = -1;
+    int px = 0, py = 0;
+    if (find_client_window(from, m->window) < 0 &&
+        on_popup_created(from, m->window, (uint32_t)m->c, m->a, m->b,
+                         &m->pos, &px, &py)) {
+        r.a = (int)m->window;
+        r.b = px;
+        r.c = py;
+    }
+    uchan_server_reply(&g_chan, from, &r, sizeof r);
+}
+
+static void req_dialog(int from, struct wmchan_msg *m) {
+    // Answers, as CREATE and POPUP do: the client has already
+    // made this slot's buffers and needs to know whether to
+    // draw into them or release them again.
+    struct wmchan_msg r;
+    k_memset(&r, 0, sizeof r);
+    r.type = WIN_REQ_DIALOG;
+    r.a = -1;
+    if (find_client_window(from, m->window) < 0 &&
+        on_dialog_created(from, m->window, WIN_DIALOG_OWNER(m->c), m->a, m->b,
+                          (int)WIN_DIALOG_FLAGS(m->c), m->text))
+        r.a = (int)m->window;
+    uchan_server_reply(&g_chan, from, &r, sizeof r);
+}
+
+static void req_destroy(int from, struct wmchan_msg *m) {
+    on_window_destroyed(from, m->window);
+}
+
+static void req_widget_reset(int from, struct wmchan_msg *m) {
+    on_widget_reset(from, m->window);
+}
+
+static void req_widget(int from, struct wmchan_msg *m) {
+    on_widget(from, m->window, m);
+}
+
+static void req_timer(int from, struct wmchan_msg *m) {
+    on_window_timer(from, m->window, (unsigned)m->a);
+}
+
+static void req_inhibit_shortcuts(int from, struct wmchan_msg *m) {
+    // **RESOLVED TO THE COMPOSITOR'S INDEX, not stored raw.**
+    // `m->window` is the slot as the CLIENT numbers it; every
+    // other handler here goes through find_client_window() for
+    // exactly that reason, and comparing a client's id against
+    // wm_focus_index() matches by accident or not at all.
+    wm_shortcut_inhibit(find_client_window(from, m->window), m->a != 0);
+}
+
+static void req_pong(int from, struct wmchan_msg *m) {
+    on_window_pong(from, m->window, (uint32_t)m->a);
+}
+
+static void req_close_pid(int from, struct wmchan_msg *m) {
+    // NOT about the sender's own window: it names another
+    // process. Unprivileged, as it was through the kernel, and
+    // strictly weaker than SYS_KILL -- every window it reaches
+    // is ASKED, and may refuse.
+    wm_end_task(m->a);
+}
+
+// one-way: nothing is sent back
+static void req_activate_own(int from, struct wmchan_msg *m) {
+    activate_own(from, m->window);
+}
+
+static void req_activate(int from, struct wmchan_msg *m) {
+    // **THE ONE MESSAGE HERE THAT ANSWERS.** A single-instance
+    // app asks this before it opens anything; the reply decides
+    // whether it draws or exits, so it is always sent, including
+    // the "nobody there" case -- a client left waiting spends
+    // its whole timeout and then opens a duplicate.
+    struct wmchan_msg r;
+    k_memset(&r, 0, sizeof r);
+    r.type = WIN_REQ_ACTIVATE;
+    r.a = activate_twin_of(from);
+    uchan_server_reply(&g_chan, from, &r, sizeof r);
+}
+
+// One row per request, indexed by type; a hole is a type this build
+// does not know.
+static void (*const wm_req_table[])(int, struct wmchan_msg *) = {
+    [WIN_REQ_TITLE] = req_title,
+    [WIN_REQ_NOTICE] = req_notice,
+    [WIN_REQ_HINTS] = req_hints,
+    [WIN_REQ_FULLSCREEN] = req_fullscreen,
+    [WIN_REQ_CURSOR] = req_cursor,
+    [WIN_REQ_DRAG_START] = req_drag_start,
+    [WIN_REQ_DRAG_END] = req_drag_end,
+    [WIN_REQ_SCREENSHOT] = req_screenshot,
+    [WIN_REQ_CREATE] = req_create,
+    [WIN_REQ_PRESENT] = req_present,
+    [WIN_REQ_POPUP] = req_popup,
+    [WIN_REQ_DIALOG] = req_dialog,
+    [WIN_REQ_DESTROY] = req_destroy,
+    [WIN_REQ_WIDGET_RESET] = req_widget_reset,
+    [WIN_REQ_WIDGET] = req_widget,
+    [WIN_REQ_TIMER] = req_timer,
+    [WIN_REQ_INHIBIT_SHORTCUTS] = req_inhibit_shortcuts,
+    [WIN_REQ_PONG] = req_pong,
+    [WIN_REQ_CLOSE_PID] = req_close_pid,
+    [WIN_REQ_ACTIVATE_OWN] = req_activate_own,
+    [WIN_REQ_ACTIVATE] = req_activate,
+};
+
 // Drains everything queued. Called AFTER the event queue is pumped --
 // see lib/uwmchan.h on why that order is load-bearing rather than
 // tidy.
@@ -1077,168 +1274,12 @@ void wm_client_chan_pump(void) {
     for (int budget = WM_CHAN_DRAIN_MAX;
          budget > 0 && (from = uchan_server_recv(&g_chan, &m, sizeof m)) != 0; budget--) {
         m.text[sizeof m.text - 1] = '\0';
-        switch (m.type) {
-        // THE PAYLOAD IS HERE, which is the point: each of these took a
-        // "something changed" event through the kernel and then a
-        // WIN_REQ_WINDOW_INFO to read the detail back, because struct
-        // win_event is 24 bytes and none of them fits.
-        case WIN_REQ_TITLE:
-            on_window_title(from, m.window, m.text);
-            break;
-        case WIN_REQ_NOTICE:
-            crash_notice_piece(from, m.a, m.b, (unsigned)m.c, m.text);
-            break;
-        case WIN_REQ_HINTS:
-            on_window_hints(from, m.window, (unsigned)m.a, m.b, m.c);
-            break;
-        case WIN_REQ_FULLSCREEN: {
-            int idx = find_client_window(from, m.window);
-            if (idx >= 0) wm_set_fullscreen(idx, m.a);
-            break;
-        }
-        case WIN_REQ_CURSOR:
-            on_window_cursor(from, m.window, m.a);
-            break;
-        case WIN_REQ_DRAG_START:
-            wm_dnd_start(from, m.a);
-            break;
-        case WIN_REQ_DRAG_END:
-            wm_dnd_end(from);
-            break;
-        // A CAPTURE ROUND-TRIPS, because the client has to know what it
-        // got: a WINDOW capture's size is the compositor's answer, not
-        // the client's question, and a refusal has to be told apart
-        // from an unwritten buffer.
-        case WIN_REQ_SCREENSHOT: {
-            struct wmchan_msg r;
-            k_memset(&r, 0, sizeof r);
-            r.type = WIN_REQ_SCREENSHOT;
-            r.shot = m.shot;
-            r.a = wm_screenshot_capture(from, m.a, (unsigned)m.b, m.c, &r.shot);
-            uchan_server_reply(&g_chan, from, &r, sizeof r);
-            break;
-        }
-        // **CREATE IS THE ONLY REQUEST THAT ALLOCATES.** The client
-        // proposes a slot -- its buffer objects are already named after
-        // it -- and this accepts unless that (pid, slot) is already
-        // open. Refusing is a -1 rather than silence: a client with no
-        // answer would sit out its whole timeout and then open nothing,
-        // which is the same outcome reached slowly.
-        case WIN_REQ_CREATE: {
-            struct wmchan_msg r;
-            k_memset(&r, 0, sizeof r);
-            r.type = WIN_REQ_CREATE;
-            r.a = -1;
-            if (find_client_window(from, m.window) < 0 &&
-                on_window_created(from, m.window, m.a, m.b, 0, 0,
-                                  m.text, identity_for_pid(from))) {
-                r.a = (int)m.window;
-                // A SAVER IS A SAVER WHOEVER STARTED IT (wm_idle.h), so
-                // the Test button and a shell prompt get the same
-                // dismiss-on-input the idle clock's own does.
-                if (wm_pid_is_screensaver(from)) wm_idle_adopt_saver(from);
-            }
-            uchan_server_reply(&g_chan, from, &r, sizeof r);
-            break;
-        }
-        // **THE FRAME BRINGS ITS OWN GEOMETRY**, which is what retired
-        // WIN_REQ_RESIZE and WIN_REQ_BUFFER: there is no second record
-        // of a buffer's size to keep in step, so there is none to go
-        // stale. Ownership is checked the way every request here is --
-        // `from` is the ring's pid and cannot be forged.
-        case WIN_REQ_PRESENT:
-            on_window_present(from, m.window, WIN_PRESENT_BUF(m.a),
-                              WIN_PRESENT_GEN(m.a),
-                              WIN_PRESENT_W((uint32_t)m.b),
-                              WIN_PRESENT_H((uint32_t)m.b), (uint32_t)m.c);
-            break;
-        case WIN_REQ_POPUP: {
-            // The third round trip: the client draws its menu at the
-            // answer, so it has to have one. Refused as -1 for a parent
-            // that is not the sender's, a slot already open, or nothing
-            // to map.
-            struct wmchan_msg r;
-            k_memset(&r, 0, sizeof r);
-            r.type = WIN_REQ_POPUP;
-            r.a = -1;
-            int px = 0, py = 0;
-            if (find_client_window(from, m.window) < 0 &&
-                on_popup_created(from, m.window, (uint32_t)m.c, m.a, m.b,
-                                 &m.pos, &px, &py)) {
-                r.a = (int)m.window;
-                r.b = px;
-                r.c = py;
-            }
-            uchan_server_reply(&g_chan, from, &r, sizeof r);
-            break;
-        }
-        case WIN_REQ_DIALOG: {
-            // Answers, as CREATE and POPUP do: the client has already
-            // made this slot's buffers and needs to know whether to
-            // draw into them or release them again.
-            struct wmchan_msg r;
-            k_memset(&r, 0, sizeof r);
-            r.type = WIN_REQ_DIALOG;
-            r.a = -1;
-            if (find_client_window(from, m.window) < 0 &&
-                on_dialog_created(from, m.window, WIN_DIALOG_OWNER(m.c), m.a, m.b,
-                                  (int)WIN_DIALOG_FLAGS(m.c), m.text))
-                r.a = (int)m.window;
-            uchan_server_reply(&g_chan, from, &r, sizeof r);
-            break;
-        }
-        case WIN_REQ_DESTROY:
-            on_window_destroyed(from, m.window);
-            break;
-        case WIN_REQ_WIDGET_RESET:
-            on_widget_reset(from, m.window);
-            break;
-        case WIN_REQ_WIDGET:
-            on_widget(from, m.window, &m);
-            break;
-        case WIN_REQ_TIMER:
-            on_window_timer(from, m.window, (unsigned)m.a);
-            break;
-        case WIN_REQ_INHIBIT_SHORTCUTS:
-            // **RESOLVED TO THE COMPOSITOR'S INDEX, not stored raw.**
-            // `m.window` is the slot as the CLIENT numbers it; every
-            // other handler here goes through find_client_window() for
-            // exactly that reason, and comparing a client's id against
-            // wm_focus_index() matches by accident or not at all.
-            wm_shortcut_inhibit(find_client_window(from, m.window), m.a != 0);
-            break;
-        case WIN_REQ_PONG:
-            on_window_pong(from, m.window, (uint32_t)m.a);
-            break;
-        case WIN_REQ_CLOSE_PID:
-            // NOT about the sender's own window: it names another
-            // process. Unprivileged, as it was through the kernel, and
-            // strictly weaker than SYS_KILL -- every window it reaches
-            // is ASKED, and may refuse.
-            wm_end_task(m.a);
-            break;
-        case WIN_REQ_ACTIVATE_OWN:   // one-way: nothing is sent back
-            activate_own(from, m.window);
-            break;
-        case WIN_REQ_ACTIVATE: {
-            // **THE ONE MESSAGE HERE THAT ANSWERS.** A single-instance
-            // app asks this before it opens anything; the reply decides
-            // whether it draws or exits, so it is always sent, including
-            // the "nobody there" case -- a client left waiting spends
-            // its whole timeout and then opens a duplicate.
-            struct wmchan_msg r;
-            k_memset(&r, 0, sizeof r);
-            r.type = WIN_REQ_ACTIVATE;
-            r.a = activate_twin_of(from);
-            uchan_server_reply(&g_chan, from, &r, sizeof r);
-            break;
-        }
-        default:
-            // A message this build does not know. Dropped rather than
-            // guessed at -- a client speaking a later protocol is not
-            // an error the compositor can fix.
-            break;
-        }
+        // A message this build does not know is dropped rather than
+        // guessed at -- a client speaking a later protocol is not an
+        // error the compositor can fix.
+        if (m.type < sizeof wm_req_table / sizeof wm_req_table[0] &&
+            wm_req_table[m.type])
+            wm_req_table[m.type](from, &m);
     }
 }
 
