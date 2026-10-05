@@ -2424,6 +2424,23 @@ reasonable template, and the existing `*_test.c` diagnostic pattern is a
 natural fit for early loopback/ARP verification -- but this is its own
 multi-session project with its own milestones, not a single build bump.
 
+### An AQC113 (Aquantia AQtion, 10G) driver for the desktop's XG-C100C V2, so its onboard r8169 can be the `kdebug=net` card
+
+The Kaby Lake desktop (.159) has an ASUS XG-C100C V2 at `01:00.0`, read
+2026-10-05 as `1d6a:94c0` "AQtion AQC113CS" -- Aquantia's A2 generation,
+not the AQC107 the first XG-C100C carried -- with no driver binding it.
+`kdebug=net` takes a card BEFORE any driver binds it, and the r8169
+(`03:00.0`) already has a polled backend (`r8169_kdb.c`), so a driver for
+the AQC113 is what lets the desktop keep its network while its r8169 is
+the debugger's (`kdebug=net,...,nic=03:00.0`).
+
+What is known going in, to be checked rather than trusted: Linux drives
+it with `atlantic` (the `hw_atl2` half); the link is brought up by the
+card's own firmware through a shared-memory interface rather than by
+PHY registers; there is no public datasheet, so Linux's driver is the
+reference. QEMU models no Aquantia part, so every test is on the
+desktop, debugged over the r8169.
+
 ### IPv6, or a written decision against it -- link-local, neighbour discovery and SLAAC first
 
 The minimum is link-local addressing, neighbour discovery (IPv6's ARP,

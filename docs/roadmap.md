@@ -943,6 +943,7 @@ run on, not by order.
 - [x] ~~**A passive open: listen and accept**, so something can connect TO toy-os~~ DONE 2026-08-29 -- `/bin/httpd` serves the filesystem
 - [x] ~~**A connection per child process**~~ DONE 2026-08-29 -- `/bin/inetd`; the spawn NAMES fd 0/1, so `inetd -p 7 /bin/cat` echoes
 - [x] ~~An RTL8111/8168 driver, for the Ethernet built into most laptops~~ DONE 2026-09-05 -- `r8169.c`; DHCP and 5.5 MB of TFTP
+- [ ] An AQC113 (Aquantia AQtion, 10G) driver for the desktop's XG-C100C V2, so its onboard r8169 can be the `kdebug=net` card
 - [x] ~~Remove a network device when it is unplugged~~ DONE 2026-09-05 -- `net_unregister()`; net was the last class registry without one
 - [x] ~~`/bin/netd`: naming rules from `/etc/net.conf`, and a lease per card~~ DONE 2026-09-05 -- replaced the `dhcp` service
 - [ ] An RTT estimate, and Nagle -- the retransmit timeout is a fixed floor with backoff

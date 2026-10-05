@@ -337,6 +337,7 @@ static void do_write(uint32_t ip, uint16_t port, const char *path,
     sys_sendto(tid, first, first_len, ip, port);
 
     int tries = 0;
+    unsigned stalls = 0;          // timeouts survived, for the log
     for (;;) {
         uint32_t src = 0; uint16_t sport = 0;
         int64_t n = sys_recvfrom(tid, g_rx, sizeof g_rx, &src, &sport,
@@ -346,9 +347,17 @@ static void do_write(uint32_t ip, uint16_t port, const char *path,
             // sender is waiting for an ACK it will not get, because we
             // stopped advancing. So a timeout ACKs what we DO have,
             // which is what tells it where to resume (RFC 7440).
+            //
+            // WHAT WE HAVE IS expect - 1, NOT `acked`. `acked` is the
+            // last window boundary, which the sender already holds: the
+            // stale ACK moved nothing, the sender waited on, and after
+            // RETRIES we gave up with every block but the lost one
+            // received (docs/bugs.md had it as `remote.py flash` failing).
             if (++tries > RETRIES) break;
+            stalls++;
             if (acked == 0 && expect == 1) sys_sendto(tid, first, first_len, ip, port);
-            else { put16(g_tx, OP_ACK); put16(g_tx + 2, acked);
+            else { acked = (uint16_t)(expect - 1);
+                   put16(g_tx, OP_ACK); put16(g_tx + 2, acked);
                    sys_sendto(tid, g_tx, 4, ip, port); }
             continue;
         }
@@ -420,8 +429,8 @@ static void do_write(uint32_t ip, uint16_t port, const char *path,
         return;
     }
     if (had_old) remove(aside);
-    logf("tftpd: wrote %s, %llu bytes (blksize %u, window %u)\n", path,
-         (unsigned long long)total, g_blksize, g_window);
+    logf("tftpd: wrote %s, %llu bytes (blksize %u, window %u, %u stalls)\n",
+         path, (unsigned long long)total, g_blksize, g_window, stalls);
     // THE OTHER HALF OF WHAT A FLASH DOES, for the tray's remote view.
     // The peer is passed EXPLICITLY because tftpd is a service rather
     // than a session -- naming the connection it is serving is what
@@ -644,13 +653,21 @@ int main(int argc, char **argv) {
              (unsigned)get16(g_rx), (ip >> 24) & 0xFF, (ip >> 16) & 0xFF,
              (ip >> 8) & 0xFF, ip & 0xFF, (unsigned)cport, (int)n);
 
+        // A STRAY TRANSFER PACKET IS DROPPED UNANSWERED. With -1 this is
+        // also every transfer's TID, so a DATA arriving here is a client
+        // resending into a transfer we already ended -- and parsing it as
+        // a request answered it with "bad path", which that client took
+        // as the verdict on its file.
+        uint16_t op = get16(g_rx);
+        if (op == OP_DATA || op == OP_ACK || op == OP_ERROR || op == OP_OACK)
+            continue;
+
         const char *name = 0, *mode = 0;
         uint32_t opt_start = 0;
         if (!parse_request(g_rx, (uint32_t)n, &name, &mode, &opt_start)) {
             send_error(fd, ip, cport, ERR_ILLEGAL, "malformed request");
             continue;
         }
-        uint16_t op = get16(g_rx);
         char path[PATH_MAX_LEN];
         if (!resolve(name, path, sizeof path)) {
             send_error(fd, ip, cport, ERR_ACCESS, "bad path");

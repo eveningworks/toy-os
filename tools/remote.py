@@ -436,6 +436,12 @@ WANT_WINDOW = 3          # the guest's socket holds 3 datagrams -- see
 # timeouts -- silence or chatter alike.
 STALL_ROUNDS = 6
 
+# A put RESENDS ITS WINDOW after this long without progress, stale ACKs
+# or not. It must stay well under tftpd's give-up (RETRIES * TIMEOUT_MS,
+# 10 s): waiting out --timeout instead meant a lost block was resent only
+# after the server had left, into its request port.
+RESEND_S = 2.0
+
 
 def _tftp_socket(timeout):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -498,7 +504,10 @@ def _negotiate(s, host, port, req, timeout):
     raise RuntimeError("no reply to the request")
 
 
-def do_put(host, port, local, remote, timeout, quiet=False):
+def do_put(host, port, local, remote, timeout, quiet=False, drop_once=()):
+    """`drop_once` names blocks whose FIRST send is skipped -- a lost
+    datagram on demand, for tools/remote_test.py's recovery checks."""
+    drop_once = set(drop_once)
     # A HAND-NAMED seed/sync FILE DODGES THE FLASH'S OWN GUARD, and
     # sending one reads as the fix not working rather than as the fix
     # not being sent. See iso_guard.check_staged_file().
@@ -518,7 +527,7 @@ def do_put(host, port, local, remote, timeout, quiet=False):
         if len(data) % blksize == 0:
             total += 1        # a final short (empty) block ends it
         acked = 0             # blocks the server has confirmed
-        tries = 0
+        quiet_since = time.time()
         sent_bytes = 0
         # PROGRESS BOUNDS THIS, NOT ONLY SILENCE. `tries` counts quiet
         # waits, and any reply resets nothing towards it -- so a server
@@ -536,6 +545,9 @@ def do_put(host, port, local, remote, timeout, quiet=False):
             n = min(window, total - acked)
             for i in range(n):
                 b = acked + 1 + i
+                if b in drop_once:
+                    drop_once.discard(b)
+                    continue
                 payload = data[(b - 1) * blksize: b * blksize]
                 s.sendto(bytes([0, OP_DATA]) + (b & 0xFFFF).to_bytes(2, "big")
                          + payload, peer)
@@ -543,14 +555,19 @@ def do_put(host, port, local, remote, timeout, quiet=False):
             # the window on every ACK that moved nothing is RFC 1123's
             # Sorcerer's Apprentice: each resend draws more stale ACKs,
             # each of those another window -- a 3 MB put to a fast machine
-            # moved ~330,000 frames for ~2,200. Only silence resends.
+            # moved ~330,000 frames for ~2,200. So the resend is paced by
+            # the CLOCK, once per RESEND_S, and no reply shortens it.
             before = acked
             heard = False     # a stale ACK is not silence: the stall bounds it
-            while acked == before and time.time() <= stall:
+            resend_at = time.time() + min(timeout, RESEND_S)
+            while acked == before and time.time() < resend_at:
+                s.settimeout(max(0.01, resend_at - time.time()))
                 try:
-                    pkt, _ = s.recvfrom(65536)
+                    pkt, src = s.recvfrom(65536)
                 except socket.timeout:
                     break
+                if src != peer:
+                    continue  # not our TID (RFC 1350): never its verdict
                 heard = True
                 if pkt[1] == OP_ERROR:
                     raise RuntimeError(_tftp_error(pkt))
@@ -564,12 +581,12 @@ def do_put(host, port, local, remote, timeout, quiet=False):
                 elif ((a - acked) & 0xFFFF) <= n:
                     acked += (a - acked) & 0xFFFF
             if acked == before:
-                if not heard:
-                    tries += 1
-                    if tries > 5:
-                        raise RuntimeError(f"no ACK after block {acked}")
+                if heard:
+                    quiet_since = time.time()
+                elif time.time() - quiet_since > timeout * 5:
+                    raise RuntimeError(f"no ACK after block {acked}")
                 continue
-            tries = 0
+            quiet_since = time.time()
             stall = time.time() + timeout * STALL_ROUNDS
             sent_bytes = min(acked * blksize, len(data))
     finally:
@@ -663,7 +680,7 @@ def do_get(host, port, remote, local, timeout):
                 pkt, pending = pending, None
             else:
                 try:
-                    pkt, _ = s.recvfrom(65536)
+                    pkt, src = s.recvfrom(65536)
                 except socket.timeout:
                     tries += 1
                     if tries > 5:
@@ -673,6 +690,8 @@ def do_get(host, port, remote, local, timeout):
                     s.sendto(bytes([0, OP_ACK]) + (acked & 0xFFFF).to_bytes(2, "big"),
                              peer)
                     continue
+                if src != peer:
+                    continue      # not our TID -- see do_put()
             tries = 0
             if pkt[1] == OP_ERROR:
                 raise RuntimeError(_tftp_error(pkt))

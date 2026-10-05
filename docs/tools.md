@@ -536,7 +536,9 @@ manual steps to be worth automating:
   against a QEMU guest, seven checks. On demand: it boots its own guest
   and ENABLES services that ship disabled, so it leaves `disk.img` with
   a network shell turned on -- `make clean-disk && make iso` afterwards
-  if that matters.
+  if that matters. **Its lossy puts drop one block on purpose**
+  (`do_put(drop_once=...)`) -- the last of a window, the first of one,
+  and the final block -- and must recover inside `tftpd`'s give-up.
 
   Three of its checks exist because of a specific way this can pass
   while broken. It asserts a command's OUTPUT and that the command LINE
@@ -690,7 +692,12 @@ manual steps to be worth automating:
   repeated block, and `read_until_line` checked its deadline only when a
   `recv` timed out -- so a peer that never stopped talking never let it.
   A transfer now gives up when nothing has MOVED it for `STALL_ROUNDS`
-  timeouts, silence or chatter alike. **And the chmod pass uses the
+  timeouts, silence or chatter alike. **A `put` resends its window every
+  `RESEND_S` (2 s) without progress, stale ACKs or not** -- paced by the
+  clock, so it cannot amplify -- and that must stay under `tftpd`'s 10 s
+  give-up: waiting out `--timeout` landed the resend on a server that had
+  left, whose request port answered `bad path`. Replies not from the
+  transfer's peer are ignored (RFC 1350's TID rule). **And the chmod pass uses the
   flash's HELD session**: it opened a fresh one, which is exactly what
   dies once `/bin` is new and `/lib` old -- `could not set execute bits
   (connection closed)` -- leaving every mode unset. Which of these hung

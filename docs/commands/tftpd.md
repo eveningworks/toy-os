@@ -101,10 +101,15 @@ blocks, one round trip each — and still works, which is what keeps a
 boot ROM able to talk to this. The server's log line names what was
 actually agreed:
 
-    tftpd: wrote /bin/ls, 150336 bytes (blksize 8192, window 3)
+    tftpd: wrote /bin/ls, 150336 bytes (blksize 8192, window 3, 0 stalls)
 
 A lost packet is retried five times at a two-second timeout before the
-transfer is abandoned.
+transfer is abandoned. Each timeout ACKs the last block received IN
+ORDER, so the client resumes right after the gap; `stalls` counts the
+timeouts a finished transfer survived. A DATA, ACK, ERROR or OACK
+arriving on the request port is dropped unanswered -- with `-1` that is
+a client resending into a transfer that already ended, and answering it
+used to hand that client an error it took as the verdict on its file.
 
 **Why those two numbers**, since neither was chosen for speed:
 

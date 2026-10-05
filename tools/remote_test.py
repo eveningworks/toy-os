@@ -27,6 +27,8 @@ WHAT IT CHECKS
      quietly drops to 512-byte lockstep still succeeds and only looks
      slow, so the round-trip checks alone cannot see it -- which is why
      one check reads the server's own log for the negotiated values.
+  7. A LOST DATAGRAM IS RECOVERED inside tftpd's give-up time, wherever
+     in a window it falls -- `remote.py flash` used to die on one.
 
 WHY SLIRP IS ENOUGH. TFTP's reply normally comes from a fresh ephemeral
 port, which no NAT forwards back -- but the shipped service runs with
@@ -262,6 +264,38 @@ def main():
                     got == data, f"{len(got)} of 3000 bytes")
         finally:
             rmod.WANT_BLKSIZE, rmod.WANT_WINDOW = want_b, want_w
+
+        # 7. A LOST BLOCK IS RECOVERED, not reported as the server's
+        #    verdict. Each put skips one block's FIRST send: the last of a
+        #    window (the server holds part of it), the first of one (the
+        #    server holds nothing new and can only repeat a stale ACK),
+        #    and the final short block. Before the fix every one of these
+        #    ended ~25 s later in `tftp error 2: bad path` -- the client's
+        #    resend landing on a server that had already given up.
+        size = blk * 7 + 100        # eight blocks: windows 1-3, 4-6, 7-8
+        data = bytes(((i * 7 + (i >> 9) * 31) & 0xFF) for i in range(size))
+        src = os.path.join(tmp, "lossy.bin")
+        with open(src, "wb") as f:
+            f.write(data)
+        for drop, what in ((3, "the last block of a window"),
+                           (4, "the first block of a window"),
+                           (8, "the final block")):
+            back = os.path.join(tmp, f"lossyback{drop}.bin")
+            t0 = time.time()
+            try:
+                rmod.do_put("127.0.0.1", TFTP_PORT, src, f"/tmp/lossy{drop}.bin",
+                            15.0, quiet=True, drop_once=(drop,))
+                err = ""
+            except RuntimeError as e:
+                err = str(e)
+            took = time.time() - t0
+            remote("get", f"/tmp/lossy{drop}.bin", back)
+            got = open(back, "rb").read() if os.path.exists(back) else b""
+            # Inside tftpd's 10 s give-up, or recovery only worked by luck.
+            r.check(f"a put that loses {what} recovers",
+                    not err and got == data and took < 10,
+                    f"{err or 'no error'}, {len(got)} of {size} bytes, "
+                    f"{took:.1f}s")
 
         # 5. THE ONE THAT MATTERS: a binary pushed over the network runs
         #    on the far side.
