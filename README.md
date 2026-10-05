@@ -76,8 +76,9 @@ of those actually is, and where the interesting decisions were.
 
 **Without building anything:** download `toy-os-live.iso` from
 [Releases](https://github.com/eveningworks/toy-os/releases) and boot it
-in QEMU or from a USB stick — `run_release.sh`, beside it, does the QEMU
-part for you. **BIOS/CSM only; UEFI does not boot.**
+in QEMU — `run_release.sh`, beside it, does that for you — or write
+`toyos-usb.img.gz` to a USB stick for real hardware. **BIOS/CSM only;
+UEFI does not boot.**
 
 **From source** (on Debian/Ubuntu; [other distributions](docs/building.md#dependencies)):
 
@@ -114,8 +115,8 @@ real page and a browser to read `httpd`.
 - **BIOS/CSM boot only** — GRUB's EFI build faults before the kernel runs.
 - **One CPU** — other cores are discovered, and every one reports offline.
 - **No privilege model** — no user accounts or permission checks.
-- No USB mass storage, no `dlopen`, no `mprotect`, and swap that pages
-  nothing out yet.
+- No USB mass storage, no `mprotect`, and swap that pages nothing out
+  yet.
 
 [docs/roadmap.md](docs/roadmap.md) tracks all of it, and
 [docs/bugs.md](docs/bugs.md) what is broken right now.
@@ -155,7 +156,9 @@ third-party material. In short:
   terms.
 - `userland/ports/mbedtls/` (Mbed TLS) is taken under the Apache-2.0
   side of its dual licence, and builds into `/lib/libssl.so`.
-- `userland/ports/dash/` is BSD-3-Clause, vendored but not built.
+- `userland/ports/dash/` is BSD-3-Clause and builds into `/bin/dash`;
+  its one GPL file, `mksignames.c`, is not compiled --
+  `tools/gen_signames.py` generates that table instead.
 - `userland/ports/cjson/` is MIT, under its own copyright.
 - The runtime-loadable fonts in `data/fonts/` are under the Bitstream
   Vera and SIL Open Font licenses, and the baked JetBrains Mono glyphs

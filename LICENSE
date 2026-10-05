@@ -134,10 +134,9 @@ directory.
         any later version. dash's own COPYING carries that notice as a
         second section and states the consequence: the file is not
         linked into the shell, but its output -- the generated
-        signames.c signal-name table -- is. Nothing in this repository
-        builds dash yet, so today it is vendored source and no more
-        than that; a binary built from it as it stands would have to be
-        distributed under the GPL, exactly as /bin/doom is. See that
+        signames.c signal-name table -- is. A dash built with that
+        generator would have to be distributed under the GPL, exactly
+        as /bin/doom is.
         **IT IS NOT COMPILED, AND THEREFORE NOT DISTRIBUTED IN ANY
         BINARY.** The build generates that table with
         tools/gen_signames.py instead, from this kernel's own signal
