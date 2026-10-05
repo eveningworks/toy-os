@@ -26,8 +26,8 @@
 > [docs/decisions.md](docs/decisions.md).
 
 <p align="center">
-  <img src="screenshots/readme/desktop.png" alt="toy-os desktop: the Start menu open on All Apps, over the Image Viewer, the File Manager, DOOM and a Terminal" width="49%">
-  <img src="screenshots/readme/apps.png" alt="toy-os apps: a shaded teapot in Shapes, an MP3 playing in the Audio Player, Minesweeper, the Calculator and the Device Manager showing each device's driver" width="49%">
+  <img src="screenshots/readme/desktop.png" alt="toy-os desktop: the Start menu, frosted glass, open on All Apps over the Image Viewer, the File Manager, DOOM and a Terminal" width="49%">
+  <img src="screenshots/readme/apps.png" alt="toy-os apps on the floating, frosted taskbar: a shaded teapot in Shapes, the Audio Player, Minesweeper, the Calculator and the Device Manager" width="49%">
 </p>
 
 <p align="center">
