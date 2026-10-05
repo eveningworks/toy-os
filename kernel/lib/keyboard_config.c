@@ -62,7 +62,7 @@ void keyboard_config_init(void) {
     // Always call keyboard_layout_load() -- even with no persisted
     // value -- so the layout tables are actually populated by the
     // time this returns. keyboard_layout_load()'s own fallback chain
-    // (requested name -> /etc/kbs/us -> compiled-in US) means passing
+    // (requested name -> /usr/share/kbs/us -> compiled-in US) means passing
     // "us" here when nothing's persisted yet does exactly the right
     // thing either way.
     if (!etc_config_get(KEYBOARD_CONFIG_FILE, KEYBOARD_CONFIG_KEY, value, sizeof(value))) {
@@ -83,7 +83,7 @@ int keyboard_config_save(const char *name) {
 //
 // This is the setting the registry's `choice` CALLBACK exists for: the
 // layouts are not a compiled-in enum, they are whatever files sit in
-// /etc/kbs (tools/gen_kbs.py puts them there), so the option list has
+// /usr/share/kbs (tools/gen_kbs.py puts them there), so the option list has
 // to be read off the disk at the moment it is asked for. An array
 // would have to be rebuilt every time a layout file appeared.
 //
@@ -91,7 +91,7 @@ int keyboard_config_save(const char *name) {
 // it used to be file-static on the grounds that nothing yields, and the
 // walk itself does (fs.h's fs_list()).
 
-#define KB_LAYOUT_DIR "/etc/kbs"
+#define KB_LAYOUT_DIR "/usr/share/kbs"
 
 struct kb_walk_ctx {
     int want;    // which index the caller asked for

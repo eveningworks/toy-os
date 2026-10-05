@@ -6,7 +6,7 @@ WHAT IS UNDER TEST
 The property the input core exists for, asserted end to end: which
 DRIVER a key arrived through must not be observable. A keyboard is a
 `struct input_source`, the canonical event is a Linux evdev keycode, and
-`/etc/kbs` is keyed on those -- so nothing between the wire and the
+`/usr/share/kbs` is keyed on those -- so nothing between the wire and the
 character should differ between the two paths.
 
 It was not true, and nothing noticed. The layout used to be keyed on AT

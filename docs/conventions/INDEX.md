@@ -63,7 +63,7 @@ whenever a headline here tells you something you did not already know.
 - **USB IS xHCI ONLY, ITS PORTS WAIT ON PED RATHER THAN PRC, AND EVERY
   DMA OBJECT IS ITS OWN FRAME**
 - **INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event
-  is evdev -- including `/etc/kbs`, so only the PS/2 driver ever sees a
+  is evdev -- including `/usr/share/kbs`, so only the PS/2 driver ever sees a
   scancode**
 - **A KEY IS AN `int`: A CHARACTER IS ONE LATIN-1 BYTE, A `KEY_*` SPECIAL
   IS ABOVE 0xFF**

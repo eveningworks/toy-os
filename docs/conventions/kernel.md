@@ -1652,7 +1652,7 @@ so a table lifted from a HID or virtio specification lines up without
 adjustment. That is the point: a USB keyboard has no scancodes to speak
 of.
 
-**AND IT IS EVDEV ALL THE WAY UP NOW, INCLUDING `/etc/kbs`.** The layout
+**AND IT IS EVDEV ALL THE WAY UP NOW, INCLUDING `/usr/share/kbs`.** The layout
 tables used to be keyed on AT set-1 scancodes, which made the sentence
 above half true: the canonical event was evdev, but anything that was
 not PS/2 had to be translated DOWN into set 1 by the input core to be

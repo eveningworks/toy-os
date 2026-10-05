@@ -313,7 +313,7 @@ static void key_event(uint16_t keycode, int down, uint16_t wire, int extended);
 //
 // **THE ONE PLACE AN AT SCANCODE EXISTS IN THIS KERNEL.** Everything
 // above keyboard_key_event() speaks Linux evdev keycodes, which is what
-// virtio-input and a USB keyboard report natively and what /etc/kbs is
+// virtio-input and a USB keyboard report natively and what /usr/share/kbs is
 // keyed on. This driver is the legacy one, so the legacy encoding stops
 // here -- exactly where Linux keeps it (`atkbd` translates set 1 into
 // keycodes and nothing above it ever sees a scancode).

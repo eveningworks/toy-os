@@ -1724,7 +1724,7 @@ $(DISK_IMG):
 # build time; no grub.cfg/iso recipe changes needed anymore, unlike
 # when these were GRUB modules (see docs/decisions.md).
 
-# Seeds $(DISK_IMG) with every userland ELF, plus the /etc/kbs/*
+# Seeds $(DISK_IMG) with every userland ELF, plus the /usr/share/kbs/*
 # keyboard-layout data files, via tools/seed_disk.py (see
 # docs/decisions.md) -- this is what gets each binary onto disk now,
 # replacing both the old boot-time BIN_BOOTSTRAP/GRUB-module install
@@ -1740,14 +1740,14 @@ $(DISK_IMG):
 # content-hash compare inside sync itself, not something make's own
 # mtime logic should try to shortcut.
 #
-# The /etc/kbs layouts are regenerated here (not hand-maintained) by
+# The /usr/share/kbs layouts are regenerated here (not hand-maintained) by
 # tools/gen_kbs.py --all, whose LAYOUTS table is the one list -- see
 # that script's top comment. It needs `xkbcli` (Debian/Ubuntu: `apt-get install
 # libxkbcommon-tools`). WITHOUT xkbcli the step is skipped with a warning
-# -- nothing in $(SEED_DIR)/sync/etc/kbs reaches disk.img, and the
+# -- nothing in $(SEED_DIR)/sync/usr/share/kbs reaches disk.img, and the
 # kernel's compiled-in US table (keyboard_layout.c) keeps the keyboard
 # working. WITH xkbcli, A LAYOUT THAT FAILS TO GENERATE FAILS THE BUILD
-# (`|| exit 1`): Settings lists /etc/kbs, so a half-written set would
+# (`|| exit 1`): Settings lists /usr/share/kbs, so a half-written set would
 # offer a layout that falls back to US when picked.
 # EXTRAS=1 fetches the optional, differently-licensed material before
 # seeding -- today that is the Doom shareware IWAD. OFF by default, so no
@@ -2039,14 +2039,14 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	@if [ -n "$$(ls -A data/wm/startup 2>/dev/null)" ]; then \
 	    cp data/wm/startup/* $(SEED_DIR)/sync/usr/wm/startup/; fi
 	# The layouts are generated from the host's xkeyboard-config, so its
-	# notices travel with them: an image that has /etc/kbs has
+	# notices travel with them: an image that has /usr/share/kbs has
 	# /usr/share/licenses/xkeyboard-config.txt (see LICENSE).
 	@if command -v xkbcli >/dev/null 2>&1; then \
 		python3 tools/gen_kbs.py --all --write || exit 1; \
 		mkdir -p $(SEED_DIR)/sync/usr/share/licenses; \
 		cp data/licenses/xkeyboard-config.txt $(SEED_DIR)/sync/usr/share/licenses/; \
 	else \
-		echo "seed: xkbcli not found -- skipping /etc/kbs regeneration (apt-get install libxkbcommon-tools to enable; kernel falls back to compiled-in US regardless)"; \
+		echo "seed: xkbcli not found -- skipping /usr/share/kbs regeneration (apt-get install libxkbcommon-tools to enable; kernel falls back to compiled-in US regardless)"; \
 	fi
 	python3 tools/seed_disk.py $(DISK_IMG) $(SEED_DIR)
 	# THE KERNEL GOES ON THE DISK TOO. GRUB cannot read TFS3, so

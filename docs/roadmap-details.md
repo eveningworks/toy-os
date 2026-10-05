@@ -2318,7 +2318,7 @@ order is Enable Slot, Address Device, *then* GET_DESCRIPTOR. (2) Steps 6
 and 7 predate the input core and say to feed `keyboard.c`/`mouse.c`
 directly; the real work is registering an `input_source` and calling
 `input_report_*`, which made both steps far smaller than estimated --
-and, because `/etc/kbs` is keyed on evdev now, a USB keyboard needs no
+and, because `/usr/share/kbs` is keyed on evdev now, a USB keyboard needs no
 layout table at all. (3) Step 8 conflates the xHCI USB Legacy Support
 capability (a controller ownership semaphore) with BIOS/SMM PS/2
 emulation (what actually produces ghost keys); they are unrelated and
@@ -6250,7 +6250,7 @@ Worth doing before a NIC, since a busy network device is where per-queue
 interrupts start to matter. Not worth doing for input, which is why INTx
 was the right size here.
 
-### Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table
+### Re-key `/usr/share/kbs` layouts to evdev keycodes, removing the input core's translation table
 
 The canonical input event is an evdev keycode
 (`kernel/include/kernel/input.h`), but the keyboard layout files are
@@ -6259,7 +6259,7 @@ keyed on AT set-1 scancodes, so `input_report_key()` translates keycode
 (codes 1..83 are identical; only the 0xE0-prefixed block needs
 entries), and it is the seam's one piece of legacy.
 
-Removing it means regenerating `/etc/kbs/*` keyed on evdev codes --
+Removing it means regenerating `/usr/share/kbs/*` keyed on evdev codes --
 `tools/gen_kbs.py` already reads XKB keycodes, which ARE evdev + 8, so
 it is arguably a simplification of the generator -- and changing
 `keyboard.c` to switch on keycodes rather than scancodes. The PS/2

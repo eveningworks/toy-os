@@ -1355,7 +1355,7 @@ success is the exact lie that enum was introduced to stop.
 ## A config file declares itself with a file, over a built-in floor
 
 `api/config_file.h` indexes the `/etc` DOCUMENTS -- including the ones
-holding no registered setting at all (`/etc/timezones`, `/etc/kbs`,
+holding no registered setting at all (`/etc/timezones`, `/usr/share/kbs`,
 `/etc/desktop.conf`). Those are the hardest to find precisely because
 nothing describes them.
 
@@ -4956,7 +4956,7 @@ differently for a reason the user cannot see.
 
 **The mechanism was a table pointing the wrong way.** `input.h` declared
 evdev the canonical event -- correctly, since that is what virtio-input
-and a USB keyboard report natively -- but `/etc/kbs/*` was keyed on AT
+and a USB keyboard report natively -- but `/usr/share/kbs/*` was keyed on AT
 set-1 SCANCODES. So the input core had to translate evdev DOWN into a
 legacy encoding for every non-PS/2 device, through a hand-kept list. The
 direct range stopped at 83 and the extended table only held 0xE0-prefixed
@@ -4979,7 +4979,7 @@ the only place in the kernel an AT scancode exists, and
 
 **Why the data did not change.** evdev's numbering was taken from AT set
 1, so the two agree for the whole primary block (KEY_1 = 2 = 0x02, up to
-KEY_F12 = 88 = 0x58). Every value in `/etc/kbs` stayed the same; only the
+KEY_F12 = 88 = 0x58). Every value in `/usr/share/kbs` stayed the same; only the
 key names did (`sc_2a=` became `kc_42=`, hex to decimal). That
 coincidence is exactly why the old naming looked right for years, and
 why the hole was invisible until a device reported a key from the part of

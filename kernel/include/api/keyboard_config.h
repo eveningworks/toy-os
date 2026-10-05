@@ -8,7 +8,7 @@
 // boot. Same split as font_config.c/tz.c: this file only selects +
 // persists, it doesn't touch the scancode tables themselves -- that's
 // keyboard_layout.c's job, and it works from a plain layout NAME now
-// (whatever /etc/kbs/<name> exists), not a fixed compiled-in enum.
+// (whatever /usr/share/kbs/<name> exists), not a fixed compiled-in enum.
 
 // Call once at boot, after fs_init()/fs_mkdir("/etc") (same ordering as
 // the other /etc readers -- see kernel.c) -- loads the persisted
@@ -28,7 +28,7 @@ void keyboard_config_init(void);
 int keyboard_config_save(const char *name);
 
 // Announces this setting to the registry (setting.h). Its choice list
-// is read from /etc/kbs at call time -- see keyboard_config.c.
+// is read from /usr/share/kbs at call time -- see keyboard_config.c.
 void keyboard_config_setting_register(void);
 
 #endif

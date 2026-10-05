@@ -51,7 +51,7 @@ running `kbd` with no arguments turns it on for as long as it runs.
 **Why four columns.** A key becomes a scancode on the wire, then a
 keycode, then a character through the layout file, and a keyboard bug is
 nearly always one stage disagreeing with the next -- a hole in a
-translation table, a wrong row in `/etc/kbs`. From outside, every one of
+translation table, a wrong row in `/usr/share/kbs`. From outside, every one of
 those looks the same: the key does nothing, or the wrong thing. Reading
 the stages side by side turns *"the keyboard is broken"* into *"the
 scancode arrived, the keycode is right, the layout produced the wrong

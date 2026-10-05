@@ -5,7 +5,7 @@
 // that into, and the modifiers held at that instant
 // (kernel/include/kernel/input.h has the stages). A keyboard bug is
 // nearly always one stage disagreeing with the next -- a hole in a
-// translation table, a wrong row in /etc/kbs -- and from the outside
+// translation table, a wrong row in /usr/share/kbs -- and from the outside
 // every one of them looks the same: a key does nothing, or the wrong
 // thing. This prints all four on one line, so the disagreement is
 // visible rather than deduced.

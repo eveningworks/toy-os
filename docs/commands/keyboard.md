@@ -10,7 +10,7 @@
 
 ## Description
 
-Selects the keyboard layout, by the name of a file under `/etc/kbs/`.
+Selects the keyboard layout, by the name of a file under `/usr/share/kbs/`.
 With no argument it prints the usage line and the layout currently
 active.
 
@@ -22,10 +22,10 @@ active.
 The names are XKB's (`de`, `fr`, `se`...): every layout whose letters
 Latin-1 can type, listed in `tools/gen_kbs.py`'s `LAYOUTS` (`gen_kbs.py
 --choices` prints them with their display names). System Settings >
-Input > Keyboard shows them by name, A to Z; `ls /etc/kbs` is the list
+Input > Keyboard shows them by name, A to Z; `ls /usr/share/kbs` is the list
 on a given disk.
 
-A layout is a DATA FILE, not compiled-in code: `/etc/kbs/<name>` maps
+A layout is a DATA FILE, not compiled-in code: `/usr/share/kbs/<name>` maps
 evdev keycodes to four characters each -- base, Shift, AltGr and
 Shift+AltGr -- and carries its own dead keys. `tools/gen_kbs.py`
 generates every one from Linux's own XKB data (its `LAYOUTS` table is
@@ -48,7 +48,7 @@ appended when the write did not land, and silence means it did.
 
 **A missing layout falls back rather than breaking the keyboard.** Ask
 for a name with no file and it reverts to what was active and says so;
-underneath, `keyboard_layout_load()` falls back to `/etc/kbs/us` and
+underneath, `keyboard_layout_load()` falls back to `/usr/share/kbs/us` and
 then to a small compiled-in US table, so no state of the disk can leave
 the machine unable to type.
 
@@ -77,7 +77,7 @@ docs/roadmap.md is what lifts that. The on-screen keyboard still draws
 and types US whatever is set here.
 
 **It lists nothing.** There is no `keyboard --list`; the layouts are
-whatever files exist, so `ls /etc/kbs` is the listing.
+whatever files exist, so `ls /usr/share/kbs` is the listing.
 
 **It holds one layout.** Several layouts with a switching shortcut, and
 a picture of the layout in Settings, are on docs/roadmap.md.

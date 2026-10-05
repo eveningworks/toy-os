@@ -12,7 +12,7 @@ does — and add its entry here, which `tools/check_docs.py` verifies.
 Dev/build helper scripts, not compiled or shipped as part of the OS:
 `genttf.py` (font generation; `--font PATH` when JetBrains Mono is not
 installed -- the v2.304 release reproduces the committed tables byte for
-byte), `gen_kbs.py` (generates the `seed/sync/etc/kbs/<layout>`
+byte), `gen_kbs.py` (generates the `seed/sync/usr/share/kbs/<layout>`
 keyboard-layout data files, dead keys included, from Linux's own XKB
 data; `--all` for every layout in its `LAYOUTS` table, `--check` to
 re-measure that each still fits Latin-1, `--choices` for the Settings

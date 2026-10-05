@@ -1097,7 +1097,7 @@ reach a window as bits, and a game reads keys by position".
 ### Enter is 0x0A here and 0x0D in Doom, and the first test could not see it
 
 The port shipped able to open its menu and unable to START A GAME.
-`/etc/kbs` maps the Enter key to `\n` (0x0A), which is what a terminal
+`/usr/share/kbs` maps the Enter key to `\n` (0x0A), which is what a terminal
 and a line editor want and is not going to change; `doomkeys.h` defines
 `KEY_ENTER` as 0x0D. So the menu opened, the arrow keys moved the
 highlight, and no item could ever be chosen. Nothing crashed, nothing

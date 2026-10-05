@@ -6943,7 +6943,7 @@ What it costs is that the compositor now contains a keyboard layout --
 a second copy of `kernel/lib/keyboard_layout.c`'s `FALLBACK_US`, which
 is a real duplication and is why the convention entry says the two must
 agree character for character. The roadmap carries both follow-ups:
-reading `/etc/kbs` so the caps match the configured layout, and moving
+reading `/usr/share/kbs` so the caps match the configured layout, and moving
 the panel to a ring-3 app once there is a virtual-keyboard protocol
 worth having. Neither is needed for the thing this was built for, which
 is a machine whose only working input device is a touchpad.

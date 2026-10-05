@@ -109,7 +109,7 @@ void input_poll_sources(void) {
 //
 // **THERE IS NO TRANSLATION HERE ANY MORE, AND THAT IS THE FIX.** This
 // used to convert evdev keycodes DOWN into AT set-1 scancodes, because
-// the layout tables (/etc/kbs) were keyed on scancodes -- so every
+// the layout tables (/usr/share/kbs) were keyed on scancodes -- so every
 // non-PS/2 device had to speak a legacy encoding to be understood. The
 // table was hand-kept and duly grew a hole: KEY_102ND, the ISO key that
 // carries `|` on every Nordic layout, sat just past the end of it, so a

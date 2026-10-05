@@ -1,4 +1,4 @@
-Description=Which key produces which character, from /etc/kbs
+Description=Which key produces which character, from /usr/share/kbs
 Sort=label
 Choice.al=Albanian
 Choice.be=Belgian

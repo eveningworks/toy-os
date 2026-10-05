@@ -250,7 +250,7 @@ def run(dbg, qmp, tmp, res):
     # --- Enter SELECTS, and the oracle is that the game goes STILL ---
     #
     # THIS CHECK EXISTS BECAUSE THE PORT SHIPPED UNABLE TO START A GAME.
-    # `/etc/kbs` maps Enter to 0x0A, because that is what a terminal and
+    # `/usr/share/kbs` maps Enter to 0x0A, because that is what a terminal and
     # a line editor want; `doomkeys.h` defines KEY_ENTER as 0x0D. Nothing
     # crashed and nothing logged: the menu opened, the highlight moved
     # with the arrow keys, and no item could be chosen.

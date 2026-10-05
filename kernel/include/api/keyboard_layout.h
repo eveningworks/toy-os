@@ -7,7 +7,7 @@
 // split out of kernel/drivers/keyboard.c (the driver): keyboard.c's job
 // is turning raw 8042 bytes into scancodes/shift-state/extended-prefix
 // handling, not owning per-region character tables. This file owns the
-// tables (loaded from /etc/kbs/<name> -- see kernel/core/etc_config.h's
+// tables (loaded from /usr/share/kbs/<name> -- see kernel/core/etc_config.h's
 // sibling convention for /etc files, though this one is its own small
 // parser, not etc_config_get/set -- see keyboard_layout.c's top comment
 // for why) and the one lookup keyboard.c's keyboard_feed_byte() calls
@@ -17,11 +17,11 @@
 #define KB_LAYOUT_NAME_MAX 8
 
 // Loads scancode->character mappings for the named layout from
-// /etc/kbs/<name>, replacing whatever was previously loaded. Falls
-// back automatically (see keyboard_layout.c) to /etc/kbs/us, and if
+// /usr/share/kbs/<name>, replacing whatever was previously loaded. Falls
+// back automatically (see keyboard_layout.c) to /usr/share/kbs/us, and if
 // even that's missing, to a small compiled-in US table -- so this
 // never leaves the keyboard producing nothing, no matter what's
-// actually on disk. Returns 1 if /etc/kbs/<name> itself was found and
+// actually on disk. Returns 1 if /usr/share/kbs/<name> itself was found and
 // loaded, 0 if a fallback was used instead (callers -- e.g. the
 // shell's `keyboard` command -- can use this to tell the user their
 // requested layout wasn't found, rather than silently pretending it
@@ -89,7 +89,7 @@ int keyboard_layout_spacing(int sym);
 int keyboard_layout_dead_pending(void);
 void keyboard_layout_compose_reset(void);
 
-// Parses a layout from memory instead of /etc/kbs, replacing the active
+// Parses a layout from memory instead of /usr/share/kbs, replacing the active
 // tables; 1 if it mapped anything. For KTESTs, which restore the real
 // layout with keyboard_layout_load() afterwards. Does not change
 // keyboard_layout_current().

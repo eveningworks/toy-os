@@ -417,7 +417,7 @@ KTEST("input", "the PS/2 pair registered itself with the core") {
 // is not supposed to be observable.
 //
 // **THAT IS NOW TRUE BY CONSTRUCTION FOR EVERYTHING EXCEPT PS/2.**
-// /etc/kbs is keyed on evdev keycodes, virtio-input reports evdev
+// /usr/share/kbs is keyed on evdev keycodes, virtio-input reports evdev
 // keycodes, and input_report_key() hands one straight to
 // keyboard_key_event() -- there is no table in between to have a hole
 // in. It used to translate evdev DOWN into AT set-1 scancodes, and that
@@ -723,7 +723,7 @@ KTEST("input", "the physical stream reports positions, both edges, and no repeat
 //
 // keyboard_try_get_key(): one ordered queue of edges while the console is
 // bypassed. A fixture layout, so no XKB data is assumed; the real one is
-// reloaded after the preemption guard drops (it reads /etc/kbs, whose
+// reloaded after the preemption guard drops (it reads /usr/share/kbs, whose
 // mount lock sleeps). Nothing is asserted while preemption is off.
 static const char DEAD_FIXTURE[] =
     "kc_18=e\nkc_45=x\nkc_13=dead:acute\n"

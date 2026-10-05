@@ -73,7 +73,7 @@ static void arg_list_cb(void *ctx, const char *name, uint32_t size, int is_dir) 
 // a hardcoded us/se -- the whole point of layouts being data files (see
 // docs/decisions.md) is that a third one can be added without a rebuild.
 static void complete_keyboard_layout(struct completion_collector *c) {
-    if (fs_is_dir("/etc/kbs")) fs_list("/etc/kbs", arg_list_cb, c);
+    if (fs_is_dir("/usr/share/kbs")) fs_list("/usr/share/kbs", arg_list_cb, c);
 }
 
 // What `cmd`'s argument number `arg_index` offers. COMPLETION_PATHS

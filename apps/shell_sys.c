@@ -1035,7 +1035,7 @@ void cmd_fontface(const char *args) {
 }
 
 // Changes the active keyboard layout -- any name with a matching
-// /etc/kbs/<name> file (see kernel/lib/keyboard_layout.c and
+// /usr/share/kbs/<name> file (see kernel/lib/keyboard_layout.c and
 // tools/gen_kbs.py, whose LAYOUTS table is what ships). `keyboard`
 // alone shows the current layout. Persists via keyboard_config_save()
 // so it survives a reboot -- same pattern as `fontsize`/`timezone`.
@@ -1051,7 +1051,7 @@ void cmd_keyboard(const char *args) {
     if (!found) {
         vga_write("keyboard: '");
         vga_write(args);
-        vga_write("' not found in /etc/kbs -- reverted to ");
+        vga_write("' not found in /usr/share/kbs -- reverted to ");
         vga_write(keyboard_layout_current());
         vga_write("\n");
         return;

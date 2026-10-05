@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/gen_kbs.py -- generates /etc/kbs/<layout> keyboard-layout data
+"""tools/gen_kbs.py -- generates /usr/share/kbs/<layout> keyboard-layout data
 files (kernel/lib/keyboard_layout.c's on-disk format) from Linux's own
 XKB layout data, via `xkbcli compile-keymap` (libxkbcommon-tools --
 `apt-get install libxkbcommon-tools` if missing; no X server needed, it
@@ -34,7 +34,7 @@ WHAT A FILE CARRIES:
   listed in the file's trailing comment, and the key types nothing on
   that level.
 - DEAD KEYS, with their compositions IN THE SAME FILE, so a layout is
-  self-contained and /etc/kbs holds layouts and nothing else (its
+  self-contained and /usr/share/kbs holds layouts and nothing else (its
   listing IS the Settings choice list):
       kc_26=dead:acute        the key is a dead acute on that level
       dead:acute=0xB4         what it types alone (dead + Space, or twice)
@@ -50,7 +50,7 @@ WHAT A FILE CARRIES:
 
 Usage:
     python3 tools/gen_kbs.py de              # one layout to stdout
-    python3 tools/gen_kbs.py de --write      # into seed/sync/etc/kbs/de
+    python3 tools/gen_kbs.py de --write      # into seed/sync/usr/share/kbs/de
     python3 tools/gen_kbs.py --all --write   # every layout; prunes the rest
     python3 tools/gen_kbs.py --check         # does each still fit Latin-1?
     python3 tools/gen_kbs.py --choices       # the Choice.<name>= lines
@@ -366,7 +366,7 @@ def generate(layout):
 
 
 def write(layout, content):
-    out_dir = os.path.join("seed", "sync", "etc", "kbs")
+    out_dir = os.path.join("seed", "sync", "usr", "share", "kbs")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, layout)
     with open(out_path, "w", encoding="ascii") as f:
@@ -378,7 +378,7 @@ def prune():
     """Removes staged layouts no longer in LAYOUTS: the directory's
     listing IS the Settings choice list. (An existing disk.img keeps its
     copy -- the seed sync adds and replaces, never deletes.)"""
-    out_dir = os.path.join("seed", "sync", "etc", "kbs")
+    out_dir = os.path.join("seed", "sync", "usr", "share", "kbs")
     for name in os.listdir(out_dir) if os.path.isdir(out_dir) else ():
         if name not in LAYOUTS:
             os.remove(os.path.join(out_dir, name))
@@ -395,7 +395,7 @@ def main():
         bad = failed = 0
         for layout in sorted(LAYOUTS):
             # ONE LAYOUT FAILING IS LOUD, and the rest are still written:
-            # Settings lists /etc/kbs, so a silently missing file would be
+            # Settings lists /usr/share/kbs, so a silently missing file would be
             # a choice that falls back to US when picked.
             try:
                 content, problems = generate(layout)
@@ -414,7 +414,7 @@ def main():
         if "--write" in args:
             prune()
             print(f"gen_kbs: wrote {len(LAYOUTS) - failed} layouts to "
-                  "seed/sync/etc/kbs", file=sys.stderr)
+                  "seed/sync/usr/share/kbs", file=sys.stderr)
         if failed:
             return 1
         return 1 if (bad and "--check" in args) else 0

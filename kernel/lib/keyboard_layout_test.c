@@ -38,7 +38,7 @@ static void restore(const struct saved *s) {
 // Every shipped layout loads from its own file (precondition: an image
 // seeded with xkbcli present, which `make iso` and CI both are).
 static int have(const char *name) {
-    char path[32] = "/etc/kbs/";
+    char path[32] = "/usr/share/kbs/";
     k_strlcat(path, name, sizeof path);
     return fs_exists(path);
 }
@@ -151,7 +151,7 @@ static int generated_checks(void) {
 
 KTEST("kblayout", "generated de/fr/es/se: AltGr, Latin-1 base keys, dead acute") {
     if (!have("de") || !have("fr") || !have("es") || !have("se"))
-        KTEST_SKIP("/etc/kbs not seeded (no xkbcli on the build host)");
+        KTEST_SKIP("/usr/share/kbs not seeded (no xkbcli on the build host)");
     struct saved s;
     save(&s);
     int line = generated_checks();
@@ -159,7 +159,7 @@ KTEST("kblayout", "generated de/fr/es/se: AltGr, Latin-1 base keys, dead acute")
     KTEST_ASSERT_EQ(line, 0);
 }
 
-// The listing, not a copy of it: /etc/kbs IS the layout list
+// The listing, not a copy of it: /usr/share/kbs IS the layout list
 // (tools/gen_kbs.py's LAYOUTS writes it), so a name kept here would be a
 // third list to drift.
 struct kbs_list { int n; char name[64][KB_LAYOUT_NAME_MAX]; };
@@ -173,7 +173,7 @@ static void kbs_cb(void *ctx, const char *name, uint32_t size, int is_dir) {
 static int all_load_checks(void) {
     static struct kbs_list l;   // 512 bytes: off the kernel stack
     l.n = 0;
-    fs_list("/etc/kbs", kbs_cb, &l);
+    fs_list("/usr/share/kbs", kbs_cb, &l);
     CHECK(l.n >= 2);
     for (int i = 0; i < l.n; i++) {
         CHECK(keyboard_layout_load(l.name[i]) == 1);
@@ -185,9 +185,9 @@ static int all_load_checks(void) {
     return 0;
 }
 
-KTEST("kblayout", "every layout in /etc/kbs loads from its own file") {
+KTEST("kblayout", "every layout in /usr/share/kbs loads from its own file") {
     if (!have("us") || !have("latam"))
-        KTEST_SKIP("/etc/kbs not seeded (no xkbcli on the build host)");
+        KTEST_SKIP("/usr/share/kbs not seeded (no xkbcli on the build host)");
     struct saved s;
     save(&s);
     int line = all_load_checks();

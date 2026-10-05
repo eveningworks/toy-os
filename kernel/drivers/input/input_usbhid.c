@@ -45,7 +45,7 @@ DRIVER_DECLARE("usb-hid", "input", "USB HID keyboards and mice");
 // Usage page 0x07. The table is indexed by usage, so a gap is a 0 and
 // an unmapped key is silently dropped rather than reported as some
 // other key. Values are Linux's evdev numbering, which is what
-// input_report_key() wants and what /etc/kbs is keyed on.
+// input_report_key() wants and what /usr/share/kbs is keyed on.
 //
 // Usage 0x64 is the one worth naming: the ISO key between Left Shift
 // and Z, which carries `|` on every Nordic layout. input.h records that

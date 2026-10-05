@@ -1,4 +1,4 @@
-// Loads /etc/kbs/<name> keyboard-layout data files, answers keyboard.c's
+// Loads /usr/share/kbs/<name> keyboard-layout data files, answers keyboard.c's
 // keycode->character lookups, and composes DEAD KEYS -- see
 // keyboard_layout.h's top comment for why this is split out of the
 // driver itself.
@@ -29,7 +29,7 @@
 #include "string.h"
 #include "knum.h"
 
-#define KB_LAYOUT_DIR "/etc/kbs/"
+#define KB_LAYOUT_DIR "/usr/share/kbs/"
 
 // INDEXED BY EVDEV KEYCODE, NOT BY AT SCANCODE: evdev is what every
 // non-PS/2 keyboard reports natively, so no driver translates into a
@@ -77,7 +77,7 @@ static struct kb_dead *dead_lookup(const char *name, uint32_t len, int create) {
     return d;
 }
 
-// Compiled-in last-resort US table -- applied only if /etc/kbs/us itself
+// Compiled-in last-resort US table -- applied only if /usr/share/kbs/us itself
 // can't be read (no filesystem, corrupted disk, a skipped seed step).
 static const char FALLBACK_US[128] = {
     0, 27, '1','2','3','4','5','6','7','8','9','0','-','=', '\b',
@@ -205,7 +205,7 @@ static void apply_line(const char *line, uint32_t len) {
     if (v > 0) g_table[level][keycode] = (uint16_t)v;
 }
 
-// Reads and applies /etc/kbs/<name>. Returns 1 if the file exists and
+// Reads and applies /usr/share/kbs/<name>. Returns 1 if the file exists and
 // mapped something, 0 otherwise (the caller falls back).
 static int load_from_file(const char *name) {
     char path[32];
@@ -253,7 +253,7 @@ int keyboard_layout_load(const char *name) {
         return 1;
     }
 
-    // Not found: /etc/kbs/us (unless that was the request), then the
+    // Not found: /usr/share/kbs/us (unless that was the request), then the
     // compiled-in table. Either way the name says what is ACTIVE.
     if (k_strcmp(name, "us") != 0 && load_from_file("us")) {
         k_strlcpy(g_current_name, "us", sizeof g_current_name);

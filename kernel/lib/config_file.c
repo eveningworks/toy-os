@@ -127,7 +127,7 @@ void config_files_scan(void) {
                          "Per-application playback volume", 1);
     config_file_register("update", "/etc/update.conf",
                          "The server System Update pulls from", 1);
-    config_file_register("keymaps", "/etc/kbs",
+    config_file_register("keymaps", "/usr/share/kbs",
                          "Keyboard layout tables (dir)", 1);
     config_file_register("apps", "/usr/wm/applications",
                          "Start-menu/desktop entries (dir)", 1);

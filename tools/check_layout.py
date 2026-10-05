@@ -12,7 +12,7 @@ against a built image, failing on drift in EITHER direction:
 Three statuses: `present` (must exist), `optional` (may or may not --
 documented so it isn't flagged as undocumented, but never required), and
 `reserved` (a name spoken for by a future milestone, nothing creates it
-yet). `optional` exists for /etc/kbs, which the build only produces when
+yet). `optional` exists for /usr/share/kbs, which the build only produces when
 xkbcli is installed -- requiring it would fail the check on any machine
 without that tool, and dropping the row would let a genuinely
 undocumented directory hide behind the same name.

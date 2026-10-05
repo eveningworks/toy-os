@@ -98,7 +98,7 @@ static int raw_choice(struct setting_msg *m, int kcount, uint32_t gen) {
 // already in order. So an unsorted setting costs nothing beyond its
 // ordinary CHOICE, and a sorted one is enumerated once and then answered
 // with no I/O at all. A list can grow without the generation moving (a
-// file dropped into /etc/kbs); the cache is per process, so a fresh
+// file dropped into /usr/share/kbs); the cache is per process, so a fresh
 // process sees it.
 #define CHOICE_RUNAWAY 4096   // a guard against a provider that never ends, not a size
 

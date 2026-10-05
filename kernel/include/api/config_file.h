@@ -11,7 +11,7 @@
 // FILES: the `/etc` documents themselves, including ones that hold no
 // registered setting at all -- `/etc/desktop.conf` (icon positions,
 // written by the desktop), `/etc/timezones` (the city database),
-// `/etc/kbs/*` (layout tables). Those are exactly the files that are
+// `/usr/share/kbs/*` (layout tables). Those are exactly the files that are
 // hardest to find precisely because nothing describes them.
 //
 // TWO SOURCES, on purpose:

@@ -206,7 +206,7 @@
 
 // A typed character is ONE BYTE OF LATIN-1 (ISO-8859-1): ASCII, or the
 // Latin-1 Supplement 0xA0-0xFF, which is what the font draws
-// (font_ttf.h) and what /etc/kbs layouts produce. Not UTF-8 --
+// (font_ttf.h) and what /usr/share/kbs layouts produce. Not UTF-8 --
 // docs/decisions/drivers.md's Nordic-keyboard entry says why, and
 // docs/roadmap.md's UTF-8 migration is where that changes. 0x80-0x9F
 // (the C1 controls) are not characters.
@@ -223,7 +223,7 @@
 
 // Scancode->character translation itself lives in
 // kernel/include/api/keyboard_layout.h / kernel/lib/keyboard_layout.c now
-// -- data-driven from /etc/kbs/<name> files rather than a compiled-in
+// -- data-driven from /usr/share/kbs/<name> files rather than a compiled-in
 // enum of two hardcoded layouts. See that header's top comment and
 // docs/decisions.md. keyboard.c (this driver) only owns raw
 // scancode/shift-state/extended-prefix handling; it calls into
