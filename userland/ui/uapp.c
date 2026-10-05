@@ -237,6 +237,11 @@ static struct ugfx_surface *surf_back(struct uapp_surf *s) {
                 if (b != s->front && (pick < 0 || s->busy_seq[b] < s->busy_seq[pick]))
                     pick = b;
             s->busy[pick] = 0;
+            // SAID, because if the compositor was merely slow rather
+            // than the release lost, this frame draws into pixels it may
+            // still be reading -- a torn window, and this line its cause.
+            ulogf("uapp: buffer %d taken back unreleased after %llu ms\n",
+                  pick, now - s->stall_ms);
         }
         s->stall_ms = 0;
         if (!buf_ensure(s, pick, s->w, s->h)) return 0;
