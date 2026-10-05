@@ -1558,7 +1558,12 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
 
     if (in->type == WIN_EV_MOUSE_DOWN && (WIN_MOUSE_BUTTONS(in->mods) & 0x1)) {
         g_press_slot = 0;
-        if (in->window != a->window && in->window < WIN_CLIENT_MAX && g_surf[in->window].used) {
+        // A DIALOG IS A TOPLEVEL, NOT A POPUP, though it holds a g_surf
+        // slot too: its press owes nothing, and recording it made
+        // dlg_dispatch() skip the click's focus move -- a dialog's text
+        // field could not be clicked into.
+        if (in->window != a->window && in->window < WIN_CLIENT_MAX && g_surf[in->window].used &&
+            !dlg_for(in->window)) {
             const struct uapp_surf *ps = &g_surf[in->window];
             g_press_slot = in->window;
             g_press_up = *in;
