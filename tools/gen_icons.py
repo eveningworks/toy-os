@@ -4,8 +4,9 @@
 WHY THE REPO DRAWS ITS OWN. Same reason tools/gen_cursors.py and
 gen_imgdata.py exist: every pixel this project ships should be one it
 owns, and an icon set lifted from somewhere else brings a licence with
-it. These are deliberately simple -- a rounded tile in a per-app hue and
-a white pictogram -- which is also what reads at 20 pixels in a menu row.
+it. The colour art -- apps, folders, files, drives, categories -- is
+drawn in tools/icon_art.py (each app as its own object, at 4x); this
+file holds the symbolic glyphs, tinted at draw time, and writes them all.
 
 WHY QOI AND NOT JPEG. An icon needs an ALPHA channel (it sits on a
 wallpaper) and lossless edges (at 48px an icon is almost entirely edge,
@@ -56,267 +57,12 @@ INK = (255, 255, 255, 235)   # pictogram ink: white, a shade softer
 
 
 def tile(colour):
-    """The rounded plate every icon sits on, in that app's hue."""
+    """A rounded plate in one hue: the toy-os logo's and a device class's."""
     im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     d.rounded_rectangle([PAD, PAD, SIZE - PAD - 1, SIZE - PAD - 1],
                         radius=RADIUS, fill=colour + (255,))
     return im, d
-
-
-# --- one function per icon --------------------------------------------
-#
-# Each draws a pictogram that says what the app IS, not what it is
-# called: a page for the editor, a prompt for the terminal, a gear for
-# settings. That is the difference between an icon and a letter tile, and
-# it is the whole reason this file exists.
-
-def icon_notepad():
-    im, d = tile((66, 133, 244))
-    d.rectangle([20, 14, 44, 50], fill=WHITE)
-    for i, y in enumerate(range(21, 46, 6)):
-        d.line([25, y, 39 if i % 2 else 35, y], fill=(120, 140, 170, 255), width=2)
-    return im
-
-
-def icon_terminal():
-    im, d = tile((60, 64, 72))
-    d.rectangle([14, 16, 50, 48], fill=(24, 26, 30, 255))
-    d.line([20, 26, 26, 32], fill=(120, 230, 140, 255), width=3)
-    d.line([26, 32, 20, 38], fill=(120, 230, 140, 255), width=3)
-    d.line([30, 40, 42, 40], fill=(120, 230, 140, 255), width=3)
-    return im
-
-
-def icon_calculator():
-    im, d = tile((235, 148, 42))
-    d.rectangle([16, 12, 48, 24], fill=WHITE)
-    for row in range(3):
-        for col in range(3):
-            x = 17 + col * 11
-            y = 29 + row * 8
-            d.rectangle([x, y, x + 7, y + 5], fill=INK)
-    return im
-
-
-def icon_settings():
-    im, d = tile((120, 128, 140))
-    # A gear: a thick ring with eight RADIAL teeth. Drawn as spokes
-    # rather than as rotated rectangles, which PIL has no primitive for
-    # -- a stroke from r=15 to r=23 is the same shape at this size.
-    import math as _m
-    for k in range(8):
-        a = _m.pi * k / 4.0
-        d.line([32 + 15 * _m.cos(a), 32 + 15 * _m.sin(a),
-                32 + 23 * _m.cos(a), 32 + 23 * _m.sin(a)], fill=WHITE, width=7)
-    d.ellipse([18, 18, 46, 46], outline=WHITE, width=6)
-    d.ellipse([27, 27, 37, 37], fill=(120, 128, 140, 255))
-    return im
-
-
-def icon_taskmgr():
-    im, d = tile((90, 160, 110))
-    for i, h in enumerate((14, 24, 10, 30)):
-        x = 15 + i * 10
-        d.rectangle([x, 48 - h, x + 6, 48], fill=INK)
-    return im
-
-
-def icon_imgview():
-    im, d = tile((150, 110, 200))
-    d.rectangle([14, 18, 50, 46], fill=WHITE)
-    d.ellipse([20, 23, 28, 31], fill=(250, 210, 120, 255))       # sun
-    d.polygon([(17, 44), (29, 29), (38, 44)], fill=(110, 170, 130, 255))
-    d.polygon([(31, 44), (41, 33), (48, 44)], fill=(80, 140, 110, 255))
-    return im
-
-
-def icon_player():
-    # A speaker cone with two waves -- what the app DOES, and it reads at
-    # 16px where a musical note's stem does not.
-    im, d = tile((90, 130, 185))
-    d.rectangle([16, 26, 24, 38], fill=WHITE)                     # the box
-    d.polygon([(24, 26), (34, 16), (34, 48), (24, 38)], fill=WHITE)  # the cone
-    d.arc([32, 20, 46, 44], start=-60, end=60, fill=INK, width=3)
-    d.arc([36, 14, 54, 50], start=-60, end=60, fill=INK, width=3)
-    return im
-
-
-def icon_about():
-    im, d = tile((70, 150, 190))
-    d.ellipse([16, 16, 48, 48], outline=WHITE, width=4)
-    d.ellipse([30, 23, 34, 27], fill=WHITE)
-    d.rectangle([30, 30, 34, 42], fill=WHITE)
-    return im
-
-
-def icon_help():
-    # A QUESTION MARK AS STROKES, not a glyph: the icon set carries no
-    # font, and an outlined '?' drawn as a polygon loses its counter at
-    # menu-row size the way icon_fontdemo()'s A did.
-    im, d = tile((90, 120, 200))
-    d.arc([18, 12, 46, 40], start=160, end=20, fill=WHITE, width=5)
-    d.line([32, 30, 32, 40], fill=WHITE, width=5)
-    d.ellipse([29, 45, 35, 51], fill=WHITE)
-    return im
-
-
-def icon_logview():
-    # RULED LINES OF DIFFERENT LENGTHS, with one marked: a log is text in
-    # rows, and "one row stands out" is what the app is for. Equal-length
-    # bars read as a menu or a list rather than as a log.
-    im, d = tile((110, 125, 140))
-    for i, (y, w) in enumerate(((16, 30), (24, 24), (32, 32), (40, 20), (48, 28))):
-        colour = (250, 190, 90) if i == 3 else WHITE
-        d.rectangle([14, y, 14 + w, y + 4], fill=colour)
-    return im
-
-
-def icon_crashreports():
-    # A PAGE WITH A WARNING BAR: a report of something that went wrong.
-    # An amber bar on a plain page, on a warm red tile, so it reads as
-    # "a document about a problem" rather than as an error dialog.
-    im, d = tile((150, 85, 80))
-    d.rounded_rectangle([16, 10, 48, 54], radius=4, fill=WHITE)
-    d.rectangle([16, 10, 48, 20], fill=(250, 190, 90))
-    for y, w in ((26, 24), (33, 18), (40, 22), (47, 14)):
-        d.rectangle([21, y, 21 + w, y + 3], fill=(150, 85, 80, 255))
-    return im
-
-
-def icon_screenshot():
-    # A CAMERA BODY WITH A LENS, which is what a screenshot icon is
-    # everywhere -- the alternative, a dashed rectangle "selection",
-    # reads as a crop tool and is invisible at 20px once the dashes go.
-    im, d = tile((70, 110, 160))
-    d.rectangle([22, 15, 34, 21], fill=WHITE)              # the viewfinder hump
-    d.rounded_rectangle([12, 20, 52, 48], radius=5, fill=WHITE)
-    d.ellipse([24, 26, 40, 42], fill=(70, 110, 160, 255))
-    d.ellipse([28, 30, 36, 38], fill=WHITE)
-    return im
-
-
-def icon_shapes():
-    im, d = tile((215, 95, 120))
-    d.polygon([(15, 37), (26, 16), (37, 37)], fill=WHITE)
-    d.ellipse([30, 31, 50, 51], outline=WHITE, width=5)
-    return im
-
-
-def icon_fontdemo():
-    im, d = tile((180, 140, 90))
-    # A letter A as three STROKES. The filled-polygon version read as a
-    # tent at 20px, because its counter (the hole) closed up.
-    d.line([23, 48, 32, 16], fill=WHITE, width=5)
-    d.line([32, 16, 41, 48], fill=WHITE, width=5)
-    d.line([26, 38, 38, 38], fill=WHITE, width=4)
-    return im
-
-
-def icon_uidemo():
-    im, d = tile((80, 150, 170))
-    d.rounded_rectangle([16, 18, 48, 28], radius=5, fill=(30, 60, 70, 255))
-    d.ellipse([37, 19, 47, 27], fill=WHITE)                       # a switch, on
-    d.line([18, 38, 46, 38], fill=(30, 60, 70, 255), width=4)      # a slider
-    d.ellipse([26, 33, 36, 43], fill=WHITE)
-    return im
-
-
-def icon_diskmark():
-    # A PLATTER WITH A NEEDLE, not a bar chart. The disc says storage at
-    # 20px where bars say "some app with numbers", and the sweep says
-    # measurement -- which is the same pairing CrystalDiskMark, GNOME
-    # Disks and macOS's Blackmagic test all reach for.
-    im, d = tile((58, 122, 168))
-    cx, cy = 32, 32
-    d.ellipse([cx - 19, cy - 19, cx + 19, cy + 19], outline=WHITE, width=4)
-    d.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], fill=WHITE)
-    # The needle, up and to the right: a reading part-way up its scale
-    # rather than pinned at either end.
-    d.line([cx, cy, cx + 13, cy - 13], fill=WHITE, width=4)
-    return im
-
-
-def icon_mines():
-    # A MINE, not a flag. Both are the game's symbols, but a flag at
-    # 20px is a wedge that could be anything, while a spiked ball is
-    # unmistakable -- and it is what winmine.exe, KMines and gnome-mines
-    # all put on the board itself.
-    im, d = tile((190, 78, 70))
-    cx, cy, r = 32, 32, 11
-    for dx, dy in ((0, 1), (1, 0), (1, 1), (1, -1)):
-        d.line([cx - dx * 17, cy - dy * 17, cx + dx * 17, cy + dy * 17],
-               fill=WHITE, width=4)
-    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=WHITE)
-    # The highlight, in the tile's own hue rather than a fourth colour --
-    # it is what stops the ball reading as a flat blob.
-    d.ellipse([cx - 6, cy - 6, cx - 3, cy - 3], fill=(190, 78, 70, 255))
-    return im
-
-
-def icon_doom():
-    # A HEALTH/ARMOR-STYLE CHEVRON, not a face and not a gun.
-    #
-    # The obvious pick is the marine's face from the status bar, and it
-    # is the wrong one twice over: it is id's artwork rather than a
-    # pictogram we drew, and at 20px on a taskbar a face becomes three
-    # smudges. A firearm is worse -- it says "shooter" without saying
-    # WHICH, and it is the one subject an icon set for a desktop should
-    # not lean on.
-    #
-    # So: the downward chevron stack that every Doom HUD and box has
-    # used since 1993, in the series' own red. Reads at 20px as a shape
-    # rather than as a picture, which is the whole test.
-    im, d = tile((166, 42, 38))
-    for i, y in enumerate((16, 30, 44)):
-        inset = 4 + i * 3
-        d.polygon([(12 + inset, y), (32, y + 12), (52 - inset, y),
-                   (32, y + 5)], fill=WHITE)
-    return im
-
-
-def icon_files():
-    # A folder, which is what every file manager on every desktop uses:
-    # a tab along the top of a body, drawn as two rectangles so the fold
-    # reads at 20px as well as at 64. The second, offset folder behind it
-    # is what says MANAGER rather than "a folder" -- Dolphin, Nautilus
-    # and Explorer all carry the same doubling.
-    im, d = tile((240, 190, 70))
-    d.rounded_rectangle([12, 20, 44, 46], radius=3, fill=(200, 150, 40, 255))
-    d.rectangle([16, 16, 30, 22], fill=WHITE)
-    d.rounded_rectangle([18, 22, 52, 50], radius=3, fill=WHITE)
-    d.rectangle([22, 18, 36, 25], fill=WHITE)
-    d.line([24, 32, 46, 32], fill=(190, 160, 90, 255), width=2)
-    d.line([24, 39, 40, 39], fill=(190, 160, 90, 255), width=2)
-    return im
-
-
-
-def icon_folder():
-    # NOT an app icon: a plain folder glyph for the file manager's icons
-    # view, drawn with no tile() plate -- a listing entry sits in a pane,
-    # not on a wallpaper, and a plate would read as a button.
-    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    d.rounded_rectangle([6, 14, 34, 24], radius=4, fill=(230, 176, 60, 255))
-    d.rounded_rectangle([6, 20, 58, 52], radius=4, fill=(240, 190, 70, 255))
-    d.rounded_rectangle([6, 20, 58, 26], radius=2, fill=(214, 162, 52, 255))
-    return im
-
-
-def icon_file():
-    # A page with a folded corner, the universal "some file" glyph --
-    # per-type artwork is the icon THEME's future problem, not this
-    # function's.
-    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    grey = (140, 145, 155, 255)
-    d.rounded_rectangle([14, 8, 50, 56], radius=3, fill=WHITE, outline=grey, width=2)
-    d.polygon([(38, 8), (50, 20), (38, 20)], fill=(210, 214, 222, 255), outline=grey)
-    for yy in (28, 35, 42):
-        d.line([20, yy, 44, yy], fill=(170, 175, 185, 255), width=2)
-    return im
-
 
 
 # --- toolbar glyphs ----------------------------------------------------
@@ -369,84 +115,12 @@ def icon_tb_home():
     return im
 
 
-# --- file types, places and drives (the File Manager) ------------------
+# --- places (the File Manager's sidebar) --------------------------------
 #
-# The file-type glyphs are the generic page with an emblem, so a listing
-# reads as "a page of some kind" first and "which kind" second -- the
-# Plasma and Windows 11 convention. Places and drives are flat ink, no
-# plate: they sit in a sidebar, not on a wallpaper.
+# Flat ink, no plate, then recoloured onto a tile below. The file types,
+# folders and drives are tools/icon_art.py's.
 
-PAGE_EDGE = (140, 145, 155, 255)
 PLACE_INK = (91, 127, 191, 255)
-
-
-def _page():
-    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    d.rounded_rectangle([14, 8, 50, 56], radius=3, fill=WHITE, outline=PAGE_EDGE, width=2)
-    d.polygon([(38, 8), (50, 20), (38, 20)], fill=(210, 214, 222, 255), outline=PAGE_EDGE)
-    return im, d
-
-
-def icon_file_text():
-    im, d = _page()
-    for yy in (28, 35, 42, 49):
-        d.line([20, yy, 44 if yy != 49 else 36, yy], fill=(150, 156, 168, 255), width=2)
-    return im
-
-
-def icon_file_doc():
-    # Markdown: a document with a heading bar.
-    im, d = _page()
-    d.rectangle([20, 26, 40, 31], fill=(50, 90, 160, 255))
-    for yy in (37, 43, 49):
-        d.line([20, yy, 44, yy], fill=(150, 156, 168, 255), width=2)
-    return im
-
-
-def icon_file_image():
-    im, d = _page()
-    d.rectangle([19, 26, 45, 48], fill=(120, 170, 220, 255))
-    d.polygon([(19, 48), (28, 36), (34, 43), (38, 39), (45, 48)], fill=(60, 140, 90, 255))
-    d.ellipse([36, 29, 41, 34], fill=(250, 220, 90, 255))
-    return im
-
-
-def icon_file_audio():
-    im, d = _page()
-    ink = (192, 102, 28, 255)
-    d.line([36, 26, 36, 45], fill=ink, width=4)
-    d.line([36, 26, 44, 30], fill=ink, width=4)
-    d.ellipse([25, 40, 37, 50], fill=ink)
-    return im
-
-
-def icon_file_config():
-    # Settings: two slider tracks with their knobs.
-    im, d = _page()
-    ink = (63, 143, 138, 255)
-    d.line([20, 32, 44, 32], fill=ink, width=3)
-    d.line([20, 44, 44, 44], fill=ink, width=3)
-    d.ellipse([24, 27, 34, 37], fill=WHITE, outline=ink, width=3)
-    d.ellipse([32, 39, 42, 49], fill=WHITE, outline=ink, width=3)
-    return im
-
-
-def icon_file_font():
-    im, d = _page()
-    ink = (70, 70, 80, 255)
-    d.line([22, 50, 32, 26], fill=ink, width=4)
-    d.line([32, 26, 42, 50], fill=ink, width=4)
-    d.line([26, 42, 38, 42], fill=ink, width=3)
-    return im
-
-
-def icon_file_app():
-    # A launcher (.desktop): an app tile on the page.
-    im, d = _page()
-    d.rounded_rectangle([21, 28, 43, 50], radius=5, fill=(50, 90, 160, 255))
-    d.rectangle([26, 37, 38, 41], fill=WHITE)
-    return im
 
 
 def _place():
@@ -529,14 +203,9 @@ def icon_place_pictures_tile():  return _tile((74, 163, 107), icon_place_picture
 
 # A FOLDER OF A KNOWN KIND is the plain folder's shape in the kind's
 # colour, with a white emblem on its front -- Plasma's folder-music and
-# Explorer's special folders. lib/ufiletype.c maps names to these.
-def _folder_kind(body, tab, emblem):
-    im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    d.rounded_rectangle([6, 14, 34, 24], radius=4, fill=tab + (255,))
-    d.rounded_rectangle([6, 20, 58, 52], radius=4, fill=body + (255,))
-    emblem(d, (255, 255, 255, 255))
-    return im
+# Explorer's special folders. lib/ufiletype.c maps names to these; the
+# emblems are drawn in the 64-px space and icon_art.kind_folder() puts
+# them on its folder at 4x.
 
 
 def _em_music(d, w):
@@ -620,27 +289,6 @@ FOLDER_KINDS = {
     "folder-soundfonts": ((176, 92, 201), (149, 71, 174), _em_soundfonts),
     "folder-home":       ((70, 110, 160), (55, 88, 132), _em_home),
 }
-
-
-def icon_drive():
-    # A drive seen from the front: a slab with its activity light.
-    im, d = _place()
-    d.rounded_rectangle([6, 20, 58, 46], radius=6, fill=(223, 227, 234, 255),
-                        outline=(106, 116, 134, 255), width=3)
-    d.ellipse([44, 30, 52, 38], fill=(58, 138, 74, 255))
-    d.line([14, 34, 34, 34], fill=(106, 116, 134, 255), width=3)
-    return im
-
-
-def icon_drive_ram():
-    # Memory: a chip with its legs, for a filesystem that lives in RAM.
-    im, d = _place()
-    ink = (106, 90, 150, 255)
-    d.rounded_rectangle([14, 14, 50, 50], radius=4, fill=(231, 226, 243, 255), outline=ink, width=3)
-    for x in (22, 32, 42):
-        d.line([x, 6, x, 14], fill=ink, width=3)
-        d.line([x, 50, x, 58], fill=ink, width=3)
-    return im
 
 
 def icon_tb_cut():
@@ -1316,17 +964,6 @@ def icon_tb_info():
     return im
 
 
-def icon_properties():
-    """The Properties window's own icon: a sheet with an information
-    mark. Not a `tb-` glyph -- it names a WINDOW, so it is drawn like
-    the other app icons, on a plate."""
-    im, d = tile((92, 104, 126))
-    d.rectangle([16, 12, 44, 52], fill=(250, 250, 252, 255))
-    d.ellipse([26, 18, 34, 26], fill=(92, 104, 126, 255))
-    d.rectangle([27, 30, 33, 46], fill=(92, 104, 126, 255))
-    return im
-
-
 def icon_start():
     """The Start button's mark -- NOT an app icon, and deliberately not
     shaped like a UI convention either.
@@ -1349,8 +986,7 @@ def icon_start():
 
     DRAWN AS SOLID BLOCKS WITH GAPS, not outlines: at the ~12px the
     taskbar scales it to, an outline's interior closes up and the whole
-    mark becomes a smudge -- the same failure icon_fontdemo() records
-    for a filled letter A.
+    mark becomes a smudge.
     """
     im = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     brick_stack(ImageDraw.Draw(im), w=22, h=20, gap=5, bottom_y=34, left_x=6)
@@ -1402,142 +1038,7 @@ def icon_toyos():
     return im
 
 
-# --- SETTINGS CATEGORIES ----------------------------------------------
-#
-# One per top-level category in System Settings' sidebar, named
-# `cat-<something>` so they sort together in /usr/share/icons and cannot
-# collide with an app's. Drawn flatter and simpler than an app icon on
-# purpose: these are read at about a text row's height beside a bold
-# label, not at 48px on a wallpaper, so a pictogram with any detail in
-# it turns to mush. The tile hue carries most of the recognition at that
-# size; the shape confirms it.
-
-def icon_cat_time():
-    im, d = tile((70, 130, 180))
-    d.ellipse([14, 14, 50, 50], outline=WHITE, width=5)
-    d.line([32, 32, 32, 20], fill=WHITE, width=5)   # hour hand
-    d.line([32, 32, 42, 38], fill=WHITE, width=5)   # minute hand
-    return im
-
-
-def icon_cat_appearance():
-    # A half-filled disc: the universal "contrast/theme" mark, and the
-    # one shape that still reads when it is twelve pixels across.
-    im, d = tile((150, 100, 190))
-    d.ellipse([14, 14, 50, 50], outline=WHITE, width=5)
-    d.pieslice([14, 14, 50, 50], 90, 270, fill=WHITE)
-    return im
-
-
-def icon_cat_input():
-    # A keyboard: an outline with three key rows, the middle one broken
-    # so it does not read as a filled block.
-    im, d = tile((90, 160, 120))
-    d.rounded_rectangle([10, 20, 54, 46], radius=4, outline=WHITE, width=4)
-    for y in (27, 33):
-        d.line([17, y, 47, y], fill=WHITE, width=3)
-    d.line([24, 39, 40, 39], fill=WHITE, width=3)   # the space bar
-    return im
-
-
-def icon_cat_shortcuts():
-    # A single keycap with a chevron on it -- a KEY being pressed, which
-    # is what a shortcut is. Deliberately NOT another full keyboard:
-    # cat-input already is one, and two keyboards in the same sidebar
-    # would be two rows nobody can tell apart at 20px.
-    im, d = tile((120, 135, 185))
-    d.rounded_rectangle([16, 16, 48, 48], radius=5, outline=WHITE, width=4)
-    # The chevron, pointing down-right the way a "press" arrow does.
-    d.line([25, 27, 32, 34], fill=WHITE, width=4)
-    d.line([32, 34, 25, 41], fill=WHITE, width=4)
-    d.line([36, 41, 42, 41], fill=WHITE, width=4)
-    return im
-
-
-def icon_cat_kernel():
-    # A chip: a square die with legs on all four sides. The one category
-    # that is about the machine rather than about the session.
-    im, d = tile((110, 120, 135))
-    d.rounded_rectangle([18, 18, 46, 46], radius=3, outline=WHITE, width=4)
-    for t in (25, 32, 39):
-        d.line([t, 10, t, 18], fill=WHITE, width=3)   # top
-        d.line([t, 46, t, 54], fill=WHITE, width=3)   # bottom
-        d.line([10, t, 18, t], fill=WHITE, width=3)   # left
-        d.line([46, t, 54, t], fill=WHITE, width=3)   # right
-    return im
-
-
-def icon_cat_display():
-    # A monitor: a screen on a stand. The category is about the panel
-    # itself -- brightness, resolution, scaling -- not about what is
-    # drawn on it, which is Appearance.
-    im, d = tile((70, 130, 180))
-    d.rounded_rectangle([12, 16, 52, 42], radius=3, outline=WHITE, width=4)
-    d.line([32, 42, 32, 50], fill=WHITE, width=4)      # stand
-    d.line([22, 51, 42, 51], fill=WHITE, width=4)      # foot
-    return im
-
-
-def icon_cat_storage():
-    # A disk platter seen edge-on: the stacked-cylinder shape every file
-    # manager and every OS has used for a drive since the 1980s.
-    im, d = tile((120, 125, 140))
-    d.ellipse([12, 12, 52, 24], outline=WHITE, width=4)   # top rim
-    d.line([12, 18, 12, 44], fill=WHITE, width=4)         # left wall
-    d.line([52, 18, 52, 44], fill=WHITE, width=4)         # right wall
-    d.arc([12, 32, 52, 44], 0, 180, fill=WHITE, width=4)  # middle band
-    d.arc([12, 40, 52, 52], 0, 180, fill=WHITE, width=4)  # bottom
-    return im
-
-
-def icon_cat_system():
-    # A tower: the machine itself, which is what this category is about
-    # (the shell it runs, the machine's own configuration) rather than
-    # the session on it. A TOWER and not a monitor, because Display is
-    # already a monitor and two boxes would be one too many; the power
-    # dot and the drive slots are what separate them at a glance.
-    im, d = tile((100, 110, 125))
-    d.rounded_rectangle([20, 10, 44, 54], radius=3, outline=WHITE, width=4)
-    d.ellipse([28, 16, 36, 24], outline=WHITE, width=3)   # power button
-    d.line([26, 32, 38, 32], fill=WHITE, width=3)         # drive slot
-    d.line([26, 40, 38, 40], fill=WHITE, width=3)         # drive slot
-    return im
-
-
-def icon_devmgr():
-    # An expansion card: a board, a chip on it, and the gold fingers
-    # along its edge -- the DEVICE rather than the machine (System is a
-    # tower, Kernel a bare chip).
-    im, d = tile((70, 110, 160))
-    d.rounded_rectangle([10, 14, 54, 42], radius=3, outline=WHITE, width=4)
-    d.rectangle([18, 21, 31, 34], fill=WHITE)            # the chip
-    d.line([36, 24, 46, 24], fill=WHITE, width=3)         # traces
-    d.line([36, 31, 46, 31], fill=WHITE, width=3)
-    for x in range(16, 50, 6):
-        d.line([x, 44, x, 51], fill=WHITE, width=3)       # the fingers
-    return im
-
-
-def icon_bootmgr():
-    # A boot MENU: three entries, the first picked by a pointer -- what
-    # GRUB's screen looks like, which is the thing this app edits.
-    im, d = tile((84, 96, 150))
-    d.polygon([(10, 15), (20, 21), (10, 27)], fill=WHITE)
-    d.rounded_rectangle([24, 14, 54, 28], radius=3, fill=WHITE)
-    d.rounded_rectangle([24, 33, 54, 39], radius=3, outline=WHITE, width=2)
-    d.rounded_rectangle([24, 45, 54, 51], radius=3, outline=WHITE, width=2)
-    return im
-
-
-def icon_sysupdate():
-    # A circular arrow around a down-arrow: "fetch, and refresh" -- the
-    # shape Windows Update and KDE Discover both use for the job.
-    im, d = tile((60, 130, 170))
-    d.arc([12, 12, 52, 52], start=200, end=500, fill=WHITE, width=5)
-    d.polygon([(44, 8), (52, 22), (38, 22)], fill=WHITE)   # the arc's arrowhead
-    d.line([32, 22, 32, 38], fill=WHITE, width=5)
-    d.polygon([(24, 36), (40, 36), (32, 45)], fill=WHITE)
-    return im
+# --- device classes (Device Manager) ------------------------------------
 
 
 def icon_dev_usb():
@@ -1581,190 +1082,16 @@ def icon_badge_disabled():
     return im
 
 
-def icon_cat_favourites():
-    # A STAR, which is what a pinned thing is called everywhere. Drawn
-    # as a polygon rather than a glyph so it stays sharp at the folder
-    # size the Start menu asks for, which is smaller than an app icon.
-    im, d = tile((240, 186, 60))
-    pts = []
-    import math
-    for i in range(10):
-        r = 22 if i % 2 == 0 else 9
-        a = -math.pi / 2 + i * math.pi / 5
-        pts.append((32 + r * math.cos(a), 32 + r * math.sin(a)))
-    d.polygon(pts, fill=WHITE)
-    return im
-
-
-def icon_cat_recent():
-    # A CLOCK, and deliberately not an hourglass: this folder is
-    # ordered by WHEN, and an hourglass means "wait" in every toolkit
-    # including this one's wait cursor.
-    im, d = tile((120, 140, 170))
-    d.ellipse([14, 14, 50, 50], outline=WHITE, width=4)
-    d.line([32, 32, 32, 21], fill=WHITE, width=4)   # hour hand
-    d.line([32, 32, 41, 36], fill=WHITE, width=4)   # minute hand
-    return im
-
-
-def icon_cat_all():
-    # A GRID: every app, which is what the folder holds. Nine squares
-    # rather than four, because four reads as a window layout.
-    im, d = tile((110, 120, 135))
-    for row in range(3):
-        for col in range(3):
-            x = 14 + col * 13
-            y = 14 + row * 13
-            d.rounded_rectangle([x, y, x + 8, y + 8], radius=2, fill=WHITE)
-    return im
-
-
-def icon_cat_utility():
-    # A WRENCH at an angle -- the small tools category. The handle is a
-    # thick line and the head an open ring, which survives being drawn
-    # at half an app icon's size where a detailed spanner would not.
-    im, d = tile((90, 150, 120))
-    d.line([22, 42, 44, 20], fill=WHITE, width=7)
-    d.ellipse([16, 36, 30, 50], outline=WHITE, width=5)
-    return im
-
-
-def icon_cat_graphics():
-    # A PICTURE: a frame with a hill and a sun, the same pictogram the
-    # Image Viewer's own icon uses -- a category and the app most in it
-    # sharing a visual language is a feature.
-    im, d = tile((200, 120, 190))
-    d.rounded_rectangle([14, 16, 50, 48], radius=3, outline=WHITE, width=4)
-    d.polygon([(20, 44), (30, 30), (40, 44)], fill=WHITE)
-    d.ellipse([36, 22, 44, 30], fill=WHITE)
-    return im
-
-
-def icon_cat_multimedia():
-    # A PLAY TRIANGLE, which means media everywhere and nothing else
-    # anywhere.
-    im, d = tile((220, 110, 90))
-    d.polygon([(24, 16), (48, 32), (24, 48)], fill=WHITE)
-    return im
-
-
-def icon_cat_games():
-    # A GAMEPAD, reduced to what survives at this size: a rounded body,
-    # a d-pad cross and two buttons.
-    im, d = tile((110, 160, 90))
-    d.rounded_rectangle([12, 22, 52, 44], radius=10, fill=WHITE)
-    d.line([20, 33, 30, 33], fill=(110, 160, 90, 255), width=4)
-    d.line([25, 28, 25, 38], fill=(110, 160, 90, 255), width=4)
-    d.ellipse([38, 28, 44, 34], fill=(110, 160, 90, 255))
-    d.ellipse([44, 34, 50, 40], fill=(110, 160, 90, 255))
-    return im
-
-
-def icon_cat_development():
-    # ANGLE BRACKETS, the universal "this is code" mark -- and the one
-    # pictogram here that is literally two characters, which is why it
-    # is drawn as lines rather than set as text: the interface face is
-    # not guaranteed to have a weight that reads at 20 pixels.
-    im, d = tile((130, 120, 200))
-    d.line([26, 22, 16, 32], fill=WHITE, width=5)
-    d.line([16, 32, 26, 42], fill=WHITE, width=5)
-    d.line([38, 22, 48, 32], fill=WHITE, width=5)
-    d.line([48, 32, 38, 42], fill=WHITE, width=5)
-    return im
-
-
-def icon_cat_desktop():
-    # A desktop with a panel along the bottom and two icons on it: the
-    # furniture of the session, which is what this category holds
-    # (wallpaper, icon size, taskbar, tray, screensaver). Distinct from
-    # Display's monitor, which is about the panel the pixels land on.
-    im, d = tile((80, 140, 150))
-    d.rounded_rectangle([10, 12, 54, 50], radius=3, outline=WHITE, width=4)
-    d.line([12, 42, 52, 42], fill=WHITE, width=3)        # the panel
-    d.rectangle([17, 20, 25, 28], outline=WHITE, width=3)  # an icon
-    d.rectangle([17, 31, 25, 38], outline=WHITE, width=3)  # another
-    return im
-
-
-def icon_cat_network():
-    # Three nodes on a stem: one above, two below. The shape every
-    # settings panel uses for a network -- a connection between things
-    # rather than a cable or a globe, neither of which is what this
-    # category is about (an address, a name, a log).
-    im, d = tile((70, 120, 165))
-    d.line([32, 20, 32, 32], fill=WHITE, width=4)        # stem down
-    d.line([16, 32, 48, 32], fill=WHITE, width=4)        # crossbar
-    d.line([16, 32, 16, 40], fill=WHITE, width=4)        # left drop
-    d.line([48, 32, 48, 40], fill=WHITE, width=4)        # right drop
-    d.ellipse([26, 10, 38, 22], outline=WHITE, fill=WHITE)   # top node
-    d.ellipse([10, 40, 22, 52], outline=WHITE, fill=WHITE)   # left node
-    d.ellipse([42, 40, 54, 52], outline=WHITE, fill=WHITE)   # right node
-    return im
-
-
-def icon_cat_sound():
-    # A speaker with one arc. Deliberately ONE arc, not the tray
-    # volume icon's three: this is the category heading, and it should
-    # not read as a live volume level.
-    im, d = tile((90, 150, 120))
-    d.polygon([(16, 26), (26, 26), (38, 14), (38, 50), (26, 38), (16, 38)],
-              outline=WHITE, fill=WHITE)
-    d.arc([36, 18, 54, 46], -60, 60, fill=WHITE, width=4)
-    return im
-
-
 ICONS = {
     # The Start menu's folders. `cat-<key>` is the name start_menu.c
     # derives from a `.desktop` Category=, so an icon appears the day a
     # category does -- and a category with no icon file simply draws
     # none rather than breaking the column.
-    "cat-favourites": icon_cat_favourites,
-    "cat-recent": icon_cat_recent,
-    "cat-all": icon_cat_all,
-    "cat-utility": icon_cat_utility,
-    "cat-graphics": icon_cat_graphics,
-    "cat-multimedia": icon_cat_multimedia,
-    "cat-games": icon_cat_games,
-    "cat-development": icon_cat_development,
-    "cat-time": icon_cat_time,
-    "cat-appearance": icon_cat_appearance,
-    "cat-input": icon_cat_input,
-    "cat-shortcuts": icon_cat_shortcuts,
-    "cat-kernel": icon_cat_kernel,
-    "cat-system": icon_cat_system,
-    "cat-desktop": icon_cat_desktop,
-    "cat-network": icon_cat_network,
-    "cat-display": icon_cat_display,
-    "cat-storage": icon_cat_storage,
-    "cat-sound": icon_cat_sound,
-    "devmgr": icon_devmgr,
-    "bootmgr": icon_bootmgr,
-    "sysupdate": icon_sysupdate,
     "dev-usb": icon_dev_usb,
     "badge-warning": icon_badge_warning,
     "badge-disabled": icon_badge_disabled,
     "start": icon_start,
     "toyos": icon_toyos,
-    "notepad": icon_notepad,
-    "terminal": icon_terminal,
-    "calculator": icon_calculator,
-    "settings": icon_settings,
-    "taskmgr": icon_taskmgr,
-    "imgview": icon_imgview,
-    "player": icon_player,
-    "about": icon_about,
-    "help": icon_help,
-    "logview": icon_logview,
-    "crashreports": icon_crashreports,
-    "screenshot": icon_screenshot,
-    "shapes": icon_shapes,
-    "fontdemo": icon_fontdemo,
-    "uidemo": icon_uidemo,
-    "mines": icon_mines,
-    "doom": icon_doom,
-    "files": icon_files,
-    "folder": icon_folder,
-    "file": icon_file,
     "tb-up": icon_tb_up,
     "tb-zoom-in": icon_tb_zoom_in,
     "tb-zoom-out": icon_tb_zoom_out,
@@ -1817,20 +1144,11 @@ ICONS = {
     "tb-find": icon_tb_find,
     "tb-menu": icon_tb_menu,
     "tb-chevron": icon_tb_chevron,
-    "file-text": icon_file_text,
-    "file-doc": icon_file_doc,
-    "file-image": icon_file_image,
-    "file-audio": icon_file_audio,
-    "file-config": icon_file_config,
-    "file-font": icon_file_font,
-    "file-app": icon_file_app,
     "place-home": icon_place_home_tile,
     "place-desktop": icon_place_desktop_tile,
     "place-documents": icon_place_documents_tile,
     "place-music": icon_place_music_tile,
     "place-pictures": icon_place_pictures_tile,
-    "drive": icon_drive,
-    "drive-ram": icon_drive_ram,
     "tb-details": icon_tb_details,
     "tb-chart": icon_tb_chart,
     "tb-gear": icon_tb_gear,
@@ -1842,8 +1160,6 @@ ICONS = {
     "tb-mkdir": icon_tb_mkdir,
     "tb-rename": icon_tb_rename,
     "tb-delete": icon_tb_delete,
-    "properties": icon_properties,
-    "diskmark": icon_diskmark,
     "tray-volume-high": icon_tray_volume_high,
     "tray-volume-low": icon_tray_volume_low,
     "tray-volume-muted": icon_tray_volume_muted,
@@ -1863,8 +1179,13 @@ ICONS = {
 # missing.
 
 
+# THE COLOUR ART -- apps, folders, files, drives, categories -- is
+# tools/icon_art.py's, drawn at 4x; this file keeps the symbolic glyphs.
+import icon_art  # noqa: E402
+
+ICONS.update(icon_art.ART)
 for _name, (_body, _tab, _em) in FOLDER_KINDS.items():
-    ICONS[_name] = (lambda b=_body, t=_tab, e=_em: _folder_kind(b, t, e))
+    ICONS[_name] = (lambda b=_body, t=_tab, e=_em: icon_art.kind_folder(b, t, e))
 
 
 def render(name):

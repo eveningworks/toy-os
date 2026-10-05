@@ -2039,11 +2039,17 @@ window without going through it will find its layout polls timing out.
   that only asked whether it failed.
 - **`gen_icons.py`** -- draws the application icons into `data/icons/`
   (one 64x64 QOI per icon NAME) and `--check`s that the files on disk
-  match the script, the same contract `gen_cursors.py` has. The art is
-  deliberately simple -- a rounded tile in a per-app hue and a white
-  pictogram -- because that is what still reads at 20 pixels in a Start
-  menu row, and it is drawn here rather than committed as somebody's
-  icon set so the repo owns every pixel it ships. **PILLOW encodes
+  match the script, the same contract `gen_cursors.py` has. It holds
+  the SYMBOLIC glyphs (toolbar, tray -- one flat ink, tinted at draw
+  time); the colour art is **`icon_art.py`**, its module: each app as
+  its own object with a soft gradient and shadow, no plate (Windows 11's
+  and GNOME's shape, chosen from mockups 2026-10-05), and the folders,
+  file types, drives and categories to match. That art is drawn at 4x
+  and box-reduced in premultiplied alpha, because Pillow's ImageDraw does
+  not anti-alias; its `D4` draws in the 64-px space at 4x, so an older
+  64-px drawing (the folder emblems) ports verbatim. Drawn here rather
+  than committed as somebody's icon set so the repo owns every pixel it
+  ships. **PILLOW encodes
   them**, which is what keeps `uimg_qoi.c`'s DECODER honest: these files
   come from a foreign implementation, so a chunk type the decoder
   misreads cannot round-trip through a matching bug of our own. (The
