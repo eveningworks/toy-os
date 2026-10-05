@@ -499,10 +499,14 @@ static void fill_button(struct taskbar_button *b, int starter, int first, int me
     // A GROUPED button is named after the APPLICATION, an ungrouped
     // one after its window -- which is what Windows and KDE both
     // show, and the only naming that stays true when the group's
-    // frontmost window changes underneath it. Falls back to the
-    // title for a window whose client declared no app id.
+    // frontmost window changes underneath it: the registry's name
+    // ("Notepad"), else the bare app id, else the title for a window
+    // whose client declared none.
     const char *name = windows[first].title;
-    if (members > 1 && windows[first].app_id[0]) name = windows[first].app_id;
+    if (members > 1 && windows[first].app_id[0]) {
+        const char *app = wm_window_app_name_of(&windows[first]);
+        name = app ? app : windows[first].app_id;
+    }
     b->icon = wm_window_icon_name(first);
     if (!labelled) {
         b->elided = 0;
@@ -514,6 +518,30 @@ static void fill_button(struct taskbar_button *b, int starter, int first, int me
     // cannot disagree about where the text starts.
     int label_w = w - (b->icon ? taskbar_icon_size() + TB_ICON_GAP : 0);
     b->elided = make_label(b->label, (int)sizeof b->label, name, label_w, members);
+}
+
+int taskbar_badge_rect(const struct taskbar_button *b, int x,
+                       int *bx, int *by, int *bw, int *bh, char *num, int cap) {
+    if (g_buttons != TASKBAR_BUTTONS_ICONS || b->count < 2 || cap < 3) return 0;
+    if (b->count > 9) { num[0] = '9'; num[1] = '+'; num[2] = 0; }
+    else { num[0] = (char)('0' + b->count); num[1] = 0; }
+    struct taskbar_geom g;
+    taskbar_geom(&g);
+    const struct ugfx_font *was = ugfx_set_font(ugfx_font_caption());
+    int th = ugfx_char_h(), tw = ugfx_text_width(num);
+    ugfx_set_font(was);
+    *bh = th + 2;
+    *bw = tw + 6 < *bh ? *bh : tw + 6;
+    // CENTRED ON THE ICON'S TOP-RIGHT CORNER, a little in from it --
+    // where Windows and every phone put a count -- and kept inside the
+    // button, whose rect is what gets damaged.
+    int isz = taskbar_icon_size();
+    int ir = x + (b->w + isz) / 2, it = g.btn_y + (g.btn_h - isz) / 2;
+    *bx = ir - *bw / 2 - 1;
+    *by = it + 3 - *bh / 2;
+    if (*bx + *bw > x + b->w - 1) *bx = x + b->w - 1 - *bw;
+    if (*by < g.btn_y + 1) *by = g.btn_y + 1;
+    return 1;
 }
 
 // The Start button's left edge, which a centred Start derives from the

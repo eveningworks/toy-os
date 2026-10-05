@@ -76,6 +76,14 @@ struct taskbar_button {
     char label[32];
 };
 
+// THE GROUP COUNT on an icons-only button (`desktop.taskbar_buttons` =
+// icons) that stands for two or more windows: the badge's rect when the
+// button is drawn at `x`, and its text ("3", "9+") in `num`. 0 for a
+// labelled strip, whose label carries the count instead, or a single
+// window. One function, so the renderer and `gui taskbar` agree.
+int taskbar_badge_rect(const struct taskbar_button *b, int x,
+                       int *bx, int *by, int *bw, int *bh, char *num, int cap);
+
 // Fills `out` with the strip's current buttons, left to right, and
 // returns how many were written. Never writes more than `max`, and
 // never places a button that would cross into the tray.

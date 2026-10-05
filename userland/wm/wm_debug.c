@@ -919,15 +919,27 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
         for (int i = 0; i < nb; i++) {
             if (o->overflow) break;
             int mark = dbg_out_mark(o);
+            // The group count's badge where the button is DRAWN, or null.
+            char badge[80], num[4];
+            int bx, by, bw, bh;
+            if (taskbar_badge_rect(&btns[i], taskbar_draw_x(&btns[i]), &bx, &by, &bw, &bh,
+                                   num, sizeof num))
+                k_snprintf(badge, sizeof badge,
+                           "{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"text\":\"%s\"}",
+                           bx, by, bw, bh, num);
+            else
+                k_strlcpy(badge, "null", sizeof badge);
             dbg_out_printf(o, "%s{\"index\":%d,\"title\":\"%s\",\"app_id\":\"%s\","
                          "\"label\":\"%s\",\"elided\":%s,\"key\":%u,\"dragging\":%s,"
-                         "\"x\":%d,\"w\":%d,\"count\":%d,\"cx\":%d,\"cy\":%d}",
+                         "\"x\":%d,\"w\":%d,\"count\":%d,\"cx\":%d,\"cy\":%d,",
                          i ? "," : "", btns[i].first, windows[btns[i].first].title,
                          windows[btns[i].first].app_id, btns[i].label,
                          btns[i].elided ? "true" : "false", (unsigned)btns[i].key,
                          btns[i].dragging ? "true" : "false",
                          btns[i].x, btns[i].w, btns[i].count,
                          btns[i].x + btns[i].w / 2, bar_y + taskbar_h / 2);
+            // A call of its own: one line is KFMT_LINE_MAX, as above.
+            dbg_out_printf(o, "\"badge\":%s}", badge);
             if (o->overflow) { dbg_out_rollback(o, mark); break; }
             listed++;
         }

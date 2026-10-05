@@ -1381,17 +1381,30 @@ static void draw_taskbar(void) {
                                          wm_glass_ink_bg(WM_GLASS_TASKBAR, bg, p->bar));
             }
             // THE PILL: short and grey for an open window, long and in
-            // the accent for the focused one, doubled for a group --
-            // Windows 11's running indicator.
+            // the accent for the focused one -- Windows 11's running
+            // indicator. A group says how many in its badge instead.
             int ph = g_pill_h();
             int py = y + h - ph - 2;
-            if (focused) {
+            if (focused)
                 uui_fill_round_rect(s, x + (w - 16) / 2, py, 16, ph, UUI_CAPSULE, p->accent);
-            } else if (tb->count > 1) {
-                uui_fill_round_rect(s, x + w / 2 - 7, py, 6, ph, UUI_CAPSULE, p->running);
-                uui_fill_round_rect(s, x + w / 2 + 1, py, 6, ph, UUI_CAPSULE, p->running);
-            } else {
+            else
                 uui_fill_round_rect(s, x + (w - 6) / 2, py, 6, ph, UUI_CAPSULE, p->running);
+            // THE COUNT BADGE: the strip's ink as its fill and the
+            // button's ground as its digits, so it inverts with the
+            // theme, cut out of the icon by a ring of that ground.
+            char num[4];
+            int bx, by, bw, bh;
+            if (taskbar_badge_rect(tb, x, &bx, &by, &bw, &bh, num, sizeof num)) {
+                uint32_t under = wm_glass_ink_bg(WM_GLASS_TASKBAR, bg, p->bar);
+                int ring = taskbar_bar_h() >= 40 ? 2 : 1;
+                uui_fill_round_rect(s, bx - ring, by - ring, bw + 2 * ring, bh + 2 * ring,
+                                    UUI_CAPSULE, under);
+                uui_fill_round_rect(s, bx, by, bw, bh, UUI_CAPSULE, p->text);
+                const struct ugfx_font *was = ugfx_set_font(ugfx_font_caption());
+                int tw = ugfx_text_width(num);
+                ugfx_draw_string_clipped(s, bx + (bw - tw) / 2, by + (bh - ugfx_char_h()) / 2,
+                                         bw, num, under, p->text);
+                ugfx_set_font(was);
             }
             continue;
         }

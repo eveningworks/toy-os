@@ -361,6 +361,12 @@ int ugfx_font_load(const char *path, int px, int bold,
 // session's cell height changes. Never NULL.
 const struct ugfx_font *ugfx_font_display(void);
 
+// Two thirds of the session's height, bold -- the CAPTION size a count
+// badge or a small figure on an icon is drawn at (the taskbar's group
+// count). Same contract as ugfx_font_display(): private, cached,
+// re-rasterized when the session's height changes, never NULL.
+const struct ugfx_font *ugfx_font_caption(void);
+
 // Bytes ugfx_font_load() needs at `px`. Sized for the worst case at
 // that size, so a caller can allocate before knowing which face it will
 // get -- a face whose glyphs turn out narrower simply uses less.

@@ -791,26 +791,34 @@ int ugfx_font_load(const char *path, int px, int bold,
     return 1;
 }
 
-// The session size doubled, bold, for a clock or a figure that is the
-// point of its panel -- loaded once per cell height and kept. Falls
-// back to the session's bold weight when the file will not load.
-const struct ugfx_font *ugfx_font_display(void) {
-    static struct ugfx_font f;
-    static void *arena;
-    static int loaded_px, ok;
-    // From the SESSION font, never the current one: asked while this
-    // font is selected, ugfx_char_h() would double the double.
-    int px = ugfx_font_session(UGFX_FONT_REGULAR)->line_h * 2;
-    if (px < 16) px = 16;
-    if (px != loaded_px) {
-        loaded_px = px;
-        free(arena);
+// A private bold Liberation Sans at `px`, loaded once per size and kept.
+// Falls back to the session's bold weight when the file will not load.
+struct sized_bold { struct ugfx_font f; void *arena; int px, ok; };
+
+static const struct ugfx_font *bold_at(struct sized_bold *s, int px) {
+    if (px != s->px) {
+        s->px = px;
+        free(s->arena);
         unsigned long need = ugfx_font_arena_size(px);
-        arena = malloc(need);
-        ok = arena && ugfx_font_load("/usr/share/fonts/liberation-sans-bold.ttf",
-                                     px, 0, &f, arena, need);
+        s->arena = malloc(need);
+        s->ok = s->arena && ugfx_font_load("/usr/share/fonts/liberation-sans-bold.ttf",
+                                           px, 0, &s->f, s->arena, need);
     }
-    return ok ? &f : ugfx_font_session(UGFX_FONT_BOLD);
+    return s->ok ? &s->f : ugfx_font_session(UGFX_FONT_BOLD);
+}
+
+// Sizes are taken from the SESSION font, never the current one: asked
+// while one of these is selected, ugfx_char_h() would scale the scale.
+const struct ugfx_font *ugfx_font_display(void) {
+    static struct sized_bold s;
+    int px = ugfx_font_session(UGFX_FONT_REGULAR)->line_h * 2;
+    return bold_at(&s, px < 16 ? 16 : px);
+}
+
+const struct ugfx_font *ugfx_font_caption(void) {
+    static struct sized_bold s;
+    int px = ugfx_font_session(UGFX_FONT_REGULAR)->line_h * 2 / 3;
+    return bold_at(&s, px < 9 ? 9 : px);
 }
 
 int ugfx_kern(int prev, int c) {

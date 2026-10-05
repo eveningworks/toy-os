@@ -26,6 +26,9 @@ fake:
     centred Start holds the buttons centred -- the alignment's
     Requires= refuses `left` and reads `center` until Start returns.
   * light: the strip is drawn in the light palette.
+  * the group count: an icons-only group carries a badge with its count,
+    in the strip's ink, while its window has the focus; a single
+    window has none; a labelled group reads "Notepad (2)".
 
     python3 tools/vm.py --disk <copy> start
     python3 tools/taskbar_style_test.py
@@ -37,7 +40,9 @@ Making taskbar_floating() return 0 turns the floating checks red (the
 corner pixel stays the strip's colour, `floating` reports false), and
 the deflate check with them; dropping the `hovered` fill in
 draw_taskbar() turns "the hovered button is drawn lit" red while the
-JSON hover check stays green -- the reason both exist.
+JSON hover check stays green -- the reason both exist. No badge
+(taskbar_badge_rect() returning 0) reddens the badge check alone, and
+naming a group by its app id reddens the label check alone.
 
 It leaves every taskbar setting UNSET on the way out: `make iso` syncs
 rather than reformats, so a setting written here outlives the run.
@@ -315,7 +320,46 @@ def main():
 
         # Back to the defaults for every later tool.
         set_and_wait(dbg, "desktop.taskbar_theme", None, lambda t: t.get("theme") == "dark")
-        for k in ("taskbar_buttons", "taskbar_align", "start_position", "taskbar_float"):
+
+        # --- the group count ---------------------------------------------
+        #
+        # An icons-only GROUP says how many windows it holds in a badge;
+        # a single window has none. The second Notepad takes the focus,
+        # which is the case the old doubled pill went missing in.
+        print("the group count")
+        dbg.open_app("Notepad")
+        set_and_wait(dbg, "desktop.taskbar_combine", "always", lambda t: t.get("combine") == "always")
+        tb = set_and_wait(dbg, "desktop.taskbar_buttons", "icons",
+                          lambda t: t.get("buttons_kind") == "icons"
+                          and any(b["count"] == 2 for b in t.get("buttons", [])))
+        grp = next((b for b in tb["buttons"] if b["count"] == 2), None)
+        one = next((b for b in tb["buttons"] if b["count"] == 1), None)
+        res.check("an icons-only group carries a count badge and a single window none",
+                  grp is not None and grp.get("badge") and grp["badge"]["text"] == "2"
+                  and one is not None and one.get("badge") is None,
+                  f"group {grp and grp.get('badge')}, single {one and one.get('badge')}")
+        if grp and grp.get("badge") and one:
+            bd = grp["badge"]
+            # Inside the capsule, left of the digit: the strip's ink. The
+            # same offset on the single button is icon, not badge.
+            spot = (bd["x"] + 2, bd["y"] + bd["h"] // 2)
+            off = (one["x"] + (bd["x"] - grp["x"]) + 2, spot[1])
+            from PIL import Image
+            path = os.path.join(tmp, "badge.png")
+            qmp.screenshot(path)
+            im = Image.open(path).convert("RGB")
+            res.check("...drawn in the strip's ink, while its window has the focus",
+                      im.getpixel(spot) == rgb(tb["ink"]) and im.getpixel(off) != rgb(tb["ink"]),
+                      f"badge {im.getpixel(spot)}, single {im.getpixel(off)}, ink {rgb(tb['ink'])}")
+        tb = set_and_wait(dbg, "desktop.taskbar_buttons", None,
+                          lambda t: t.get("buttons_kind") == "labelled")
+        grp = next((b for b in tb["buttons"] if b["count"] == 2), None)
+        res.check("a labelled group is named after the app, with its count",
+                  grp is not None and grp["label"] == "Notepad (2)" and grp.get("badge") is None,
+                  f"label {grp and grp['label']!r}, badge {grp and grp.get('badge')}")
+
+        for k in ("taskbar_buttons", "taskbar_align", "start_position", "taskbar_float",
+                  "taskbar_combine"):
             dbg.send(f"sh config unset desktop.{k}")
 
     n_ok, n_bad = len(res.passes), len(res.fails)

@@ -1656,7 +1656,13 @@ this the obvious way), not from how much history it accumulated.
   ARMS it**: the click acts on release, and 4px of movement first makes
   it a drag, which `taskbar_layout()` itself turns into the live row
   (`apply_drag()`) and the release commits into ranks. Buttons are
-  DRAWN at `taskbar_draw_x()` (a glide) and HIT at their layout x. `gui taskbar --json` reports all of it;
+  DRAWN at `taskbar_draw_x()` (a glide) and HIT at their layout x.
+  **A GROUP SAYS HOW MANY**: a labelled one in its label, under the
+  app's registry name ("Notepad (3)", never the app id); an icons-only
+  one in a count badge on the icon's top-right corner
+  (`taskbar_badge_rect()`, drawn in the strip's ink with the caption
+  font), because the running pill under the icon is taken by the focus.
+  `gui taskbar --json` reports all of it;
   `tools/taskbar_style_test.py` checks each where it is drawn.
 - **EVERY PART OF THE TASKBAR ANSWERS A RIGHT-CLICK, EXCEPT THE TRAY**
   (`taskbar_handle_right_click()`). A window button opens that window's

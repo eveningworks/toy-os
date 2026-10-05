@@ -294,6 +294,18 @@ const char *wm_window_icon_name_of(const struct window *w) {
     return 0;
 }
 
+// The registry's NAME for a window's app ("Notepad"), or NULL when its
+// app_id names no entry -- the same lookup as the icon's.
+const char *wm_window_app_name_of(const struct window *w) {
+    const char *id = w->app_id;
+    if (!id || !id[0]) return 0;
+    for (int i = 0; i < gui_app_registry_count; i++) {
+        const struct gui_app *a = &gui_app_registry[i];
+        if (a->app_id && k_strcmp(a->app_id, id) == 0) return a->name;
+    }
+    return 0;
+}
+
 // ---- window lifecycle ----
 
 int wm_index_after_move(int v, int idx, int to_front) {

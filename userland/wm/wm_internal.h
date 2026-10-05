@@ -560,6 +560,7 @@ const struct uimg *title_icon(int idx, int *out_x, int *out_y, int *out_size);
 // see wm.c. The taskbar and the title bar both ask.
 const char *wm_window_icon_name(int idx);
 const char *wm_window_icon_name_of(const struct window *w); // by app_id, no index
+const char *wm_window_app_name_of(const struct window *w);  // "Notepad", or NULL
 
 // The Start button's mark and its rect, or NULL when the button shows
 // the word instead (`text` mode, or artwork missing from the disk).

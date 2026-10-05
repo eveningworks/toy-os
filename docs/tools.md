@@ -3146,14 +3146,19 @@ window without going through it will find its layout polls timing out.
   goes to x=0 with the icons still centred, and that floats; icons from
   the left pack straight after Start; a centred Start over left buttons
   sits alone in the middle; labelled buttons centre with their labels
-  whole; light draws `#ECECEC`. **The gap probe is placed from the
+  whole; light draws `#ECECEC`; an icons-only GROUP carries a count
+  badge in the strip's ink while its window has the focus, a single
+  window none, and a labelled group reads "Notepad (2)" (`gui taskbar
+  --json` reports each button's `badge`). **The gap probe is placed from the
   SCREEN's edge, not from the reported panel** -- its first version
   derived it from the panel, so a wrong report moved the probe off the
   screen and crashed the tool instead of failing a check. Positive
   control: forcing `taskbar_floating()` to 0 reddens the floating
   checks, and dropping the hover fill reddens "drawn lit" while the JSON
-  hover check stays green -- which is why both exist. Unsets every
-  taskbar setting on the way out. In `gui_regress.py`.
+  hover check stays green -- which is why both exist; no badge reddens
+  the badge check alone, and the app id for a group's name reddens the
+  label check alone. Unsets every taskbar setting on the way out. In
+  `gui_regress.py`.
 - **`taskbar_peek_test.py`** -- the taskbar's window preview
   (`desktop.taskbar_peek`, `userland/wm/wm_peek.h`) against `gui peek
   --json`: resting on a button opens a card over it; **the thumbnail is

@@ -200,10 +200,11 @@ def run(dbg, qmp, res, pixels):
                   group["count"] == grouped_at,
                   f"button says {group['count']}, {grouped_at} were opened")
         # Named after the APP, not after whichever window opened first --
-        # "notepad (28)", not "unt (28)". The count alone would pass with
-        # the window title, which is why the app id is checked too.
+        # "Notepad (28)", not "unt (28)" and not the lowercase app id
+        # "notepad (28)". The count alone would pass with the window
+        # title, which is why the name is checked too.
         res.check("the group button is named after the application",
-                  "notepad" in group["label"] and "(" in group["label"],
+                  group["label"].startswith("Notepad ("),
                   f"label is {group['label']!r}")
         res.check("the group accounts for every window opened",
                   final["represented"] == grouped_at,
