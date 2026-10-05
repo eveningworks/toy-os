@@ -23,6 +23,14 @@ int uui_anim_pending(void);
 // The clock every toolkit animation paces by (sys_monotonic_ns).
 unsigned long long uui_anim_now_ns(void);
 
+// `base_ms` through `desktop.animations` and `desktop.animation_speed`,
+// for an APP's own motion: 0 when animations are off or the speed is
+// instant -- and 0 means SKIP the effect, never "a very short one" --
+// else `base_ms` scaled by the same ratios the window manager uses
+// (wm_anim.c's anim_duration_ms(): fast halves, slow doubles, very-slow
+// quadruples). Two registry reads, so ask once per effect, not per frame.
+unsigned uui_anim_ms(unsigned base_ms);
+
 // --- scrolling policy, in one place -----------------------------------
 
 // `desktop.smooth_scroll`, asked of the registry each time (one syscall
