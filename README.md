@@ -87,9 +87,10 @@ UEFI does not boot.**
 > [!WARNING]
 > **Real hardware is at your own risk.** toy-os is a hobby experiment and
 > comes with no warranty: if running or installing it breaks something,
-> that is on you, not on this project. Writing the USB image erases the
-> stick, and a machine toy-os has not met may hang. Read
-> [On real hardware](docs/building.md#running-a-release) first.
+> that is on you, not on this project. Writing the USB image erases
+> everything on the stick, and toy-os may hang on hardware it hasn't been
+> tested on. Read [On real hardware](docs/building.md#running-a-release)
+> first.
 
 **From source** (on Debian/Ubuntu; [other distributions](docs/building.md#dependencies)):
 

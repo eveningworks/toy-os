@@ -156,8 +156,8 @@ internal drive and makes it boot. **Both media are BIOS/CSM only.**
 **On real hardware.** `dd` overwrites the device you name, completely and
 without asking — check it with `lsblk` first, and check the size. Expect
 the rough edges of a hobby kernel: it programs the display, USB and ACPI
-directly, so a machine it has not met before may hang partway through
-boot, and [boot-flags.md](boot-flags.md) lists the escape hatches
+directly, so it may hang partway through boot on hardware it hasn't
+been tested on, and [boot-flags.md](boot-flags.md) lists the escape hatches
 (`nousb`, `noahci`, `nomsi`, `nogpe`, `nokaslr`). It does not flash
 firmware, write EFI variables or touch anything outside the disk you
 point it at, so the realistic worst case is a disk you told it to erase.
