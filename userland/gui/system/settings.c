@@ -458,6 +458,19 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
               g_si_debug_cb.y, g_si_debug_cb.w, g_si_debug_cb.h, g_si_debug_cb.checked);
     }
 
+    // The footer buttons move when the WINDOW does change size -- the WM
+    // fits a new window into the work area after it opens -- so they are
+    // re-reported then, not only from on_open().
+    static int last_apply_x = -1, last_apply_y = -1;
+    if (g_apply.x != last_apply_x || g_apply.y != last_apply_y) {
+        last_apply_x = g_apply.x;
+        last_apply_y = g_apply.y;
+        uapp_logf_layout("settings: layout button apply %d %d %d %d\n",
+                         g_apply.x, g_apply.y, g_apply.w, g_apply.h);
+        uapp_logf_layout("settings: layout button reset %d %d %d %d\n",
+                         g_reset.x, g_reset.y, g_reset.w, g_reset.h);
+    }
+
     // WHERE EACH CONTROL ENDED UP, whenever one MOVES -- a page change
     // and a scroll alike. A control below the fold is unreachable to a
     // test that does not know where it went.

@@ -22,8 +22,17 @@
 // Applies this window's remembered geometry, if it has any and the app
 // allows it. Call once, right after a window is created and its app_id
 // is set. Silently does nothing when there is nothing saved -- the
-// caller's own default placement then stands.
-void wm_geometry_restore(int idx);
+// caller's own default placement then stands. Returns 1 when it applied
+// a remembered geometry, 0 when there was none.
+int wm_geometry_restore(int idx);
+
+// Fits a window that has NO remembered geometry into the work area (the
+// screen minus the taskbar): moved up and left until it fits, and when it
+// is larger than the work area, asked to shrink to it -- what Windows and
+// KDE do with a window too big for the screen. A size sized in text lines
+// outgrows a 720p screen once lines are tall enough. Popups are skipped:
+// their client places them.
+void wm_geometry_fit(int idx);
 
 // Records this window's geometry. Call from close_window() BEFORE the
 // slot is shifted out of the array.

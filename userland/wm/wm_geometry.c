@@ -101,18 +101,18 @@ void wm_geometry_save(const struct window *win) {
     wm_conf_set(WINDOWS_CONF_PATH, key, value);
 }
 
-void wm_geometry_restore(int idx) {
-    if (idx < 0 || idx >= window_count) return;
+int wm_geometry_restore(int idx) {
+    if (idx < 0 || idx >= window_count) return 0;
     struct window *win = &windows[idx];
     const char *key = geom_key(win);
-    if (!key || !remembers(key)) return;
+    if (!key || !remembers(key)) return 0;
 
     geom_load();
     char value[40];
-    if (!etc_config_buf_get(&g_cfg, key, value, sizeof value)) return;
+    if (!etc_config_buf_get(&g_cfg, key, value, sizeof value)) return 0;
 
     int x, y, w, h;
-    if (!parse_geom(value, &x, &y, &w, &h)) return;
+    if (!parse_geom(value, &x, &y, &w, &h)) return 0;
 
     // A SAVED SIZE FROM A BIGGER SCREEN MUST NOT BE RESTORED WHOLE.
     // The display can change between runs -- a different monitor, a
@@ -123,7 +123,7 @@ void wm_geometry_restore(int idx) {
     int max_h = screen_h - taskbar_h;
     if (w > max_w) w = max_w;
     if (h > max_h) h = max_h;
-    if (w < 1 || h < 1) return;
+    if (w < 1 || h < 1) return 0;
 
     // AND THE POSITION IS CLAMPED FULLY ON-SCREEN, which is a STRICTER
     // rule than the WM's general one and deliberately so. A window may
@@ -176,4 +176,31 @@ void wm_geometry_restore(int idx) {
     // wm_ensure_reachable() is the WM's own invariant. If they ever
     // disagree the WM's wins.
     wm_ensure_reachable(idx);
+    return 1;
+}
+
+void wm_geometry_fit(int idx) {
+    if (idx < 0 || idx >= window_count) return;
+    struct window *win = &windows[idx];
+    if (!window_has_chrome(win)) return;    // a popup: its client places it
+
+    int work_w = screen_w, work_h = screen_h - taskbar_h;
+    int w = win->w < work_w ? win->w : work_w;
+    int h = win->h < work_h ? win->h : work_h;
+    int x = win->x, y = win->y;
+    if (x > work_w - w) x = work_w - w;
+    if (y > work_h - h) y = work_h - h;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    win->x = x; win->y = y;
+    if (w == win->w && h == win->h) return;
+
+    // Too big for the work area: a REQUEST, as in wm_geometry_restore()
+    // -- the client owns its buffer, and a fixed-size one declines.
+    if (wm_client_is_client_window(win)) {
+        int content_w = w - 2, content_h = h - WM_TITLEBAR_H - 2;
+        if (content_w > 0 && content_h > 0) wm_client_send_resize(win, content_w, content_h);
+    } else {
+        win->w = w; win->h = h;
+    }
 }

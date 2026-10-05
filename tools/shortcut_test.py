@@ -178,6 +178,7 @@ def run_rebinding(dbg, qmp, res):
     if win is None:
         res.check("System Settings opened", False, "no window")
         return
+    win = dbg.window_settled("System Settings") or win
     content = win["content"]
 
     # Reach the Shortcuts page BY SEARCHING, which needs no pixel: typing
@@ -239,6 +240,13 @@ def run_rebinding(dbg, qmp, res):
     time.sleep(1)
 
     # --- the end-to-end rebinding -------------------------------------
+    # The task manager row is the LAST, below the scroll viewport once
+    # the rows are a full line tall: scroll the page with the real
+    # pointer over it, then read where the rows went.
+    dbg.warp_cursor(qmp, content["x"] + content["w"] * 2 // 3, content["y"] + content["h"] // 2)
+    qmp.wheel("down", notches=10, delay=0.02)
+    dbg.settle(1.0)
+    rects = settings_rects(dbg)
     if not click_named(dbg, res, content, rects, "task_manager"):
         return
     time.sleep(1.2)

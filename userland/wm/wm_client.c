@@ -257,7 +257,7 @@ static int on_window_created(int pid, uint32_t id,
     // on. A client's SIZE cannot simply be assigned -- it owns its
     // buffer -- so this may send it a resize to ask for one; see
     // wm_geometry.c.
-    wm_geometry_restore(window_count - 1);
+    if (!wm_geometry_restore(window_count - 1)) wm_geometry_fit(window_count - 1);
     redraw_pending = 1;
     wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h); // new taskbar button
 

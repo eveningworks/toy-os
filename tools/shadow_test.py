@@ -63,10 +63,15 @@ def run(dbg, qmp, tmp, res):
     if not (np_ and calc):
         return
     # Move both over the flat lower wallpaper band, side by side, well
-    # apart so neither's shadow reaches the other.
-    dbg.send(f"gui drag {np_['x'] + 200} {np_['y'] + 10} 330 210")
+    # apart so neither's shadow reaches the other -- and high enough that
+    # the desktop FAR below each bottom edge is still above the taskbar,
+    # since a window's height follows the font's line height.
+    bar = dbg.taskbar()["y"]
+    def drop_y(w):
+        return min(210, bar - w["h"] - FAR - 8) + 10
+    dbg.send(f"gui drag {np_['x'] + 200} {np_['y'] + 10} 330 {drop_y(np_)}")
     dbg.settle(0.8)
-    dbg.send(f"gui drag {calc['x'] + 100} {calc['y'] + 10} 900 210")
+    dbg.send(f"gui drag {calc['x'] + 100} {calc['y'] + 10} 900 {drop_y(calc)}")
     dbg.settle(0.8)
     # Click Calculator's title so IT is focused and Notepad is inactive.
     calc = dbg.window("Calculator")
@@ -122,8 +127,13 @@ def run(dbg, qmp, tmp, res):
         im3 = shot(qmp, os.path.join(tmp, "shadow_off.png"))
         off_near = below(im3, calc, 0.5, 2)
         off_far = below(im3, calc, 0.5, FAR)
+        # The control on the SAME ROW, beside the window: the wallpaper's
+        # gradient runs top to bottom, so a pixel FAR below is a different
+        # shade wherever the band is not flat.
+        edge_y = calc["y"] + calc["h"] + 2
+        off_side = lum(im3.getpixel((min(calc["x"] + calc["w"] + FAR, im3.width - 1), edge_y)))
         res.check("desktop.shadows=off: the pixel below the edge matches the desktop",
-                  abs(off_near - off_far) <= 2, f"near={off_near} far={off_far}")
+                  abs(off_near - off_side) <= 2, f"near={off_near} beside={off_side}")
         res.check("...and the control pixel itself did not move",
                   abs(off_far - far_c) <= 2, f"off far={off_far} on far={far_c}")
     finally:

@@ -471,6 +471,22 @@ class DebugConsole:
                 return w
         return None
 
+    def window_settled(self, title, timeout=8.0):
+        """window(title) once its rect has stopped changing, or None. A NEW
+        window may be moved and asked to shrink right after it opens (the
+        WM fits it into the work area, wm_geometry_fit()), so a rect read
+        at once can be one the window is about to leave."""
+        deadline = time.time() + timeout
+        last = None
+        while time.time() < deadline:
+            w = self.window(title)
+            rect = w and (w["x"], w["y"], w["w"], w["h"])
+            if w and rect == last:
+                return w
+            last = rect
+            time.sleep(0.4)
+        return self.window(title)
+
     def processes(self):
         """Every process as a dict: pid, ppid, pgid, state, cpu, name.
 

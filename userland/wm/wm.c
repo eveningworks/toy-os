@@ -485,7 +485,7 @@ void open_app(const struct gui_app *app) {
     // AFTER window_count++, because restoring takes an INDEX: it calls
     // wm_ensure_reachable(), which addresses windows by index and would
     // not see a slot the count does not cover yet.
-    wm_geometry_restore(window_count - 1);
+    if (!wm_geometry_restore(window_count - 1)) wm_geometry_fit(window_count - 1);
     if (app->on_open) app->on_open(win);
     redraw_pending = 1;
     // A new taskbar button appears -- compute_window_damage()

@@ -151,6 +151,10 @@ def main():
     # A section opens.
     lay = toggle(dbg, win, lay, "Image", 0)
     lay = toggle(dbg, win, lay, "Opens with", 0)
+    if "Permissions" not in lay.sec:   # below the fold on a short screen: the wheel, as for Checksum
+        dbg.warp_cursor(qmp, c["x"] + c["w"] // 2, c["y"] + c["h"] // 2)
+        qmp.wheel("down", notches=10, delay=0.02)
+        lay = wait(dbg, lay, lambda l: "Permissions" in l.sec)
     lay = toggle(dbg, win, lay, "Permissions", 1)
     lay = wait(dbg, lay, lambda l: "perm6" in l.rect)
     check("a section header opens its section", lay.sec.get("Permissions", (0,) * 5)[4] == 1 and "perm6" in lay.rect,
