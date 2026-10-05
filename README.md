@@ -31,8 +31,9 @@
 > — including the ones that turned out wrong — is in
 > [docs/decisions.md](docs/decisions.md).
 >
-> It is also almost certainly insecure in ways nobody has looked for yet —
-> please don't run it in production, or anywhere you'd mind losing.
+> Nobody has audited it for security, and it is sure to have holes, so
+> please don't run it in production, or on a machine with anything on it
+> you care about.
 
 <p align="center">
   <img src="screenshots/readme/desktop.png" alt="toy-os desktop: the Start menu, frosted glass, open on All Apps over the Image Viewer, the File Manager, DOOM and a Terminal" width="49%">
