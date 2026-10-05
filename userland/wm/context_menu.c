@@ -206,6 +206,12 @@ int context_menu_row_disabled(int level, int index) {
     if (index < 0 || index >= lv->count || !lv->items[index].label) return 0;
     return (item_flags(lv->items[index].code) & UUI_MI_DISABLED) != 0;
 }
+int context_menu_row_checked(int level, int index) {
+    if (!context_menu_open || level >= uui_menubar_depth(&g_menu)) return 0;
+    const struct uui_menu_level *lv = &g_menu.level[level];
+    if (index < 0 || index >= lv->count || !lv->items[index].label) return 0;
+    return (item_flags(lv->items[index].code) & UUI_MI_CHECKED) != 0;
+}
 int context_menu_sub_row_top(int index) { return row_top(1, index); }
 
 void context_menu_close(void) {

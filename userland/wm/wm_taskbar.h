@@ -290,8 +290,9 @@ void taskbar_close_app(int idx);
 // taskbar_update_press().
 int taskbar_handle_click(int mx, int my);
 
-// Same, for a right click: opens the per-window context menu, or the
-// group list for a collapsed button.
+// Same, for a right click: opens the per-window context menu, the group
+// list for a collapsed button, the Start button's tools menu, or the
+// empty strip's own menu (taskbar_menu.h). The tray takes none.
 int taskbar_handle_right_click(int mx, int my);
 
 #endif

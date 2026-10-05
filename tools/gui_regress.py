@@ -174,6 +174,7 @@ TOOLS = [
     ("imgview", "imgview_test.py", "JPEG decoding, the viewer, and the wallpaper"),
     ("icons", "icons_test.py", "app icons: QOI, alpha compositing, three draw sites"),
     ("desktopmenu", "desktop_menu_test.py", "desktop menus, glass, rename, properties, popup corners"),
+    ("taskbarmenu", "taskbar_menu_test.py", "the taskbar strip's and the Start button's right-click menus"),
     ("player", "player_test.py", "the Audio Player on a machine with NO sound device"),
     ("calendar", "calendar_test.py", "the tray clock's calendar popup: grid, week start, week numbers, Settings link"),
     ("clock", "clock_settings_test.py", "Settings' Date & time: Change... steps the kernel clock, time -s, the NTP lock"),

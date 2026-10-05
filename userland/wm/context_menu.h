@@ -129,6 +129,8 @@ int context_menu_row_top(int index);
 // whether it is greyed.
 int context_menu_row_rect(int level, int index, int *x, int *y, int *w, int *h);
 int context_menu_row_disabled(int level, int index);
+// ...and whether it wears a tick (a choice that is set now).
+int context_menu_row_checked(int level, int index);
 // Any open level's rect and rows (0 the menu, 1 its submenu, 2 the one
 // below that), for `gui ctxmenu`'s "sub2". 0 rows when that level is shut.
 int context_menu_level_rows(int level, int *x, int *y, int *w);

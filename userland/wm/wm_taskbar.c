@@ -19,6 +19,7 @@
 #include "wm_shadow.h"
 #include "ui/utheme.h"
 #include "close_batch.h"   // taskbar_close_app()
+#include "taskbar_menu.h"  // the strip's and the Start button's menus
 
 #define TB_GAP 4
 
@@ -1181,5 +1182,16 @@ int taskbar_handle_right_click(int mx, int my) {
         }
         return 1;
     }
-    return 0;
+    // Not a window button: the Start button has its tools menu, the
+    // empty strip the taskbar's own, and the tray nothing -- its items
+    // act on a left click, and one may want a menu of its own later.
+    int sx, sy, sw, sh;
+    taskbar_start_hit_rect(&sx, &sy, &sw, &sh);
+    if (uui_hit(sx, sy, sw, sh, mx, my)) {
+        taskbar_menu_open_start(mx, my);
+        return 1;
+    }
+    if (mx >= tray_left()) return 0;
+    taskbar_menu_open_strip(mx, my);
+    return 1;
 }

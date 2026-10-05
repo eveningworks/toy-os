@@ -768,7 +768,7 @@ void wm_handle_right_click(int mx, int my) {
 
     if (my >= screen_h - taskbar_h && !wm_top_covers_screen()) {
         taskbar_handle_right_click(mx, my);
-        return; // taskbar area, but not over an app button (or the Start button -- no menu there)
+        return; // a button's window menu, the Start button's tools, or the strip's options
     }
 
     for (int i = window_count - 1; i >= 0; i--) {

@@ -3020,6 +3020,19 @@ window without going through it will find its layout polls timing out.
   popup's compositor-cut corner. **It establishes an empty clipboard by
   spending a cut**: the clipboard outlives a run, and a second run on
   the same guest inherited the first one's copy. In `gui_regress.py`.
+- **`taskbar_menu_test.py`** -- the taskbar's empty-strip menu and the
+  Start button's (14 checks), through `gui taskbar --json` and `gui
+  ctxmenu --json` (whose rows now carry `checked`). The rows in order;
+  the tray opening NOTHING and a window button still opening its
+  window's menu, which is the control a strip handler that swallowed the
+  buttons would fail; a Combine choice as a ROUND TRIP -- the setting
+  written, the taskbar adopting it, the reopened submenu's tick moved --
+  then put back; Floating panel both ways; the Start button's rows and
+  Leave >; a tool row opening Task Manager; Leave > Shut down opening
+  the Leave page dry and Esc backing out. Positive controls: the strip
+  handler returning early reddens every menu check and leaves the two
+  controls green; a choice that writes nothing reddens checks 2 and 3.
+  In `gui_regress.py`.
 - **`mines_test.py`** -- Minesweeper (29 checks), and the protocol
   property it was built to prove: **a secondary click reaching a ring-3
   client**. The check that matters is a PAIR -- a right-click on the

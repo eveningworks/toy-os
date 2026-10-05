@@ -1658,6 +1658,19 @@ this the obvious way), not from how much history it accumulated.
   (`apply_drag()`) and the release commits into ranks. Buttons are
   DRAWN at `taskbar_draw_x()` (a glide) and HIT at their layout x. `gui taskbar --json` reports all of it;
   `tools/taskbar_style_test.py` checks each where it is drawn.
+- **EVERY PART OF THE TASKBAR ANSWERS A RIGHT-CLICK, EXCEPT THE TRAY**
+  (`taskbar_handle_right_click()`). A window button opens that window's
+  menu (a group, its list); the Start button its tools menu -- the
+  system programs by AppId, then Leave > through the Leave page, which
+  is Windows' Win+X shape; the empty strip Task Manager, the taskbar's
+  own settings as ticked choices, and Taskbar settings, which opens
+  System Settings on their page (`taskbar_menu.c`). **A choice row
+  WRITES THE SETTING and nothing else**: the taskbar adopts it on its
+  config poll exactly as it does a change made in System Settings, so
+  the two can never disagree, and the menu is rebuilt on every open so
+  its ticks say what is set NOW. A row for an app this system does not
+  have is left out, not greyed. The tray takes no right-click: its items
+  act on a left click, and one may want a menu of its own.
 - **ASKING SEVERAL WINDOWS TO CLOSE IS `close_batch.h`, HELD BY
   `open_seq`.** The Leave page and "Close all N windows" (the window menu
   and a grouped button's list, offered only when the app has more than

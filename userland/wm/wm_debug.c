@@ -580,9 +580,10 @@ static void cmd_ctxmenu(struct dbg_out *o, int json) {
         for (int i = 0; i < rows; i++) {
             int rx = x, ry = context_menu_row_top(i), rw = w, rh = ih;
             context_menu_row_rect(0, i, &rx, &ry, &rw, &rh);
-            dbg_out_printf(o, "%s{\"label\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"cx\":%d,\"cy\":%d,\"disabled\":%s}",
+            dbg_out_printf(o, "%s{\"label\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"cx\":%d,\"cy\":%d,\"disabled\":%s,\"checked\":%s}",
                          i ? "," : "", context_menu_row_label(i), rx, ry, rw, rx + rw / 2,
-                         ry + ih / 2, context_menu_row_disabled(0, i) ? "true" : "false");
+                         ry + ih / 2, context_menu_row_disabled(0, i) ? "true" : "false",
+                         context_menu_row_checked(0, i) ? "true" : "false");
         }
         dbg_out_write(o, "]");
         // The open SUBMENU, if any, in the same shape.
@@ -593,9 +594,10 @@ static void cmd_ctxmenu(struct dbg_out *o, int json) {
                            sx, sy, sw, sih);
             for (int i = 0; i < srows; i++) {
                 int ry = context_menu_sub_row_top(i);
-                dbg_out_printf(o, "%s{\"label\":\"%s\",\"y\":%d,\"cy\":%d,\"disabled\":%s}",
+                dbg_out_printf(o, "%s{\"label\":\"%s\",\"y\":%d,\"cy\":%d,\"disabled\":%s,\"checked\":%s}",
                                i ? "," : "", context_menu_sub_row_label(i), ry, ry + ih / 2,
-                               context_menu_row_disabled(1, i) ? "true" : "false");
+                               context_menu_row_disabled(1, i) ? "true" : "false",
+                               context_menu_row_checked(1, i) ? "true" : "false");
             }
             dbg_out_write(o, "]}");
         }

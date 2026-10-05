@@ -448,6 +448,7 @@ whenever a headline here tells you something you did not already know.
   app** (`desktop.taskbar_combine`), then overflows into a button
 - **THE TASKBAR'S LAYOUT IS FOUR INDEPENDENT SETTINGS, AND EVERY RECT
   COMES FROM `taskbar_geom()`**
+- **EVERY PART OF THE TASKBAR ANSWERS A RIGHT-CLICK, EXCEPT THE TRAY**
 - **ASKING SEVERAL WINDOWS TO CLOSE IS `close_batch.h`, HELD BY
   `open_seq`**
 - **A CLOSE WHILE AN APP IS ASKING SOMETHING IS IGNORED, AND A SINGLE
