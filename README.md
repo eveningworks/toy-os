@@ -90,12 +90,13 @@ in QEMU — `run_release.sh`, beside it, does that for you — or write
 UEFI does not boot.**
 
 > [!WARNING]
-> **Real hardware is at your own risk.** toy-os is a hobby experiment and
-> comes with no warranty: if running or installing it breaks something,
-> that is on you, not on this project. Writing the USB image erases
-> everything on the stick, and toy-os may hang on hardware it hasn't been
-> tested on. Read [On real hardware](docs/building.md#running-a-release)
-> first.
+> **Running it is at your own risk, in a VM or on real hardware.** toy-os is a
+> hobby experiment and comes with no warranty: if running or installing it
+> breaks something, that is on you, not on this project. In QEMU it can still
+> damage what you hand it -- its disk image, and any USB device or disk you
+> pass through. On real hardware, writing the USB image erases everything on
+> the stick, and toy-os may hang on hardware it hasn't been tested on. Read
+> [On real hardware](docs/building.md#running-a-release) first.
 
 **From source** (on Debian/Ubuntu; [other distributions](docs/building.md#dependencies)):
 
