@@ -13,7 +13,7 @@ every turn in this repo. It means exactly what it says -- real unpushed
 work on the real checkout -- and is worth surfacing to the user rather
 than explaining away.
 
-**2026-08-17 (the M41 migration day): the ring-3 desktop RUNS, and the
+**2026-08-17 (the day the GUI moved to ring 3): the ring-3 desktop RUNS, and the
 day's lessons are mostly about DIAGNOSIS rather than about this OS.**
 
 Where the milestone stood THAT DAY, kept because the lessons below came
@@ -21,7 +21,7 @@ out of it: `gui3` started a ring-3 desktop passing 19 of 23 GUI tools,
 `gui` was still the ring-0 one, and two copies of the WM existed.
 **All of that is finished -- see the 2026-08-18 section below: the
 desktop is a ring-3 process by default, `apps/wm/` is deleted, and
-Milestone 41 is complete.**
+The GUI in ring 3 is complete.**
 
 The four lessons worth carrying anywhere:
 
@@ -74,7 +74,7 @@ Manager's "End Task"/"End Process" (Windows' names) became
 for that action elsewhere, so one action had stopped having two names.
 
 
-**2026-08-18 (Milestone 41 CLOSED, kernel stacks, settings namespaces,
+**2026-08-18 (The GUI in ring 3 CLOSED, kernel stacks, settings namespaces,
 and four harness bugs). Read this before believing anything above about
 the WM being in ring 0.**
 
