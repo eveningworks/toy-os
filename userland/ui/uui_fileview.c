@@ -119,6 +119,13 @@ unsigned long long uui_fileview_total_bytes(const struct uui_fileview *fv) {
 // The alternative -- sorting the array with dirsort() and giving the
 // table no comparator -- costs the click-to-sort header, and would put
 // a second ordering beside the one lib/dirsort.h exists to keep single.
+// A folder's counted size, or -1 (not counted, or nobody counts them).
+static long long fv_dir_bytes(const struct uui_fileview *fv, const struct sys_dirent *e) {
+    char p[UUI_FILEVIEW_PATH_MAX];
+    if (!fv->dirsize || !fv_entry_path(fv, e, p, sizeof p)) return -1;
+    return fv->dirsize(fv->dirsize_ctx, p);
+}
+
 static int fv_group(const struct uui_fileview *fv, int row) {
     if (fv_is_up_row(fv, row)) return 0;
     const struct sys_dirent *e = fv_entry(fv, row);
@@ -164,7 +171,13 @@ static int fv_compare(void *ctx, int row_a, int row_b, int col) {
     // A directory has no meaningful size (SYS_LISTDIR reports 0), so
     // sorting directories by it would order them arbitrarily where the
     // name order is the only one a reader can predict.
-    if (key == DIRSORT_SIZE && a->is_dir && b->is_dir) key = DIRSORT_NAME;
+    if (key == DIRSORT_SIZE && a->is_dir && b->is_dir) {
+        // ...unless they are counted: then by the count, an uncounted
+        // folder as the smallest.
+        long long sa = fv_dir_bytes(fv, a), sb = fv_dir_bytes(fv, b);
+        if (fv->dirsize && (sa >= 0 || sb >= 0)) return -(sa < sb ? -1 : sa > sb);
+        key = DIRSORT_NAME;
+    }
 
     if (col == FV_COL_TYPE) {
         int r = strcmp(ufiletype_name(a->name, a->is_dir), ufiletype_name(b->name, b->is_dir));
@@ -216,9 +229,16 @@ static void fv_cell(void *ctx, int row, int col, char *out, int cap) {
         break;
     case FV_COL_SIZE:
         // A folder has no size of its own (SYS_LISTDIR reports 0), and
-        // a blank says so better than a zero.
-        if (e->is_dir) out[0] = '\0';
-        else           human_size(out, (unsigned long)cap, e->size);
+        // a blank says so better than a zero -- unless the app counts
+        // them, and then "..." until its count arrives.
+        if (e->is_dir) {
+            long long b = fv_dir_bytes(fv, e);
+            if (b >= 0) human_size(out, (unsigned long)cap, (unsigned long long)b);
+            else if (fv->dirsize) snprintf(out, (size_t)cap, "...");
+            else out[0] = '\0';
+        } else {
+            human_size(out, (unsigned long)cap, e->size);
+        }
         break;
     case FV_COL_TIME: {
         // Zeroed when the kernel's per-entry stat failed
@@ -439,6 +459,35 @@ void uui_fileview_set_thumb(struct uui_fileview *fv,
     fv->thumb_ctx = ctx;
 }
 
+// Each row's share of the folder, on its Size cell.
+static int fv_meter(void *ctx, int row, int col) {
+    const struct uui_fileview *fv = (const struct uui_fileview *)ctx;
+    if (!fv->dirsize || col != FV_COL_SIZE || !fv->sized_total) return -1;
+    const struct sys_dirent *e = fv_entry(fv, row);
+    if (!e) return -1;
+    long long b = e->is_dir ? fv_dir_bytes(fv, e) : (long long)e->size;
+    if (b < 0) return -1;
+    return (int)((unsigned long long)b * 1000ull / fv->sized_total);
+}
+
+void uui_fileview_sizes_changed(struct uui_fileview *fv) {
+    unsigned long long t = 0;
+    for (int i = 0; i < fv->count; i++) {
+        long long b = fv->entries[i].is_dir ? fv_dir_bytes(fv, &fv->entries[i])
+                                            : (long long)fv->entries[i].size;
+        if (b > 0) t += (unsigned long long)b;
+    }
+    fv->sized_total = t;
+    uui_table_set_rows(&fv->table, uui_fileview_row_count(fv));   // re-sort by the new sizes
+}
+
+void uui_fileview_set_dirsize(struct uui_fileview *fv, uui_fileview_dirsize_fn fn, void *ctx) {
+    fv->dirsize = fn;
+    fv->dirsize_ctx = ctx;
+    uui_table_set_meter(&fv->table, fn ? fv_meter : 0);
+    uui_fileview_sizes_changed(fv);
+}
+
 void uui_fileview_set_resolver(struct uui_fileview *fv,
                                 uui_fileview_resolve_fn fn, void *ctx) {
     fv->resolve = fn;
@@ -567,6 +616,7 @@ int uui_fileview_reload(struct uui_fileview *fv) {
     // mode this line ran in, which is why /bin -- no thumbnails, no
     // cache writes -- did it too.
     if (fv->mode == UUI_FILEVIEW_ICONS) ic_clamp(fv);
+    if (fv->dirsize) uui_fileview_sizes_changed(fv);   // a new listing, a new total
     return !fv->failed;
 }
 

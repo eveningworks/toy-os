@@ -191,6 +191,7 @@ static const struct uui_menu_item view_items[] = {
     UUI_MENU("Icons",          CMD_VIEW_ICONS,   0),
     UUI_MENU("Details",        CMD_VIEW_DETAILS, 0),
     UUI_MENU_SEP,
+    UUI_MENU("Folder sizes",   CMD_VIEW_SIZES,   0),
     UUI_MENU("Details pane",   CMD_VIEW_DPANE,   0),
     UUI_MENU("Second pane",    CMD_VIEW_PANES,   0),
     UUI_MENU("Folder tree",    CMD_VIEW_TREE,    0),
@@ -405,6 +406,8 @@ static unsigned menu_item_flags(int code) {
                ? UUI_MI_CHECKED : 0;
     case CMD_VIEW_DPANE:
         return g_dpane ? UUI_MI_CHECKED : 0;
+    case CMD_VIEW_SIZES:
+        return g_sizes_on ? UUI_MI_CHECKED : 0;
     case CMD_SORT_NAME: case CMD_SORT_MODIFIED: case CMD_SORT_TYPE: case CMD_SORT_SIZE:
         return uui_fileview_sort(active(), 0) == sort_key_of(code) ? UUI_MI_CHECKED : 0;
     case CMD_SORT_ASC: case CMD_SORT_DESC: {
@@ -633,6 +636,7 @@ static void scope_chosen(int sel) {
 // hint names the folder it would search, as Explorer's does.
 void path_sync(void) {
     const char *dir = uui_fileview_dir(active());
+    sizes_follow(dir, 0);
     const struct uui_toolbar_item *want = in_bin(active()) ? bin_toolbar_items : toolbar_items;
     if (g_toolbar.items != want) {
         g_toolbar.items = want;
@@ -794,6 +798,7 @@ void do_command(struct uapp *a, int code) {
     case CMD_RESTORE_ALL:    bin_restore(1); break;
     case CMD_EMPTY_BIN:      do_empty_bin(); break;
     case CMD_UNDO:           do_undo(0); break;
+    case CMD_VIEW_SIZES:     sizes_set(!g_sizes_on); break;
     case CMD_REDO:           do_undo(1); break;
     case CMD_MKDIR:
         if (g_opt.rename_dialog) open_prompt(CMD_MKDIR, "New folder", "New folder");
@@ -861,6 +866,7 @@ void do_command(struct uapp *a, int code) {
         break;
     }
     case CMD_REFRESH:
+        sizes_follow(uui_fileview_dir(active()), 1);
         reload_panes();
         set_note("refreshed");
         break;
@@ -1592,6 +1598,10 @@ static int on_user(struct uapp *a, int a0, int a1) {
         refresh_status();
         return 1;
     }
+    if (a0 == POST_SIZES) {
+        sizes_posted();
+        return 1;
+    }
     if (a0 == POST_THUMB) {
         int got = thumb_posted();
         if (got) delete_picture();   // the delete card may be waiting on it
@@ -1778,6 +1788,8 @@ int main(int argc, char **argv) {
     }
     if (uconf_get(FILES_CONF, "details_pane", opt, sizeof opt))
         g_dpane = (opt[0] == '1');
+    if (uconf_get(FILES_CONF, "folder_sizes", opt, sizeof opt) && opt[0] == '1')
+        sizes_set(1);
     for (int i = 0; i < 2; i++) uui_textbox_init(&g_addr[i], "/");
 
     uui_splitter_init(&g_tree_split, 1, TREE_SPLIT_DEFAULT);

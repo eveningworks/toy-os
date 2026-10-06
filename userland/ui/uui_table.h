@@ -102,6 +102,12 @@ typedef const struct uimg *(*uui_table_icon_fn)(void *ctx, int row, int px);
 // outranks it, since a shaded selected row would hide the selection.
 typedef int (*uui_table_heat_fn)(void *ctx, int row, int col);
 
+// A cell's METER, 0..1000 per mille, or -1 for none: a thin bar along the
+// foot of the cell, under its text -- a folder's share of the folder it
+// is in (Windows' drive bars, WinDirStat's column). Drawn in the accent,
+// over a track; the selection keeps it, since it is data, not a state.
+typedef int (*uui_table_meter_fn)(void *ctx, int row, int col);
+
 // --- groups and a tree --------------------------------------------------
 //
 // Both are ORDERINGS, so they live beside the sort in `order`: groups
@@ -180,6 +186,7 @@ struct uui_table {
     uui_table_fade_fn fade;  // NULL = no row ever faded
     uui_table_icon_fn icon;  // NULL = no icon column
     uui_table_heat_fn heat;  // NULL = no cell shaded
+    uui_table_meter_fn meter; // NULL = no cell metered
     uui_table_group_fn group;             // NULL = no groups
     uui_table_group_title_fn group_title;
     uui_table_parent_fn parent;           // NULL = a flat list
@@ -265,6 +272,8 @@ void uui_table_set_fade(struct uui_table *t, uui_table_fade_fn fade);
 void uui_table_set_icon(struct uui_table *t, uui_table_icon_fn icon);
 // See uui_table_heat_fn. NULL turns it off again.
 void uui_table_set_heat(struct uui_table *t, uui_table_heat_fn heat);
+// See uui_table_meter_fn. NULL turns it off again.
+void uui_table_set_meter(struct uui_table *t, uui_table_meter_fn meter);
 // Groups and the tree; NULL for either half turns it off. Both rebuild
 // the order at once.
 void uui_table_set_groups(struct uui_table *t, uui_table_group_fn group,

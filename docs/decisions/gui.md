@@ -10583,3 +10583,20 @@ files, and a Recycle Bin never is. **The walk is depth-first over an
 explicit stack**: a breadth-first queue grows with the tree's width and
 has no bound worth naming; a stack holds one frame per level.
 
+## Folder sizes are an option, counted in the background, with the share drawn in the Size cell
+
+**Picked 2026-10-06 by the maintainer** (artboard I of the File Manager
+round). View > Folder sizes, OFF by default, as Dolphin's "size of
+contents" and macOS's "Calculate all sizes" are: a folder's size is a
+walk of everything under it, which Explorer judged too slow to show by
+default. `fm_sizes.c` counts the active folder's folders one at a time
+on a worker (`lib/uwalk.h`), each posted as it lands; until then its
+cell says "...". Counts are not kept across a navigation -- a stale
+size is worse than a "..." -- and Refresh counts again.
+
+**The share is a thin meter along the foot of the Size cell** (a new
+`uui_table` meter hook), not the artboard's separate "Share of folder"
+column with a percentage: the details columns ARE the sort keys by
+index, so a fifth column in the middle would have re-mapped Sort, and
+one at the end is the first a narrow pane drops.
+

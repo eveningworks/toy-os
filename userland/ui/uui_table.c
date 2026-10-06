@@ -64,6 +64,7 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
     t->fade = 0;
     t->icon = 0;
     t->heat = 0;
+    t->meter = 0;
     t->group = 0;
     t->group_title = 0;
     t->parent = 0;
@@ -328,6 +329,10 @@ void uui_table_set_compare(struct uui_table *t, uui_table_cmp_fn compare) {
 
 void uui_table_set_icon(struct uui_table *t, uui_table_icon_fn icon) {
     t->icon = icon;
+}
+
+void uui_table_set_meter(struct uui_table *t, uui_table_meter_fn meter) {
+    t->meter = meter;
 }
 
 void uui_table_set_heat(struct uui_table *t, uui_table_heat_fn heat) {
@@ -650,6 +655,17 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
                 ugfx_fill_rect(s, hx, ry, hw, rh, cbg);
             }
             draw_cell(s, t, c, idx, ry, rfg, cbg);
+            int pm = t->meter ? t->meter(t->ctx, idx, c) : -1;
+            if (pm >= 0) {
+                int mx, mw;
+                uui_table_column_rect(t, c, &mx, &mw);
+                mx += 6; mw -= 12;
+                if (pm > 1000) pm = 1000;
+                int fill = mw * pm / 1000;
+                if (pm > 0 && fill < 2) fill = 2;   // a sliver still says "something"
+                ugfx_fill_rect(s, mx, ry + rh - 4, mw, 2, ugfx_blend(cbg, rfg, 40));
+                ugfx_fill_rect(s, mx, ry + rh - 4, fill, 2, UTHEME_ACCENT);
+            }
         }
     }
     ugfx_clip_restore(s, &saved);

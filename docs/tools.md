@@ -2971,6 +2971,13 @@ window without going through it will find its layout polls timing out.
   log first swallowed it. Its positive control stops the walk from
   descending: the subfolder check reddens.
 
+- **`sizes_gui_test.py`** -- View > Folder sizes (`fm_sizes.c` over
+  `lib/uwalk.h`): folders made with `mkfiles` at known sizes, one with a
+  subfolder, read back from the app's `files: size <bytes> <path>`
+  lines (logged once per folder, on the main thread). Its positive
+  control counts only a folder's top level: the subfolder check reddens
+  (3000 instead of 4000).
+
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window
   (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
   driven through Notepad, Image Viewer and Audio Player. 17 checks: the

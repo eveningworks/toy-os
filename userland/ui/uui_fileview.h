@@ -111,6 +111,14 @@ struct uui_fileview_source {
 };
 typedef const struct uui_fileview_source *(*uui_fileview_resolve_fn)(void *ctx, const char *dir);
 
+// FOLDER SIZES, which the CALLER counts (in the background -- a folder's
+// size is a walk of everything under it): the bytes under `path`, or -1
+// while it is not known yet. With it set, a folder's Size cell shows the
+// count ("..." until it arrives), sorting by Size uses it, and every
+// row's Size cell carries a meter -- its share of the folder. Dolphin's
+// "size of contents", WinDirStat's column. NULL = folders show none.
+typedef long long (*uui_fileview_dirsize_fn)(void *ctx, const char *path);
+
 struct uui_fileview {
     struct uui_table table; // the whole visual/input mechanism
 
@@ -143,6 +151,10 @@ struct uui_fileview {
     uui_fileview_resolve_fn resolve; // NULL = every dir is a directory
     void *resolve_ctx;
     const struct uui_fileview_source *src; // this listing's; OWNED
+
+    uui_fileview_dirsize_fn dirsize;
+    void *dirsize_ctx;
+    unsigned long long sized_total;  // OWNED: files + counted folders, for the meters
 
     // --- marks ------------------------------------------------------
     //
@@ -273,6 +285,10 @@ void uui_fileview_set_thumb(struct uui_fileview *fv,
 // Asked on every reload. See struct uui_fileview_source.
 void uui_fileview_set_resolver(struct uui_fileview *fv,
                                 uui_fileview_resolve_fn fn, void *ctx);
+// Folder sizes (see uui_fileview_dirsize_fn); NULL turns them off.
+void uui_fileview_set_dirsize(struct uui_fileview *fv, uui_fileview_dirsize_fn fn, void *ctx);
+// The caller learned more sizes: re-total the folder for the meters.
+void uui_fileview_sizes_changed(struct uui_fileview *fv);
 // The listing's source, or NULL for a directory.
 const struct uui_fileview_source *uui_fileview_source(const struct uui_fileview *fv);
 

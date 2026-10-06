@@ -105,6 +105,7 @@ enum {
     CMD_TRASH, CMD_PURGE,
     // Undo and Redo (fm_undo.c): commands, and CMD_UNDO the worker's op.
     CMD_UNDO, CMD_REDO, CMD_TOAST,
+    CMD_VIEW_SIZES,          // View > Folder sizes (fm_sizes.c)
 };
 
 // The Recycle Bin's folder, as uui_fileview and the breadcrumb see it --
@@ -331,6 +332,12 @@ int  undo_toast_tick(void);        // 1 when it timed out and the window should 
 void undo_toast_action(void);      // its button
 void fm_job_undo(struct ufu_op *op, int redo);
 
+// --- folder sizes (fm_sizes.c) -----------------------------------------------
+extern int g_sizes_on;
+void sizes_set(int on);
+void sizes_follow(const char *dir, int again);   // count `dir`'s folders (again: even if it is current)
+void sizes_posted(void);
+
 // --- search into subfolders (fm_search.c) -----------------------------------
 void search_start(const char *root, const char *query);
 void search_stop(void);
@@ -370,6 +377,7 @@ int  poll_job(void);
 #define POST_CONFLICT 2
 #define POST_THUMB    3   // fm_thumbs.c's worker, and its wake-up
 #define POST_SEARCH   4   // fm_search.c's worker: results, or (a1 = 1) done
+#define POST_SIZES    5   // fm_sizes.c's worker: a folder was counted
 
 int  fm_job_running(void);
 void fm_job_cancel(void);
