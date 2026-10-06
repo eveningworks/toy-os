@@ -5564,3 +5564,35 @@ main()'s local.
   reports `first_frame`; `fullscreen_test.py` asserts it. Asked later, a
   fullscreen is an ordinary resize.
 
+## A TREE IS FILTERED BY `uui_tree_set_filter()`, AND A FILTERED TREE IS FULLY OPEN
+
+A search field over a tree (Device Manager's "Find a device"; Windows
+11 Settings and KDE System Settings put one over their sidebars) hands
+its text to `uui_tree_set_filter(tree, text, match, ctx)`. A node shows
+when it matches, when something under it does (the path to the match),
+or when it sits under a match ("Sound" finds the sound devices). While
+a filter is set the tree is FULLY OPEN, whatever was collapsed -- a match
+in a closed branch would be no match at all -- and the matching run of
+each label is marked in Notepad's find-hit colour. `match` is how an app
+searches more than the label (Device Manager's ids, drivers, vendors);
+NULL matches the label, case-insensitively. **The filter survives
+`uui_tree_set_nodes()`** and is re-run, so an app that relists keeps it;
+a selection the filter hides moves to the first match, so the page
+beside the tree never shows something the tree does not.
+
+## A PROPERTIES PAGE IS `uui_props`, FILLED FROM A LIST THE COMMAND LINE PRINTS TOO
+
+`userland/ui/uui_props.h`: titled sections of key/value rows in one
+scrolling column, a NOTICE box for a problem the page leads with, an
+action link per section ("Copy details"), and SLOTS for an app's own
+controls -- shown only while the whole slot is in view, never drawn over
+the page's edge. **What it shows comes from a library list, not from the
+app's draw code**: Device Manager fills it from `udevice_props()`, which
+is also what Copy details copies, what `devctl show` prints and what the
+hardware report writes -- four readers of one list cannot disagree,
+where a pane that formats its own rows drifts from the command line the
+first time either is touched. Values wrap at spaces (four lines, then
+elide); the layout is measured once per width. Properties' and the File
+Manager's `uui_fileinfo` predates it and draws its own sections -- moving
+it onto `uui_props` is on the roadmap.
+

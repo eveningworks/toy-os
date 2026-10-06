@@ -20,6 +20,24 @@ WHAT IT CHECKS, and what a broken version would still pass:
     back without asking;
   - Cancel leaves the card bound, and the storage controller's toggle
     opens no dialog at all (its driver cannot let go);
+  - the pane is ONE PAGE OF SECTIONS: the network card's has its
+    Connection, Driver, Resources and Events (the app's report), and
+    `devctl show` -- the same udevice_props() list, read as text --
+    carries a Driver section and a memory range;
+  - the disable/enable cycle above is in the card's EVENTS: `devctl
+    events` shows it Taken, Given back and Driven again, in that order --
+    an event ring that recorded nothing, or not that card, fails;
+  - the FILTER: Ctrl+F, then the card's driver name, leaves the tree at
+    its heading and the card, the card selected; Esc brings every row
+    back. A filter that only highlighted, or one that hid the match,
+    fails on the row count;
+  - Copy details puts the card's properties on the clipboard (the app's
+    report of the bytes it handed over);
+  - a card whose driver is a MODULE: the pane's Unload asks, then
+    unloads (`devctl` says no-driver); the pane then offers that module
+    under Load driver, and Load binds the card again (`devctl` says ok);
+  - Disk drives and Monitors are listed (`devctl` names a blk: and a
+    mon: device);
   - a desktop context menu opened OVER the tree takes the pointer: no
     tree row lights up under it. Measured beside the menu, on the rows'
     part the menu does not cover, with the pointer on the tree next to
@@ -68,6 +86,15 @@ def layout(dbg):
         m = re.search(r"devmgr: layout (ask\.button|view\.slot) (\d+) (-?\d+) (-?\d+) (\d+) (\d+)", line)
         if m:
             _lay[f"{m.group(1)}{m.group(2)}"] = tuple(int(v) for v in m.groups()[2:])
+        m = re.search(r"devmgr: pane sections (\d+) rows (\d+) scroll (\d+) driver (\d+) "
+                      r"filter \"([^\"]*)\" rows (\d+)", line)
+        if m:
+            _lay["pane.sections"], _lay["pane.rows"] = int(m.group(1)), int(m.group(2))
+            _lay["pane.driver"], _lay["filter"] = int(m.group(4)), m.group(5)
+            _lay["tree.visible"] = int(m.group(6))
+        m = re.search(r"devmgr: copy (\S+) (-?\d+) bytes (\w+)", line)
+        if m:
+            _lay["copy"] = (m.group(1), int(m.group(2)), m.group(3))
         m = re.search(r"devmgr: selected (\S+) view (\w+)(?: format (\d))?", line)
         if m:
             _lay["selected"], _lay["view"] = m.group(1), m.group(2)
@@ -101,7 +128,7 @@ def devices(dbg):
     out = {}
     for line in dbg.send("sh devctl").splitlines():
         parts = line.split()
-        if len(parts) >= 4 and re.match(r"(pci|usb|ps2|cpu):", parts[0]):
+        if len(parts) >= 4 and re.match(r"(pci|usb|ps2|cpu|blk|mon):", parts[0]):
             # TYPE is two words in a fixed 12-column field ("Network adap").
             m = re.match(r"(\S+)\s+(.{12})\s+(\S+)\s+(\S+)", line)
             if m:
@@ -273,12 +300,128 @@ def main():
     check("...and it keeps its driver", devices(dbg).get(store, ("", "", ""))[1] == devs[store][1],
           f"{store}: {devices(dbg).get(store)}")
 
+    pane_and_events(dbg, win, nic)
+    filter_and_copy(dbg, win, nic, nic_driver)
+    unload_and_load(dbg, win, nic)
+    listed = devices(dbg)
+    check("Disk drives and Monitors are listed (devctl names a blk: and a mon: device)",
+          any(d.startswith("blk:") for d in listed) and any(d.startswith("mon:") for d in listed),
+          f"{sorted(d for d in listed if d[:4] in ('blk:', 'mon:'))}")
+
+    lay = layout(dbg)
     overlay_hover(dbg, qmp, win, lay, args.tmp)
 
     w = window(dbg)
     if w:
         dbg.send(f"gui close {w['z']}")
     return finish()
+
+
+def pane_and_events(dbg, win, nic):
+    """The card's pane has its sections; `devctl show` and `devctl
+    events` -- the same library, read as text -- agree."""
+    select_device(dbg, win, nic)
+    lay = wait_layout(dbg, lambda l: l.get("selected") == nic and l.get("pane.sections", 0) >= 4)
+    check("the card's pane is a page of sections (Device, Connection, Driver, Resources, Events)",
+          lay.get("pane.sections", 0) >= 5 and lay.get("pane.rows", 0) >= 10,
+          f"sections={lay.get('pane.sections')} rows={lay.get('pane.rows')}")
+    show = dbg.send(f"sh devctl show {nic}")
+    check("devctl show prints the same list: a Driver section and a memory range",
+          "\nDriver" in show and "Memory:" in show and "Device ID: " + nic in show,
+          show[-300:].replace("\n", " | "))
+    kinds = []
+    for line in dbg.send(f"sh devctl events {nic}").splitlines():
+        m = re.match(r"\s*\d+\.\d+\s+" + re.escape(nic) +
+                     r"\s+(Driven|Declined|Released|Taken|Given back)", line)
+        if m:
+            kinds.append(m.group(1))
+    seq = ["Taken", "Given back", "Driven"]
+    found = []
+    for k in kinds:
+        if len(found) < len(seq) and k == seq[len(found)]:
+            found.append(k)
+    check("the disable/enable cycle is in the card's events: Taken, Given back, Driven",
+          found == seq, f"events {kinds}")
+
+
+def filter_and_copy(dbg, win, nic, nic_driver):
+    lay = layout(dbg)
+    full = lay.get("tree.visible", 0)
+    dbg.send("gui key 0x06")          # Ctrl+F
+    dbg.settle(0.5)
+    for ch in nic_driver:
+        dbg.send(f"gui key {ch}")
+        dbg.settle(0.2)
+    lay = wait_layout(dbg, lambda l: l.get("filter") == nic_driver)
+    check(f"the filter \"{nic_driver}\" leaves the heading and the card, the card selected",
+          lay.get("filter") == nic_driver and lay.get("tree.visible") == 2 and lay.get("selected") == nic,
+          f"filter={lay.get('filter')!r} rows {full} -> {lay.get('tree.visible')} "
+          f"selected={lay.get('selected')}")
+    dbg.send(f"gui key {K_ESC}")
+    lay = wait_layout(dbg, lambda l: l.get("filter") == "")
+    check("Esc empties the filter and every row comes back",
+          lay.get("filter") == "" and lay.get("tree.visible") == full,
+          f"filter={lay.get('filter')!r} rows {lay.get('tree.visible')} (was {full})")
+    # The tree has the focus again, and Ctrl+C is the app's Copy details.
+    select_device(dbg, win, nic)
+    _lay.pop("copy", None)
+    dbg.send("gui key 0x03")
+    lay = wait_layout(dbg, lambda l: "copy" in l, 3.0)
+    cp = lay.get("copy", ("", 0, ""))
+    check("Copy details puts the card's properties on the clipboard",
+          cp[0] == nic and cp[1] > 200 and cp[2] == "ok", f"copy={cp}")
+
+
+def reveal(dbg, win, name, want_driver):
+    """Scroll the pane until widget `name` is reported -- a slot's controls
+    show only while the whole slot is in view, as a person scrolls to it."""
+    lay = layout(dbg)
+    px, py, pw, ph = lay.get("props", (0, 0, 0, 0))
+    c = win["content"]
+    dbg.send(f"gui move {c['x'] + px + pw // 2} {c['y'] + py + ph // 2}")
+    dbg.settle(0.3)
+    for _ in range(10):
+        lay = wait_layout(dbg, lambda l: l.get("pane.driver") == want_driver and
+                          l.get(name, (0, 0, 0, 0))[2] > 0, 1.0)
+        if lay.get(name, (0, 0, 0, 0))[2] > 0:
+            break
+        dbg.send("gui wheel -2")
+        dbg.settle(0.3)
+    return lay
+
+
+def unload_and_load(dbg, win, nic):
+    """A module-driven card: Unload through the pane, then Load back."""
+    mods = dbg.send("sh lsmod")
+    driver = devices(dbg).get(nic, ("", "", ""))[1]
+    if driver not in mods:
+        check("the card's driver is a module to unload (lsmod)", False, f"{driver} not in {mods!r}")
+        return
+    select_device(dbg, win, nic)
+    lay = reveal(dbg, win, "unload", 2)
+    ux, uy, uw, uh = lay.get("unload", (0, 0, 0, 0))
+    if not check("a module-driven card offers Unload in its pane", uw > 0 and lay.get("pane.driver") == 2,
+                 f"driver mode {lay.get('pane.driver')} unload {lay.get('unload')}"):
+        return
+    click(dbg, win, ux + uw // 2, uy + uh // 2)
+    lay = wait_layout(dbg, lambda l: l.get("ask", (0, 0, 0, 0))[2] > 0 and "ask.button0" in l)
+    ax, ay, aw, ah = lay.get("ask.button0", (0, 0, 0, 0))
+    click(dbg, win, ax + aw // 2, ay + ah // 2)
+    time.sleep(1.5)
+    gone = devices(dbg).get(nic, ("", "", ""))
+    check("Unload asks, then the card has no driver (devctl agrees)",
+          gone[1] == "-" and gone[2] == "no-driver", f"{nic}: {gone}")
+    lay = reveal(dbg, win, "load", 1)
+    lx, ly, lw, lh = lay.get("load", (0, 0, 0, 0))
+    if not check("...and the pane offers the module under Load driver",
+                 lw > 0 and lay.get("pane.driver") == 1,
+                 f"driver mode {lay.get('pane.driver')} load {lay.get('load')}"):
+        return
+    click(dbg, win, lx + lw // 2, ly + lh // 2)
+    time.sleep(1.5)
+    back = devices(dbg).get(nic, ("", "", ""))
+    check("Load driver binds the card again (devctl agrees)",
+          back[1] == driver and back[2] == "ok", f"{nic}: {back} (wanted {driver})")
 
 
 def overlay_hover(dbg, qmp, win, lay, tmp):

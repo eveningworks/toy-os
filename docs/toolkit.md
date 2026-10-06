@@ -129,6 +129,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_prefs.h` | uui_prefs -- an app's OPTIONS WINDOW: a sidebar of pages, each a column of "Caption:  control  [control]" rows, over Defaults / OK / Cancel. |
 | `uui_primitives.h` | Every widget reaches its default colours through the theme (UUI_COLOR / UTHEME_*), so the one header they all include carries it. |
 | `uui_progress.h` | A PROGRESS BAR: a track and a fill, determinate or busy. |
+| `uui_props.h` | uui_props -- a page of PROPERTIES: titled sections of key/value rows, one scrolling column. |
 | `uui_radio_list.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |
 | `uui_route.h` | uui_route -- pointer input, delivered to widgets by the toolkit instead of by every app. |
 | `uui_scale.h` | A CONTINUOUS value on a range, dragged with the pointer -- a media player's position bar, a volume control, a percentage. |

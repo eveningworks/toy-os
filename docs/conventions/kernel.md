@@ -2735,8 +2735,18 @@ itself: it declares what it drives (`PCI_MATCH_CLASS(0x04, 0x03,
 PCI_ANY)`, `PCI_MATCH_ID(0x8086, 0x100e)`) and a `probe(dev)`, and
 `pci_bind()` -- one initcall at `INIT_BUS` -- walks the devices in
 enumeration order and hands each to the FIRST driver in link order
-whose table matches. Five things to know:
+whose table matches. Six things to know:
 
+- **`probe()` RETURNS 0, OR DECLINES WITH `pci_probe_decline(dev,
+  "why")`, AND A DECLINED DEVICE IS UNBOUND.** The binding is recorded
+  while the probe runs and dropped if it declines: no driver in `lspci`
+  or the Device Manager, the reason kept beside the device
+  (`QUERY_PCIDEV`'s `declined_by`/`why`) and in the event ring,
+  claimable, and offered to a module loaded later -- though not to the
+  driver that already said no, on a bulk re-bind. It used to stay
+  "bound" to a driver that drove nothing (the Lenovo's EHCI read
+  `xhci`). Undo what the probe built first; the bus clears bus
+  mastering and nothing else.
 - **A SECOND CONTROLLER IS A SECOND `probe()`**, not a silent skip.
   Every driver that keeps one device says so when it is offered
   another (`ahci`, `xhci`, `e1000`, `ac97`, `virtio-blk`, `virtio-net`);
@@ -2751,8 +2761,8 @@ whose table matches. Five things to know:
   The `pci_bind` KTEST fails on any present device two drivers claim;
   a class match that also needs a prog-if check (xHCI is 0x0C/0x03 with
   prog-if 0x30; UHCI/OHCI/EHCI share the class) does the check in
-  `probe()` and LOGS the refusal, so a machine with only EHCI still
-  says why USB is missing.
+  `probe()` and DECLINES, so a machine with only EHCI still says why
+  USB is missing -- in the log and on the device.
 - **VIRTIO DRIVERS MATCH THE MODERN ID AND THE TRANSITIONAL ONE**
   (`VIRTIO_PCI_MATCH_MODERN(type)` plus `PCI_MATCH_ID(0x1af4, 0x100x)`),
   and `virtio_pci_attach()` re-checks the type from the subsystem id.
@@ -2763,6 +2773,21 @@ whose table matches. Five things to know:
   by the display registry at `vga_init()`, before the walk; USB class
   drivers bind at enumeration inside the xHCI's probe. Each has its own
   registry, which is the right place for its order.
+
+## A DEVICE'S LIFECYCLE GOES IN THE EVENT RING, ITS DRIVER'S CHATTER IN THE LOG
+
+`kernel/core/devevent.c`, read as `QUERY_DEVEVENT` by `devctl events`
+and the Device Manager's Events section: bound, declined (with the
+reason), released, claimed and given back, plugged in, pulled out,
+registered (a disk). **Emit one with `devevent_add()` /
+`devevent_pci()` where the lifecycle changes** -- the bus, the claim
+table, USB enumeration and the block table already do -- under the id
+`userland/lib/udevice.c` gives the device (`pci:00:1f.2`,
+`usb_device_id()`'s `usb:14:2357:0601`, `blk:ahci0`); an id the list
+does not use is an event nobody sees. **What a driver says ABOUT a
+device stays a `klog_printf()`**: the ring is 128 entries, and filling it
+with "HBA 1.30, 32 command slots" would push the lifecycle out. It is
+kept, not broadcast -- nothing in ring 3 listens for a device event yet.
 
 ## A PROCESS CAN TAKE A PCI DEVICE OFF THE KERNEL, THE GATE IS THE DRIVER'S `remove()`, AND A DRIVER CALLBACK RUNS WITH INTERRUPTS ON
 

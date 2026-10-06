@@ -5,14 +5,18 @@
 // sidebar.
 //
 // EVERYTHING ABOUT DEVICES IS lib/udevice.c, shared with /bin/devctl --
-// this file is the view. Disabling is an unbind; "keep disabled after
-// restart" writes /etc/devices.conf, which the `devices` service
-// re-applies at boot (udevice.h says what each state means).
+// this file is the view. The pane is ONE PAGE OF SECTIONS (ui/uui_props.h)
+// filled from udevice_props(), so what it shows, what Copy details copies
+// and what `devctl show` prints are one list. Disabling is an unbind;
+// "keep disabled after restart" writes /etc/devices.conf, which the
+// `devices` service re-applies at boot (udevice.h says what each state
+// means).
 //
 // THE LIST IS RE-READ WHEN IT CHANGES, NOT ON A TIMER: naming a device
 // streams the 1.6 MB pci.ids, so the tick compares a cheap signature
-// (each device's binding and holder) and relists only when it moved --
-// a USB device plugged in, or a driver let go.
+// (each device's binding and holder, the USB slots, the event count) and
+// relists only when it moved -- a USB device plugged in, or a driver let
+// go.
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -25,15 +29,20 @@
 #include "ui/ulog.h"
 #include "ui/uui_menubar.h"
 #include "ui/uui_segmented.h"
+#include "ui/uui_textbox.h"
 #include "ui/uui_tree.h"
 #include "ui/uui_splitter.h"
+#include "ui/uui_props.h"
 #include "ui/uui_button.h"
 #include "ui/uui_checkbox.h"
+#include "ui/uui_dropdown.h"
 #include "ui/uui_statusbar.h"
 #include "ui/uui_dialog.h"
+#include "ui/uui_filedialog.h"
 #include "ui/uui_focus.h"
 #include "ui/uui_route.h"   // UUI_REASON_*
 #include "lib/udevice.h"
+#include "lib/uclip.h"
 #include "ui/uui_sndformat.h"
 
 #define ID_MENU    1
@@ -45,11 +54,21 @@
 #define ID_KEEP    7
 #define ID_STATUS  8
 #define ID_ASK     9
+#define ID_FILTER  10
+#define ID_PROPS   11
+#define ID_MODS    12
+#define ID_LOAD    13
+#define ID_UNLOAD  14
 #define ID_SNDFMT  32   // .. + UUI_SNDFORMAT_IDS: a sound device's Format
+
+// The controls the pane holds in its sections (uui_props slots).
+#define SLOT_FORMAT 1
+#define SLOT_DRIVER 2
 
 enum {
     CMD_REFRESH = 1, CMD_EXIT, CMD_BY_TYPE, CMD_BY_CONN, CMD_EXPAND, CMD_COLLAPSE,
-    CMD_TOGGLE, ASK_DISABLE, ASK_CANCEL,
+    CMD_TOGGLE, CMD_COPY, CMD_EXPORT, CMD_FIND, CMD_LOAD, CMD_UNLOAD,
+    ASK_DISABLE, ASK_UNLOAD, ASK_CANCEL,
 };
 
 // A category's node id: below every device index, so one int names both.
@@ -70,31 +89,53 @@ static struct uui_menubar g_menu;
 // over a list that can be grouped two ways; tabs would promise two pages.
 static const char *const VIEWS[] = { "By type", "By connection" };
 static struct uui_segmented g_view;
+// THE FILTER OVER THE TREE (Win11 Settings, KDE System Settings): it
+// hides what does not match, by name, ID, driver, vendor or location.
+static struct uui_textbox g_filter;
 static struct uui_tree g_tree;
 static struct uui_splitter g_split;
+static struct uui_props g_props;
+static struct udev_prop g_p[UDEV_PROPS_MAX];
+static char g_props_for[24];   // the device the pane was filled for
 static struct uui_button g_toggle, g_refresh;
 static struct uui_checkbox g_keep;
 static struct uui_statusbar g_status;
 static struct uui_dialog g_ask;
+static struct uui_filedialog g_save;
 
-// A SOUND DEVICE'S FORMAT, under its properties: the card whose
+// THE DRIVER'S ACTIONS, in the Driver section: a module to load for a
+// device with none, or Unload for a driver that came in a module. A
+// built-in driver has neither -- the section says so instead.
+static struct uui_dropdown g_mods;
+static char g_mod_name[8][16];
+static char g_mod_label[8][40];
+static const char *g_mod_items[8];
+static int g_nmods;
+static struct uui_button g_load, g_unload;
+static char g_unload_label[40];
+static int g_drv_mode;          // 0 nothing, 1 load, 2 unload
+
+// A SOUND DEVICE'S FORMAT, in its own section: the card whose
 // `device_id` is the selected device's id (QUERY_SOUND), shown with the
 // panel System Settings uses. `g_fmt_card` is the card loaded, so a
 // re-selection of the same device does not reset what is open.
 static struct uui_sndformat g_fmt;
 static char g_fmt_card[16];
-static int g_fmt_y, g_fmt_h; // the panel's place in the pane; 0 = no room
 
-static char g_st_count[32], g_st_problem[32], g_st_note[96];
+static char g_st_count[32], g_st_problem[48], g_st_note[96];
 static char g_ask_line[2][112];
 static const char *g_ask_rows[2];
 static char g_ask_id[24];   // by ID: the tick may relist under the open dialog
+static char g_ask_module[16];
 
-// Pane geometry, placed by layout_all() and drawn by on_draw().
-static int g_px, g_py, g_pw, g_ph;
+// Pane geometry, placed by layout_all(): the header's height, and the
+// whole pane's rect.
+static int g_px, g_py, g_pw, g_ph, g_head_h;
 
 static const struct uui_menu_item file_items[] = {
-    UUI_MENU("Refresh", CMD_REFRESH, 0),
+    UUI_MENU("Refresh", CMD_REFRESH, "F5"),
+    UUI_MENU("Copy details", CMD_COPY, "Ctrl+C"),
+    UUI_MENU("Export hardware report...", CMD_EXPORT, "Ctrl+E"),
     UUI_MENU_SEP,
     UUI_MENU("Exit", CMD_EXIT, "Alt+F4"),
 };
@@ -102,11 +143,14 @@ static const struct uui_menu_item view_items[] = {
     UUI_MENU("Devices by type", CMD_BY_TYPE, 0),
     UUI_MENU("Devices by connection", CMD_BY_CONN, 0),
     UUI_MENU_SEP,
+    UUI_MENU("Find a device", CMD_FIND, "Ctrl+F"),
     UUI_MENU("Expand all", CMD_EXPAND, 0),
     UUI_MENU("Collapse all", CMD_COLLAPSE, 0),
 };
 static const struct uui_menu_item action_items[] = {
     UUI_MENU("Disable or enable device", CMD_TOGGLE, 0),
+    UUI_MENU("Load driver", CMD_LOAD, 0),
+    UUI_MENU("Unload driver", CMD_UNLOAD, 0),
 };
 static const struct uui_menu_item menu_items[] = {
     UUI_SUBMENU("File", file_items),
@@ -114,14 +158,20 @@ static const struct uui_menu_item menu_items[] = {
     UUI_SUBMENU("Action", action_items),
 };
 
-// The dialog LAST: an open one is on top, and the router asks the last
-// item first.
+// The pane's slot controls AFTER the pane, so they draw over it and are
+// asked first; the dialog LAST: an open one is on top, and the router
+// asks the last item first.
 static struct uui_item g_widgets[] = {
     { .ops = &uui_menubar_ops,   .widget = &g_menu,    .id = ID_MENU,    .name = "menu" },
     { .ops = &uui_segmented_ops, .widget = &g_view,    .id = ID_VIEW,    .name = "view" },
+    { .ops = &uui_textbox_ops,   .widget = &g_filter,  .id = ID_FILTER,  .name = "filter" },
     { .ops = &uui_tree_ops,      .widget = &g_tree,    .id = ID_TREE,    .name = "tree" },
     { .ops = &uui_splitter_ops,  .widget = &g_split,   .id = ID_SPLIT,   .name = "split" },
+    { .ops = &uui_props_ops,     .widget = &g_props,   .id = ID_PROPS,   .name = "props" },
     { .ops = &uui_layout_ops,    .widget = &g_fmt.col, .name = "sndfmt", .hidden = 1 },
+    { .ops = &uui_dropdown_ops,  .widget = &g_mods,    .id = ID_MODS,    .name = "mods",   .hidden = 1 },
+    { .ops = &uui_button_ops,    .widget = &g_load,    .id = ID_LOAD,    .name = "load",   .hidden = 1 },
+    { .ops = &uui_button_ops,    .widget = &g_unload,  .id = ID_UNLOAD,  .name = "unload", .hidden = 1 },
     { .ops = &uui_checkbox_ops,  .widget = &g_keep,    .id = ID_KEEP,    .name = "keep" },
     { .ops = &uui_button_ops,    .widget = &g_refresh, .id = ID_REFRESH, .name = "refresh" },
     { .ops = &uui_button_ops,    .widget = &g_toggle,  .id = ID_TOGGLE,  .name = "toggle" },
@@ -129,23 +179,31 @@ static struct uui_item g_widgets[] = {
     { .ops = &uui_dialog_ops,    .widget = &g_ask,     .id = ID_ASK,     .name = "ask" },
 };
 
-// The ring is REBUILT when the selection changes: the Format panel's
-// controls sit between the tree and the buttons only while it is shown.
-static struct uui_focusable g_focusables[5 + UUI_SNDFORMAT_IDS];
+// The ring is REBUILT when the pane's controls come and go: the Format
+// panel and the driver's buttons sit between the tree and the buttons
+// only while they are shown.
+static struct uui_focusable g_focusables[10 + UUI_SNDFORMAT_IDS];
 static struct uui_focus g_focus;
 
-static struct uui_item *fmt_item(void) {
+static struct uui_item *item_of(const void *widget) {
     for (unsigned i = 0; i < sizeof g_widgets / sizeof g_widgets[0]; i++)
-        if (g_widgets[i].widget == &g_fmt.col) return &g_widgets[i];
+        if (g_widgets[i].widget == widget) return &g_widgets[i];
     return 0;
 }
 
 static void build_focus(void) {
     int n = 0;
-    g_focusables[n++] = (struct uui_focusable){ &g_tree, &uui_tree_ops };
+    g_focusables[n++] = (struct uui_focusable){ &g_filter, &uui_textbox_ops };
     g_focusables[n++] = (struct uui_focusable){ &g_view, &uui_segmented_ops };
-    if (!fmt_item()->hidden)
+    g_focusables[n++] = (struct uui_focusable){ &g_tree, &uui_tree_ops };
+    if (!item_of(&g_fmt.col)->hidden)
         n += uui_sndformat_focusables(&g_fmt, g_focusables + n, UUI_SNDFORMAT_IDS);
+    if (!item_of(&g_mods)->hidden) {
+        g_focusables[n++] = (struct uui_focusable){ &g_mods, &uui_dropdown_ops };
+        g_focusables[n++] = (struct uui_focusable){ &g_load, &uui_button_ops };
+    }
+    if (!item_of(&g_unload)->hidden)
+        g_focusables[n++] = (struct uui_focusable){ &g_unload, &uui_button_ops };
     g_focusables[n++] = (struct uui_focusable){ &g_keep, &uui_checkbox_ops };
     g_focusables[n++] = (struct uui_focusable){ &g_refresh, &uui_button_ops };
     g_focusables[n++] = (struct uui_focusable){ &g_toggle, &uui_button_ops };
@@ -164,22 +222,45 @@ static void update_format(const struct udevice *d) {
         uui_sndformat_load(&g_fmt, &q);
         strlcpy(g_fmt_card, q.name, sizeof g_fmt_card);
     }
-    if (!found) g_fmt_card[0] = 0;   // draw_pane() shows or hides the panel
+    if (!found) g_fmt_card[0] = 0;
 }
+
+// --- the filter --------------------------------------------------------
+
+static int dev_matches(const struct udevice *d, const char *q) {
+    return uui_tree_text_matches(d->name, q) || uui_tree_text_matches(d->id, q) ||
+           uui_tree_text_matches(d->driver, q) || uui_tree_text_matches(d->vendor_name, q) ||
+           uui_tree_text_matches(d->location, q) || uui_tree_text_matches(d->devname, q);
+}
+
+static int node_matches(void *ctx, int node, const char *q) {
+    (void)ctx;
+    int id = g_nodes[node].id;
+    if (id >= 0 && id < g_n) return dev_matches(&g_dev[id], q);
+    return uui_tree_text_matches(g_nodes[node].label, q);
+}
+
+static const char *filter_text(void) { return uui_textbox_text(&g_filter); }
 
 // --- the tree ------------------------------------------------------------
 
 // A heading's label with its member count after it -- "Sound (2)", as
-// the mockup and Windows' collapsed categories show. Storage for the
-// tree, which borrows every label; reset on each rebuild.
+// the mockup and Windows' collapsed categories show; "(1 of 2)" while a
+// filter hides some. Storage for the tree, which borrows every label;
+// reset on each rebuild.
 static char g_head[UDEV_T_COUNT + 4][72];
 static int g_head_n;
 
-static const char *head(const char *name, int count) {
+static const char *head(const char *name, int count, int shown) {
     if (g_head_n >= (int)(sizeof g_head / sizeof g_head[0])) return name;
-    snprintf(g_head[g_head_n], sizeof g_head[0], "%s (%d)", name, count);
+    if (filter_text()[0] && shown != count)
+        snprintf(g_head[g_head_n], sizeof g_head[0], "%s (%d of %d)", name, shown, count);
+    else
+        snprintf(g_head[g_head_n], sizeof g_head[0], "%s (%d)", name, count);
     return g_head[g_head_n++];
 }
+
+static int shown(int i) { return !filter_text()[0] || dev_matches(&g_dev[i], filter_text()); }
 
 static void label_device(int i) {
     strlcpy(g_label[i], g_dev[i].name, sizeof g_label[i]);
@@ -187,7 +268,7 @@ static void label_device(int i) {
 
 static void add_node(const char *label, int depth, int id, const char *icon) {
     if (g_node_count >= (int)(sizeof g_nodes / sizeof g_nodes[0])) return;
-    g_nodes[g_node_count++] = (struct uui_tree_node){ label, depth, id, UUI_TREE_AUTO, icon, 0 };
+    g_nodes[g_node_count++] = (struct uui_tree_node){ label, depth, id, UUI_TREE_AUTO, icon, 0, 0, 0, 0, 0 };
 }
 
 // The state is a BADGE on the icon, Windows' shape: a yellow "!" for a
@@ -215,35 +296,49 @@ static void open_problems(void) {
 // Windows' default: a heading per type that has any devices.
 static void build_by_type(void) {
     for (int t = 0; t < UDEV_T_COUNT; t++) {
-        int any = 0;
-        for (int i = 0; i < g_n; i++) any += (int)g_dev[i].type == t;
+        int any = 0, vis = 0;
+        for (int i = 0; i < g_n; i++)
+            if ((int)g_dev[i].type == t) { any++; vis += shown(i); }
         if (!any) continue;
-        add_node(head(udevice_type_name(t), any), 0, NODE_CAT(t), udevice_type_icon(t));
+        add_node(head(udevice_type_name(t), any, vis), 0, NODE_CAT(t), udevice_type_icon(t));
         for (int i = 0; i < g_n; i++)
             if ((int)g_dev[i].type == t) add_device(i, 1);
     }
 }
 
-// As the hardware is wired: the PCI bus, with each USB device under the
-// controller it hangs off; then the platform devices; then the CPUs.
+// A device and what hangs off it, depth first: a controller's USB
+// devices and disks, a display adapter's monitor.
+static void add_subtree(int i, int depth) {
+    add_device(i, depth);
+    for (int j = 0; j < g_n; j++)
+        if (g_dev[j].parent == i && g_dev[j].bus != UDEV_PCI) add_subtree(j, depth + 1);
+}
+
+// As the hardware is wired: the PCI bus, with each USB device, disk and
+// monitor under what it hangs off; then the platform devices; then what
+// hangs off nothing known; then the CPUs.
 static void build_by_connection(void) {
-    int npci = 0, ncpu = 0;
-    for (int i = 0; i < g_n; i++) { npci += g_dev[i].bus == UDEV_PCI; ncpu += g_dev[i].bus == UDEV_CPU; }
-    add_node(head("PCI bus", npci), 0, NODE_BUS_PCI, "cat-system");
+    int npci = 0, ncpu = 0, vpci = 0, vcpu = 0;
     for (int i = 0; i < g_n; i++) {
-        if (g_dev[i].bus != UDEV_PCI) continue;
-        add_device(i, 1);
-        for (int j = 0; j < g_n; j++)
-            if (g_dev[j].bus == UDEV_USB && g_dev[j].parent == i) add_device(j, 2);
+        if (g_dev[i].bus == UDEV_PCI) { npci++; vpci += shown(i); }
+        if (g_dev[i].bus == UDEV_CPU) { ncpu++; vcpu += shown(i); }
     }
-    int plat = 0;
-    for (int i = 0; i < g_n; i++) plat += g_dev[i].bus == UDEV_PLATFORM;
+    add_node(head("PCI bus", npci, vpci), 0, NODE_BUS_PCI, "cat-system");
+    for (int i = 0; i < g_n; i++)
+        if (g_dev[i].bus == UDEV_PCI) add_subtree(i, 1);
+    int plat = 0, vplat = 0;
+    for (int i = 0; i < g_n; i++)
+        if (g_dev[i].bus == UDEV_PLATFORM || (g_dev[i].parent < 0 && (g_dev[i].bus == UDEV_BLOCK ||
+            g_dev[i].bus == UDEV_MONITOR || g_dev[i].bus == UDEV_USB))) { plat++; vplat += shown(i); }
     if (plat) {
-        add_node(head("Platform devices", plat), 0, NODE_BUS_PLAT, "cat-system");
+        add_node(head("Platform devices", plat, vplat), 0, NODE_BUS_PLAT, "cat-system");
         for (int i = 0; i < g_n; i++)
             if (g_dev[i].bus == UDEV_PLATFORM) add_device(i, 1);
+        for (int i = 0; i < g_n; i++)
+            if (g_dev[i].parent < 0 && (g_dev[i].bus == UDEV_BLOCK || g_dev[i].bus == UDEV_MONITOR ||
+                                        g_dev[i].bus == UDEV_USB)) add_subtree(i, 1);
     }
-    add_node(head(udevice_type_name(UDEV_T_CPU), ncpu), 0, NODE_CAT(UDEV_T_CPU),
+    add_node(head(udevice_type_name(UDEV_T_CPU), ncpu, vcpu), 0, NODE_CAT(UDEV_T_CPU),
              udevice_type_icon(UDEV_T_CPU));
     for (int i = 0; i < g_n; i++)
         if (g_dev[i].bus == UDEV_CPU) add_device(i, 1);
@@ -268,16 +363,76 @@ static void rebuild_tree(const char *keep_id) {
     for (int i = 0; i < g_n; i++) label_device(i);
     if (g_by_conn) build_by_connection(); else build_by_type();
     uui_tree_set_nodes_keep(&g_tree, g_nodes, g_node_count);
+    uui_tree_set_filter(&g_tree, filter_text(), node_matches, 0);
     open_problems();
     if (keep_id && keep_id[0])
         for (int i = 0; i < g_n; i++)
-            if (!strcmp(g_dev[i].id, keep_id)) { uui_tree_select_id(&g_tree, i); return; }
-    // Nothing to keep: the first DEVICE, so the pane has something to say.
+            if (!strcmp(g_dev[i].id, keep_id) && shown(i)) { uui_tree_select_id(&g_tree, i); return; }
+    // Nothing to keep: the first DEVICE showing, so the pane has something to say.
     for (int n = 0; n < g_node_count; n++)
-        if (g_nodes[n].id >= 0) { uui_tree_select_id(&g_tree, g_nodes[n].id); return; }
+        if (g_nodes[n].id >= 0 && shown(g_nodes[n].id)) { uui_tree_select_id(&g_tree, g_nodes[n].id); return; }
 }
 
-// --- the controls under the properties ------------------------------------
+// --- the pane ----------------------------------------------------------------
+
+// The modules that could drive `d`, into the dropdown -- a match first,
+// marked as one.
+static void load_modules(const struct udevice *d) {
+    int m = 0;
+    g_nmods = udevice_modules(d, g_mod_name, 8, &m);
+    for (int k = 0; k < g_nmods; k++) {
+        snprintf(g_mod_label[k], sizeof g_mod_label[k], "%s%s", g_mod_name[k],
+                 k < m ? " (matches this device)" : "");
+        g_mod_items[k] = g_mod_label[k];
+    }
+    uui_dropdown_set_items(&g_mods, g_mod_items, g_nmods);
+    uui_dropdown_set_selected(&g_mods, 0);
+}
+
+// Fills the pane from udevice_props(): "Problem" becomes the notice box,
+// and the Format and the driver's buttons get slots in their sections.
+static void build_props(const struct udevice *d) {
+    int same = d && !strcmp(g_props_for, d->id);
+    uui_props_begin(&g_props, same);
+    strlcpy(g_props_for, d ? d->id : "", sizeof g_props_for);
+    g_drv_mode = 0;
+    if (!d) return;
+    int idx = (int)(d - g_dev);
+    int np = udevice_props(g_dev, g_n, idx, UDEV_PROPS_ALL, g_p, UDEV_PROPS_MAX);
+    int ctrl = utheme_control_h(), pad = utheme_pad();
+
+    if (d->bus == UDEV_PCI && !d->driver[0] && !d->holder_pid && !d->disabled) {
+        load_modules(d);
+        if (g_nmods) g_drv_mode = 1;
+    } else if (d->module[0]) {
+        snprintf(g_unload_label, sizeof g_unload_label, "Unload module %s", d->module);
+        g_unload.label = g_unload_label;
+        g_drv_mode = 2;
+    }
+
+    const char *cur = 0;
+    int fmt_done = !g_fmt_card[0];
+    for (int k = 0; k < np; k++) {
+        if (!cur || strcmp(cur, g_p[k].section) != 0) {
+            cur = g_p[k].section;
+            int notice = !strcmp(cur, "Problem");
+            // THE FORMAT FIRST, for a sound card -- after a problem, before
+            // the facts: it is the one thing here a person changes.
+            if (!notice && !fmt_done) {
+                int w, h;
+                uui_layout_natural_size(&g_fmt.col, &w, &h);
+                uui_props_slot(&g_props, uui_props_section(&g_props, "Format", UUI_PROPS_PLAIN),
+                               SLOT_FORMAT, h);
+                fmt_done = 1;
+            }
+            int sec = uui_props_section(&g_props, cur, notice ? UUI_PROPS_NOTICE : UUI_PROPS_PLAIN);
+            if (!strcmp(cur, "Device")) uui_props_set_action(&g_props, sec, "Copy details");
+            if (!strcmp(cur, "Events")) uui_props_set_action(&g_props, sec, "Open Log Viewer");
+            if (!strcmp(cur, "Driver") && g_drv_mode) uui_props_slot(&g_props, sec, SLOT_DRIVER, ctrl + pad);
+        }
+        uui_props_row(&g_props, g_p[k].key, "%s", g_p[k].val);
+    }
+}
 
 static void update_controls(void) {
     const struct udevice *d = selected();
@@ -287,6 +442,7 @@ static void update_controls(void) {
     g_keep.disabled = !can;
     g_keep.checked = d ? d->persisted : 0;
     update_format(d);
+    build_props(d);
 
     int problems = 0, off = 0;
     for (int i = 0; i < g_n; i++) { problems += g_dev[i].problem; off += g_dev[i].disabled; }
@@ -304,7 +460,9 @@ static void relist(void) {
 }
 
 // What would change if a device were bound, unbound or claimed: every
-// driver name and holder, and the USB slots. Cheap -- no database.
+// driver name and holder, the USB slots, and how many device events
+// there have been (a disk or a module comes and goes with one). Cheap --
+// no database.
 static unsigned signature(void) {
     unsigned h = 2166136261u;
     struct query_pcidev p;
@@ -317,11 +475,15 @@ static unsigned signature(void) {
         h = (h ^ (unsigned)u.slot) * 16777619u;
         for (const char *c = u.driver; *c; c++) h = (h ^ (unsigned char)*c) * 16777619u;
     }
+    struct query_devevent e;
+    uint32_t last = 0;
+    QUERY_FOREACH(QUERY_DEVEVENT, e, i) last = e.seq;
+    h = (h ^ last) * 16777619u;
     return h;
 }
 static unsigned g_sig;
 
-// --- disable / enable ------------------------------------------------------
+// --- disable / enable, load / unload ------------------------------------------
 
 static void set_note(const char *msg) { strlcpy(g_st_note, msg, sizeof g_st_note); }
 
@@ -335,6 +497,16 @@ static void report(const struct udevice *d, int r, const char *verb) {
     ulogf("devmgr: %s %s -> %d\n", verb, d->id, r);
 }
 
+static void ask(struct uapp *a, const char *title, const char *button, int code) {
+    g_ask_rows[0] = g_ask_line[0];
+    g_ask_rows[1] = g_ask_line[1];
+    static struct uui_dialog_button btns[2];
+    btns[0] = (struct uui_dialog_button){ button, code, UUI_DLG_DANGER };
+    btns[1] = (struct uui_dialog_button){ "Cancel", ASK_CANCEL, 0 };
+    uui_dialog_set_bounds(&g_ask, 0, 0, uapp_width(a), uapp_height(a));
+    uui_dialog_open(&g_ask, title, g_ask_rows, 2, btns, 2, 1, ASK_CANCEL);
+}
+
 static void ask_disable(struct uapp *a) {
     const struct udevice *d = selected();
     if (!d || !d->can_disable || uui_dialog_is_open(&g_ask)) return;
@@ -343,13 +515,7 @@ static void ask_disable(struct uapp *a) {
     snprintf(g_ask_line[1], sizeof g_ask_line[1], "%s",
              g_keep.checked ? "It stays disabled after a restart, until you enable it."
                             : "It stays disabled until you enable it or restart.");
-    g_ask_rows[0] = g_ask_line[0];
-    g_ask_rows[1] = g_ask_line[1];
-    static const struct uui_dialog_button btns[] = {
-        { "Disable", ASK_DISABLE, UUI_DLG_DANGER }, { "Cancel", ASK_CANCEL, 0 },
-    };
-    uui_dialog_set_bounds(&g_ask, 0, 0, uapp_width(a), uapp_height(a));
-    uui_dialog_open(&g_ask, "Disable device", g_ask_rows, 2, btns, 2, 1, ASK_CANCEL);
+    ask(a, "Disable device", "Disable", ASK_DISABLE);
 }
 
 static void toggle(struct uapp *a) {
@@ -374,11 +540,113 @@ static void keep_changed(void) {
     relist();
 }
 
+// LOADING A MODULE is `modload`: the kernel links it and offers it every
+// device no driver holds, this one included (kernel/core/module.c).
+static void load_driver(void) {
+    const struct udevice *d = selected();
+    int k = uui_dropdown_selected(&g_mods);
+    if (!d || g_drv_mode != 1 || k < 0 || k >= g_nmods) return;
+    char path[64], msg[96];
+    snprintf(path, sizeof path, "/lib/modules/%s.ko", g_mod_name[k]);
+    if (sys_modload(path) < 0) {
+        snprintf(msg, sizeof msg, "could not load %s: %s", g_mod_name[k], strerror(sys_errno()));
+    } else {
+        char id[24];
+        strlcpy(id, d->id, sizeof id);
+        relist();
+        const struct udevice *now = find_id(id);
+        snprintf(msg, sizeof msg, "loaded %s -- %s", g_mod_name[k],
+                 now && now->driver[0] ? "it drives this device" : "it did not take this device");
+    }
+    set_note(msg);
+    ulogf("devmgr: load %s -> %s\n", g_mod_name[k], msg);
+    g_sig = signature();
+}
+
+// UNLOADING TAKES THE MODULE AWAY FROM EVERY DEVICE IT DRIVES, so it asks.
+static void ask_unload(struct uapp *a) {
+    const struct udevice *d = selected();
+    if (!d || !d->module[0] || uui_dialog_is_open(&g_ask)) return;
+    strlcpy(g_ask_module, d->module, sizeof g_ask_module);
+    snprintf(g_ask_line[0], sizeof g_ask_line[0], "Unload the module %s?", d->module);
+    snprintf(g_ask_line[1], sizeof g_ask_line[1],
+             "Every device it drives is left without a driver until it is loaded again.");
+    ask(a, "Unload driver", "Unload", ASK_UNLOAD);
+}
+
+static void unload_driver(void) {
+    char msg[96];
+    if (sys_modunload(g_ask_module) < 0)
+        snprintf(msg, sizeof msg, "could not unload %s: %s", g_ask_module, strerror(sys_errno()));
+    else
+        snprintf(msg, sizeof msg, "unloaded %s", g_ask_module);
+    set_note(msg);
+    ulogf("devmgr: unload %s -> %s\n", g_ask_module, msg);
+    g_ask_module[0] = 0;
+    relist();
+    g_sig = signature();
+}
+
+// --- copy, export, the log ------------------------------------------------------
+
+static void copy_details(void) {
+    const struct udevice *d = selected();
+    if (!d) return;
+    static char text[8192];
+    int np = udevice_props(g_dev, g_n, (int)(d - g_dev), UDEV_PROPS_ALL, g_p, UDEV_PROPS_MAX);
+    char title[160], st[64];
+    snprintf(title, sizeof title, "%s [%s] -- %s", d->name, d->id, udevice_status(d, st, sizeof st));
+    int n = udevice_props_text(g_p, np, title, text, sizeof text);
+    int ok = n > 0 && uclip_set_text(text, n);
+    set_note(ok ? "copied the device's details" : "the details did not fit on the clipboard");
+    ulogf("devmgr: copy %s %d bytes %s\n", d->id, n, ok ? "ok" : "refused");
+    build_props(d);   // udevice_props() wrote into the pane's own buffer
+}
+
+struct sink { FILE *f; int lines; };
+static void put_line(void *ctx, const char *line) {
+    struct sink *s = ctx;
+    fprintf(s->f, "%s\n", line);
+    s->lines++;
+}
+
+static void export_chosen(void *ctx, const char *path) {
+    struct uapp *a = ctx;
+    if (!path) return;
+    FILE *f = fopen(path, "w");
+    char msg[96];
+    if (!f) {
+        snprintf(msg, sizeof msg, "could not write %s: %s", path, strerror(errno));
+    } else {
+        struct sink s = { f, 0 };
+        udevice_report(g_dev, g_n, UDEV_PROPS_RESOURCES | UDEV_PROPS_EVENTS, put_line, &s);
+        int bad = fclose(f) != 0;
+        snprintf(msg, sizeof msg, bad ? "could not finish %s" : "saved the hardware report to %s", path);
+    }
+    set_note(msg);
+    ulogf("devmgr: export %s\n", msg);
+    const struct udevice *d = selected();
+    build_props(d);   // the report used the pane's property buffer
+    uapp_redraw(a);
+}
+
+static void export_report(struct uapp *a) {
+    if (uui_filedialog_is_open(&g_save)) return;
+    struct uui_filedialog_opts o = {
+        .mode = UUI_FILEDIALOG_SAVE,
+        .title = "Export hardware report",
+        .start_dir = "/home",
+        .initial_name = "hardware-report.txt",
+    };
+    if (!uui_filedialog_open(a, &g_save, &o, export_chosen, a))
+        set_note("cannot open the chooser");
+}
+
 // --- layout and drawing ---------------------------------------------------
 
 static void layout_all(int cw, int ch) {
     int mb = uui_menubar_height(&g_menu), sb = uui_statusbar_height(&g_status);
-    int pad = utheme_pad(), bt = utheme_control_h();
+    int pad = utheme_pad(), bt = utheme_control_h(), chh = ugfx_char_h();
     int top = mb, bottom = ch - sb;
 
     uui_menubar_set_geometry(&g_menu, 0, 0, cw, mb);
@@ -392,8 +660,11 @@ static void layout_all(int cw, int ch) {
     uui_splitter_set_geometry(&g_split, uui_splitter_pos(&g_split), top, bar, bottom - top);
 
     uui_segmented_set_geometry(&g_view, pad, top + pad);
-    int th = g_view.h + 2 * pad;
-    g_tree.x = 0; g_tree.y = top + th; g_tree.w = left; g_tree.h = bottom - top - th;
+    int fy = top + pad + g_view.h + pad, fh;
+    uui_textbox_natural_size(&g_filter, 0, &fh);
+    uui_textbox_set_geometry(&g_filter, pad, fy, left - 2 * pad, fh);
+    int ty = fy + fh + pad;
+    g_tree.x = 0; g_tree.y = ty; g_tree.w = left; g_tree.h = bottom - ty;
 
     g_px = left + bar;
     g_py = top;
@@ -410,72 +681,68 @@ static void layout_all(int cw, int ch) {
     int by = bottom - pad - bt;
     uui_button_set_geometry(&g_toggle, cw - pad - tw, by, tw, bt);
     uui_button_set_geometry(&g_refresh, cw - pad - tw - pad - rw, by, rw, bt);
-    uui_checkbox_set_geometry(&g_keep, g_px + pad, by + (bt - ugfx_char_h()) / 2);
+    uui_checkbox_set_geometry(&g_keep, g_px + pad, by + (bt - chh) / 2);
+
+    // The header: the name, its type, and the status box under them.
+    g_head_h = 2 * pad + chh + pad / 2 + chh + pad + chh + pad + pad;
+    uui_props_set_geometry(&g_props, g_px, g_py + g_head_h, g_pw, by - pad - (g_py + g_head_h));
 
     uui_dialog_set_bounds(&g_ask, 0, 0, cw, ch);
 }
 
-// One "Key   value" row; returns the next row's y, or 0 when out of room.
-static int row(struct ugfx_surface *s, int y, const char *k, const char *v) {
-    const struct utheme *t = utheme_current();
-    int pad = utheme_pad(), lh = ugfx_char_h() + pad / 2, kw = ugfx_char_advance('n') * 13;
-    if (y + lh > g_py + g_ph - utheme_control_h() - 2 * pad) return 0;
-    ugfx_draw_string_clipped(s, g_px + 2 * pad, y, kw - pad, k, t->outline, t->panel_bg);
-    ugfx_draw_string_clipped(s, g_px + 2 * pad + kw, y, g_pw - 3 * pad - kw, v, t->text, t->panel_bg);
-    return y + lh;
+// THE SLOTS' CONTROLS FOLLOW THE PANE'S SCROLL: shown where their slot
+// is wholly in view, hidden otherwise -- never drawn over the header or
+// the buttons -- and the focus ring is rebuilt when that changes.
+static void place_slot_controls(void) {
+    int x, y, w, h, changed = 0;
+    struct uui_item *fmt = item_of(&g_fmt.col);
+    int fmt_on = g_fmt_card[0] && uui_props_slot_rect(&g_props, SLOT_FORMAT, &x, &y, &w, &h);
+    if (fmt->hidden == fmt_on) { fmt->hidden = !fmt_on; changed = 1; }
+    if (fmt_on) {
+        // A top-level layout takes the window-edge margin; this one sits in
+        // the pane's own, so it is placed that far out to line up.
+        int m = uui_layout_margin(&g_fmt.col);
+        uui_layout_run(&g_fmt.col, x - m, y - m, w + 2 * m, h + m);
+    }
+    int drv = uui_props_slot_rect(&g_props, SLOT_DRIVER, &x, &y, &w, &h);
+    int load_on = drv && g_drv_mode == 1, unload_on = drv && g_drv_mode == 2;
+    struct uui_item *mods = item_of(&g_mods), *load = item_of(&g_load), *unl = item_of(&g_unload);
+    if (mods->hidden == load_on) { mods->hidden = load->hidden = !load_on; changed = 1; }
+    if (unl->hidden == unload_on) { unl->hidden = !unload_on; changed = 1; }
+    int bt = utheme_control_h(), pad = utheme_pad();
+    if (load_on) {
+        int lw, lh;
+        uui_button_natural_size(&g_load, &lw, &lh);
+        int dw = w - lw - pad;
+        int per = ugfx_char_advance('n') > 0 ? ugfx_char_advance('n') : 8;
+        if (dw > per * 34) dw = per * 34;
+        uui_dropdown_set_geometry(&g_mods, x, y, dw, bt);
+        uui_button_set_geometry(&g_load, x + dw + pad, y, lw, bt);
+    }
+    if (unload_on) {
+        int uw, uh;
+        uui_button_natural_size(&g_unload, &uw, &uh);
+        uui_button_set_geometry(&g_unload, x, y, uw, bt);
+    }
+    if (changed) build_focus();
 }
 
-static void section(struct ugfx_surface *s, int *y, const char *title) {
-    if (!*y) return;
-    const struct utheme *t = utheme_current();
-    const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
-    *y += utheme_pad() / 2;
-    ugfx_draw_string_clipped(s, g_px + 2 * utheme_pad(), *y, g_pw - 3 * utheme_pad(), title,
-                             t->accent, t->panel_bg);
-    ugfx_set_font(was);
-    *y += ugfx_char_h() + utheme_pad() / 2;
-}
-
-// The driver's source file and description, from QUERY_DRIVER.
-static void driver_info(const char *name, char *file, int fcap) {
-    file[0] = '\0';
-    struct query_driver q;
-    QUERY_FOREACH(QUERY_DRIVER, q, i)
-        if (!strcmp(q.name, name)) { strlcpy(file, q.file, (size_t)fcap); return; }
-}
-
-static void draw_pane_text(struct ugfx_surface *s);
-
-// The pane, then the Format panel under its text when a sound card is
-// selected -- placed here, since where the text ends is only known once
-// it is drawn, and the toolkit draws the panel's controls after this.
-static void draw_pane(struct ugfx_surface *s) {
-    g_fmt_y = 0;
-    draw_pane_text(s);
-    struct uui_item *it = fmt_item();
-    int pad = utheme_pad();
-    // SHOWN ONLY WHERE IT FITS above the buttons: a short window drops
-    // the panel rather than drawing it over them, and gets it back when
-    // it grows -- the focus ring following either way.
-    int fits = g_fmt_card[0] && g_fmt_y;
-    if (it->hidden == fits) { it->hidden = !fits; build_focus(); }
-    // A top-level layout takes the window-edge margin; this one sits in
-    // the pane's own, so it is placed that far out to line up.
-    int m = uui_layout_margin(&g_fmt.col);
-    if (fits) uui_layout_run(&g_fmt.col, g_px + 2 * pad - m, g_fmt_y, g_pw - 4 * pad + 2 * m, g_fmt_h);
-}
-
-static void draw_pane_text(struct ugfx_surface *s) {
+static void draw_header(struct ugfx_surface *s) {
     const struct utheme *t = utheme_current();
     int pad = utheme_pad(), ch = ugfx_char_h();
-    ugfx_fill_rect(s, g_px, g_py, g_pw, g_ph, t->panel_bg);
+    ugfx_fill_rect(s, g_px, g_py, g_pw, g_head_h, t->panel_bg);
+    // The bottom strip under the props, where the buttons sit.
+    int bottom = g_props.y + g_props.h;
+    ugfx_fill_rect(s, g_px, bottom, g_pw, g_py + g_ph - bottom, t->panel_bg);
+    ugfx_fill_rect(s, g_px + 2 * pad, g_py + g_head_h - 1, g_pw - 4 * pad, 1, t->separator);
+
     const struct udevice *d = selected();
     int x = g_px + 2 * pad, y = g_py + 2 * pad, w = g_pw - 4 * pad;
     if (w <= 0) return;
-
     if (!d) {
         int id = uui_tree_selected_id(&g_tree), count = 0;
-        const char *what = "Select a device to see its properties.";
+        const char *what = filter_text()[0] ? "No device matches the filter."
+                                            : "Select a device to see its properties.";
         char buf[64];
         if (id <= NODE_CAT(0) && id > NODE_CAT(UDEV_T_COUNT)) {
             enum udev_type ty = (enum udev_type)(NODE_CAT(0) - id);
@@ -509,77 +776,19 @@ static void draw_pane_text(struct ugfx_surface *s) {
     ugfx_fill_circle(s, x + pad + r, y + bh / 2, r, dot);
     ugfx_draw_string_clipped(s, x + 2 * pad + 2 * r, y + (bh - ch) / 2, w - 3 * pad - 2 * r, st,
                              t->text, t->field_bg);
-    y += bh + pad;
-
-    // THE FORMAT FIRST, for a sound card: it is the one thing on this
-    // pane a person changes, and the details below are cut before it is
-    // when the window is short (Windows gives it a tab of its own).
-    if (g_fmt_card[0]) {
-        int w, h;
-        uui_layout_natural_size(&g_fmt.col, &w, &h);
-        int heading = ch + pad;    // section()'s own advance
-        if (y + heading + h <= g_py + g_ph - utheme_control_h() - 2 * pad) {
-            section(s, &y, "Format");
-            g_fmt_y = y;
-            g_fmt_h = h;
-            y += h - uui_layout_margin(&g_fmt.col);   // its bottom margin is the gap
-        }
-    }
-
-    char buf[176], file[64];
-    section(s, &y, "Device");
-    if (y) y = row(s, y, "Location", d->location);
-    if (y && d->bus != UDEV_CPU && d->bus != UDEV_PLATFORM) {
-        snprintf(buf, sizeof buf, "%04x:%04x", d->vendor, d->device);
-        y = row(s, y, "IDs", buf);
-    }
-    if (y && d->vendor_name[0]) y = row(s, y, "Vendor", d->vendor_name);
-    // The class LEVEL BY LEVEL, each by name with its code after it; a
-    // level the database has no name for is left out, and a device with
-    // no names at all shows the bare code.
-    if (y && (d->bus == UDEV_PCI || d->bus == UDEV_USB)) {
-        const char *third = d->bus == UDEV_USB ? "Protocol" : "Interface";
-        if (!d->class_name[0] && !d->subclass_name[0] && !d->progif_name[0]) {
-            snprintf(buf, sizeof buf, "%02x/%02x/%02x", d->cls, d->subclass, d->prog_if);
-            y = row(s, y, "Class", buf);
-        }
-        if (y && d->class_name[0]) {
-            snprintf(buf, sizeof buf, "%s (%02x)", d->class_name, d->cls);
-            y = row(s, y, "Class", buf);
-        }
-        if (y && d->subclass_name[0]) {
-            snprintf(buf, sizeof buf, "%s (%02x)", d->subclass_name, d->subclass);
-            y = row(s, y, "Subclass", buf);
-        }
-        if (y && d->progif_name[0]) {
-            snprintf(buf, sizeof buf, "%s (%02x)", d->progif_name, d->prog_if);
-            y = row(s, y, third, buf);
-        }
-    }
-    if (y && d->bus != UDEV_CPU) {
-        section(s, &y, "Driver");
-        if (y) y = row(s, y, "Driver", d->driver[0] ? d->driver : "(none)");
-        if (y && d->driver[0]) {
-            driver_info(d->driver, file, sizeof file);
-            if (file[0]) y = row(s, y, "Source", file);
-        }
-        if (y && d->holder_pid) {
-            snprintf(buf, sizeof buf, "pid %d", d->holder_pid);
-            y = row(s, y, "Held by", buf);
-        }
-        if (y) y = row(s, y, "Can disable", d->can_disable ? "Yes"
-                        : d->holder_pid ? "No (in use by a program)"
-                        : d->driver[0] ? "No (not supported by its driver)" : "No");
-    }
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     layout_all(d->surface->w, d->surface->h);
-    draw_pane(d->surface);
+    place_slot_controls();
+    draw_header(d->surface);
     uapp_log_layout(a, "devmgr");
     const struct udevice *sel = selected();
     uapp_logf_layout("devmgr: selected %s view %s format %d\n", sel ? sel->id : "-",
-                     g_by_conn ? "connection" : "type", !fmt_item()->hidden);
+                     g_by_conn ? "connection" : "type", !item_of(&g_fmt.col)->hidden);
+    uapp_logf_layout("devmgr: pane sections %d rows %d scroll %d driver %d filter \"%s\" rows %d\n",
+                     g_props.nsec, g_props.nrow, g_props.scroll, g_drv_mode, filter_text(),
+                     uui_tree_visible_count(&g_tree));
 }
 
 // --- commands and input -------------------------------------------------
@@ -591,7 +800,25 @@ static void set_view(struct uapp *a, int by_conn) {
     char keep[24] = "";
     if (d) strlcpy(keep, d->id, sizeof keep);
     rebuild_tree(keep);
+    update_controls();
     uapp_redraw(a);
+}
+
+static void filter_changed(void) {
+    const struct udevice *d = selected();
+    char keep[24] = "";
+    if (d) strlcpy(keep, d->id, sizeof keep);
+    rebuild_tree(keep);
+    int vis = 0;
+    for (int i = 0; i < g_n; i++) vis += shown(i);
+    if (filter_text()[0]) snprintf(g_st_note, sizeof g_st_note, "Filter: %d of %d shown", vis, g_n);
+    else g_st_note[0] = 0;
+    update_controls();
+}
+
+static void focus_filter(void) {
+    for (int i = 0; i < g_focus.count; i++)
+        if (g_focus.items[i].widget == &g_filter) { uui_focus_set(&g_focus, i); return; }
 }
 
 static void do_command(struct uapp *a, int code) {
@@ -603,6 +830,18 @@ static void do_command(struct uapp *a, int code) {
     case CMD_EXPAND:   uui_tree_expand_all(&g_tree); break;
     case CMD_COLLAPSE: uui_tree_collapse_all(&g_tree); break;
     case CMD_TOGGLE:   toggle(a); break;
+    case CMD_COPY:     copy_details(); uapp_redraw(a); return;
+    case CMD_EXPORT:   export_report(a); uapp_redraw(a); return;
+    case CMD_FIND:     focus_filter(); uapp_redraw(a); return;
+    case CMD_LOAD:
+        if (g_drv_mode == 1) load_driver();
+        else set_note("this device has a driver, or no module could drive it");
+        break;
+    case CMD_UNLOAD:
+        if (g_drv_mode == 2) { ask_unload(a); uapp_redraw(a); return; }
+        set_note(selected() && selected()->driver[0] ? "its driver is built into the kernel"
+                                                     : "this device has no driver to unload");
+        break;
     default: return;
     }
     update_controls();
@@ -610,11 +849,16 @@ static void do_command(struct uapp *a, int code) {
 }
 
 static void on_action(struct uapp *a, int code) {
-    if (code == ID_REFRESH) { do_command(a, CMD_REFRESH); return; }
-    if (code != ID_TOGGLE) return;
-    toggle(a);
-    update_controls();
-    uapp_redraw(a);
+    switch (code) {
+    case ID_REFRESH: do_command(a, CMD_REFRESH); return;
+    case ID_LOAD:    do_command(a, CMD_LOAD); return;
+    case ID_UNLOAD:  do_command(a, CMD_UNLOAD); return;
+    case ID_TOGGLE:
+        toggle(a);
+        update_controls();
+        uapp_redraw(a);
+        return;
+    }
 }
 
 static void on_widget(struct uapp *a, int id, int reason) {
@@ -639,19 +883,37 @@ static void on_widget(struct uapp *a, int id, int reason) {
     case ID_ASK: {
         int code = uui_dialog_take_code(&g_ask);     // -1 on every press
         if (code < 0) return;
-        const struct udevice *d = code == ASK_DISABLE ? find_id(g_ask_id) : 0;
-        if (d && d->can_disable) {
-            report(d, udevice_disable(d, g_keep.checked), "disabled");
-            relist();
-            g_sig = signature();
+        if (code == ASK_UNLOAD) {
+            unload_driver();
+        } else {
+            const struct udevice *d = code == ASK_DISABLE ? find_id(g_ask_id) : 0;
+            if (d && d->can_disable) {
+                report(d, udevice_disable(d, g_keep.checked), "disabled");
+                relist();
+                g_sig = signature();
+            }
         }
         g_ask_id[0] = 0;
+        update_controls();
         uapp_redraw(a);
         return;
     }
     case ID_VIEW:
         if (g_view.selected != g_by_conn) set_view(a, g_view.selected);
         return;
+    case ID_FILTER:
+        filter_changed();
+        uapp_redraw(a);
+        return;
+    case ID_PROPS: {
+        int s = uui_props_take_action(&g_props);
+        if (s >= 0) {
+            if (!strcmp(g_props.sec[s].title, "Device")) copy_details();
+            else if (!strcmp(g_props.sec[s].title, "Events")) uapp_spawn(a, "/bin/wm/apps/logview", 0);
+        }
+        uapp_redraw(a);
+        return;
+    }
     }
     if (reason != UUI_REASON_RELEASE && reason != UUI_REASON_KEY) {
         if (id == ID_TREE) { update_controls(); uapp_redraw(a); }
@@ -660,12 +922,14 @@ static void on_widget(struct uapp *a, int id, int reason) {
     switch (id) {
     case ID_KEEP:    keep_changed(); break;
     case ID_TREE:    break;
+    case ID_MODS:    uapp_redraw(a); return;
     default: return;
     }
     update_controls();
     uapp_redraw(a);
 }
 
+// Ctrl+letter arrives as its control code (as in Notepad).
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
     int code;
@@ -673,6 +937,20 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         if (code >= 0) do_command(a, code);
         else uapp_redraw(a);
         return;
+    }
+    switch (key) {
+    case 0x06:   do_command(a, CMD_FIND); return;    // Ctrl+F
+    case 0x03:   do_command(a, CMD_COPY); return;    // Ctrl+C
+    case 0x05:   do_command(a, CMD_EXPORT); return;  // Ctrl+E
+    case KEY_F5: do_command(a, CMD_REFRESH); return;
+    case 0x1B:                                        // Esc empties the filter
+        if (filter_text()[0]) {
+            uui_textbox_set_text(&g_filter, "");
+            filter_changed();
+            uapp_redraw(a);
+            return;
+        }
+        break;
     }
     // The ring already moved the tree's selection; the pane follows it.
     update_controls();
@@ -704,21 +982,27 @@ static void on_resize(struct uapp *a, int w, int h) {
 static void on_size(int *w, int *h) {
     int per = ugfx_char_advance('n');
     if (per <= 0) per = 8;
-    *w = per * 100;
-    *h = ugfx_char_h() * 34;
+    *w = per * 110;
+    *h = ugfx_char_h() * 38;
 }
 
 int main(void) {
     uui_menubar_init(&g_menu, menu_items, (int)(sizeof menu_items / sizeof menu_items[0]));
     uui_segmented_init(&g_view, VIEWS, 2, 0);
+    uui_textbox_init(&g_filter, "");
+    g_filter.placeholder = "Find a device";
     uui_tree_init(&g_tree, 0, 0, 0, 0, g_nodes, 0);
     g_tree.sel_style = UUI_SEL_STRONG;
     uui_splitter_init(&g_split, 1, 430);
+    uui_props_init(&g_props);
     uui_button_init(&g_toggle, 0, 0, 0, 0, "Disable device", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_TOGGLE);
     uui_button_init(&g_refresh, 0, 0, 0, 0, "Refresh", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_REFRESH);
+    uui_button_init(&g_load, 0, 0, 0, 0, "Load driver", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_LOAD);
+    uui_button_init(&g_unload, 0, 0, 0, 0, "Unload driver", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_UNLOAD);
+    uui_dropdown_init(&g_mods, 0, 0, 0, 0, g_mod_items, 0);
     // The mockup's look: outlined buttons, and the selected device in
     // the accent -- both opt-in styles of the toolkit.
-    g_toggle.outlined = g_refresh.outlined = 1;
+    g_toggle.outlined = g_refresh.outlined = g_load.outlined = g_unload.outlined = 1;
     uui_checkbox_init(&g_keep, 0, 0, 0, "Keep disabled after restart", UUI_COLOR_UNSET, UUI_COLOR_UNSET);
     uui_dialog_init(&g_ask);
 

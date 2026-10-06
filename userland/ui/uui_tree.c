@@ -6,6 +6,8 @@
 #include "ui/uui_scrollbar.h" // uui_scrollbar_natural_size()
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 #include "lib/icon_cache.h" // icon_get() -- a node may carry an icon
+#include <stdio.h>
+#include <string.h>
 
 #define UUI_TREE_PAD_X   4  // left inset before the first expander
 #define UUI_TREE_INDENT  12 // per depth level
@@ -44,6 +46,85 @@ void uui_tree_init(struct uui_tree *t, int x, int y, int w, int h,
     t->guide = ugfx_rgb(200, 200, 208);
 }
 
+// --- the filter -----------------------------------------------------------
+
+#define FILTER_HIT_BG ugfx_rgb(255, 231, 163)   // notepad.c's HIT_BG
+
+static int is_header(const struct uui_tree *t, int node);
+static int node_hidden(const struct uui_tree *t, int node);
+static void tree_clamp(struct uui_tree *t);
+
+static int lower(int c) { return c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c; }
+
+// Where `needle` starts in `hay`, ignoring case, or -1.
+static int find_ci(const char *hay, const char *needle) {
+    if (!hay || !needle || !needle[0]) return -1;
+    for (int i = 0; hay[i]; i++) {
+        int k = 0;
+        while (needle[k] && hay[i + k] && lower((unsigned char)hay[i + k]) == lower((unsigned char)needle[k])) k++;
+        if (!needle[k]) return i;
+    }
+    return -1;
+}
+
+int uui_tree_text_matches(const char *haystack, const char *needle) {
+    return find_ci(haystack, needle) >= 0;
+}
+
+static void set_shown(struct uui_tree *t, int node) {
+    if (node >= 0 && node < UUI_TREE_FILTER_MAX) t->filter_shown[node / 64] |= 1ull << (node % 64);
+}
+
+// A matching node shows, and so does every ancestor of it (the nearest
+// shallower node before it, walking back) -- the path to the match --
+// and everything under it: "Sound" finds the sound devices, not a
+// heading with nothing beneath it.
+static int compute_filter(struct uui_tree *t) {
+    memset(t->filter_shown, 0, sizeof t->filter_shown);
+    if (!t->filter[0]) return 0;
+    int matches = 0;
+    for (int i = 0; i < t->count && i < UUI_TREE_FILTER_MAX; i++) {
+        if (is_header(t, i)) continue;
+        int hit = t->filter_match ? t->filter_match(t->filter_ctx, i, t->filter)
+                                  : find_ci(t->nodes[i].label, t->filter) >= 0;
+        if (!hit) continue;
+        matches++;
+        set_shown(t, i);
+        for (int k = i + 1; k < t->count && t->nodes[k].depth > t->nodes[i].depth; k++)
+            set_shown(t, k);
+        int d = t->nodes[i].depth;
+        for (int a = i - 1; a >= 0 && d > 0; a--) {
+            if (t->nodes[a].depth < d) { set_shown(t, a); d = t->nodes[a].depth; }
+        }
+    }
+    // A section heading shows when anything under it does.
+    for (int i = 0; i < t->count && i < UUI_TREE_FILTER_MAX; i++) {
+        if (!is_header(t, i)) continue;
+        for (int k = i + 1; k < t->count && k < UUI_TREE_FILTER_MAX && !is_header(t, k); k++)
+            if ((t->filter_shown[k / 64] >> (k % 64)) & 1u) { set_shown(t, i); break; }
+    }
+    return matches;
+}
+
+int uui_tree_set_filter(struct uui_tree *t, const char *text,
+                        int (*match)(void *ctx, int node, const char *text), void *ctx) {
+    snprintf(t->filter, sizeof t->filter, "%s", text ? text : "");
+    t->filter_match = match;
+    t->filter_ctx = ctx;
+    int n = compute_filter(t);
+    t->top = 0;
+    t->hovered = -1;
+    // A selection the filter hides moves to the first match, so what the
+    // page beside the tree shows is something the tree still shows.
+    if (t->filter[0] && (t->selected < 0 || node_hidden(t, t->selected))) {
+        t->selected = -1;
+        for (int i = 0; i < t->count; i++)
+            if (!node_hidden(t, i) && !is_header(t, i) && !uui_tree_is_parent(t, i)) { t->selected = i; break; }
+    }
+    tree_clamp(t);
+    return n;
+}
+
 void uui_tree_set_nodes(struct uui_tree *t, const struct uui_tree_node *nodes, int count) {
     t->nodes = nodes;
     t->count = count;
@@ -53,8 +134,9 @@ void uui_tree_set_nodes(struct uui_tree *t, const struct uui_tree_node *nodes, i
     t->top = 0;
     // Collapsed state is DROPPED with the nodes it described: bit 3 of
     // an old tree means nothing about a new one, and keeping it would
-    // silently hide an unrelated row.
+    // silently hide an unrelated row. The filter is KEPT and re-run.
     t->collapsed = 0;
+    compute_filter(t);
 }
 
 static void tree_clamp(struct uui_tree *t);
@@ -89,6 +171,7 @@ int uui_tree_is_parent(const struct uui_tree *t, int node) {
 
 int uui_tree_is_collapsed(const struct uui_tree *t, int node) {
     if (node < 0 || node >= t->count || is_header(t, node)) return 0;
+    if (t->filter[0]) return 0;   // a filtered tree is fully open
     if (t->nodes[node].kind != UUI_TREE_AUTO)
         return t->nodes[node].kind == UUI_TREE_CLOSED;
     if (node >= UUI_TREE_MAX_NODES) return 0;
@@ -100,6 +183,8 @@ int uui_tree_is_collapsed(const struct uui_tree *t, int node) {
 // backwards per node -- the same single pass every other loop here uses,
 // so they cannot disagree about what is visible.
 static int node_hidden(const struct uui_tree *t, int node) {
+    if (t->filter[0])
+        return node < UUI_TREE_FILTER_MAX && !((t->filter_shown[node / 64] >> (node % 64)) & 1u);
     int hide_below = -1; // depth at or under which everything is hidden
     for (int i = 0; i <= node && i < t->count; i++) {
         int d = t->nodes[i].depth;
@@ -454,6 +539,26 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
         if (avail > 0)
             ugfx_draw_string_clipped(s, tx, ty, avail, nd->label,
                                       selected ? sel_fg : t->fg, row_bg);
+        // The filter's matching run, marked over the label in the colour
+        // Notepad marks a find hit in.
+        int at = t->filter[0] ? find_ci(nd->label, t->filter) : -1;
+        if (at >= 0 && avail > 0) {
+            char run[96];
+            int hn = at < (int)sizeof run - 1 ? at : (int)sizeof run - 1;
+            memcpy(run, nd->label, (size_t)hn);
+            run[hn] = '\0';
+            int mx = tx + ugfx_text_width(run);
+            int mn = (int)strlen(t->filter);
+            if (mn > (int)sizeof run - 1) mn = (int)sizeof run - 1;
+            memcpy(run, nd->label + at, (size_t)mn);
+            run[mn] = '\0';
+            int mw = ugfx_text_width(run);
+            if (mx + mw > tx + avail) mw = tx + avail - mx;
+            if (mw > 0) {
+                ugfx_fill_rect(s, mx, ty, mw, ugfx_char_h(), FILTER_HIT_BG);
+                ugfx_draw_string_clipped(s, mx, ty, mw, run, UTHEME_TEXT, FILTER_HIT_BG);
+            }
+        }
     }
     ugfx_clip_restore(s, &saved);
 

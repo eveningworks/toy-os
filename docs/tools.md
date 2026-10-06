@@ -4704,7 +4704,16 @@ window without going through it will find its layout polls timing out.
   app is single-instance,
   so a leftover window takes the spawn with the layout log still off. It
   never ticks "Keep disabled", so it leaves `/etc/devices.conf` as found.
-  In `gui_regress.py`.
+  It also checks the pane as a page of sections (the app's `pane` report)
+  against `devctl show`, the disable/enable cycle in `devctl events`
+  (Taken, Given back, Driven, in order), the tree filter (Ctrl+F, the
+  card's driver name: two rows; Esc: all back), Copy details, Unload and
+  Load of the module-driven NIC through the pane's own buttons (`devctl`
+  the judge), and that a disk and a monitor are listed. **A slot's
+  controls are reported only while the slot is wholly in view**, so it
+  scrolls the pane to them (`reveal()`) as a person would. The filter and
+  event checks fired on a never-hiding filter and on a claim that
+  recorded no event. In `gui_regress.py`.
 - **`sysupdate_test.py`** -- the System Update window
   (`userland/gui/system/sysupdate.c`) against `update_server.py`'s handler
   in-process on an ephemeral port, THROTTLED so an install has a middle:

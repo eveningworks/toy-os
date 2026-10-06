@@ -166,7 +166,11 @@ whenever a headline here tells you something you did not already know.
 - **AN INIT IS DECLARED, NOT CALLED: `INITCALL(fn, LEVEL)` BESIDE THE
   FUNCTION, AND `kernel_main()` WALKS THE LEVELS**
 - **A PCI DRIVER DECLARES A MATCH TABLE AND A `probe()`, AND
-  `pci_bind()` CALLS IT ONCE PER DEVICE**
+  `pci_bind()` CALLS IT ONCE PER DEVICE** -- a probe returns 0 or
+  declines through `pci_probe_decline()`, and a declined device is
+  unbound
+- **A DEVICE'S LIFECYCLE GOES IN THE EVENT RING, ITS DRIVER'S CHATTER IN
+  THE LOG**
 - **A PROCESS CAN TAKE A PCI DEVICE OFF THE KERNEL, THE GATE IS THE
   DRIVER'S `remove()`, AND A DRIVER CALLBACK RUNS WITH INTERRUPTS ON**
 - **A CLAIMED DEVICE CANNOT REACH MEMORY UNTIL `SYS_DEV_DMA_ALLOC`, AND
@@ -778,6 +782,10 @@ whenever a headline here tells you something you did not already know.
   COMMAND, AND A HOVER REACHES IT ONLY IF ASKED**
 - **A CLIENT HOLDS ITS OWN MINIMUM: `uapp` CLAMPS A PROPOSED SIZE TO
   `min_w`/`min_h`**
+- **A TREE IS FILTERED BY `uui_tree_set_filter()`, AND A FILTERED TREE IS
+  FULLY OPEN**
+- **A PROPERTIES PAGE IS `uui_props`, FILLED FROM A LIST THE COMMAND LINE
+  PRINTS TOO**
 
 ### Storage, the filesystem, and /etc
 

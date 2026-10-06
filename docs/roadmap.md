@@ -781,6 +781,10 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~CPU/memory over time as a TAB in Task Manager~~ DONE 2026-09-15 -- history is collected whether or not the tab is showing
 - [ ] Scientific mode for Calculator
 - [x] ~~Device Manager: devices by bus with their bound driver, properties, and unbind/rebind~~ DONE 2026-09-28
+- [x] ~~Device Manager round 2: resources, events, drivers, disks, monitors, a filter, a report~~ DONE 2026-10-06
+- [ ] The hardware report's own dialog: a preview, and what to include -- Export is a plain Save today
+- [ ] Device Manager's network card links to Settings > Network, and a device's Events open the Log Viewer at that device's lines
+- [ ] Properties' and the File Manager's `uui_fileinfo` on `uui_props`, whose sections it draws by hand
 - [x] ~~A Network tab in Task Manager~~ DONE 2026-09-29 -- an Ethernet device on the Performance page, as Windows has it
 - [x] ~~A boot menu editor~~ DONE 2026-10-03 -- `bootcfg`, the Boot Manager and Settings > System > Boot menu, over one checked model
 - [ ] The Boot Manager's Text view has no line numbers, though its problems are reported by line

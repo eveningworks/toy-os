@@ -29,6 +29,7 @@
 // tried to own those would be reimplementing the widget, which is what
 // docs/gui-guidelines.md's "behaviour belongs to the component" forbids.
 
+#define UUI_TREE_FILTER_MAX 256 // nodes a filter decides for; the rest show
 #define UUI_TREE_MAX_NODES 64 // bounds the collapsed-state bitmap below;
                                // UUI_TREE_CLOSED/OPEN nodes are not in it
                                // and a lazy tree may exceed this count
@@ -121,6 +122,17 @@ struct uui_tree {
     // and Plasma's selected row, for a tree that is the window's subject.
     // It draws no focus ring on that row: the fill is the indicator.
     int sel_style;
+
+    // A FILTER (uui_tree_set_filter): while one is set, a node shows only
+    // if it or something under it matches, and a filtered tree is fully
+    // OPEN whatever was collapsed -- a match hidden in a closed branch
+    // would be no match at all. Every desktop's tree search does this.
+    // `filter_shown` is computed when the filter or the nodes change;
+    // nodes past UUI_TREE_FILTER_MAX always show. OWNED.
+    char filter[48];
+    int (*filter_match)(void *ctx, int node, const char *text);
+    void *filter_ctx;
+    uint64_t filter_shown[UUI_TREE_FILTER_MAX / 64];
 };
 
 // UUI_SEL_ROUNDED is the design language's selection (docs/gui-guidelines.md):
@@ -157,6 +169,18 @@ void uui_tree_set_nodes(struct uui_tree *t, const struct uui_tree_node *nodes, i
 // clamped: node ids are the app's and may not survive its rebuild, so
 // re-selecting is the app's job (uui_tree_select_id()).
 void uui_tree_set_nodes_keep(struct uui_tree *t, const struct uui_tree_node *nodes, int count);
+
+// Show only the nodes matching `text`, what leads to them and what is
+// under them; "" or
+// NULL clears it. `match` decides whether node `node` matches (an app
+// that searches more than the label -- ids, drivers -- supplies one);
+// NULL matches the label, case-insensitively. A filtered label draws
+// its matching run highlighted. Returns how many nodes MATCH.
+int  uui_tree_set_filter(struct uui_tree *t, const char *text,
+                         int (*match)(void *ctx, int node, const char *text), void *ctx);
+// Whether `haystack` contains `needle`, ignoring case -- the label
+// match, for an app's own `match` to build on.
+int  uui_tree_text_matches(const char *haystack, const char *needle);
 
 // The lazy half of UUI_TREE_CLOSED/OPEN -- see struct uui_tree_node.
 // Without a callback, a kind-declared expander is inert.

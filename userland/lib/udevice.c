@@ -14,14 +14,15 @@
 #include "lib/udevice.h"
 
 static const char *const TYPE_NAME[UDEV_T_COUNT] = {
-    "Display adapters", "Network adapters", "Sound", "Storage controllers",
-    "USB controllers", "Input devices", "Processors", "System devices", "Other devices",
+    "Display adapters", "Monitors", "Network adapters", "Sound", "Storage controllers",
+    "Disk drives", "USB controllers", "Input devices", "Processors", "System devices",
+    "Other devices",
 };
 // The Settings sidebar's category art, which already draws these; the
 // USB has no page there, so it is the Device Manager's own.
 static const char *const TYPE_ICON[UDEV_T_COUNT] = {
-    "cat-display", "cat-network", "cat-sound", "cat-storage",
-    "dev-usb", "cat-input", "cat-kernel", "cat-system", "cat-system",
+    "cat-display", "cat-display", "cat-network", "cat-sound", "cat-storage",
+    "drive", "dev-usb", "cat-input", "cat-kernel", "cat-system", "cat-system",
 };
 
 const char *udevice_type_name(enum udev_type t) { return t < UDEV_T_COUNT ? TYPE_NAME[t] : "?"; }
@@ -59,7 +60,13 @@ static enum udev_type usb_type(const struct query_usb *q) {
 // so a webcam or a Bluetooth adapter is "Other devices" by type and
 // still a problem (it read "No driver needed" until 2026-09-29).
 static int wants_driver(const struct udevice *d) {
-    return d->type <= UDEV_T_INPUT || d->bus == UDEV_USB;
+    switch (d->type) {
+    case UDEV_T_DISPLAY: case UDEV_T_NETWORK: case UDEV_T_SOUND: case UDEV_T_STORAGE:
+    case UDEV_T_USB: case UDEV_T_INPUT:
+        return d->bus == UDEV_PCI || d->bus == UDEV_USB;
+    default:
+        return d->bus == UDEV_USB;
+    }
 }
 
 // --- what has been disabled ---------------------------------------------
@@ -141,6 +148,8 @@ static void add_pci(struct udevice *out, int *n, int cap, struct uhwids_entry *i
         snprintf(d->id, sizeof d->id, "pci:%02x:%02x.%x", p.bus, p.device, p.function);
         snprintf(d->location, sizeof d->location, "PCI %02x:%02x.%x", p.bus, p.device, p.function);
         strlcpy(d->driver, q.driver, sizeof d->driver);
+        strlcpy(d->declined_by, q.declined_by, sizeof d->declined_by);
+        strlcpy(d->why, q.why, sizeof d->why);
         d->holder_pid = q.holder_pid;
         d->can_disable = q.claimable && !q.holder_pid;
         ids[*n].vendor = d->vendor;
@@ -269,8 +278,79 @@ static void adopt_class_drivers(struct udevice *d, int npci) {
     }
 }
 
+// The disks: QUERY_BLKDEV's whole devices, under the controller that
+// reports them (`device_id`), or -- the legacy ATA driver knows no PCI
+// device -- under the IDE function adopt_class_drivers() gave to "ata".
+// A RAM disk is not hardware and is left out, as Windows leaves it.
+static void add_disks(struct udevice *out, int *n, int cap, int npci) {
+    struct query_blkdev q;
+    QUERY_FOREACH(QUERY_BLKDEV, q, i) {
+        if (*n >= cap) return;
+        if (q.parent[0] || !q.persistent) continue;
+        struct udevice *d = &out[*n];
+        memset(d, 0, sizeof *d);
+        d->bus = UDEV_BLOCK;
+        d->type = UDEV_T_DISK;
+        d->index = d->parent = -1;
+        snprintf(d->id, sizeof d->id, "blk:%s", q.name);
+        strlcpy(d->devname, q.name, sizeof d->devname);
+        strlcpy(d->driver, q.driver, sizeof d->driver);
+        for (int k = 0; k < npci; k++) {
+            if (q.device_id[0] ? !strcmp(out[k].id, q.device_id)
+                               : (!strcmp(q.driver, "ata") && !strcmp(out[k].driver, "ata"))) {
+                d->parent = k;
+                break;
+            }
+        }
+        if (q.model[0]) strlcpy(d->name, q.model, sizeof d->name);
+        else snprintf(d->name, sizeof d->name, "%s disk", q.driver[0] ? q.driver : "Block");
+        snprintf(d->location, sizeof d->location, "Block device %s", q.name);
+        (*n)++;
+    }
+}
+
+// The monitor on the screen, from the display driver's EDID: one, under
+// the display adapter adopt_class_drivers() gave that driver.
+static void add_monitor(struct udevice *out, int *n, int cap, int npci) {
+    struct query_display q;
+    if (*n >= cap) return;
+    if (sys_query_record(QUERY_DISPLAY, 0, &q, sizeof q) != (int)sizeof q) return;
+    if (!q.driver[0] || (!q.panel[0] && !q.native_width)) return;
+    struct udevice *d = &out[*n];
+    memset(d, 0, sizeof *d);
+    d->bus = UDEV_MONITOR;
+    d->type = UDEV_T_MONITOR;
+    d->index = d->parent = -1;
+    strlcpy(d->id, "mon:0", sizeof d->id);
+    strlcpy(d->driver, q.driver, sizeof d->driver);
+    for (int k = 0; k < npci; k++)
+        if (out[k].cls == 0x03 && !strcmp(out[k].driver, q.driver)) { d->parent = k; break; }
+    if (q.panel[0]) strlcpy(d->name, q.panel, sizeof d->name);
+    else strlcpy(d->name, "Monitor", sizeof d->name);
+    if (q.vendor[0]) strlcpy(d->vendor_name, q.vendor, sizeof d->vendor_name);
+    strlcpy(d->location, "On screen", sizeof d->location);
+    (*n)++;
+}
+
+// What each device's driver came in (QUERY_DRIVER's module), and a
+// network card's interface name (QUERY_NETDEV, matched by device_id).
+static void annotate(struct udevice *out, int n) {
+    struct query_driver q;
+    QUERY_FOREACH(QUERY_DRIVER, q, i) {
+        if (!q.module[0]) continue;
+        for (int k = 0; k < n; k++)
+            if (!strcmp(out[k].driver, q.name)) strlcpy(out[k].module, q.module, sizeof out[k].module);
+    }
+    struct query_netdev nd;
+    QUERY_FOREACH(QUERY_NETDEV, nd, i) {
+        if (!nd.device_id[0]) continue;
+        for (int k = 0; k < n; k++)
+            if (!strcmp(out[k].id, nd.device_id)) strlcpy(out[k].devname, nd.name, sizeof out[k].devname);
+    }
+}
+
 int udevice_list(struct udevice *out, int cap) {
-    static struct uhwids_entry ids[UDEV_MAX];   // static: ~16 KiB
+    static struct uhwids_entry ids[UDEV_MAX];   // static: too big for the stack
     int n = 0;
     if (cap > UDEV_MAX) cap = UDEV_MAX;
 
@@ -313,6 +393,9 @@ int udevice_list(struct udevice *out, int cap) {
 
     add_ps2(out, &n, cap);
     add_cpus(out, &n, cap);
+    add_disks(out, &n, cap, npci);
+    add_monitor(out, &n, cap, npci);
+    annotate(out, n);
 
     // What has been switched off: each file read once, not once a device.
     struct etc_config_buf *run = malloc(sizeof *run), *per = malloc(sizeof *per);
@@ -325,8 +408,7 @@ int udevice_list(struct udevice *out, int cap) {
         d->disabled = !d->driver[0] && !d->holder_pid &&
                       ((have_run && recorded(run, d)) || d->persisted);
         if (d->disabled) d->can_disable = 1;           // it can be enabled again
-        d->problem = !d->driver[0] && !d->holder_pid && !d->disabled && wants_driver(d) &&
-                     d->bus != UDEV_CPU;
+        d->problem = !d->driver[0] && !d->holder_pid && !d->disabled && wants_driver(d);
     }
     free(run);
     free(per);
@@ -337,8 +419,10 @@ const char *udevice_status(const struct udevice *d, char *buf, int cap) {
     if (d->holder_pid) snprintf(buf, (size_t)cap, "Held by pid %d, a driver in ring 3", d->holder_pid);
     else if (d->disabled) snprintf(buf, (size_t)cap, "%s", d->persisted ? "Disabled, and stays disabled after a restart" : "Disabled until the next restart");
     else if (d->driver[0]) snprintf(buf, (size_t)cap, "Working");
-    else if (d->problem) snprintf(buf, (size_t)cap, "No driver in this build");
-    else if (d->bus == UDEV_CPU) snprintf(buf, (size_t)cap, "Working");
+    else if (d->declined_by[0]) snprintf(buf, (size_t)cap, "No driver: %s declined it", d->declined_by);
+    else if (d->problem) snprintf(buf, (size_t)cap, "No driver");
+    else if (d->bus == UDEV_CPU || d->bus == UDEV_BLOCK || d->bus == UDEV_MONITOR)
+        snprintf(buf, (size_t)cap, "Working");
     else snprintf(buf, (size_t)cap, "No driver needed");
     return buf;
 }
