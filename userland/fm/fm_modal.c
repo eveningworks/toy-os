@@ -6,6 +6,10 @@
 // One of the File Manager's units -- see fm_internal.h for what is
 // where and why these share their state directly.
 #include "fm_internal.h"
+#include "ui/uui_renamer.h"
+#include "ui/ulog.h"
+#include "kpath.h"
+#include <stdio.h>
 #include "ui/uui_dialog.h"
 #include "ui/utheme.h"
 #include "lib/icon_cache.h"
@@ -83,4 +87,57 @@ void answer_prompt(int code) {
     if (cmd == CMD_MKDIR) commit_mkdir(text);
     else if (cmd == CMD_RENAME) commit_rename(text);
     else if (cmd == CMD_NEW_FILE) commit_newfile(text);
+}
+
+// --- rename many (ui/uui_renamer.h) ----------------------------------------
+//
+// THROUGH TEMPORARY NAMES, in two passes: every item first to a name of
+// its own that nothing has, then each to its new name. A set whose new
+// names include another's old one -- photo-02 and photo-01 numbered the
+// other way round -- would otherwise fail on the first rename.
+static void rename_many_done(void *ctx, const char *dir, char (*olds)[URENAME_NAME],
+                             char (*news)[URENAME_NAME], int n) {
+    (void)ctx;
+    static char tmp[UUI_RENAMER_MAX][URENAME_NAME];
+    char a[PATH_MAX_LEN], b[PATH_MAX_LEN];
+    int moved = 0, failed = 0;
+    for (int i = 0; i < n; i++) {
+        snprintf(tmp[i], URENAME_NAME, ".rename-%d-%s", i, olds[i]);
+        if (!k_path_join(dir, olds[i], a, sizeof a) || !k_path_join(dir, tmp[i], b, sizeof b) ||
+            sys_rename(a, b) != 0) { failed = 1; break; }
+        moved++;
+    }
+    if (failed) {   // put back what moved, and touch nothing more
+        for (int i = 0; i < moved; i++)
+            if (k_path_join(dir, tmp[i], a, sizeof a) && k_path_join(dir, olds[i], b, sizeof b))
+                sys_rename(a, b);
+        set_note("could not rename them -- nothing was changed");
+        reload_panes();
+        return;
+    }
+    int done = 0;
+    for (int i = 0; i < n; i++) {
+        if (k_path_join(dir, tmp[i], a, sizeof a) && k_path_join(dir, news[i], b, sizeof b) &&
+            sys_rename(a, b) == 0) { done++; continue; }
+        // The new name went wrong: back to the old one.
+        if (k_path_join(dir, olds[i], b, sizeof b)) sys_rename(a, b);
+        snprintf(news[i], URENAME_NAME, "%s", olds[i]);
+    }
+    ulogf("files: renamed %d of %d\n", done, n);
+    snprintf(g_stat_note, sizeof g_stat_note, "renamed %d item%s", done, done == 1 ? "" : "s");
+    if (done) undo_record_renames(dir, olds, news, n);
+    reload_panes();
+    refresh_status();
+}
+
+void rename_many_open(struct uapp *a) {
+    struct uui_fileview *fv = active();
+    static char names[UUI_RENAMER_MAX][URENAME_NAME];
+    char path[PATH_MAX_LEN];
+    int marks = uui_fileview_mark_count(fv), n = 0;
+    for (int i = 0; i < marks && n < UUI_RENAMER_MAX; i++)
+        if (uui_fileview_marked_path(fv, i, path, sizeof path))
+            strlcpy(names[n++], k_path_basename(path), URENAME_NAME);
+    if (n < 2) { set_note("mark two or more to rename them together"); return; }
+    uui_renamer_open(a, uui_fileview_dir(fv), names, n, rename_many_done, 0);
 }

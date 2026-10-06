@@ -3003,6 +3003,16 @@ window without going through it will find its layout polls timing out.
   member through /tmp/zip-open. Its positive control stops extraction
   making parent folders: the Extract all check reddens.
 
+- **`rename_gui_test.py`** -- Rename many (`lib/urename.h`,
+  `ui/uui_renamer.h`): Ctrl+A then F2 opens "Rename 3 items", Enter
+  takes the default `<folder>-##` pattern, one Ctrl+Z puts every name
+  back, and Esc renames nothing. The fixture is a CHAIN -- berry.txt
+  becomes rn-02.txt while rn-02.txt is still there -- and each file
+  carries its own content, which is what is read back with `cat`, so a
+  rename that overwrote would still show the right NAMES. Its positive
+  control renames straight to the new names, skipping the temporary
+  pass: the rename check reddens.
+
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window
   (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
   driven through Notepad, Image Viewer and Audio Player. 17 checks: the

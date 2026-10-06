@@ -204,6 +204,9 @@ TESTS = [
     # redone, a new record dropping the redo, a refused step failing
     # alone. SPAWNED: the copy and move engine is ufileop's.
     ("ufileundo_test", None, None, None),
+    # lib/urename.h: each rule against a hand-worked table, then the plan's
+    # two refusals on real files. SPAWNED, as ufileundo_test.
+    ("urename_test", None, None, None),
     # /bin/head, tail and wc on pipes, against a hand-worked fixture.
     # SPAWNED: it spawns them and waits.
     ("textcmd_test", None, None, None),

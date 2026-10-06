@@ -10653,3 +10653,21 @@ place (`descends`) -- from the archive's top, Up is the folder it is in.
 No compressing: there is no deflate encoder, and writing archives is a
 separate item if wanted.
 
+## Rename many is a dialog with a preview, and renames through temporary names
+
+**Picked 2026-10-06** (artboard G). F2 with two or more marked opens a
+window of its own -- Dolphin's "Rename items", Thunar's Bulk Rename,
+PowerToys' PowerRename -- with three rules (Numbered `<pattern>##`, Find
+and replace, Change case), Keep extensions on by default, and a preview
+of every old name beside its new one with the clashes shaded BEFORE
+anything is touched. The rules are `lib/urename.h` (touches nothing but
+a `stat` per new name) and the dialog `ui/uui_renamer.h`, which RENAMES
+NOTHING ITSELF: it hands the app the pairs, so another app could reuse
+it with its own way of renaming. **The File Manager renames in two
+passes**, every item first to a `.rename-<i>-<old>` name of its own,
+then each to its new name: a set whose new names include another's old
+one (renumbering, a swap) would otherwise fail or overwrite on the first
+rename, and a failure in the first pass puts everything back. The set
+is ONE undo step (one `UFU_RENAME` op in `lib/ufileundo.h`). Not built:
+regular expressions (lib/uregex exists, but a bulk rename by regex is a
+rare need and a confusing field), dates or metadata in the pattern.

@@ -333,6 +333,8 @@ extern struct uui_toast g_toast;
 void undo_record_job(int op, const char *what, char (*paths)[PATH_MAX_LEN],
                      char (*results)[PATH_MAX_LEN], int n, const char *dest);
 void undo_record(int kind, const char *a, const char *b);   // UFU_RENAME / UFU_CREATE
+void undo_record_renames(const char *dir, char (*olds)[64], char (*news)[64], int n);
+void rename_many_open(struct uapp *a);   // fm_modal.c: the marked set, in a uui_renamer
 void undo_applied(int redo, int failures);
 int  undo_can(int redo);
 void do_undo(int redo);

@@ -93,6 +93,19 @@ void undo_record(int kind, const char *a, const char *b) {
     ulogf("files: undo recorded \"%s\" (1 step)\n", label);
 }
 
+// Many renames as ONE operation: one Ctrl+Z puts every name back.
+void undo_record_renames(const char *dir, char (*olds)[64], char (*news)[64], int n) {
+    char label[64], a[PATH_MAX_LEN], b[PATH_MAX_LEN];
+    snprintf(label, sizeof label, "Renamed %d item%s", n, n == 1 ? "" : "s");
+    struct ufu_op *rec = ufileundo_begin(&g_undo, UFU_RENAME, label);
+    for (int i = 0; i < n; i++)
+        if (k_path_join(dir, olds[i], a, sizeof a) && k_path_join(dir, news[i], b, sizeof b))
+            ufileundo_add(rec, a, b, 0);
+    ufileundo_commit(&g_undo, rec);
+    ulogf("files: undo recorded \"%s\" (%d steps)\n", label, rec->count);
+    toast("tb-rename", label, "Undo", 0);
+}
+
 int undo_can(int redo) {
     return redo ? ufileundo_next_redo(&g_undo) != 0 : ufileundo_next_undo(&g_undo) != 0;
 }

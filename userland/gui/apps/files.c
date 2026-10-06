@@ -887,6 +887,9 @@ void do_command(struct uapp *a, int code) {
         else create_and_rename(CMD_MKDIR);
         break;
     case CMD_RENAME: {
+        // SEVERAL MARKED: the rename-many dialog, Dolphin's -- one name
+        // at a time would be the same dialog N times.
+        if (uui_fileview_mark_count(active()) > 1) { rename_many_open(a); break; }
         const char *name = uui_fileview_selected_name(active());
         if (!name) { set_note("nothing selected"); break; }
         // Options: the name edited where it is (Explorer's F2), or asked

@@ -58,6 +58,7 @@
 | `upins.h` | PINNED FOLDERS: the folders a person added to Places, kept in /etc/places.conf one absolute path per line -- GTK's bookmarks file, Explorer's Quick access pins. |
 | `uprogress.h` | A one-line transfer meter, redrawn in place with `\r`. |
 | `uregion.h` | A REGION: a bounded list of disjoint rectangles, cut by subtraction -- what the compositor draws each window inside once the opaque windows above it are taken away (pixman's region32, which wlroots... |
+| `urename.h` | RENAMING MANY FILES AT ONCE: the new names a rule gives a set of names, and whether the set can be renamed as planned -- Dolphin's "Rename items", Thunar's Bulk Rename, PowerToys' PowerRename. |
 | `uresolv.h` | Turning a name into an address: DNS over UDP, in ring 3. |
 | `usaver.h` | Where the savers are. |
 | `usetting.h` | One setting, by qualified name, for a ring-3 program: the GET and SET halves of `SYS_SETTING` with the message built here rather than in every caller. |
@@ -135,6 +136,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_progress.h` | A PROGRESS BAR: a track and a fill, determinate or busy. |
 | `uui_props.h` | uui_props -- a page of PROPERTIES: titled sections of key/value rows, one scrolling column. |
 | `uui_radio_list.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |
+| `uui_renamer.h` | THE RENAME-MANY DIALOG: a window of its own, over lib/urename.h -- a rule (Numbered, Find and replace, Change case), Keep extensions, and a PREVIEW of every old name beside its new one, with the cl... |
 | `uui_route.h` | uui_route -- pointer input, delivered to widgets by the toolkit instead of by every app. |
 | `uui_scale.h` | A CONTINUOUS value on a range, dragged with the pointer -- a media player's position bar, a volume control, a percentage. |
 | `uui_scrollanim.h` | SMOOTH SCROLLING AS A DISPLACEMENT OF THE DRAWN CONTENT, easing to zero -- the widget's own position (`top`, `offset`, `scroll_offset`) still jumps exactly as it always did, so every reader of it,... |

@@ -143,6 +143,7 @@ TOOLS = [
     ("tabsgui",    "tabs_gui_test.py",   "title-bar tabs: new, label, switch, own history, close, last closes window"),
     ("pinsgui",    "pins_gui_test.py",   "Pin to Places: the file, the Pinned row, going there, Unpin"),
     ("zipgui",     "zip_gui_test.py",    "a .zip as a folder: list, open in place, Up, Extract all, open a member"),
+    ("renamegui",  "rename_gui_test.py", "Rename many: F2 on a set, a chain through temp names, one Undo, Esc"),
     ("forcequit", "forcequit_test.py", "not-responding detection and force quit"),
     ("dialog", "dialog_test.py", "the confirm dialog, by pixel value"),
     ("leave", "leave_test.py", "the Leave page: Restart/Shut down/Exit to shell, apps asked to close, Restart into"),
