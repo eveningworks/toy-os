@@ -5548,4 +5548,19 @@ main()'s local.
 - **One `struct ushot` per process**: its buffer is named after the
   pid, so a second one unlinks the first's. Copy a frame out to keep two
   (the Screenshot overlay keeps two: with and without the pointer).
+- **The frame it renders is a FULL repaint**, never clipped to the
+  iteration's damage: the hidden client's pixels from earlier frames are
+  still in the back buffer, and a clipped frame keeps the undamaged ones.
+
+## A WINDOW EXISTS FROM ITS FIRST FRAME: THE TASKBAR, AND A FULLSCREEN ASKED IN `on_open`
+
+- **A client window is on the taskbar only once it has PRESENTED**
+  (`windows[i].first_w`, Wayland's map-on-first-commit): a test that
+  waits for a button after spawning waits for the first frame, not the
+  create.
+- **`uapp_set_fullscreen(a, 1)` in `on_open` HOLDS THE FIRST FRAME** until
+  the compositor's size proposal (300 ms at most), so the window first
+  appears fullscreen -- xdg-shell's initial configure. `gui windows`
+  reports `first_frame`; `fullscreen_test.py` asserts it. Asked later, a
+  fullscreen is an ordinary resize.
 

@@ -139,6 +139,13 @@ def run(dbg, qmp, tmp, res):
     c = win and win["content"]
     res.check("...and so is its content rect (no chrome)",
               c and (c["x"], c["y"], c["w"], c["h"]) == (0, 0, sw, sh), c)
+    # fsclient asks in on_open, before it has shown anything, so uapp holds
+    # its first frame for the proposal: a first frame at its desc size is
+    # the window flashing up small and then jumping, which a screensaver
+    # shows as a black rectangle over the desktop it is about to use.
+    ff = win and win.get("first_frame")
+    res.check("it APPEARED fullscreen: its first frame was already the screen's size",
+              ff and (ff["w"], ff["h"]) == (sw, sh), ff)
 
     if hwc:
         fb = wait_lease(dbg, pid)

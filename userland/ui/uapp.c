@@ -274,6 +274,12 @@ struct uapp {
     // two are refreshed together in present() and uapp_resize().
     struct ugfx_surface surface;
     int dirty;    // something asked for a repaint since the last present
+    int shown;    // presented at least once, so the compositor maps it
+    // THE FIRST FRAME HELD for a fullscreen request made before it, until
+    // the compositor's size proposal (or this deadline, in ms). xdg-shell's
+    // initial configure: otherwise the window appears at its desc size for
+    // a frame and then jumps, which a screensaver shows as a black flash.
+    unsigned long long hold_until_ms;
     int focused;  // keyboard focus, per WIN_EV_FOCUS
     int running;
     int status;
@@ -434,6 +440,7 @@ static void present(struct uapp *a) {
     } else {
         surf_present(TOPLEVEL);
     }
+    a->shown = 1;
     // THE POPUPS AFTER THE TOPLEVEL, in slot order -- the order they
     // were opened, which is the order the compositor stacks them. Only
     // those drawn into this frame: a menu nobody hovered is unchanged
@@ -447,6 +454,10 @@ static void present(struct uapp *a) {
 // trip, not one per event.
 static void flush(struct uapp *a) {
     if (!a->dirty) return;
+    if (a->hold_until_ms) {
+        if (sys_monotonic_ns() / 1000000ULL < a->hold_until_ms) return;
+        a->hold_until_ms = 0;
+    }
     // NO FREE BUFFER, NO FRAME: it stays dirty and is drawn when the
     // compositor hands one back (WIN_EV_BUF_RELEASE wakes the loop).
     if (!a->lease_on) {
@@ -1414,6 +1425,7 @@ void uapp_set_fullscreen(struct uapp *a, int on) {
     on = on ? 1 : 0;
     if (a->fullscreen == on) return;
     a->fullscreen = on;
+    if (on && !a->shown) a->hold_until_ms = sys_monotonic_ns() / 1000000ULL + 300;
     wmchan_send(WIN_REQ_FULLSCREEN, a->window, on, 0, 0, 0);
 }
 
@@ -1839,6 +1851,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
     }
 
     case WIN_EV_RESIZE:
+        a->hold_until_ms = 0;
         // A PROPOSAL from TWS, answered here. Everything an app would
         // otherwise have to remember -- ask the server, rebuild the
         // surface, re-lay-out, repaint -- happens for it. An app that

@@ -9,6 +9,7 @@ Description=What to show once the machine has been idle. Any key or a mouse move
 Widget=dropdown
 Choice.blank=Blank screen
 Choice.bounce=Bouncing logo
+Choice.cube=Desktop cube
 Choice.matrix=Matrix rain
 Choice.plasma=Plasma
 Choice.solid=Tumbling solid

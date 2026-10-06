@@ -542,6 +542,8 @@ int uapp_spawn(struct uapp *a, const char *path, const char *arg);
 // FULLSCREEN: the whole screen, no chrome, no taskbar, until asked
 // again with `on` = 0 or the window closes. The compositor answers
 // with a resize proposal; the app adopts it as it adopts any other.
+// ASKED IN on_open, before the window has been shown, the first frame
+// waits for that proposal, so the window first appears fullscreen.
 // With UAPP_SCANOUT the compositor may also lend the display's buffers
 // (WIN_EV_SCANOUT) -- the toolkit switches surfaces and presents by
 // flip on the app's behalf, and the app notices nothing.

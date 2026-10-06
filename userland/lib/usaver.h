@@ -63,7 +63,7 @@
 // A SAVER WITH NO DESCRIPTOR HAS NO OPTIONS, which is a state rather
 // than an error: `blank` ships without one and draws a black screen.
 
-#define USAVER_OPT_MAX     4  // options one saver may declare
+#define USAVER_OPT_MAX     8  // options one saver may declare
 #define USAVER_CHOICE_MAX  6  // values one enum option may offer
 #define USAVER_KEY_MAX     16
 #define USAVER_LABEL_MAX   32

@@ -292,6 +292,9 @@ def main():
     # descriptor and a `#define` still in place look identical from.
     options_reach_the_pixels(dbg, qmp, args)
 
+    # --- Desktop cube: the DESKTOP reaches its faces and its backdrop ----
+    cube_saver(dbg, qmp, args)
+
     # --- System Settings' Test button -----------------------------------
     #
     # Windows' Preview by another name. What makes it safe is that it
@@ -407,6 +410,132 @@ def options_reach_the_pixels(dbg, qmp, args):
     # LEAVE NOTHING BEHIND: a conf file here changes what every later
     # boot of this saver draws.
     dbg.send(f"sh rm {conf}")
+
+
+def cube_backdrop(desk):
+    """What the Desktop cube saver's DIMMED backdrop must be for a capture
+    `desk` (a PIL RGB image): box-filtered to about 512 wide, scaled back
+    up bilinearly, at 3/8 -- cube.c's make_texture() and
+    make_backdrop_rows(), in the same integer arithmetic, so a correct
+    capture matches to the unit and a wrong one does not."""
+    sw, sh = desk.size
+    px = desk.load()
+    f = max(1, (sw + 511) // 512)
+    tw, th = sw // f, sh // f
+    tex = [[(0, 0, 0)] * tw for _ in range(th)]
+    for y in range(th):
+        for x in range(tw):
+            r = g = b = 0
+            for j in range(f):
+                for i in range(f):
+                    p = px[x * f + i, y * f + j]
+                    r += p[0]; g += p[1]; b += p[2]
+            n = f * f
+            tex[y][x] = (r // n, g // n, b // n)
+
+    def coord(v, size, out):
+        s = ((2 * v + 1) * size * 128) // out - 128
+        return max(0, min(s, (size - 1) * 256))
+
+    def at(x, y):
+        sx, sy = coord(x, tw, sw), coord(y, th, sh)
+        x0, wx, y0, wy = sx >> 8, sx & 255, sy >> 8, sy & 255
+        x1, y1 = min(x0 + 1, tw - 1), min(y0 + 1, th - 1)
+        out = []
+        for c in range(3):
+            a, b2 = tex[y0][x0][c], tex[y0][x1][c]
+            cc, d = tex[y1][x0][c], tex[y1][x1][c]
+            top, bot = a * 256 + (b2 - a) * wx, cc * 256 + (d - cc) * wx
+            out.append(((top * 256 + (bot - top) * wy) >> 16) * 3 // 8)
+        return tuple(out)
+    return at
+
+
+def cube_saver(dbg, qmp, args):
+    """The Desktop cube wraps the desktop captured as it starts.
+
+    THE BACKDROP IS THE ORACLE, because it is the capture and it stays on
+    screen: with the solid held still in the middle (speed 0, spin 0), the
+    taskbar strip of a saver frame is the dimmed capture's taskbar, which
+    is computed here from a screenshot taken just before. A capture with
+    anything in it the desktop did not have -- the saver's own window, or
+    its taskbar button left over in a damage-limited frame -- differs there.
+
+    THE FACES ARE THE DESKTOP'S COLOURS: unlit, a face is texels of the
+    capture, so the solid's mean colour is near the desktop's. The
+    fallback (no capture) is a grey checker, which this tells apart only
+    while the wallpaper is coloured -- so that is checked first.
+    """
+    from PIL import Image
+    name = "cube"
+    set_setting(dbg, "desktop.screensaver", name)
+    write_conf(dbg, name, [("speed", 0), ("spin", 0), ("backdrop", "dimmed"),
+                           ("intro", "on"), ("lighting", "flat"), ("squash", "off")])
+    st = dbg.state()
+    sw, sh = st["screen"]["w"], st["screen"]["h"]
+    # The pointer is in a screendump but never in a capture: park it where
+    # the solid will cover it.
+    qmp.goto(sw // 2, sh // 2)
+    time.sleep(0.5)
+    before = f"{args.logs}/cube_desktop.png"
+    qmp.screenshot(before)
+    desk = Image.open(before).convert("RGB")
+    dbg.logs("cube:", clear=True)
+
+    dbg.send("gui idle start")
+    if not check("cube: starts", wait_pid(dbg, True) is not None):
+        return
+    # Past the fold (3.4 s from the first fullscreen frame), polled on the
+    # saver's own word rather than a clock.
+    lines = []
+    for _ in range(60):
+        lines += dbg.logs("cube:")
+        if any("closed, bouncing" in ln for ln in lines):
+            break
+        time.sleep(0.25)
+    time.sleep(0.5)
+    shot = f"{args.logs}/cube_saver.png"
+    qmp.screenshot(shot, stable=False)
+    dbg.key(ord("a"))
+    wait_pid(dbg, False)
+    dbg.send(f"sh rm {SAVER_CONF}/{name}.conf")
+    set_setting(dbg, "desktop.screensaver", "starfield")
+
+    cap = next((ln for ln in lines if "captured" in ln), "")
+    check("cube: captured the whole screen", f"captured {sw}x{sh}" in cap, cap or lines)
+    order = [next((i for i, ln in enumerate(lines) if k in ln), -1)
+             for k in ("intro: shrink", "intro: fold", "closed, bouncing")]
+    check("cube: the intro shrinks, folds and closes, in that order",
+          order[0] >= 0 and order[0] < order[1] < order[2], lines)
+
+    frame = Image.open(shot).convert("RGB")
+    want = cube_backdrop(desk)
+    fp = frame.load()
+    strip = [(x, y) for y in range(sh - 40, sh, 2) for x in range(0, sw, 2)]
+    off = sum(1 for x, y in strip
+              if max(abs(a - b) for a, b in zip(fp[x, y], want(x, y))) > 6)
+    # A clock that ticked between the two shots changes a few hundred.
+    check("cube: the backdrop is the desktop it captured, taskbar and all",
+          off < len(strip) // 50, f"{off} of {len(strip)} sampled taskbar px differ")
+
+    # The solid: what differs from the backdrop, in a box round the middle.
+    ink = []
+    for y in range(sh // 4, sh * 3 // 4, 2):
+        for x in range(sw // 4, sw * 3 // 4, 2):
+            p, q = fp[x, y], want(x, y)
+            if max(abs(a - b) for a, b in zip(p, q)) > 24:
+                ink.append(p)
+    dp = list(desk.resize((sw // 8, sh // 8)).getdata())
+    dmean = [sum(p[c] for p in dp) / len(dp) for c in range(3)]
+    if not check("cube: the solid is drawn", len(ink) > 2000, f"{len(ink)} px"):
+        return
+    imean = [sum(p[c] for p in ink) / len(ink) for c in range(3)]
+    if not check("cube: (the wallpaper is coloured, so a grey checker would show)",
+                 abs(dmean[2] - dmean[0]) > 20, f"desktop mean {dmean}"):
+        return
+    check("cube: its faces carry the desktop's colours",
+          all(abs(imean[c] - dmean[c]) < 25 for c in range(3)),
+          f"faces {[round(v) for v in imean]} vs desktop {[round(v) for v in dmean]}")
 
 
 def every_saver(dbg, qmp, args):

@@ -259,7 +259,7 @@ static int on_window_created(int pid, uint32_t id,
     // wm_geometry.c.
     if (!wm_geometry_restore(window_count - 1)) wm_geometry_fit(window_count - 1);
     redraw_pending = 1;
-    wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h); // new taskbar button
+    wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h); // the strip re-ranks; its button waits for its first frame
 
     wm_logf("wm: client pid %d opened window %u (%dx%d)\n", pid, id, w, h);
     return 1;
@@ -553,6 +553,7 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     // A failed open leaves the last good frame on screen -- see
     // map_buf() on why the size is checked by mapping it.
     if (!map_buf(win, front, gen, w, h)) { win->client_damage_all = 1; return; }
+    if (first) { win->first_w = w; win->first_h = h; }
     int old = win->client_front;
     win->client_front = front;
     win->client_buf = win->client_px[front];
@@ -595,6 +596,7 @@ static void on_window_present(int pid, uint32_t id, int front, uint32_t gen,
     // cannot damage its way over its neighbours.
     if (first) {
         wm_damage_window_rect(win->x, win->y, win->w, win->h);
+        wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);   // its button, now
     } else if (dmg && (dmg->flags & WIN_DAMAGE_LIST) && !win->client_damage_all) {
         int cx = window_content_x(win), cy = window_content_y(win);
         int cw = window_content_w(win), ch = window_content_h(win);

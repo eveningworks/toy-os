@@ -180,6 +180,10 @@ struct window {
     uint32_t  client_seq[WIN_CLIENT_BUFS];     // the present that last made it front
     int client_mapped[WIN_CLIENT_BUFS];        // client_px[b] may legitimately be 0
     int client_front;
+    // The size of the window's FIRST frame, which is the size it appeared
+    // at -- `gui windows` reports it so a test can see a fullscreen request
+    // made at open land before the window did (uapp's held first frame).
+    int first_w, first_h;
     // A PRESENT WAS DROPPED (its buffer would not map), so the next one's
     // damage list is relative to a frame this compositor never showed:
     // that present repaints the whole content instead.

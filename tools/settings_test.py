@@ -1706,32 +1706,43 @@ def main():
             down the popup until the APP says the wanted saver is staged
             asks the app instead of doing arithmetic, and needs no
             knowledge of the order the savers directory lists them in.
+
+            THE POPUP SHOWS SIX ROWS (uui_dropdown's max_rows) and scrolls
+            past that, so a second pass wheels it to the end first: the
+            seventh saver put Starfield below the fold, and every check
+            after this one failed on a page that never changed.
             """
             if sv_ctl is None:
                 return None
             popup_top = cy + sv_ctl["y"] + sv_ctl["h"]
-            for step in range(tries):
-                mk = len(drain(dbg))
-                dbg.send(f"gui click {cx + sv_ctl['x'] + sv_ctl['w'] // 2} "
-                         f"{cy + sv_ctl['y'] + sv_ctl['h'] // 2}")
-                dbg.settle()
-                time.sleep(0.35)
-                y = popup_top + 6 + step * 8
-                dbg.send(f"gui click {cx + sv_ctl['x'] + 20} {y}")
-                dbg.settle()
-                time.sleep(0.45)
-                # A SECOND FRAME, for the reason click() gives: the
-                # control report comes from on_draw, which runs before
-                # the rebuilt page has been laid out.
-                dbg.send(f"gui move {cx + sv_ctl['x'] + 20} {y + 1}")
-                dbg.settle()
-                time.sleep(0.3)
-                got = chosen(mk)
-                if got is None:
-                    continue
-                if (want is not None and got == want) or \
-                   (want is None and got != avoid):
-                    return got, option_slots(mk)
+            for scrolled in (0, 1):
+                for step in range(tries):
+                    mk = len(drain(dbg))
+                    dbg.send(f"gui click {cx + sv_ctl['x'] + sv_ctl['w'] // 2} "
+                             f"{cy + sv_ctl['y'] + sv_ctl['h'] // 2}")
+                    dbg.settle()
+                    time.sleep(0.35)
+                    y = popup_top + 6 + step * 8
+                    if scrolled:
+                        dbg.send(f"gui move {cx + sv_ctl['x'] + 20} {popup_top + 20}")
+                        dbg.settle()
+                        dbg.wheel(-10)
+                        time.sleep(0.2)
+                    dbg.send(f"gui click {cx + sv_ctl['x'] + 20} {y}")
+                    dbg.settle()
+                    time.sleep(0.45)
+                    # A SECOND FRAME, for the reason click() gives: the
+                    # control report comes from on_draw, which runs before
+                    # the rebuilt page has been laid out.
+                    dbg.send(f"gui move {cx + sv_ctl['x'] + 20} {y + 1}")
+                    dbg.settle()
+                    time.sleep(0.3)
+                    got = chosen(mk)
+                    if got is None:
+                        continue
+                    if (want is not None and got == want) or \
+                       (want is None and got != avoid):
+                        return got, option_slots(mk)
             return None, []
 
         # BY NAME, and a name that HAS options: "any saver but this one"

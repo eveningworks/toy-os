@@ -3883,7 +3883,12 @@ window without going through it will find its layout polls timing out.
   taken under the lease before any overlay opened: the closed menu's
   frame is still owed and no leased frame draws, so a render gate that
   kept asking for it spins -- the mutate.py control (the lease exception
-  dropped from `overlay_close_frame()`) reddens that check.
+  dropped from `overlay_close_frame()`) reddens that check. It also
+  reads the window's `first_frame` from `gui windows --json`: fsclient
+  asks for fullscreen in `on_open`, so uapp holds its first frame for
+  the proposal and the window must APPEAR at the screen's size -- a
+  first frame at the desc size is the flash every screensaver used to
+  open with.
 - **`virtio_gpu_test.py`** -- the ONLY thing here that boots
   `-vga virtio`, which is the whole reason it exists: every other GUI
   tool and `make test` launch the default adapter, so the virtio-gpu
@@ -4373,6 +4378,20 @@ window without going through it will find its layout polls timing out.
   written with `tosh -c` and its redirection, UNQUOTED: the kernel
   shell's `spawn` passes a quoted word through with its quotes, so tosh
   re-lexes it as one word and runs a command called "echo colour=amber".
+
+  **And that the Desktop cube wraps the desktop it captured.** The
+  oracle is the dimmed BACKDROP, because it is the capture and it stays
+  on screen: with the solid held in the middle (speed and spin 0), the
+  taskbar strip of a saver frame must equal a screenshot taken just
+  before, box-filtered, scaled back up and dimmed in `cube.c`'s own
+  integer arithmetic (`cube_backdrop()`) -- so anything the capture had
+  that the desktop did not, the saver's own taskbar button included,
+  shows there. Unlit, the faces must carry the desktop's mean colour,
+  which tells them from the grey fallback checker only while the
+  wallpaper is coloured, so that precondition is a check of its own. The
+  intro's three phases are asserted from the saver's log, in order. Its
+  positive control (the capture dropped, `g_have_shot = 0 &&`) reddens
+  four checks.
 - **`settings_harness_hostcheck.py`** -- `settings_test.py`'s own
   geometry and waits, on the host against a scripted console: a sidebar
   row is aimed at where it IS rather than where it would be unscrolled

@@ -315,10 +315,18 @@ static int same_app(int a, int b) {
 // hiding (WIN_SHOT_NO_SELF) is one, but not SHOWN NOW: the tool is not
 // in its own picture, taskbar included. A rank belongs to every strip
 // window; a button only to those shown now.
+//
+// NOR IS A CLIENT WINDOW THAT HAS NOT DRAWN YET: it is on screen from its
+// first frame, and so is its button -- a Wayland toplevel reaches the
+// taskbar when it maps. A window holding its first frame for a fullscreen
+// answer (uapp) otherwise put a button in the strip for the length of the
+// hold, under the screensaver that was about to cover it.
 static int strip_window(int i) { return !windows[i].popup && !windows[i].dialog; }
 static int shown_now(int i) {
+    if (!wm_client_is_client_window(&windows[i])) return 1;
+    if (!windows[i].first_w) return 0;
     int hidden = wm_render_hidden_pid();
-    return !(hidden && wm_client_is_client_window(&windows[i]) && windows[i].client_pid == hidden);
+    return !(hidden && windows[i].client_pid == hidden);
 }
 static int unlisted(int i) { return !strip_window(i) || !shown_now(i); }
 

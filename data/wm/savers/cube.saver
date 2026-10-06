@@ -1,0 +1,29 @@
+# What Desktop cube lets you change. See userland/lib/usaver.h for the
+# format; the values chosen here are written to /etc/savers/cube.conf.
+Options=shape,size,speed,spin,backdrop,intro,lighting,squash
+Option.shape=enum:cube,pyramid,ball:cube
+Label.shape=Shape
+Desc.shape=What the desktop is wrapped around.
+Option.size=int:15..60:35
+Label.size=Size
+Desc.size=The shape's size, as a share of the screen's height.
+Step.size=5
+Unit.size=%
+Option.speed=int:0..10:4
+Label.speed=Speed
+Desc.speed=How fast it moves across the screen. Zero keeps it in the middle.
+Option.spin=int:0..10:4
+Label.spin=Spin
+Desc.spin=How fast it turns.
+Option.backdrop=enum:dimmed,black:dimmed
+Label.backdrop=Backdrop
+Desc.backdrop=What is behind the shape: the desktop dimmed and blurred, or black.
+Option.intro=enum:off,on:on
+Label.intro=Wrap animation
+Desc.intro=Fold the desktop into the shape when the screensaver starts.
+Option.lighting=enum:shaded,flat:shaded
+Label.lighting=Lighting
+Desc.lighting=Shade each face by which way it points, or draw every face at full brightness.
+Option.squash=enum:off,on:on
+Label.squash=Squash on bounce
+Desc.squash=Flatten briefly against an edge on impact.

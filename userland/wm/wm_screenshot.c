@@ -128,7 +128,13 @@ int wm_screenshot_capture(int from, int mode, unsigned flags,
         int mx, my;
         uint8_t buttons;
         wm_rawin_mouse(&mx, &my, &buttons);
-        if (flags & WIN_SHOT_NO_SELF) wm_render_hide_pid(from);
+        // THE WHOLE SCREEN, when hiding: the caller's taskbar button and
+        // windows are in the back buffer from earlier frames, and a frame
+        // clipped to this iteration's damage left them in the picture.
+        if (flags & WIN_SHOT_NO_SELF) {
+            wm_damage_rect(0, 0, screen_w, screen_h);
+            wm_render_hide_pid(from);
+        }
         wm_render_frame(mx, my);
         wm_render_hide_pid(0);
     }

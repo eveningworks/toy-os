@@ -10374,3 +10374,45 @@ shows the one beneath. Measured under KVM at 1280x720 (ms a frame,
 before -> after): fifteen stacked Notepads, drag 11.8 -> 3.3, caret
 blink 5.2 -> 1.1, context menu open 8.2 -> 2.1; fifteen cascaded,
 drag 12.8 -> 3.2. The laptop has not been re-measured.
+
+
+## Desktop cube: the saver captures the desktop, and a window appears at its fullscreen size
+
+A saver that folds the desktop into a cube, pyramid or ball (mockup W1,
+2026-10-06). XScreenSaver's screen-grabbing hacks (`flipscreen3d`,
+`decayscreen`) take the screen once as they start and work from that
+image, and so does this one: `ushot_take(WIN_SHOT_NO_SELF)` in
+`on_open`, before the window has drawn anything. There is no live
+desktop behind a saver to sample -- the saver's window IS the screen --
+and a frozen frame is also what makes the start seamless: the first
+frame is the capture itself, pixel for pixel.
+
+**Seamless needed two fixes outside the saver.** Every saver went
+fullscreen from `on_open`, but uapp presented its first frame at the
+desc size first, so each one opened with a 640x480 black rectangle for a
+frame -- invisible over a black saver, glaring over this one. xdg-shell
+answers it with the initial configure: a client that asks for
+fullscreen before its first commit gets the fullscreen size before it
+draws. uapp now does the same -- a fullscreen request made before the
+window has ever presented holds the first present until the
+compositor's size proposal, or 300 ms -- so the window first appears at
+the screen's size (`gui windows`' `first_frame` says so, and
+`fullscreen_test.py` checks it). And while it is held the window has
+not drawn, so the taskbar does not list it: a Wayland toplevel reaches
+the taskbar when it maps, and without that a saver's button showed in
+the strip for the length of the hold.
+
+**A self-excluding capture renders the whole screen.** It hid the
+caller's windows and taskbar button in a frame clipped to that
+iteration's damage, so undamaged pixels of them could survive into the
+picture. A full repaint once per capture is cheap; captures are rare.
+A capture showing the saver's own taskbar button was seen twice before
+these changes and not reproduced afterwards, with or without them, so
+that particular observation's cause is not established.
+
+**The solid is `lib/usolid.h`, not the saver's**: meshes with texture
+coordinates, a fold stage per hinge, painter's-order drawing through
+`ugfx_tex`, and the edge bounce -- generic by nature, so shared from
+the first caller. Faces are culled by screen winding and sorted far to
+near; no depth buffer, which at 1920x1080 would be 8 MB for a solid
+that is convex once closed.

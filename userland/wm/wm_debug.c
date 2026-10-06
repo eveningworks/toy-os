@@ -373,6 +373,7 @@ static void cmd_windows(struct dbg_out *o, int json) {
             // docs/commands/lswin.md on reading the two together.
             dbg_out_printf(o, "\"buf\":{\"front\":%d,\"gen\":%u},",
                          w->client_front, w->client_gen[w->client_front]);
+            dbg_out_printf(o, "\"first_frame\":{\"w\":%d,\"h\":%d},", w->first_w, w->first_h);
             dbg_out_printf(o, "\"state\":\"%s\",\"focused\":%s,\"resizable\":%s}",
                          w->fullscreen ? "fullscreen" : state_name(w->state),
                          (i == wm_focus_index()) ? "true" : "false",

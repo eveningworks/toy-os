@@ -68,6 +68,7 @@
 | `usnd_sf2.h` | A SoundFont 2 bank, parsed and FLATTENED. |
 | `usnd_sink.h` | Where mixed samples go. |
 | `usnd_synth.h` | A General MIDI synthesiser over a SoundFont bank: sixteen channels of MIDI state and a pool of sample-playing voices. |
+| `usolid.h` | A textured solid -- a cube, a pyramid or a ball -- that folds up out of one flat face, tumbles, and bounces around a screen. |
 | `utags.h` | utags -- what a sound file says about itself: title, artist, album, and an embedded picture. |
 | `utest.h` | The harness every self-checking /tests program reports through: a banner, one line per check, and ONE epilogue line in the shape tools/usertest_run.py knows by default -- |
 | `uthumb.h` | uthumb -- thumbnails: a LOOKUP on the draw path, a decode on a WORKER THREAD, and a copy on disk (/var/cache/thumbnails) that outlives the process. |
