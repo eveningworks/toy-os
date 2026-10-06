@@ -399,6 +399,29 @@ int umd_next_line(const char *src, int len, int *i, const char **out) {
     return l.n;
 }
 
+// The fold's three tags, each alone on its line (trailing blanks aside).
+static enum umd_block details_tag(struct line l, int *arg, const char **t, int *tn) {
+    int n = l.n;
+    while (n > 0 && (l.s[n - 1] == ' ' || l.s[n - 1] == '\t')) n--;
+    struct line w = { l.s, n };
+    if (n == 10 && starts(w, "</details>")) { *t = l.s; *tn = 0; return UMD_DETAILS_END; }
+    if (starts(w, "<details") && n >= 9 && l.s[n - 1] == '>' &&
+        (n == 9 || l.s[8] == ' ')) {
+        *arg = 0;
+        for (int i = 8; i + 5 <= n; i++)
+            if (!memcmp(l.s + i, " open", 5)) { *arg = 1; break; }
+        *t = l.s;
+        *tn = 0;
+        return UMD_DETAILS;
+    }
+    if (starts(w, "<summary>") && n >= 19 && !memcmp(l.s + n - 10, "</summary>", 10)) {
+        *t = l.s + 9;
+        *tn = n - 19;
+        return UMD_SUMMARY;
+    }
+    return UMD_PARA;
+}
+
 enum umd_block umd_classify(const char *line, int n, int *arg,
                             const char **text, int *text_len) {
     struct line l = { line, n };
@@ -407,7 +430,9 @@ enum umd_block umd_classify(const char *line, int n, int *arg,
     int tn = n;
     enum umd_block kind = UMD_PARA;
 
-    if (starts(l, "```") || starts(l, "~~~")) {
+    if (n > 0 && line[0] == '<' && (kind = details_tag(l, &a, &t, &tn)) != UMD_PARA) {
+        // a fold's tag: nothing else applies
+    } else if (starts(l, "```") || starts(l, "~~~")) {
         kind = UMD_FENCE;
     } else if (blank_line(l)) {
         kind = UMD_BLANK;
@@ -483,6 +508,30 @@ void umd_render(const char *src, int len,
             continue;
         }
         if (fence) { verbatim(&e, l.s, l.n, ind + 3); continue; }
+
+        // A FOLD, shown open: the tags go, the summary is a bold line of
+        // its own, and what it folds follows as ordinary Markdown.
+        if (l.n && l.s[0] == '<') {
+            int da = 0, dn = 0;
+            const char *dt = 0;
+            enum umd_block dk = details_tag(l, &da, &dt, &dn);
+            if (dk == UMD_DETAILS || dk == UMD_DETAILS_END) {
+                if (e.open) { e_word(&e, 0); e_nl(&e); }
+                e.blank = 1;
+                in_list = in_pre = hdrs = 0;
+                continue;
+            }
+            if (dk == UMD_SUMMARY) {
+                e_block(&e, ind, ind);
+                if (e.color) os_(out, "\x1b[1m");
+                inline_line(&e, dt, dn);
+                if (e.color) os_(out, "\x1b[0m");
+                if (e.open) e_nl(&e);
+                e.blank = 1;
+                in_list = in_pre = hdrs = 0;
+                continue;
+            }
+        }
 
         if (blank_line(l)) {
             if (e.open) { e_word(&e, 0); e_nl(&e); }

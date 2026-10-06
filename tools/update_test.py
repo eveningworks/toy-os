@@ -171,8 +171,8 @@ def kernel_checks(c, sh, pidfile, disk, tmp, srv, url):
     sh, pidfile = launch(disk, tmp, "upd4", "e1000")
     c.ok("the next boot runs the NEW kernel",
          TWIN_MSG.decode() in sh.run("dmesg"))
-    c.ok("...and is up to date against it",
-         "up to date" in sh.run(f"update --from {url} --check", timeout=600))
+    out = sh.run(f"update --from {url} --check", timeout=600)
+    c.ok("...and is up to date against it", "up to date" in out, out.strip()[-300:])
     return sh, pidfile
 
 
@@ -314,9 +314,10 @@ def main():
         srv.notes = "\n".join([
             "# toy-os release notes",
             "aaaaaaa1 new Crash Reports lists past crashes.",
-            "aaaaaaa2 -",
+            "aaaaaaa2 internal System: HOOD-SYSTEM-LINE",
             f"{recorded} fixed RECORDED-BUILD-NOTE",
             "aaaaaaa3 -",
+            "aaaaaaa5 internal Sound: HOOD-SOUND-LINE",
             f"{own} -",
             "aaaaaaa4 new OLDER-THAN-THIS-BUILD",
         ]) + "\n"
@@ -325,8 +326,14 @@ def main():
         c.ok("--check prints What's new with the newer notes",
              "What's new" in out and "Crash Reports lists past crashes" in out
              and "RECORDED-BUILD-NOTE" in out, out.strip()[-300:])
-        c.ok("...counting the commits without one",
-             "2 changes with no visible effect" in out, out.strip()[-300:])
+        # UNDER THE HOOD: the `internal` lines, folded under one summary
+        # that counts them by area -- printed open, since a terminal
+        # cannot fold -- and a `-` (not the OS's) is not mentioned at all.
+        c.ok("...with the OS's unseen changes under one summary, by area",
+             "Under the hood -- 2 changes you won't see: System 1, Sound 1" in out
+             and "HOOD-SYSTEM-LINE" in out and "HOOD-SOUND-LINE" in out, out.strip()[-400:])
+        c.ok("...and a change that is not the OS's not even counted",
+             "no visible effect" not in out and "aaaaaaa3" not in out, out.strip()[-300:])
         c.ok("...and none at or older than the guest's own build",
              "OLDER-THAN-THIS-BUILD" not in out, out.strip()[-300:])
         srv.commit = recorded
@@ -339,8 +346,9 @@ def main():
                                       f"{recorded} -")
         out = sh.run(f"update --from {url} --check", timeout=600)
         c.ok("once recorded, the cut is at the RECORD's commit",
-             "Crash Reports lists past crashes" in out and "1 change with" in out
-             and "OLDER-THAN" not in out, out.strip()[-300:])
+             "Crash Reports lists past crashes" in out and "Under the hood -- 1 change you "
+             "won't see: System 1" in out and "HOOD-SOUND-LINE" not in out
+             and "OLDER-THAN" not in out, out.strip()[-400:])
         sh.run(f"update --from {url}", timeout=600)
         srv.notes = None
 

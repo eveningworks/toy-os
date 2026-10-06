@@ -10,6 +10,11 @@ WHAT IT CHECKS, and what a broken version would still pass:
     guest's build counted (a cut in the wrong place changes the count)
     and DRAWN -- more text rows than the one-line "no notes" placeholder
     leaves, which `--positive-control` serves instead;
+  - the OS's unseen changes sit under ONE folded "Under the hood" row,
+    shut: clicking the row the widget reports opens it (its bit flips in
+    the layout log), and scrolled to the end the row has RISEN with
+    lines of text drawn below it -- a pane that is not taller can only
+    have scrolled if the fold opened;
   - the Files tab, clicked at the slot the strip reports, shows the list;
   - the file list is DRAWN: ink in the table's rect, not only rows
     reported;
@@ -46,7 +51,8 @@ TITLE = "System Update"
 # desktop that restarted mid-test would find it truncated).
 DAMAGE = ("/bin/hello", "/install/kernel.bin")
 V_AVAILABLE, V_INSTALLED = 1, 4
-NOTES = 2, 1          # notes, quiet commits the fixture puts above the guest's build
+NOTES = 2, 2, 1       # visible notes, under-the-hood ones, and not-the-OS commits
+                      # the fixture puts above the guest's build
 
 
 
@@ -70,7 +76,10 @@ class Fixture(update_server.Manifest):
         return "\n".join(["# toy-os release notes",
                           "aaaaaaa1 new Crash Reports lists past crashes.",
                           "aaaaaaa2 -",
+                          "aaaaaab1 internal Sound: The sound path is 32 bits wide.",
                           "aaaaaaa3 fixed Force-quitting System Update could freeze the desktop.",
+                          "aaaaaab2 internal System: A program that never gives back a "
+                          "window buffer gets a warning in the log.",
                           f"{own} -",
                           "aaaaaaa4 new Older than this build, never shown."]) + "\n"
 
@@ -136,6 +145,31 @@ def tab_slot(dbg, w, i):
     return None
 
 
+def layout_rect(dbg, w, widget, key):
+    """Screen rect of a sub-rect `widget` reports (`notes.fold 0 ...`)."""
+    want = f"sysupdate: layout {widget}.{key} "
+    views(dbg, [])
+    for line in reversed([ln for ln in LINES if want in ln]):
+        p = line.split(want, 1)[1].split()
+        if len(p) >= 4:
+            ox = w[widget]["screen"]["x"] - w[widget]["x"]
+            oy = w[widget]["screen"]["y"] - w[widget]["y"]
+            x, y, ww, hh = (int(v) for v in p[:4])
+            return ox + x, oy + y, ww, hh
+    return None
+
+
+def layout_value(dbg, widget, key):
+    want = f"sysupdate: layout {widget}.{key} "
+    views(dbg, [])
+    for line in reversed([ln for ln in LINES if want in ln]):
+        try:
+            return int(line.split(want, 1)[1].split()[0])
+        except (IndexError, ValueError):
+            pass
+    return None
+
+
 def accent_fraction(im, rect):
     """How much of the bar's inner width is filled with the accent."""
     x, y, w, h = rect
@@ -181,11 +215,11 @@ def main():
         win = dbg.spawn(APP, TITLE)
         first = wait_view(dbg, seen, 1)
         for line in LINES:
-            m = re.search(r"notes (\d+) quiet (\d+) since (\d+)", line)
+            m = re.search(r"notes (\d+) hood (\d+) quiet (\d+) since (\d+)", line)
             if m:
                 notes.append(tuple(int(v) for v in m.groups()))
         check("the notes are cut at the guest's own build",
-              notes[-1:] == [NOTES + (1,)], f"notes/quiet/since {notes[-1:]}")
+              notes[-1:] == [NOTES + (1,)], f"notes/hood/quiet/since {notes[-1:]}")
         if not check("it checks by itself and finds the two damaged files",
                      first == (V_AVAILABLE, len(DAMAGE)), f"view/changed {first}"):
             return finish()
@@ -200,6 +234,33 @@ def main():
         line_h = w["tabs"]["h"]
         check("What's new opens first, and the notes are drawn",
               notes_rows > 3 * line_h, f"{notes_rows} rows of ink, a line is ~{line_h}")
+
+        # UNDER THE HOOD, shut, then opened by its own row.
+        fold = layout_rect(dbg, w, "notes", "fold 0")
+        opened = layout_value(dbg, "notes", "folds_open")
+        if check("the unseen changes are behind one row, shut",
+                 fold is not None and opened == 0, f"row {fold}, folds_open {opened}"):
+            dbg.click(fold[0] + fold[2] // 3, fold[1] + fold[3] // 2)
+            dbg.settle()
+            opened = layout_value(dbg, "notes", "folds_open")
+            check("...and clicking it opens it", opened == 1, f"folds_open {opened}")
+            # WHAT IT OPENED IS DRAWN: scrolled to the end, the row rises
+            # (the document is taller than the pane only because it opened)
+            # and the band below it carries lines of text. The pane is
+            # short, so what opens starts below its edge until scrolled.
+            nx, ny, nw, nh = screen_rect(w, "notes")
+            dbg.warp_cursor(qmp, nx + nw // 2, ny + nh // 2)
+            dbg.wheel(-10)
+            dbg.settle()
+            moved = layout_rect(dbg, w, "notes", "fold 0")
+            qmp.screenshot(shot)
+            im = Image.open(shot).convert("RGB")
+            band = ((nx, moved[1] + moved[3], nw - 16, ny + nh - moved[1] - moved[3])
+                    if moved else None)
+            ink = text_rows(im, band) if band and band[3] > 0 else 0
+            check("...and what it opened is drawn, under the row",
+                  moved is not None and moved[1] < fold[1] and ink > 2 * line_h,
+                  f"row {fold} -> {moved}; {ink} rows of ink below it")
         slot = tab_slot(dbg, w, 1)
         if not check("the strip reports the Files tab", slot is not None):
             return finish()

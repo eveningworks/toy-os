@@ -64,13 +64,23 @@ version -- wrapped to the terminal:
       - Force-quitting System Update while it checked could freeze the
         desktop.
 
-      And 11 changes with no visible effect.
+      Under the hood -- 2 changes you won't see: Sound 1, Desktop 1
+
+      Sound
+      - The sound path is 32 bits wide, so a 24-bit file reaches a
+        24-bit card whole.
+
+      Desktop
+      - Say so when a buffer is taken back unreleased
 
 This machine's build is the `# commit` of the manifest it last applied
 (`/var/lib/update/installed`), or the commit `/bin/update` itself was
 built from when there is no record yet. The notes are the commits'
 `Release-note:` lines, or a `refs/notes/release` git note added later
-(`docs/conventions/build.md`); a commit with neither is only counted. A server with no notes -- a build published before
+(`docs/conventions/build.md`). A change to the OS that nobody sees is
+listed under **Under the hood**, by area -- folded behind one row in the
+window, printed open here -- and a commit that is not the OS's (docs,
+tools, tests) is not shown at all. A server with no notes -- a build published before
 they existed -- prints none, and that is not an error. The System
 Update window shows the same text on its **What's new** tab, before and
 after an install.

@@ -361,9 +361,13 @@ static int is_sha(const char *s) {
     return n >= 7;
 }
 
-// `<sha> <new|improved|fixed> <text>` or `<sha> -`, newest first, read
-// until this machine's own build. The server is unauthenticated, so this
-// is text to SHOW and nothing more; a line it does not understand is
+// `<sha> <new|improved|fixed> <text>`, `<sha> internal <Area>: <text>`
+// or `<sha> -`, newest first, read until this machine's own build. The
+// visible kinds come first; `internal` -- a change to the OS that nobody
+// sees -- is grouped by area under ONE fold (<details>, lib/umd.h),
+// shut until opened; `-` is a commit that is not the OS's at all (docs,
+// tools) and is not shown. The server is unauthenticated, so this is
+// text to SHOW and nothing more; a line it does not understand is
 // skipped and counted. A server with no notes is not an error.
 __attribute__((noinline))   // its request is kilobytes, and upd_check() already holds one
 static void fetch_notes(struct upd_plan *p, const struct upd_hooks *h) {
@@ -386,6 +390,13 @@ static void fetch_notes(struct upd_plan *p, const struct upd_hooks *h) {
     own_build(own, sizeof own, built, sizeof built);
 
     struct growbuf sect[3] = { { 0 } };
+    // Under the hood, one list per area, in the order the areas first
+    // appear (newest first, like everything here).
+    enum { AREAS = 12 };
+    char area_name[AREAS][24];
+    int area_n[AREAS];
+    struct growbuf area[AREAS] = { { 0 } };
+    int areas = 0;
     int bad = 0;
     char *save = 0;
     for (char *l = strtok_r(b.p, "\n", &save); l; l = strtok_r(0, "\n", &save)) {
@@ -400,6 +411,24 @@ static void fetch_notes(struct upd_plan *p, const struct upd_hooks *h) {
         if (!is_sha(l)) { bad++; continue; }
         if (same_commit(l, own)) { p->notes_since = 1; break; }
         if (!strcmp(kind, "-") && !text) { p->notes_quiet++; continue; }
+        if (!strcmp(kind, "internal")) {
+            char *colon = text ? strstr(text, ": ") : 0;
+            if (!colon || colon == text || colon - text >= 24) { bad++; continue; }
+            *colon = '\0';
+            const char *what = colon + 2;
+            int a = 0;
+            while (a < areas && strcmp(area_name[a], text)) a++;
+            if (a == areas) {
+                if (areas == AREAS) a = AREAS - 1;     // the rest share the last
+                else { snprintf(area_name[a], sizeof area_name[a], "%s", text); area_n[a] = 0; areas++; }
+            }
+            if (grow_sink(&area[a], "- ", 2) || grow_sink(&area[a], what, strlen(what)) ||
+                grow_sink(&area[a], "\n", 1))
+                break;
+            area_n[a]++;
+            p->notes_hood++;
+            continue;
+        }
         int k = 0;
         while (k < 3 && strcmp(kind, KIND[k])) k++;
         if (k == 3 || !text || !text[0]) { bad++; continue; }
@@ -414,7 +443,7 @@ static void fetch_notes(struct upd_plan *p, const struct upd_hooks *h) {
 
     struct growbuf md = { 0 };
     char line[160];
-    if (p->notes_count || p->notes_quiet) {
+    if (p->notes_count || p->notes_hood) {
         if (!p->notes_since)
             snprintf(line, sizeof line, "Recent changes. This machine's build is not in the "
                      "server's list, so some may be ones it already has.\n\n");
@@ -432,14 +461,28 @@ static void fetch_notes(struct upd_plan *p, const struct upd_hooks *h) {
         grow_sink(&md, "\n", 1);
         free(sect[k].p);
     }
-    if (p->notes_quiet) {
-        snprintf(line, sizeof line, "%s%d change%s with no visible effect.\n",
-                 p->notes_count ? "And " : "", p->notes_quiet, p->notes_quiet == 1 ? "" : "s");
+    if (p->notes_hood) {
+        // ONE FOLDED ROW, its summary the count and each area's share.
+        int n = snprintf(line, sizeof line, "<details>\n<summary>Under the hood -- %d change%s "
+                         "you won't see:", p->notes_hood, p->notes_hood == 1 ? "" : "s");
+        for (int a = 0; a < areas && n < (int)sizeof line - 40; a++)
+            n += snprintf(line + n, sizeof line - (size_t)n, "%s %s %d", a ? "," : "",
+                          area_name[a], area_n[a]);
+        if (n > (int)sizeof line - 12) n = (int)sizeof line - 12;
+        snprintf(line + n, sizeof line - (size_t)n, "</summary>\n\n");
         grow_sink(&md, line, strlen(line));
+        for (int a = 0; a < areas; a++) {
+            snprintf(line, sizeof line, "**%s**\n\n", area_name[a]);
+            grow_sink(&md, line, strlen(line));
+            grow_sink(&md, area[a].p, area[a].len);
+            grow_sink(&md, "\n", 1);
+            free(area[a].p);
+        }
+        grow_sink(&md, "</details>\n", 11);
     }
     p->notes = md.p;
-    say(h, "notes: %d since %s%s, %d without a note", p->notes_count, own,
-        p->notes_since ? "" : " (not in the list)", p->notes_quiet);
+    say(h, "notes: %d since %s%s, %d under the hood, %d not the OS's", p->notes_count, own,
+        p->notes_since ? "" : " (not in the list)", p->notes_hood, p->notes_quiet);
 }
 
 // ---- deciding -------------------------------------------------------------

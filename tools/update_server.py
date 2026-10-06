@@ -45,11 +45,23 @@ A commit that changes something a person can see carries one or more
     Release-note: fixed: Force-quitting System Update could freeze the desktop.
 
 with the kind `new`, `improved` or `fixed`, in the user's words (GitLab's
-`Changelog:` trailer is the shape). The notes file is one line per
-commit, newest first -- `<sha> <kind> <text>`, or `<sha> -` for a commit
-with none -- and the CLIENT cuts it at its own build, as apt-listchanges
-cuts a changelog at the installed version. A trailer with any other kind
-is left out with a warning, never guessed at.
+`Changelog:` trailer is the shape). A change to the OS that nobody SEES
+says what it did the same way, with an area:
+
+    Release-note: internal: Sound: The sound path is 32 bits wide, so a 24-bit file reaches a 24-bit card whole.
+
+and an OS commit with no trailer at all is listed by its SUBJECT, its
+prefix mapped to an area (`usnd:` is Sound) -- System Update folds these
+under one "Under the hood" row below the visible ones. ONLY THE OS
+COUNTS: a commit whose files are all docs, tools, tests or repository
+housekeeping (nothing under kernel/, userland/, apps/ or data/ that is
+not a test) is `<sha> -` whatever it says, and is not shown at all.
+
+The notes file is one line per commit, newest first -- `<sha> <kind>
+<text>`, `<sha> internal <Area>: <text>`, or `<sha> -` -- and the CLIENT
+cuts it at its own build, as apt-listchanges cuts a changelog at the
+installed version. A trailer with any other kind is left out with a
+warning, never guessed at.
 
 A commit that went out WITHOUT one gets it as a git note, which changes
 no SHA (`git notes` is how Gerrit keeps its review data on commits):
@@ -107,7 +119,60 @@ SEEDING = os.path.join(REPO, "build", ".seeding")   # the Makefile's seed step, 
 UNIT_NAME = "toy-os-update.service"
 UNIT_TEMPLATE = os.path.join(REPO, "tools", "systemd", UNIT_NAME)
 VERSION_H = os.path.join(REPO, "kernel", "include", "api", "version.h")
-NOTE_KINDS = ("new", "improved", "fixed")
+NOTE_KINDS = ("new", "improved", "fixed", "internal")
+
+# What ships: a commit touching none of these (or only tests in them) is
+# not the OS's, and the notes leave it out entirely.
+OS_DIRS = ("kernel/", "userland/", "apps/", "data/")
+
+# A subject's prefix as the area it is listed under, for an OS commit
+# that wrote no `internal:` trailer. Unlisted prefixes are used as they
+# are, capitalised.
+AREAS = {
+    "System": "kernel sched mm proc smp acpi irq boot init signals syscall abi kdebug "
+              "module modules locale version",
+    "Storage": "fs tfs3 fat32 vfs ahci ata nvme block storage mount mkfs fsck",
+    "Sound": "sound usnd soundd hda ac97 audio usb-audio usbaudio midi flac mp3 aplay",
+    "Network": "net netd tcp udp dhcp ntpd wget httpd tls tftp e1000 r8169 rtl_usb dns",
+    "USB": "usb xhci",
+    "Graphics": "intel display gfx modeset virtio-gpu scanout uimg",
+    "Input": "keyboard kbs input win_input mouse touchpad osk",
+    "Desktop": "wm tray taskbar desktop start savers icons ui uapp ucrt utext font fonts "
+               "cursor cursors compositor keycapture theme",
+    "Updates": "update sysupdate",
+    "Programs": "libc tolibc ldso dash tosh shell bin lib uargs",
+}
+AREA_OF = {p: area for area, words in AREAS.items() for p in words.split()}
+
+
+# Subjects that say a commit is not the OS's, whatever it touched: a
+# README edit that swept in a stray file is still a README edit.
+NOT_OS = {p.lower() for p in "README docs roadmap tools skill repo chore release review "
+          "licenses LICENSE screenshots ci".split()}
+
+
+def _is_os_change(files, subject=""):
+    prefix, sep, _ = subject.partition(":")
+    if sep and prefix.strip().lower() in NOT_OS:
+        return False
+    for f in files:
+        if not f.startswith(OS_DIRS):
+            continue
+        base = f.rsplit("/", 1)[-1]
+        if "/tests/" in f or base.endswith("_test.c") or base.startswith("ktest"):
+            continue
+        return True
+    return False
+
+
+def _fallback(subject):
+    """`usnd: widen the path` as ("Sound", "Widen the path")."""
+    prefix, sep, rest = subject.partition(":")
+    if not sep or not rest.strip() or " " in prefix.strip():
+        return "Other", subject.strip()
+    p = prefix.strip()
+    rest = rest.strip()
+    return AREA_OF.get(p.lower(), p[:1].upper() + p[1:]), rest[:1].upper() + rest[1:]
 NOTES_COMMITS = 200       # how far back a machine can be and still get "since your build"
 NOTES_REF = "refs/notes/release"   # notes added AFTER the commit, one `<kind>: <text>` per line
 
@@ -282,19 +347,26 @@ def release_notes(build_id, limit=NOTES_COMMITS):
              # from a message's LAST paragraph, and every commit here ends
              # with a Co-Authored-By paragraph AFTER its Release-note --
              # so the trailer form read nothing, for every commit.
-             "--format=%h%x1f%B%x1f%N%x1d",
+             # The changed files follow each record (--name-only), which is
+             # what decides whether a commit is the OS's -- in this ONE
+             # call, since /dev serves these per request.
+             "--name-only", "--format=%x1d%h%x1f%B%x1f%N%x1e",
              rev],
             cwd=REPO, check=True, capture_output=True, text=True).stdout
     except (OSError, subprocess.CalledProcessError):
         return "\n".join(lines) + "\n"
     for rec in out.split("\x1d"):
-        sha, _, rest = rec.strip("\n").partition("\x1f")
+        head, _, names = rec.partition("\x1e")
+        sha, _, rest = head.strip("\n").partition("\x1f")
         if not sha:
             continue
         body, _, noted = rest.partition("\x1f")
+        os_change = _is_os_change([n for n in names.splitlines() if n.strip()],
+                                  body.splitlines()[0] if body.strip() else "")
         trailers = [ln for ln in body.splitlines()
                     if ln.lower().startswith("release-note:")]
         said = 0
+        visible = 0
         for v in trailers + noted.splitlines():
             v = " ".join(v.split())          # a folded trailer is one line
             if v.lower().startswith("release-note:"):
@@ -307,8 +379,24 @@ def release_notes(build_id, limit=NOTES_COMMITS):
                 print(f"update_server: {sha}: Release-note {v!r} is not "
                       f"`<{'|'.join(NOTE_KINDS)}>: <text>` -- left out", file=sys.stderr)
                 continue
+            if kind == "internal":
+                area, sep2, what = text.strip().partition(":")
+                if not sep2 or not what.strip() or len(area.strip()) > 20:
+                    print(f"update_server: {sha}: Release-note {v!r} is not "
+                          f"`internal: <Area>: <text>` -- left out", file=sys.stderr)
+                    continue
+                if not os_change:
+                    continue                 # not the OS's: never listed
+                text = f"{area.strip()}: {what.strip()}"
+            else:
+                visible += 1
             lines.append(f"{sha} {kind} {text.strip()[:300]}")
             said += 1
+        if not said and os_change:
+            area, what = _fallback(body.splitlines()[0] if body.strip() else "")
+            if what:
+                lines.append(f"{sha} internal {area}: {what[:300]}")
+                said += 1
         if not said:
             lines.append(f"{sha} -")
     return "\n".join(lines) + "\n"

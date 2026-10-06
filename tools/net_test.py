@@ -215,17 +215,23 @@ class Shell:
         if not cmd.startswith("sh ") and cmd:
             cmd = "sh " + cmd
         self.s.sendall((cmd + "\n").encode())
+        # DONE IS THE PROMPT OR THE CALLER'S DEADLINE, NEVER A QUIET
+        # SPELL: `update` checksums the whole system without a word for
+        # over 20 s under TCG, and returning on the socket's own timeout
+        # handed that command's tail to every check after it.
         out, deadline = b"", time.time() + (timeout or self.timeout)
         while time.time() < deadline:
+            self.s.settimeout(max(0.1, min(self.timeout, deadline - time.time())))
             try:
                 chunk = self.s.recv(65536)
             except socket.timeout:
-                break
+                continue
             if not chunk:
                 break
             out += chunk
             if out.rstrip().endswith(PROMPT.strip().encode()):
                 break
+        self.s.settimeout(self.timeout)
         return out.decode("utf-8", "replace")
 
     def drain_start(self):

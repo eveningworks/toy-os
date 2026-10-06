@@ -71,6 +71,16 @@ enum umd_block {
     UMD_PRE,       // an indented (four-space) code line
     UMD_TABLE,     // a `|`-delimited row; `arg` is 1 for the ---|--- rule
     UMD_RULE,      // a horizontal rule
+    // A FOLD, GitHub's <details> shape, each tag ON ITS OWN LINE:
+    //     <details>            (`<details open>`: `arg` 1, starts open)
+    //     <summary>Text</summary>
+    //     ...the folded Markdown...
+    //     </details>
+    // A renderer that can fold draws the summary as a row that opens it;
+    // one that cannot (a terminal) shows the summary and everything in it.
+    UMD_DETAILS,
+    UMD_SUMMARY,   // `text` is what is between the two tags
+    UMD_DETAILS_END,
     UMD_PARA,      // anything else
 };
 

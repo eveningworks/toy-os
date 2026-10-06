@@ -659,10 +659,15 @@ this the obvious way), not from how much history it accumulated.
   System Update could freeze the desktop.`, the kind one of `new`,
   `improved`, `fixed`, the text one sentence in the USER's words (what
   they notice, not which function changed). It is what System Update's
-  What's new and `update --check` show; a commit without one is counted
-  as "a change with no visible effect", which is right for a refactor, a
-  test or a doc and wrong for a fix somebody was waiting for. Several
-  lines for several changes; any other kind is dropped with a warning by
+  What's new and `update --check` show, first. **A change TO THE OS that
+  nobody sees carries `Release-note: internal: <Area>: <plain words>`**
+  (`internal: Sound: The sound path is 32 bits wide.`); it is folded under
+  "Under the hood" below the visible ones, and an OS commit without
+  either is listed there by its SUBJECT, so a subject is written to be
+  read. A commit that is not the OS's -- docs, README, roadmap, tools,
+  tests, repository housekeeping -- is not shown or counted at all,
+  whatever it carries (`update_server.py` decides by its files and its
+  prefix). Several lines for several changes; any other kind is dropped with a warning by
   `update_server.py`, never guessed at. It goes at the END of the
   message, before `Co-Authored-By:`, and is read as a LINE wherever it
   is -- not as a git trailer: git takes trailers only from the last

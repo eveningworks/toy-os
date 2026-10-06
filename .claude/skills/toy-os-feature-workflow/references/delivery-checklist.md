@@ -152,8 +152,9 @@ before you start delivering -- don't reconstruct it from memory.
   **The `Release-note:` trailer is what System Update's What's new
   shows** (`docs/conventions/build.md`): one per change a person can SEE
   or DO, kind `new`/`improved`/`fixed`, a sentence in the user's words.
-  Leave it off a refactor, a test or a doc -- the commit is then counted
-  as a change with no visible effect, which is the truth.
+  A change to the OS nobody sees gets `Release-note: internal: <Area>:
+  <plain words>` instead, shown folded under "Under the hood"; a doc,
+  tool or test commit gets nothing and is not shown at all.
 - **Tag, if cutting a release:** `git tag -a v<version> <commit> -m
   "..."` directly.
 - **To the update server's `stable` channel: COMMIT, THEN PREFLIGHT,

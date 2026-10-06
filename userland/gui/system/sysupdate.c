@@ -453,8 +453,8 @@ static void job_done(struct uapp *a, int job) {
     // What a test reads: the view, and the counts it was drawn from.
     ulogf("sysupdate: view %d changed %d removals %d staged %d installed %s\n", (int)g_view,
           g_plan.changed, g_plan.removals, g_plan.at_boot, g_job_rc == 0 ? "ok" : "failed");
-    ulogf("sysupdate: notes %d quiet %d since %d\n", g_plan.notes_count, g_plan.notes_quiet,
-          g_plan.notes_since);
+    ulogf("sysupdate: notes %d hood %d quiet %d since %d\n", g_plan.notes_count,
+          g_plan.notes_hood, g_plan.notes_quiet, g_plan.notes_since);
     refresh(a);
     uapp_log_layout(a, "sysupdate");   // the tab slots, for a test to click (ui/uui_describe.h)
 }
@@ -493,7 +493,12 @@ static void use_server(struct uapp *a) {
 // ---- callbacks ----------------------------------------------------------------
 
 static void on_widget(struct uapp *a, int id, int reason) {
-    (void)a;
+    // A fold opened or the notes scrolled: their rows moved, and a test
+    // reads where from the layout log (ui/uui_describe.h).
+    if (id == ID_NOTES && (reason == UUI_REASON_RELEASE || reason == UUI_REASON_WHEEL)) {
+        uapp_log_layout(a, "sysupdate");
+        return;
+    }
     if (id == ID_RECENT && reason == UUI_REASON_RELEASE) {
         int s = uui_dropdown_selected(&g_recent);
         if (s > 0) uui_textbox_set_text(&g_edit, g_recent_items[s]);

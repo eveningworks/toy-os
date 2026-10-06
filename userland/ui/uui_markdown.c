@@ -261,6 +261,10 @@ static int walk(struct uui_markdown *m, struct ugfx_surface *s,
     int gap = body_h / 2;
     int fence = 0;
     int table_row = 0;
+    m->fold_n = 0;       // re-recorded by every walk, measuring or drawing
+    int folds = 0;       // <details> seen so far: the next one's number
+    int fold = -1;       // the fold whose summary comes next
+    int hiding = 0;      // >0: inside a closed fold, this deep
 
     int i = 0;
     while (i < m->len) {
@@ -272,6 +276,76 @@ static int walk(struct uui_markdown *m, struct ugfx_surface *s,
         const char *txt = ln;
         int tn = n;
         enum umd_block kind = umd_classify(ln, n, &arg, &txt, &tn);
+
+        // INSIDE A CLOSED FOLD only the folds are counted -- so every
+        // fold keeps its number whichever are open -- and the end that
+        // matches is waited for; nothing is drawn or measured.
+        if (hiding) {
+            if (kind == UMD_DETAILS) { hiding++; folds++; }
+            else if (kind == UMD_DETAILS_END) hiding--;
+            continue;
+        }
+        if (!fence && kind == UMD_DETAILS) {
+            end_block(&c);
+            fold = folds++;
+            if (fold < UUI_MD_FOLDS && !(m->fold_known & (1u << fold))) {
+                m->fold_known |= 1u << fold;
+                if (arg) m->fold_open |= 1u << fold;
+            }
+            continue;
+        }
+        if (!fence && kind == UMD_DETAILS_END) { end_block(&c); continue; }
+        if (!fence && kind == UMD_SUMMARY) {
+            // THE ROW THAT OPENS IT: a chevron and the summary in bold on
+            // the panel tint, the width of the text. A summary with no
+            // <details> above it is drawn the same, and opens nothing.
+            end_block(&c);
+            int k = fold;
+            fold = -1;
+            int open = k < 0 || k >= UUI_MD_FOLDS || (m->fold_open & (1u << k));
+            c.pen_y += gap / 2;
+            int lh = line_height(&c) + body_h / 2;
+            int y0 = c.pen_y;
+            if (s) {
+                uint32_t bg = (k >= 0 && k == m->hover_fold)
+                              ? uui_state_bg(UTHEME_PANEL_BG, UUI_STATE_HOVER) : UTHEME_PANEL_BG;
+                int rx = c.ox + c.left, ry = c.oy + y0, rw = c.right - c.left;
+                ugfx_fill_rect(s, rx, ry, rw, lh, bg);
+                ugfx_fill_rect(s, rx, ry, rw, 1, UTHEME_BORDER);
+                ugfx_fill_rect(s, rx, ry + lh - 1, rw, 1, UTHEME_BORDER);
+                // The chevron points at what a click does: right while
+                // shut, down while open -- every tree and disclosure row.
+                int cx = rx + body_h / 2, cy = ry + lh / 2, a = body_h / 4;
+                if (open) {
+                    ugfx_draw_line(s, cx - a, cy - a / 2, cx, cy + a / 2, UTHEME_TEXT, GEOM_AA);
+                    ugfx_draw_line(s, cx, cy + a / 2, cx + a, cy - a / 2, UTHEME_TEXT, GEOM_AA);
+                } else {
+                    ugfx_draw_line(s, cx - a / 2, cy - a, cx + a / 2, cy, UTHEME_TEXT, GEOM_AA);
+                    ugfx_draw_line(s, cx + a / 2, cy, cx - a / 2, cy + a, UTHEME_TEXT, GEOM_AA);
+                }
+            }
+            // Recorded in DOCUMENT coordinates, by the measuring walk too:
+            // the layout log is taken before a frame is drawn, and a row
+            // known only from drawing was always a frame late.
+            if (k >= 0 && k < UUI_MD_FOLDS && m->fold_n < UUI_MD_FOLDS) {
+                struct uui_md_fold *r = &m->fold_row[m->fold_n++];
+                r->x = c.left; r->y = y0; r->w = c.right - c.left; r->h = lh; r->k = k;
+            }
+            c.pen_y = y0 + body_h / 4;
+            c.left += body_h + body_h / 2;   // the text clears the chevron
+            c.level = 3;                     // bold, at body size
+            c.pen_x = c.left;
+            c.hang = c.left;
+            c.open = 1;
+            feed(&c, txt, tn);
+            c.level = 0;
+            c.left = 0;
+            c.open = 0;
+            c.pen_x = c.hang = 0;
+            c.pen_y = y0 + lh + gap / 2;
+            if (!open) hiding = 1;
+            continue;
+        }
 
         if (kind == UMD_FENCE) { end_block(&c); fence = !fence; continue; }
 
@@ -414,6 +488,28 @@ void uui_markdown_init(struct uui_markdown *m) {
     for (unsigned i = 0; i < sizeof *m; i++) ((char *)m)[i] = 0;
     m->thumb_grab = -1;
     m->armed_link = m->hover_link = -1;
+    m->armed_fold = m->hover_fold = -1;
+}
+
+// A fold row where it sits now, in widget coordinates: 0 when scrolled
+// out of the band, which is then neither clickable nor reported.
+static int fold_rect(const struct uui_markdown *m, int i, int *x, int *y, int *w, int *h) {
+    const struct uui_md_fold *r = &m->fold_row[i];
+    *x = m->x + ugfx_char_w() + r->x;
+    *y = m->y - m->scroll + r->y;
+    *w = r->w;
+    *h = r->h;
+    return *y + *h > m->y && *y < m->y + m->h;
+}
+
+// The fold whose row is under (cx, cy), or -1.
+static int fold_at(const struct uui_markdown *m, int cx, int cy) {
+    for (int i = 0; i < m->fold_n; i++) {
+        int x, y, w, h;
+        if (fold_rect(m, i, &x, &y, &w, &h) && uui_hit(x, y, w, h, cx, cy))
+            return m->fold_row[i].k;
+    }
+    return -1;
 }
 
 void uui_markdown_set_links(struct uui_markdown *m,
@@ -446,6 +542,9 @@ void uui_markdown_set_text(struct uui_markdown *m, const char *src, int len) {
     m->scroll = 0;
     m->link_n = 0;                  // the old page's links are gone
     m->armed_link = m->hover_link = -1;
+    m->fold_n = 0;                  // ...and its folds, open or shut
+    m->fold_open = m->fold_known = 0;
+    m->armed_fold = m->hover_fold = -1;
 }
 
 static int text_width(struct uui_markdown *m);
@@ -505,11 +604,13 @@ void uui_markdown_draw(struct ugfx_surface *s, struct uui_markdown *m) {
     // only when something it depends on has changed, since the measure
     // is a whole walk of the document and most frames change neither
     // the text nor the width.
-    if (m->m_src != m->src || m->m_len != m->len || m->m_w != tw) {
+    if (m->m_src != m->src || m->m_len != m->len || m->m_w != tw ||
+        m->m_folds != m->fold_open) {
         m->doc_h = walk(m, 0, tw, 0, 0);
         m->m_src = m->src;
         m->m_len = m->len;
         m->m_w = tw;
+        m->m_folds = m->fold_open;
     }
     clamp_scroll(m);
 
@@ -554,6 +655,9 @@ int uui_markdown_press(struct uui_markdown *m, int cx, int cy) {
     if (cx < bx) {
         // Armed on press, followed on release over the same link -- the
         // commit-on-release rule, so a press dragged off follows nothing.
+        // A fold's row works the same way.
+        m->armed_fold = fold_at(m, cx, cy);
+        if (m->armed_fold >= 0) return 1;
         m->armed_link = link_at(m, cx, cy);
         return m->armed_link >= 0;
     }
@@ -592,7 +696,10 @@ void uui_markdown_release(struct uui_markdown *m) { m->thumb_grab = -1; }
 static void release_at(struct uui_markdown *m, int cx, int cy) {
     if (m->armed_link >= 0 && link_at(m, cx, cy) == m->armed_link)
         strlcpy(m->taken, m->link[m->armed_link].target, sizeof m->taken);
+    if (m->armed_fold >= 0 && fold_at(m, cx, cy) == m->armed_fold)
+        m->fold_open ^= 1u << m->armed_fold;   // the measure follows (m_folds)
     m->armed_link = -1;
+    m->armed_fold = -1;
     m->thumb_grab = -1;
 }
 
@@ -636,8 +743,10 @@ static int op_motion(void *w, int x, int y, unsigned buttons) {
         int bw = bar_width(m);
         int hot = uui_hit(m->x + m->w - bw, m->y, bw, m->h, x, y);
         int h = link_at(m, x, y);          // a hovered link darkens
-        if (h == m->hover_link && hot == m->bar_hot) return 0;
+        int f = fold_at(m, x, y);          // ...and so does a fold's row
+        if (h == m->hover_link && f == m->hover_fold && hot == m->bar_hot) return 0;
         m->hover_link = h;
+        m->hover_fold = f;
         m->bar_hot = hot;
         return 1;
     }
@@ -653,8 +762,35 @@ static int op_wheel(void *w, int notches) {
 }
 // A link wants the hand, as one does in every browser and help viewer.
 static int op_cursor(const void *w, int x, int y) {
-    return link_at((const struct uui_markdown *)w, x, y) >= 0 ? WIN_CURSOR_HAND
-                                                              : WIN_CURSOR_DEFAULT;
+    const struct uui_markdown *m = (const struct uui_markdown *)w;
+    return (link_at(m, x, y) >= 0 || fold_at(m, x, y) >= 0) ? WIN_CURSOR_HAND
+                                                           : WIN_CURSOR_DEFAULT;
+}
+
+// Each fold's row as last drawn, and whether it is open -- what a test
+// clicks and checks, in the layout log (ui/uui_describe.h).
+static void describe(const void *w, const struct uui_describe *d) {
+    // MEASURED HERE IF IT HAS NOT BEEN: the report is taken before the
+    // frame that would measure it, and an idle window draws no second one.
+    struct uui_markdown *m = (struct uui_markdown *)(void *)(uintptr_t)w;
+    if (m->src && m->len > 0 && m->w > 0) {
+        ensure_faces(m);
+        int tw = text_width(m);
+        if (m->m_src != m->src || m->m_len != m->len || m->m_w != tw ||
+            m->m_folds != m->fold_open) {
+            m->doc_h = walk(m, 0, tw, 0, 0);
+            m->m_src = m->src;
+            m->m_len = m->len;
+            m->m_w = tw;
+            m->m_folds = m->fold_open;
+        }
+    }
+    uui_describe_int(d, "folds_open", (int)m->fold_open);
+    for (int i = 0; i < m->fold_n; i++) {
+        int x, y, fw, fh;
+        if (fold_rect(m, i, &x, &y, &fw, &fh))
+            uui_describe_rect_i(d, "fold", m->fold_row[i].k, x, y, fw, fh);
+    }
 }
 
 const struct uui_widget_ops uui_markdown_ops = {
@@ -668,4 +804,5 @@ const struct uui_widget_ops uui_markdown_ops = {
     .release = op_release,
     .wheel = op_wheel,
     .cursor = op_cursor,
+    .describe = describe,
 };

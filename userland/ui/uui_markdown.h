@@ -31,6 +31,7 @@
 // machine with no fonts on disk still renders a readable document.
 #define UUI_MD_FACES 3
 #define UUI_MD_LINKS 96       // links recorded per frame; more draw, unclickable
+#define UUI_MD_FOLDS 32       // <details> folds with their own state; more show open
 #define UUI_MD_LINK_MAX 48    // a target's longest name
 
 struct uui_markdown_face {
@@ -82,6 +83,19 @@ struct uui_markdown {
     int link_n;
     int armed_link, hover_link;   // indices into `link`, or -1
     char taken[UUI_MD_LINK_MAX];  // the last clicked target, until taken
+    // --- folds (<details>, lib/umd.h) ---------------------------------
+    //
+    // ONE BIT PER FOLD, by its order in the document: the summary row
+    // that opens it is drawn and recorded like a link, and a click on
+    // it flips the bit. A fold's `open` attribute decides the bit the
+    // first time the text is seen (`fold_known`); a new text forgets
+    // them all. Folded content is not walked, so a closed fold costs no
+    // height and nothing in it can be clicked.
+    uint32_t fold_open, fold_known;
+    uint32_t m_folds;             // fold_open as of the last measure
+    struct uui_md_fold { int x, y, w, h; int k; } fold_row[UUI_MD_FOLDS];
+    int fold_n;                   // rows recorded in the last frame
+    int armed_fold, hover_fold;   // fold numbers, or -1
 };
 
 void uui_markdown_init(struct uui_markdown *m);

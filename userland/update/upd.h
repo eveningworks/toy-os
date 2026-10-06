@@ -85,8 +85,9 @@ struct upd_plan {
     // as apt-listchanges cuts a changelog: Markdown for uui_markdown and
     // umd, or NULL when the server has none or nothing is newer.
     char    *notes;
-    int      notes_count;         // release-note lines in it
-    int      notes_quiet;         // newer commits that carry none
+    int      notes_count;         // release-note lines in it, the visible kinds
+    int      notes_hood;          // ...and `internal` ones, under the hood
+    int      notes_quiet;         // newer commits that are not the OS's (never shown)
     int      notes_since;         // 1: cut at this machine's build; 0: it was not in the list
 
     // Filled by upd_apply().
