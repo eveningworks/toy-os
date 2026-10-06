@@ -233,8 +233,18 @@ int uui_toolbar_tick(struct uui_toolbar *t) {
 // The item's icon: its own ink, or its tint as a symbolic icon -- in the
 // accent's text colour when latched in the accent, where a coloured
 // glyph on the accent fill would lose its contrast.
-static void draw_icon(struct ugfx_surface *s, const struct uui_toolbar_item *it,
-                      const struct uimg *ico, int x, int y, int accent) {
+// A DISABLED ICON IS GREYED ITSELF, in the colour a disabled label takes
+// -- its action tint dropped -- as Windows and Breeze grey theirs: the
+// wash under the item alone barely shows on this chrome, and a coloured
+// icon read as live.
+static void draw_icon(struct ugfx_surface *s, const struct uui_toolbar *t,
+                      const struct uui_toolbar_item *it,
+                      const struct uimg *ico, int x, int y, int accent, int disabled) {
+    if (disabled) {
+        ugfx_blit_tinted(s, x, y, ico->w, ico->h, ico->px, ico->w,
+                         uui_state_bg(t->fg, UUI_STATE_DISABLED));
+        return;
+    }
     if (it->tint) {
         uint32_t c = it->tint < UTHEME_ACT_COUNT ? utheme_action((int)it->tint) : it->tint;
         ugfx_blit_tinted(s, x, y, ico->w, ico->h, ico->px, ico->w,
@@ -291,7 +301,8 @@ static void tb_draw(struct ugfx_surface *s, const struct uui_toolbar *t) {
             int cx = x + 6;
             const struct uimg *li = it->icon ? icon_get(it->icon, icon_px(t)) : 0;
             if (li) {
-                draw_icon(s, it, li, cx, y + (h - li->h) / 2, accent);
+                draw_icon(s, t, it, li, cx, y + (h - li->h) / 2, accent,
+                          (f & UUI_MI_DISABLED) != 0);
                 cx += icon_px(t) + 6;
             }
             if (it->label) {
@@ -308,9 +319,8 @@ static void tb_draw(struct ugfx_surface *s, const struct uui_toolbar *t) {
         }
         const struct uimg *ico = icon_get(it->icon, icon_px(t));
         if (ico) {
-            // No greying pass for a disabled icon -- the wash under it
-            // is the state signal, one rule for every control here.
-            draw_icon(s, it, ico, x + (w - ico->w) / 2, y + (h - ico->h) / 2, accent);
+            draw_icon(s, t, it, ico, x + (w - ico->w) / 2, y + (h - ico->h) / 2, accent,
+                      (f & UUI_MI_DISABLED) != 0);
         } else {
             // The icon cache's missing-file rule: a letter, never an error.
             char c[2] = { it->tip ? it->tip[0] : '?', 0 };

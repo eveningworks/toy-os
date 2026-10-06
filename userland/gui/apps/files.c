@@ -387,6 +387,8 @@ static unsigned menu_item_flags(int code) {
         return uui_fileview_selected_name(&g_pane[g_active]) ? 0 : UUI_MI_DISABLED;
     case CMD_CLIP_COPY:
     case CMD_CLIP_CUT:
+    case CMD_DELETE:
+    case CMD_DELETE_FOREVER:
         return operand_count() > 0 ? 0 : UUI_MI_DISABLED;
     case CMD_CLIP_PASTE:
         // Greyed when there is nothing to paste, which is what tells a
