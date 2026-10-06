@@ -76,15 +76,24 @@ def run(dbg, qmp, res):
               f"menu={m is not None} file={pinned()} row={row} tree={lay.treerow}")
 
     # 2. the row goes there
+    aim = None
     if row is not None:
         tx, ty, tw, th, trh, _ = lay.treebox
-        fm.sure_click(dbg, qmp, lay.ox + tx + tw // 2, lay.oy + ty + row * trh + trh // 2)
-    lay = fm.wait_layout(dbg, win, lambda l: l.dir.get(0) == TARGET) or fm.layout_now(dbg, win)
-    res.check("the pinned row goes to the folder", lay.dir.get(0) == TARGET, f"dir={lay.dir.get(0)!r}")
+        aim = (lay.ox + tx + tw // 2, lay.oy + ty + row * trh + trh // 2)
+        fm.sure_click(dbg, qmp, *aim)
+    # Generous, and with the cached layout to fall back on: under TCG the
+    # navigation's one frame can land before this wait starts listening,
+    # and an idle window draws no other.
+    lay = (fm.wait_layout(dbg, win, lambda l: l.dir.get(0) == TARGET, timeout=25.0)
+           or fm.layout_now(dbg, win) or fm.last_layout())
+    trail = [ln.strip() for ln in fm._ALL_BUF if "tree" in ln and "layout tree.row " not in ln][-8:]
+    res.check("the pinned row goes to the folder", lay is not None and lay.dir.get(0) == TARGET,
+              f"dir={lay.dir.get(0) if lay else None!r} aim={aim} treebox={lay.treebox if lay else None} "
+              f"treesel={lay.treesel if lay else None} app={trail}")
 
     # 3. unpin, from the folder's own menu in its parent
     dbg.key(fm.K_BACKSPACE)
-    fm.wait_layout(dbg, win, lambda l: l.dir.get(0) == START)
+    fm.wait_layout(dbg, win, lambda l: l.dir.get(0) == START, timeout=25.0)
     m = menu_on_doc()
     if m:
         x, y, w, h = m.popitems[PIN_ROW]
