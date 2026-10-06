@@ -32,8 +32,9 @@ struct uthumb_config {
     int (*wake)(void *ctx);
     void *ctx;
     // Called on the MAIN thread right after a thumbnail was written to
-    // the disk cache. The File Manager claims the filesystem generation
-    // there, or it would reload its panes in answer to its own write.
+    // the disk cache: an app watching the volume-wide SYS_FS_GENERATION
+    // claims it here, or it reloads in answer to its own write. NULL is
+    // fine for one that watches per folder (SYS_FS_GENERATION_OF).
     void (*stored)(void *ctx);
     // The prefix of the one line logged when a queue drains: "<prefix>:
     // N thumbnail(s) in T ms, C from the cache". Tests wait on it.

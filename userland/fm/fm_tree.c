@@ -107,6 +107,16 @@ static int is_other_mount(const char *path) {
     return 0;
 }
 
+// A volume's note and meter, from its place row.
+static void head_device(struct uui_tree_node *nd, const struct uui_place *r, int i) {
+    uui_places_short_note(r, g_tree_note[i], sizeof g_tree_note[i]);
+    nd->note = g_tree_note[i][0] ? g_tree_note[i] : 0;
+    nd->meter_on = r->total != 0;
+    nd->meter_pm = r->total ? (int)((r->used > r->total ? r->total : r->used)
+                                    * 1000 / r->total) : 0;
+    nd->meter_color = uui_places_bar_colour(r);
+}
+
 // The fixed head of the node array. Labels and icons point into
 // g_places, which outlives the widget; paths are copied so every node
 // answers the same way. Volumes are lazy roots only with the folder
@@ -127,12 +137,7 @@ static int tree_build_head(void) {
         if (r->device) {
             nd->kind = !g_tree_on ? UUI_TREE_AUTO
                      : tree_is_open(r->path) ? UUI_TREE_OPEN : UUI_TREE_CLOSED;
-            uui_places_short_note(r, g_tree_note[i], sizeof g_tree_note[i]);
-            nd->note = g_tree_note[i][0] ? g_tree_note[i] : 0;
-            nd->meter_on = r->total != 0;
-            nd->meter_pm = r->total ? (int)((r->used > r->total ? r->total : r->used)
-                                            * 1000 / r->total) : 0;
-            nd->meter_color = uui_places_bar_colour(r);
+            head_device(nd, r, i);
         }
         n++;
     }
@@ -162,6 +167,38 @@ void tree_reveal_path(const char *path) {
         tree_set_open(g_places.row[vol].path, 1);
     tree_rebuild();
     tree_select_path(path);
+}
+
+// THE SUM OF THE OPEN FOLDERS' CHANGE COUNTERS. Each only ever grows,
+// so the sum moves whenever any one of them does -- one number answers
+// "did anything the tree shows change" without keeping a list.
+static long long g_tree_gen;
+
+static long long tree_generation(void) {
+    long long sum = 0;
+    for (int i = 0; i < g_tree_count; i++)
+        if (g_tree_nodes[i].kind == UUI_TREE_OPEN)
+            sum += sys_fs_generation_of(g_tree_path[i]);
+    return sum;
+}
+
+int tree_poll(void) {
+    if (tree_generation() == g_tree_gen) return 0;
+    tree_rebuild();
+    return 1;
+}
+
+// Free space moves on every write; only the volumes' rows say it, so
+// they are updated in place rather than by re-listing the open folders.
+void tree_refresh_meters(void) {
+    for (int i = 0; i < g_tree_count; i++)
+        for (int j = g_places.places; j < g_places.count; j++)
+            if (g_places.row[j].device && !strcmp(g_places.row[j].path, g_tree_path[i]) &&
+                g_tree_nodes[i].label == g_places.row[j].label) {
+                head_device(&g_tree_nodes[i], &g_places.row[j], j);
+                break;
+            }
+    uui_tree_set_nodes_keep(&g_tree, g_tree_nodes, g_tree_count);
 }
 
 // Rebuild the node array from the open set. Each open directory's
@@ -227,6 +264,7 @@ void tree_rebuild(void) {
     }
     uui_tree_set_nodes_keep(&g_tree, g_tree_nodes, g_tree_count);
     if (sel[0]) tree_select_path(sel);
+    g_tree_gen = tree_generation();
 }
 
 void tree_toggle(void *ctx, int id, int expand) {

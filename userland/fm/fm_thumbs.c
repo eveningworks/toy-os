@@ -13,21 +13,13 @@ static int wake(void *ctx) {
     return uapp_post(g_app, POST_THUMB, 0);
 }
 
-// A cache write moves the filesystem generation this app watches, so it
-// is claimed in the same step, or both panes would reload in answer to
-// the app's own write (the rule on_pane_dir() states for the config).
-static void stored(void *ctx) {
-    (void)ctx;
-    g_seen_generation = sys_fs_generation();
-}
-
 static void init_once(void) {
     static int done;
     if (done) return;
     done = 1;
     // "files" is what tools/thumbcache_test.py waits on.
     static const struct uthumb_config cfg = {
-        .wake = wake, .stored = stored, .log_prefix = "files",
+        .wake = wake, .log_prefix = "files",
     };
     uthumb_init(&cfg);
 }

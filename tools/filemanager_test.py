@@ -1656,6 +1656,29 @@ def run(dbg, qmp, tmp, res):
     lay = goto(SRC) or lay
     dbg.send("sh rm -r /fmlong")
 
+    # ONLY THE PANE WHOSE FOLDER CHANGED RELOADS. A write somewhere
+    # neither pane shows reloads nothing; one in pane 0's folder reloads
+    # pane 0 and not pane 1. The old tick reloaded both on any write
+    # anywhere, which this cannot pass: the unrelated write alone would
+    # log a reload of pane 1.
+    def reloads(pane):
+        _collect(dbg)
+        return sum(1 for ln in _ALL_BUF if f"files: reload {pane} " in ln)
+    other = lay.dir.get(1)
+    r0, r1 = reloads(0), reloads(1)
+    dbg.send("sh touch /tmp/fm-unrelated.txt")
+    dbg.send(f"sh touch {SRC}/fm-probe.txt")
+    deadline = time.time() + 10
+    while reloads(0) == r0 and time.time() < deadline:
+        time.sleep(0.2)
+    time.sleep(1.0)   # a tick or two more, for a stray reload of pane 1 to show
+    res.check("a write in pane 0's folder reloads pane 0, and a write elsewhere reloads neither",
+              other not in (SRC, "/tmp") and reloads(0) > r0 and reloads(1) == r1,
+              f"pane0 reloads {r0}->{reloads(0)} pane1 ({other}) {r1}->{reloads(1)}")
+    dbg.send(f"sh rm {SRC}/fm-probe.txt")
+    dbg.send("sh rm /tmp/fm-unrelated.txt")
+    wait_listing(dbg, SRC, lambda names: "fm-probe.txt" not in names)
+
     home = lay.dir.get(0) or SRC
     gone = f"{SRC}/gone"
     dbg.send(f"sh mkdir {gone}")

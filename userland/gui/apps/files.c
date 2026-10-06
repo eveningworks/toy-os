@@ -129,6 +129,8 @@ char g_stat_note[64];
 // without anyone pressing anything, which is the whole reason this app
 // does not have to be told when its own child is done either.
 unsigned long long g_seen_generation;
+// Each pane's folder counter as of its last listing (pane_listed()).
+static long long g_pane_gen[2];
 
 // WHAT IS ON THE CLIPBOARD, cached. The menus ask per item on every
 // draw and hit test (`item_flags` is a query, by design), and a syscall
@@ -472,14 +474,11 @@ void addr_end_edit(int commit) {
 
 // A divider's position, written when the drag ENDS rather than per
 // motion: a drag is hundreds of events and every one of them would be a
-// whole-file rewrite. The generation is adopted for the same reason
-// on_pane_dir() adopts it -- this app watches the filesystem, and
-// without it every save reads back as somebody else changing the disk.
+// whole-file rewrite.
 void save_split(const char *key, const struct uui_splitter *sp) {
     char v[12];
     snprintf(v, sizeof v, "%d", uui_splitter_frac(sp));
     uconf_set(FILES_CONF, key, v);
-    g_seen_generation = sys_fs_generation();
 }
 
 // --- status -----------------------------------------------------------
@@ -652,7 +651,6 @@ static void set_view(int code) {
                                                         : UUI_FILEVIEW_ICONS);
     uconf_set(FILES_CONF, g_active ? "right_view" : "left_view",
               code == CMD_VIEW_DETAILS ? "details" : code == CMD_VIEW_LARGE ? "large" : "icons");
-    g_seen_generation = sys_fs_generation(); // adopt our own write
 }
 
 void do_command(struct uapp *a, int code) {
@@ -754,7 +752,6 @@ void do_command(struct uapp *a, int code) {
     case CMD_VIEW_DPANE:
         g_dpane = !g_dpane;
         uconf_set(FILES_CONF, "details_pane", g_dpane ? "1" : "0");
-        g_seen_generation = sys_fs_generation();
         break;
     case CMD_MENU_NEW: case CMD_MENU_SORT: case CMD_MENU_VIEW: case CMD_MENU_MORE:
         open_dropdown(code);
@@ -782,14 +779,12 @@ void do_command(struct uapp *a, int code) {
     case CMD_VIEW_PANES:
         g_single = !g_single;
         uconf_set(FILES_CONF, "panes", g_single ? "1" : "2");
-        g_seen_generation = sys_fs_generation();
         break;
     case CMD_VIEW_TREE:
         g_tree_on = !g_tree_on;
         if (g_tree_on) tree_reveal_path(uui_fileview_dir(active()));
         else { tree_rebuild(); tree_select_path(uui_fileview_dir(active())); }
         uconf_set(FILES_CONF, "tree", g_tree_on ? "1" : "0");
-        g_seen_generation = sys_fs_generation();
         break;
     case CMD_EXIT:
         uapp_quit(a, 0);
@@ -1246,9 +1241,13 @@ static int on_tick(struct uapp *a) {
     unsigned long long gen = sys_fs_generation();
     if (gen != g_seen_generation) {
         g_seen_generation = gen;
-        reload_panes();
+        for (int i = 0; i < 2; i++)
+            if (sys_fs_generation_of(uui_fileview_dir(&g_pane[i])) != g_pane_gen[i])
+                reload_pane(&g_pane[i]);
+        int places = g_places.count;
         uui_places_refresh(&g_places);  // free space moved, or a disk came
-        tree_rebuild();                 // ...and a dir can have appeared or gone
+        if (g_places.count != places) tree_rebuild();
+        else if (!tree_poll()) tree_refresh_meters();
         refresh_status();
         changed = 1;
     }
@@ -1303,22 +1302,9 @@ static void on_pane_dir(void *ctx, const char *dir) {
     // rewritten twice per navigation -- 512 bytes, and the alternative
     // is a dirty flag that has to be right.
     uconf_set(FILES_CONF, i ? "right" : "left", dir);
-
-    // ADOPT THE GENERATION OUR OWN WRITE JUST PRODUCED. Without this the
-    // app watches the filesystem, changes it, and then reacts to itself:
-    // every navigation wrote this file, the write bumped
-    // SYS_FS_GENERATION, and the next tick read that as "somebody
-    // changed the disk" and reloaded BOTH panes -- a second full repaint
-    // half a second after the first, which is visible as a flicker on
-    // every single directory change. Measured at 2 frames per
-    // navigation before, 1 after.
-    //
-    // Every watcher needs this: it is why inotify consumers track their
-    // own writes and why a settings daemon ignores the change it just
-    // made. The cost is bounded and worth stating -- a write by ANOTHER
-    // process landing in the same instant is adopted too and its refresh
-    // is skipped, until the next change moves the counter again.
-    g_seen_generation = sys_fs_generation();
+    // AFTER that write: a pane showing /etc would otherwise read it as a
+    // change and repaint a second time on every navigation there.
+    pane_listed(i);
 
     // The tree follows the ACTIVE pane on a NAVIGATION: ancestors
     // opened, the node selected and scrolled to. Never on a toggle, so
@@ -1462,15 +1448,21 @@ void refresh_dim(void) {
     }
 }
 
+void pane_listed(int pane) {
+    g_pane_gen[pane] = sys_fs_generation_of(uui_fileview_dir(&g_pane[pane]));
+}
+
 void reload_pane(struct uui_fileview *fv) {
+    int i = fv == &g_pane[1];
+    pane_listed(i);   // BEFORE the listing: a change during it shows next tick
+    ulogf("files: reload %d %s\n", i, uui_fileview_dir(fv));
     uui_fileview_reload(fv);
     refresh_dim();
 }
 
 void reload_panes(void) {
-    uui_fileview_reload(&g_pane[0]);
-    uui_fileview_reload(&g_pane[1]);
-    refresh_dim();
+    reload_pane(&g_pane[0]);
+    reload_pane(&g_pane[1]);
 }
 
 static void on_clipboard(struct uapp *a, int op, unsigned serial) {
@@ -1624,7 +1616,11 @@ int main(int argc, char **argv) {
     // Hooked up AFTER the opening directories are set, so starting the
     // app with an explicit argument does not silently rewrite the
     // remembered pair -- an argument is a statement about this launch.
-    for (int i = 0; i < 2; i++) g_pane[i].on_dir_changed = on_pane_dir;
+    for (int i = 0; i < 2; i++) {
+        g_pane[i].on_dir_changed = on_pane_dir;
+        pane_listed(i);   // the baseline on_tick() compares against
+    }
+    g_seen_generation = sys_fs_generation();
     if (g_tree_on) tree_reveal_path(uui_fileview_dir(active()));
     else { tree_rebuild(); tree_select_path(uui_fileview_dir(active())); }
     // ASKED ONCE AT STARTUP: the broadcast only fires on a CHANGE, so an

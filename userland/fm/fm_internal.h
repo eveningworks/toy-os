@@ -205,11 +205,15 @@ extern char g_stat_dir[PATH_MAX_LEN + 8];
 extern char g_stat_items[48];
 extern char g_stat_note[64];
 
-// The filesystem generation this app has already reacted to. An app
-// that both watches the filesystem and writes to it must adopt the
-// generation its OWN write produced, or it reacts to itself -- see
-// on_pane_dir() for the flicker that cost.
+// WHAT HAS CHANGED, PER FOLDER (on_tick). The volume-wide
+// SYS_FS_GENERATION is only the cheap first gate; each pane and the
+// tree then compare SYS_FS_GENERATION_OF for the folders they show, so
+// a write elsewhere -- this app's own config, its thumbnail cache --
+// reloads nothing. A pane's counter is sampled whenever it is listed
+// (pane_listed()), which is what keeps the app from reacting to the
+// listing it just made.
 extern unsigned long long g_seen_generation;
+void pane_listed(int pane);
 
 // The widget tree, declared by the app and consumed by the router. The
 // indices are here because the layout hides panes and the input code
@@ -258,6 +262,8 @@ void tree_init(void);
 void tree_select_path(const char *path);
 void tree_reveal_path(const char *path);   // ancestors opened, then selected
 void tree_rebuild(void);
+int  tree_poll(void);           // rebuild if an open folder changed; 1 if it did
+void tree_refresh_meters(void); // the volumes' notes and meters, from g_places
 void tree_toggle(void *ctx, int id, int expand);
 
 // --- thumbnails (fm_thumbs.c) ----------------------------------------

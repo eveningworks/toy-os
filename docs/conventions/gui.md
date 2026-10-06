@@ -3821,17 +3821,19 @@ real scanout hardware does. Do not write a pixel assertion for one.
     permission bits and Opens with apply AT ONCE** with a status line,
     as rename in place does -- no OK/Apply; the SHA-256 is computed in
     slices per tick and compared with a pasted sum.
-  - **Refresh is `SYS_FS_GENERATION` polled in the tick**, the desktop's
-    idiom -- one integer compare, no disk I/O, and a copy finishing in
-    another process appears with nobody pressing anything. **An app that
-    both watches the filesystem and writes to it must adopt the
-    generation its OWN write produced**, or it reacts to itself: saving
-    the pane directories bumped the counter, the next tick read that as
-    an external change and reloaded both panes, and every navigation
-    repainted twice half a second apart -- visible as a flicker.
-    Measured at 2 frames per navigation before and 1 after. Every
-    watcher needs this; it is why an inotify consumer tracks its own
-    writes.
+  - **Refresh is PER FOLDER: `SYS_FS_GENERATION` is the cheap gate,
+    `SYS_FS_GENERATION_OF` decides.** One integer compare per tick, and
+    only when the volume moved does each pane (and the tree, as a sum
+    over its open folders) ask about the folder it SHOWS -- so a copy
+    finishing in another process appears with nobody pressing anything,
+    and a write elsewhere (the app's own config, its thumbnail cache)
+    reloads nothing. **A pane samples its counter when it is LISTED**
+    (`pane_listed()`), and after a write the app makes into a folder it
+    is showing: that is what keeps it from reacting to itself. It used
+    to adopt the volume-wide counter after every own write, which also
+    swallowed another process's write landing in the same tick, and a
+    `mkdir` in one pane left the other pane, showing the same folder,
+    stale.
 - **WHAT OPENS A FILE TYPE IS DECLARED BY THE APP THAT OPENS IT --
   AND THE USER'S CHOICE IN `/etc/mimeapps.conf` OUTRANKS IT.**
   `Handles=.txt .md .conf` on the app's `.desktop` entry declares;

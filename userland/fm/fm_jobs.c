@@ -432,7 +432,6 @@ void fm_job_finished(void) {
               g_cancel ? "cancelled" : (g_job_failures ? "FAILED" : "done"));
     g_job_count = g_job_at = 0;
     reload_panes();
-    g_seen_generation = sys_fs_generation();   // our own writes (on_pane_dir)
     refresh_status();
 }
 
@@ -570,7 +569,6 @@ void commit_mkdir(const char *name) {
     } else {
         set_note("created");
         reload_pane(active());
-        g_seen_generation = sys_fs_generation();
         uui_fileview_select_name(active(), name);
     }
     refresh_status();
@@ -598,7 +596,6 @@ void commit_newfile(const char *name) {
     fclose(f);
     set_note("created");
     reload_pane(active());
-    g_seen_generation = sys_fs_generation();
     uui_fileview_select_name(active(), name);
     refresh_status();
 }
@@ -622,7 +619,6 @@ void commit_rename_named(const char *from_name, const char *name) {
     } else {
         set_note("renamed");
         reload_pane(active());
-        g_seen_generation = sys_fs_generation();
         uui_fileview_select_name(active(), name);
     }
     refresh_status();

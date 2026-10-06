@@ -892,7 +892,7 @@ run on, not by order.
 - [ ] A VFS inode cache -- tfs3 caches DIRECTORY inodes itself since 2026-09-28; the VFS-level one is still not worth the refactor
 - [ ] `rename()` that replaces its destination atomically -- every backend refuses, so a publish is three steps
 - [ ] Path watches for any process, not just the compositor -- polled per-directory counters exist (`SYS_FS_GENERATION_OF`); events do not
-- [ ] The File Manager reloads both panes on ANY filesystem change -- move it to `SYS_FS_GENERATION_OF` per pane
+- [x] ~~The File Manager reloads both panes on ANY filesystem change~~ DONE 2026-10-06 -- per folder now
 - [x] ~~Batch TFS3's allocation bitmap into the deferred transaction~~ done -- 1138 -> 623 write commands per 64 MiB
 - [ ] Batch the dirty POINTER TABLES too -- blocked on `g_mcache` needing to flush a second mount's dirty entry rather than discard it
 - [ ] Remove one of the file path's two copies -- scatter/gather the PRDT over the kernel buffer instead of the driver's bounce

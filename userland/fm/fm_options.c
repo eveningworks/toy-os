@@ -66,7 +66,6 @@ static void save(void) {
     uconf_set(FILES_CONF, "extensions", g_opt.extensions ? "1" : "0");
     uconf_set(FILES_CONF, "rename", g_opt.rename_dialog ? "dialog" : "inplace");
     uconf_set(FILES_CONF, "confirm_delete", g_opt.confirm_delete ? "1" : "0");
-    g_seen_generation = sys_fs_generation();   // our own write (see on_pane_dir)
 }
 
 void options_apply(void) {
