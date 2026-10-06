@@ -69,7 +69,8 @@ def tile(colour):
 #
 # Dark ink, no plate: these sit on the toolbar's near-white chrome, the
 # opposite situation from the desktop's white-on-wallpaper app icons.
-# Bold strokes, because they are drawn at ~20px from this 64px master.
+# The command bar's own set is the OUTLINE set below; the rest are bold
+# filled shapes, drawn at ~20px from this 64px master.
 
 TB_INK = (55, 60, 72, 255)
 
@@ -79,31 +80,190 @@ def _tb():
     return im, ImageDraw.Draw(im)
 
 
-def icon_tb_up():
-    im, d = _tb()
-    d.polygon([(32, 8), (54, 32), (40, 32), (40, 54), (24, 54), (24, 32), (10, 32)],
-              fill=TB_INK)
-    return im
+# --- the command bar's OUTLINE set (chosen from mockups, 2026-10-06) ---
+#
+# Windows 11 Fluent's shape: thin rounded strokes on a 24-unit grid,
+# round caps and joins. Drawn at 4x the 64px master and shrunk, which is
+# the only anti-aliasing Pillow has; a stroke is a chain of lines with a
+# disc at every joint, so a corner is round whatever its angle. SYMBOLIC:
+# one colour, tinted by the toolbar's action roles.
+OUTLINE_W = 1.7           # in grid units: 1.5 drawn, plus what two resamples thin
+_K = SIZE * 4 / 24        # grid unit -> supersampled pixels
 
 
-# BACK AND FORWARD ARE THE SAME ARROW MIRRORED, drawn from one point
-# list so the pair cannot drift apart -- a forward arrow a few pixels
-# fatter than its back twin is the kind of thing nobody reports and
-# everybody sees.
-def _tb_arrow(points):
-    im, d = _tb()
-    d.polygon(points, fill=TB_INK)
-    return im
+class _Pen:
+    def __init__(self):
+        self.im = Image.new("RGBA", (SIZE * 4, SIZE * 4), (0, 0, 0, 0))
+        self.d = ImageDraw.Draw(self.im)
+        self.w = OUTLINE_W * _K
+
+    def _p(self, x, y):
+        return (x * _K, y * _K)
+
+    def _dot(self, x, y):
+        r = self.w / 2
+        cx, cy = self._p(x, y)
+        self.d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=TB_INK)
+
+    def line(self, *pts):
+        xy = [self._p(x, y) for x, y in pts]
+        self.d.line(xy, fill=TB_INK, width=round(self.w))
+        for x, y in pts:
+            self._dot(x, y)
+
+    def arc(self, cx, cy, r, a0, a1, steps=24):
+        pts = [(cx + r * math.cos(math.radians(a0 + (a1 - a0) * i / steps)),
+                cy + r * math.sin(math.radians(a0 + (a1 - a0) * i / steps)))
+               for i in range(steps + 1)]
+        self.line(*pts)
+
+    def circle(self, cx, cy, r):
+        self.arc(cx, cy, r, 0, 360, 48)
+
+    def rrect(self, x, y, w, h, r):
+        # Four sides and four quarter-arcs, one chain.
+        self.arc(x + w - r, y + r, r, -90, 0, 8)
+        self.arc(x + w - r, y + h - r, r, 0, 90, 8)
+        self.arc(x + r, y + h - r, r, 90, 180, 8)
+        self.arc(x + r, y + r, r, 180, 270, 8)
+        self.line((x + r, y), (x + w - r, y))
+        self.line((x + w, y + r), (x + w, y + h - r))
+        self.line((x + r, y + h), (x + w - r, y + h))
+        self.line((x, y + r), (x, y + h - r))
+
+    def fill_rrect(self, x, y, w, h, r):
+        self.d.rounded_rectangle([x * _K, y * _K, (x + w) * _K, (y + h) * _K],
+                                 radius=r * _K, fill=TB_INK)
+
+    def done(self):
+        return self.im.resize((SIZE, SIZE), Image.LANCZOS)
+
+
+def _arrow(pen, x0, y0, x1, y1, head=4.5):
+    """A shaft with a two-stroke head at (x1, y1)."""
+    pen.line((x0, y0), (x1, y1))
+    a = math.atan2(y1 - y0, x1 - x0)
+    for s in (-1, 1):
+        b = a + math.pi + s * math.radians(42)
+        pen.line((x1, y1), (x1 + head * math.cos(b), y1 + head * math.sin(b)))
+
+
+def icon_tb_new():
+    p = _Pen(); p.line((12, 4.5), (12, 19.5)); p.line((4.5, 12), (19.5, 12)); return p.done()
+
+
+def icon_tb_cut():
+    p = _Pen()
+    p.line((9.2, 14.4), (17.5, 3)); p.line((14.8, 14.4), (6.5, 3))
+    p.circle(6.6, 17.2, 3.1); p.circle(17.4, 17.2, 3.1)
+    return p.done()
+
+
+def icon_tb_copy():
+    p = _Pen()
+    p.rrect(8.5, 8, 11.5, 13, 2)
+    p.line((4.5, 15), (4.5, 6)); p.arc(6.5, 6, 2, 180, 270, 6); p.line((6.5, 4), (15, 4))
+    return p.done()
+
+
+def icon_tb_paste():
+    p = _Pen()
+    p.line((8, 4.5), (6.5, 4.5)); p.arc(6.5, 6.5, 2, 180, 270, 6)
+    p.line((4.5, 6.5), (4.5, 19)); p.arc(6.5, 19, 2, 90, 180, 6); p.line((6.5, 21), (17.5, 21))
+    p.arc(17.5, 19, 2, 0, 90, 6); p.line((19.5, 19), (19.5, 6.5)); p.arc(17.5, 6.5, 2, 270, 360, 6)
+    p.line((17.5, 4.5), (16, 4.5))
+    p.rrect(8.5, 2.75, 7, 3.75, 1)
+    p.line((8.5, 12), (15.5, 12)); p.line((8.5, 16), (13.5, 16))
+    return p.done()
+
+
+def icon_tb_rename():
+    # A text field with the caret standing in it.
+    p = _Pen()
+    p.line((13, 7.5), (5, 7.5)); p.arc(5, 9.5, 2, 180, 270, 6); p.line((3, 9.5), (3, 14.5))
+    p.arc(5, 14.5, 2, 90, 180, 6); p.line((5, 16.5), (13, 16.5))
+    p.line((20.5, 9), (20.5, 15))
+    p.line((17, 4.5), (17, 19.5)); p.line((15, 4.5), (19, 4.5)); p.line((15, 19.5), (19, 19.5))
+    return p.done()
+
+
+def _bin(p):
+    p.line((3.5, 6.5), (20.5, 6.5))
+    p.line((9, 6.5), (9, 4.5)); p.arc(10, 4.5, 1, 180, 270, 4); p.line((10, 3.5), (14, 3.5))
+    p.arc(14, 4.5, 1, 270, 360, 4); p.line((15, 4.5), (15, 6.5))
+    p.line((5.5, 6.5), (6.6, 19.4)); p.arc(8.1, 19.3, 1.5, 90, 180, 6)
+    p.line((8.1, 20.8), (15.9, 20.8)); p.arc(15.9, 19.3, 1.5, 0, 90, 6); p.line((17.4, 19.4), (18.5, 6.5))
+
+
+def icon_tb_delete():
+    p = _Pen(); _bin(p); p.line((10, 10.5), (10, 17)); p.line((14, 10.5), (14, 17)); return p.done()
+
+
+def icon_tb_bin_restore():
+    p = _Pen(); _bin(p); _arrow(p, 12, 17.5, 12, 10.5, 3.2); return p.done()
+
+
+def icon_tb_bin_empty():
+    p = _Pen(); _bin(p); p.line((9.5, 11), (14.5, 16)); p.line((14.5, 11), (9.5, 16)); return p.done()
+
+
+def icon_tb_sort():
+    p = _Pen(); _arrow(p, 7.5, 4.5, 7.5, 19.5, 3.5); _arrow(p, 16.5, 19.5, 16.5, 4.5, 3.5); return p.done()
+
+
+def icon_tb_view():
+    p = _Pen()
+    for x, y in ((4, 4), (13.5, 4), (4, 13.5), (13.5, 13.5)):
+        p.rrect(x, y, 6.5, 6.5, 1.5)
+    return p.done()
+
+
+def icon_tb_icons():
+    return icon_tb_view()
+
+
+def icon_tb_details():
+    p = _Pen()
+    for y in (6.5, 12, 17.5):
+        p.line((4, y), (5, y)); p.line((8.5, y), (20, y))
+    return p.done()
+
+
+def icon_tb_more():
+    p = _Pen()
+    for x in (6, 12, 18):
+        p.fill_rrect(x - 1.4, 10.6, 2.8, 2.8, 1.4)
+    return p.done()
+
+
+def icon_tb_pane():
+    p = _Pen(); p.rrect(3.5, 5, 17, 14, 2); p.line((14.5, 5), (14.5, 19)); return p.done()
 
 
 def icon_tb_back():
-    return _tb_arrow([(8, 32), (32, 10), (32, 24), (56, 24),
-                      (56, 40), (32, 40), (32, 54)])
+    p = _Pen(); _arrow(p, 19.5, 12, 4.5, 12, 6.5); return p.done()
 
 
 def icon_tb_forward():
-    return _tb_arrow([(56, 32), (32, 10), (32, 24), (8, 24),
-                      (8, 40), (32, 40), (32, 54)])
+    p = _Pen(); _arrow(p, 4.5, 12, 19.5, 12, 6.5); return p.done()
+
+
+def icon_tb_up():
+    p = _Pen(); _arrow(p, 12, 19.5, 12, 4.5, 6.5); return p.done()
+
+
+def icon_tb_refresh():
+    # An open circle, the gap on the right, and a head on its upper end
+    # pointing along the turn -- Fluent's ArrowClockwise.
+    p = _Pen()
+    p.arc(12, 12, 7.5, 30, 330, 40)
+    t = math.radians(330)
+    tx, ty = 12 + 7.5 * math.cos(t), 12 + 7.5 * math.sin(t)
+    ang = math.atan2(math.cos(t), -math.sin(t))      # the tangent, increasing angle
+    for sgn in (-1, 1):
+        b = ang + math.pi + sgn * math.radians(45)
+        p.line((tx, ty), (tx + 4.5 * math.cos(b), ty + 4.5 * math.sin(b)))
+    return p.done()
 
 
 def icon_tb_home():
@@ -292,62 +452,6 @@ FOLDER_KINDS = {
 }
 
 
-def icon_tb_cut():
-    im, d = _tb()
-    d.ellipse([8, 38, 26, 56], outline=TB_INK, width=5)
-    d.ellipse([38, 38, 56, 56], outline=TB_INK, width=5)
-    d.line([22, 40, 46, 6], fill=TB_INK, width=5)
-    d.line([42, 40, 18, 6], fill=TB_INK, width=5)
-    return im
-
-
-def icon_tb_paste():
-    im, d = _tb()
-    d.rounded_rectangle([12, 10, 52, 58], radius=4, outline=TB_INK, width=5)
-    d.rounded_rectangle([22, 4, 42, 16], radius=3, fill=TB_INK)
-    d.line([22, 32, 42, 32], fill=TB_INK, width=4)
-    d.line([22, 42, 36, 42], fill=TB_INK, width=4)
-    return im
-
-
-def icon_tb_new():
-    im, d = _tb()
-    d.line([32, 8, 32, 56], fill=TB_INK, width=8)
-    d.line([8, 32, 56, 32], fill=TB_INK, width=8)
-    return im
-
-
-def icon_tb_sort():
-    im, d = _tb()
-    d.line([16, 8, 16, 52], fill=TB_INK, width=5)
-    d.polygon([(6, 42), (26, 42), (16, 56)], fill=TB_INK)
-    for y, x1 in ((14, 58), (30, 52), (46, 44)):
-        d.line([32, y, x1, y], fill=TB_INK, width=5)
-    return im
-
-
-def icon_tb_view():
-    im, d = _tb()
-    for x, y in ((8, 8), (36, 8), (8, 36), (36, 36)):
-        d.rectangle([x, y, x + 20, y + 20], fill=TB_INK)
-    return im
-
-
-def icon_tb_pane():
-    # The details pane: a window with its right-hand column.
-    im, d = _tb()
-    d.rectangle([6, 10, 58, 54], outline=TB_INK, width=5)
-    d.rectangle([38, 10, 58, 54], fill=TB_INK)
-    return im
-
-
-def icon_tb_more():
-    im, d = _tb()
-    for x in (12, 32, 52):
-        d.ellipse([x - 6, 26, x + 6, 38], fill=TB_INK)
-    return im
-
-
 def icon_tb_find():
     # The lens alone: zoom-in's without the plus.
     im, d = _tb()
@@ -370,21 +474,6 @@ def icon_tb_chevron():
     return im
 
 
-def icon_tb_refresh():
-    im, d = _tb()
-    d.arc([10, 10, 54, 54], start=30, end=300, fill=TB_INK, width=8)
-    d.polygon([(56, 24), (40, 28), (52, 42)], fill=TB_INK)
-    return im
-
-
-def icon_tb_details():
-    im, d = _tb()
-    for i, yy in enumerate((12, 27, 42)):
-        d.rectangle([8, yy, 16, yy + 8], fill=TB_INK)
-        d.rectangle([22, yy, 56, yy + 8], fill=TB_INK)
-    return im
-
-
 # Task Manager's rail: Performance is a trend over an axis, Services a
 # gear -- the toolbar's ink, so the three rail rows read as one set.
 def icon_tb_chart():
@@ -402,14 +491,6 @@ def icon_tb_gear():
         d.ellipse([cx - 6, cy - 6, cx + 6, cy + 6], fill=TB_INK)
     d.ellipse([12, 12, 52, 52], fill=TB_INK)
     d.ellipse([24, 24, 40, 40], fill=(0, 0, 0, 0))
-    return im
-
-
-def icon_tb_icons():
-    im, d = _tb()
-    for yy in (8, 34):
-        for xx in (8, 34):
-            d.rectangle([xx, yy, xx + 22, yy + 22], fill=TB_INK)
     return im
 
 
@@ -569,13 +650,6 @@ def _sheet(d, x, y, w, h):
     d.rectangle([x, y, x + w, y + h], outline=TB_INK, width=4)
 
 
-def icon_tb_copy():
-    im, d = _tb()
-    _sheet(d, 6, 6, 30, 38)
-    _sheet(d, 26, 20, 30, 38)
-    return im
-
-
 def _folder_outline(d, x, y, w, h):
     # The body, then the tab on its top-left -- the folder every desktop
     # draws, as an outline so it matches the sheets beside it.
@@ -602,54 +676,6 @@ def icon_tb_mkdir():
     _folder_outline(d, 4, 12, 56, 42)
     d.rectangle([22, 34, 46, 40], fill=TB_INK)
     d.rectangle([31, 25, 37, 49], fill=TB_INK)
-    return im
-
-
-def icon_tb_rename():
-    # A text field with the caret in it: rename is TYPING a name, and
-    # an I-beam is the one glyph that means "edit this text" on every
-    # desktop (edit-rename in Plasma, the F2 field in Explorer).
-    im, d = _tb()
-    d.rounded_rectangle([4, 18, 60, 46], radius=3, outline=TB_INK, width=4)
-    d.rectangle([20, 26, 24, 38], fill=TB_INK)      # the caret's stem
-    d.rectangle([15, 24, 29, 27], fill=TB_INK)      # ...and its serifs
-    d.rectangle([15, 37, 29, 40], fill=TB_INK)
-    d.rectangle([32, 30, 50, 34], fill=TB_INK)      # a line of text after it
-    return im
-
-
-def icon_tb_delete():
-    im, d = _tb()
-    d.rectangle([18, 6, 46, 14], fill=TB_INK)      # the lid
-    d.rectangle([8, 16, 56, 24], fill=TB_INK)
-    d.polygon([(14, 26), (50, 26), (46, 58), (18, 58)], outline=TB_INK, width=4)
-    d.rectangle([26, 32, 32, 52], fill=TB_INK)
-    d.rectangle([38, 32, 44, 52], fill=TB_INK)
-    return im
-
-
-# THE RECYCLE BIN'S VERBS (lib/utrash.h): the delete glyph's can, with
-# what happens to its contents drawn inside -- an arrow rising out of it
-# (Restore) or a cross (Empty: gone for good).
-def _bin_can(d):
-    d.rectangle([18, 6, 46, 12], fill=TB_INK)
-    d.rectangle([8, 14, 56, 20], fill=TB_INK)
-    d.polygon([(12, 22), (52, 22), (48, 58), (16, 58)], outline=TB_INK, width=4)
-
-
-def icon_tb_bin_restore():
-    im, d = _tb()
-    _bin_can(d)
-    d.rectangle([29, 34, 35, 52], fill=TB_INK)
-    d.polygon([(32, 24), (43, 37), (21, 37)], fill=TB_INK)
-    return im
-
-
-def icon_tb_bin_empty():
-    im, d = _tb()
-    _bin_can(d)
-    d.line([23, 31, 41, 49], fill=TB_INK, width=5)
-    d.line([41, 31, 23, 49], fill=TB_INK, width=5)
     return im
 
 

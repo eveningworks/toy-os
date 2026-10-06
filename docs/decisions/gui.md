@@ -10539,3 +10539,23 @@ operation they reverse: undoing a cross-volume move is a copy, with
 progress and Cancel. Permanent deletes are not journalled -- nothing is
 left to take back.
 
+## The command bar's icons are a thin outline set, drawn by a supersampled pen
+
+**Chosen 2026-10-06 by the maintainer, from mockups** (filled blocks,
+thin outline, heavier outline, two-tone): Windows 11 Fluent's thin
+rounded outline, for the WHOLE command bar and navigation row -- New,
+Cut, Copy, Paste, Rename, Delete, Sort, View, More, the details pane,
+Back/Forward/Up/Refresh, the view switch and the Recycle Bin's verbs --
+so one bar is one style. The `tb-*` files are shared, so every app that
+uses them follows.
+
+**They stay SYMBOLIC** (one colour, tinted by the action roles), which
+rules out Breeze's multi-coloured glyphs: a two-colour icon cannot be
+tinted. **Pillow has no anti-aliased stroke**, so `tools/gen_icons.py`'s
+`_Pen` draws on a 24-unit grid at four times the 64-pixel master --
+lines with a disc at every joint, so any corner is round -- and shrinks
+it. The stroke is a little heavier than Fluent's 1.5 units because the
+icon is resampled twice (to the master, then to the bar), and 1.5 came
+out faint on a real frame. No new tool dependency: an SVG rasteriser
+would have been the obvious way, and none is required to build.
+
