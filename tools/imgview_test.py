@@ -25,6 +25,11 @@ file with libjpeg and the guest's framebuffer has to agree with it.**
   4. "Set as wallpaper" reaches the DESKTOP -- a different process --
      through /etc/desktop.conf and the filesystem generation counter,
      and the background becomes the other image.
+  5. A GIF PLAYS and a BMP shows: both are copied in with `vm.py put`,
+     the GIF's three solid frames must cycle in order at its own delay
+     (faster than the window's idle tick, so the frame timer is what
+     drives it), and the BMP's four quadrants must be its colours and
+     stay put -- a still that animated would be the bug.
 
 WHY THE ORACLE MATTERS. "Something colourful appeared" is the weak check
 this replaces: a decoder with its colour transform wrong, its chroma
@@ -62,6 +67,7 @@ a clean run says nothing about the real mouse or keyboard path.
 import argparse
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -266,7 +272,7 @@ def set_setting(dbg, key, value):
     time.sleep(0.8)
 
 
-def run(dbg, qmp, tmp, res):
+def run(dbg, qmp, tmp, res, inst):
     # ESTABLISH the wallpaper rather than inherit it. It persists to
     # /etc/desktop.conf on the disk image, which a build syncs onto but
     # never reformats, so a previous run of this tool -- or of
@@ -559,6 +565,134 @@ def run(dbg, qmp, tmp, res):
               any("tide.jpg" in l for l in shown),
               f"shown lines since the launch: {shown[-4:]} -- aurora.jpg "
               "here means the argument only picked the folder")
+
+    check_gif_and_bmp(dbg, qmp, tmp, res, inst)
+
+
+GIF_COLOURS = [(220, 40, 40), (40, 180, 60), (40, 70, 220)]
+GIF_DELAY_MS = 300      # under the viewer's 500 ms idle tick, on purpose
+QUAD_COLOURS = [(250, 200, 40), (30, 30, 30), (120, 40, 200), (20, 160, 170)]
+
+
+def vm_put(inst, src, dst):
+    argv = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "vm.py")]
+    if inst is not None:
+        argv += ["--instance", str(inst)]
+    r = subprocess.run(argv + ["put", src, dst], capture_output=True, text=True, timeout=180)
+    return r.returncode == 0, (r.stdout + r.stderr).strip()[-200:]
+
+
+def nearest(px, colours, tol=30):
+    """The index of the colour `px` is, or None."""
+    for i, c in enumerate(colours):
+        if max(abs(px[k] - c[k]) for k in range(3)) <= tol:
+            return i
+    return None
+
+
+def check_gif_and_bmp(dbg, qmp, tmp, res, inst):
+    """Section 5 of the docstring: a GIF plays, a BMP shows and stays."""
+    from PIL import Image
+    frames = [Image.new("RGB", (96, 64), c).quantize(4) for c in GIF_COLOURS]
+    gif = os.path.join(tmp, "anim.gif")
+    frames[0].save(gif, save_all=True, append_images=frames[1:], duration=GIF_DELAY_MS, loop=0)
+    quad = Image.new("RGB", (64, 48))
+    for i, c in enumerate(QUAD_COLOURS):
+        quad.paste(c, ((i % 2) * 32, (i // 2) * 24, (i % 2) * 32 + 32, (i // 2) * 24 + 24))
+    bmp = os.path.join(tmp, "quad.bmp")
+    quad.save(bmp)
+    with dbg.detached():                      # `vm.py put` needs the console socket
+        for src, dst in ((gif, "/tmp/anim.gif"), (bmp, "/tmp/quad.bmp")):
+            ok, out = vm_put(inst, src, dst)
+            if not ok:
+                break
+    if not ok:
+        res.check("the GIF and BMP fixtures reached the guest", False, f"{dst}: {out}")
+        return
+
+    before = {w.get("client_pid") for w in dbg.windows()}
+    poll_logs(dbg)
+    mark = len(LOG)
+    dbg.send("gui spawn /bin/wm/apps/imgview /tmp/anim.gif")
+    win, deadline = None, time.time() + 30
+    while time.time() < deadline and win is None:
+        time.sleep(0.4)
+        win = next((w for w in dbg.windows() if w["title"] == TITLE_VIEWER
+                    and w.get("client_pid") not in before), None)
+    if win is None:
+        res.check("an Image Viewer opened on the GIF", False, "no new window")
+        return
+    content = win["content"]
+    shown, deadline = [], time.time() + 30
+    while time.time() < deadline and not shown:
+        time.sleep(0.4)
+        poll_logs(dbg)
+        shown = [ln for ln in LOG[mark:] if "imgview: shown anim.gif" in ln]
+    res.check("the GIF decoded", bool(shown), f"lines since the launch: {LOG[mark:][-4:]}")
+    lay, _ = wait_layout(dbg, content, lambda l: l.has("image.picture"))
+    if not shown or not lay.has("image.picture"):
+        return
+    px, py, pw, ph = lay.screen_rect("image.picture")
+    dbg.warp_cursor(qmp, 1180, 40)
+
+    # RAW frames, never settled ones: an animation never settles, which
+    # is the thing being measured. Each sample is the picture's middle.
+    seq, t0 = [], time.time()
+    path = os.path.join(tmp, "anim.png")
+    while time.time() - t0 < 5.0:
+        qmp.screenshot(path, stable=False, settle=0)
+        k = nearest(Image.open(path).convert("RGB").getpixel((px + pw // 2, py + ph // 2)),
+                    GIF_COLOURS)
+        now = time.time()
+        if k is not None and (not seq or seq[-1][0] != k):
+            seq.append((k, now))
+    order_ok = all(b[0] == (a[0] + 1) % 3 for a, b in zip(seq, seq[1:]))
+    res.check("the GIF plays: all three frames, in order",
+              {k for k, _ in seq} == {0, 1, 2} and order_ok,
+              f"frames seen in order: {[k for k, _ in seq]}")
+    # Intervals between CHANGES, which include a screendump's own time,
+    # so only the mean is meaningful -- and only against the idle tick.
+    gaps = [(b[1] - a[1]) * 1000 for a, b in zip(seq[1:], seq[2:])]
+    mean = sum(gaps) / len(gaps) if gaps else 0
+    res.check("at the file's delay, not the window's idle tick",
+              gaps and mean < 450,
+              f"mean {mean:.0f} ms between frames over {len(gaps)} (file says "
+              f"{GIF_DELAY_MS}; a 500 ms tick would give 500 or more)")
+
+    # --- the BMP: its quadrants, and they do not move -------------------
+    #
+    # Reached by Right from the GIF (the folder is /tmp, sorted by name),
+    # so this is also the animation being let go of: a viewer that kept
+    # stepping the old frames would paint them over the still.
+    poll_logs(dbg)
+    mark = len(LOG)
+    dbg.send("gui key 0xf785")                # Right
+    shown, deadline = [], time.time() + 30
+    while time.time() < deadline and not shown:
+        time.sleep(0.4)
+        poll_logs(dbg)
+        shown = [ln for ln in LOG[mark:] if "imgview: shown quad.bmp" in ln]
+    res.check("Right steps to the BMP, which decodes", bool(shown),
+              f"lines since the key: {LOG[mark:][-4:]}")
+    lay, _ = wait_layout(dbg, content, lambda l: l.has("image.picture"))
+    if shown and lay.has("image.picture"):
+        px, py, pw, ph = lay.screen_rect("image.picture")
+        pts = [(px + (2 * (i % 2) + 1) * pw // 4, py + (2 * (i // 2) + 1) * ph // 4)
+               for i in range(4)]
+        samples = []
+        for n in range(6):
+            qmp.screenshot(path, stable=False, settle=0)
+            im = Image.open(path).convert("RGB")
+            samples.append([nearest(im.getpixel(p), QUAD_COLOURS) for p in pts])
+            time.sleep(0.25)
+        res.check("the BMP's quadrants are its colours, the right way up",
+                  samples[-1] == [0, 1, 2, 3],
+                  f"quadrant samples (index into QUAD_COLOURS): {samples[-1]}")
+        res.check("and the still stays still once the GIF is gone",
+                  all(sm == samples[-1] for sm in samples),
+                  f"samples over 1.5 s: {samples}")
+    dbg.send(f"sh kill {win.get('client_pid')}")
+    dbg.settle()
 
 
 def check_features(dbg, qmp, tmp, res, content):
@@ -883,7 +1017,7 @@ def main():
     print("imgview_test: checks")
     try:
         if not args.only:
-            run(dbg, qmp, tmp, res)
+            run(dbg, qmp, tmp, res, args.instance)
         check_close_with_chooser(dbg, res)
     finally:
         dbg.close()

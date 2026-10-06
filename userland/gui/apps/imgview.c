@@ -17,6 +17,9 @@
 // command line, defaulting to /usr/share/wallpapers -- which is also
 // where "Set as wallpaper" points the desktop.
 //
+// AN ANIMATED GIF PLAYS, at its own frame delays, through lib/uimg.h's
+// frame iterator -- one canvas, the window timer as its clock.
+//
 // THE DECODE IS THIS PROCESS'S, on a worker thread (lib/uimg.h says why
 // a decoder is a ring-3 library); the filmstrip's thumbnails come from
 // lib/uthumb.h, the File Manager's cache, with its copy on disk.
@@ -79,6 +82,15 @@ static int g_count, g_cur = -1;
 static struct uimg g_img;      // the decoded picture, owned here
 static struct uimg g_rimg;     // ...turned, when g_rot is not 0
 static int g_have_img, g_rot;
+
+// AN ANIMATION OWNS ITS CANVAS: while g_animated, g_img is g_anim.frame
+// under another name and is freed by uimg_anim_close(), never by
+// uimg_free(). The window timer is the frame clock -- re-armed with each
+// frame's own delay, then back to IDLE_TICK_MS.
+#define IDLE_TICK_MS 500
+static struct uimg_anim g_anim;
+static int g_animated, g_anim_done, g_plays;
+static unsigned long long g_frame_due;     // ms, monotonic
 
 static struct uui_menubar g_menu;
 static struct uui_toolbar g_tb;
@@ -226,7 +238,9 @@ struct decode_job {
     struct uapp *app;
     char path[PATH_MAX_LEN];
     char name[PATH_MAX_LEN];
-    struct uimg img;
+    struct uimg img;            // the animation's canvas when `animated`
+    struct uimg_anim anim;
+    int animated, delay;
     struct uimg_info info;
     int rc;
     unsigned long long ms;
@@ -243,7 +257,18 @@ static unsigned g_frames_during;
 static void *decode_main(void *arg) {
     struct decode_job *j = (struct decode_job *)arg;
     unsigned long long t0 = sys_monotonic_ns();
-    j->rc = uimg_load(j->path, &j->img);
+    if (j->info.frames > 1) {
+        j->rc = uimg_anim_load(j->path, &j->anim);
+        if (j->rc == 0) j->rc = uimg_anim_next(&j->anim, &j->delay);
+        if (j->rc == 0) {
+            j->animated = 1;
+            j->img = j->anim.frame;
+        } else {
+            uimg_anim_close(&j->anim);
+        }
+    } else {
+        j->rc = uimg_load(j->path, &j->img);
+    }
     j->ms = (sys_monotonic_ns() - t0) / 1000000ull;
     if (j->rc < 0) strlcpy(j->err, uimg_last_error(), sizeof j->err);
     uapp_post(j->app, USER_DECODED, 0);
@@ -321,6 +346,51 @@ static void show_index(struct uapp *a, int i) {
     start_decode(a, path, g_entries[i].name);
 }
 
+static void free_picture(struct uapp *a) {
+    if (g_animated) {
+        uimg_anim_close(&g_anim);
+        memset(&g_img, 0, sizeof g_img);
+        g_animated = 0;
+        if (a) uapp_set_tick(a, IDLE_TICK_MS);
+    } else if (g_have_img) {
+        uimg_free(&g_img);
+    }
+    g_have_img = 0;
+}
+
+static void arm_frame(struct uapp *a, int delay_ms) {
+    g_frame_due = sys_monotonic_ns() / 1000000ull + (unsigned)delay_ms;
+    uapp_set_tick(a, (unsigned)delay_ms);
+}
+
+// The next frame onto the stage. A file with a loop count rests on its
+// LAST frame when the count runs out, as a browser leaves it.
+static int next_frame(struct uapp *a) {
+    if (g_anim.index == g_anim.frames - 1 && g_anim.loops && ++g_plays >= g_anim.loops) {
+        g_anim_done = 1;
+        uapp_set_tick(a, IDLE_TICK_MS);
+        return 0;
+    }
+    int delay;
+    if (uimg_anim_next(&g_anim, &delay) < 0) {
+        // A later frame that will not decode stops the animation on the
+        // last good one, and the status bar says why.
+        g_anim_done = 1;
+        strlcpy(g_stat_note, uimg_last_error(), sizeof g_stat_note);
+        ulogf("imgview: animation stopped at frame %d -- %s\n", g_anim.index + 1, g_stat_note);
+        uapp_set_tick(a, IDLE_TICK_MS);
+        return 1;
+    }
+    g_img = g_anim.frame;
+    if (g_rot) {
+        uimg_free(&g_rimg);
+        if (uimg_rotate(&g_img, g_rot, &g_rimg) < 0) uui_image_set(&g_view, &g_img);
+    }
+    uui_image_release(&g_view);   // same pointer, new pixels: drop the scaled copy
+    arm_frame(a, delay);
+    return 1;
+}
+
 // What the widget shows: the picture, or its turned copy.
 static void show_rotation(void) {
     uui_image_set(&g_view, NULL);
@@ -342,10 +412,17 @@ static void finish_decode(struct uapp *a) {
         // The widget is pointed away BEFORE the old pixels are freed.
         uui_image_set(&g_view, NULL);
         uimg_free(&g_rimg);
-        uimg_free(&g_img);
+        free_picture(a);
         g_img = j->img;
         g_have_img = 1;
         g_rot = 0;
+        if (j->animated) {
+            g_anim = j->anim;
+            g_animated = 1;
+            g_anim_done = 0;
+            g_plays = 0;
+            arm_frame(a, j->delay);
+        }
         ambient_from(&g_img);
         apply_chrome();
         show_rotation();
@@ -360,7 +437,7 @@ static void finish_decode(struct uapp *a) {
         // the decoder's own sentence, copied on the worker.
         uui_image_set(&g_view, NULL);
         uimg_free(&g_rimg);
-        if (g_have_img) { uimg_free(&g_img); g_have_img = 0; }
+        free_picture(a);
         ambient_default();
         apply_chrome();
         strlcpy(g_stat_dims, "not shown", sizeof g_stat_dims);
@@ -928,6 +1005,11 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 static int on_tick(struct uapp *a) {
     uthumb_tick();
     int redraw = uui_toolbar_tick(&g_tb);
+    // A few ms of slack: the timer's deadline is kept in nanoseconds and
+    // this in milliseconds, and a tick that lands a hair early must not
+    // cost a whole frame.
+    if (g_animated && !g_anim_done && sys_monotonic_ns() / 1000000ull + 3 >= g_frame_due)
+        redraw |= next_frame(a);
     if (g_slide && !g_paused) {
         unsigned long long now = sys_monotonic_ns() / 1000000ull;
         // A ZOOMED picture holds the slideshow -- it is being looked at --
@@ -1030,7 +1112,7 @@ int main(int argc, char **argv) {
         .flags        = UAPP_RESIZABLE,
         .min_w        = 420,
         .min_h        = 300,
-        .tick_ms      = 500,
+        .tick_ms      = IDLE_TICK_MS,
         .widgets      = g_widgets,
         .widget_count = (int)(sizeof g_widgets / sizeof g_widgets[0]),
         .on_size      = on_size,
@@ -1051,7 +1133,7 @@ int main(int argc, char **argv) {
     int rc = uapp_run(&desc);
     uui_image_release(&g_view);
     uimg_free(&g_rimg);
-    if (g_have_img) uimg_free(&g_img);
+    free_picture(NULL);   // the window is gone: no timer to re-arm
     uambient_stage_free(&g_stage);
     return rc;
 }

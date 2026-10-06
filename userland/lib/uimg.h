@@ -66,7 +66,10 @@ struct uimg_info {
     int components;         // 1 = grayscale, 3 = colour
     const char *format;     // the codec's name, e.g. "jpeg"
     char detail[64];        // codec-specific, e.g. "baseline, 4:2:0, restart markers"
+    int frames;             // more than 1 for an animation; 0 or 1 is a still
 };
+
+struct uimg_anim;
 
 struct uimg_codec {
     const char *name;
@@ -90,6 +93,11 @@ struct uimg_codec {
     // Writes `im` into a fresh allocation, `*out_len` bytes, which the
     // caller frees. NULL for a format this build only reads.
     int (*encode)(const struct uimg *im, uint8_t **out, size_t *out_len);
+
+    // Opens an animation over `d`, which the caller keeps alive. NULL for
+    // a format with no frames; uimg_anim_open() then presents the still
+    // as a one-frame animation, so a caller never asks which it got.
+    int (*anim_open)(const uint8_t *d, size_t n, struct uimg_anim *a);
 };
 
 // ERRORS ARE NEGATIVE ERRNOS, the same convention a failed syscall
@@ -206,6 +214,43 @@ int uimg_scale(const struct uimg *src, int dw, int dh, struct uimg *out);
 // Exact, no resampling: a viewer's "rotate" must not soften the picture.
 int uimg_rotate(const struct uimg *src, int quarters, struct uimg *out);
 
+// --- animation -------------------------------------------------------
+//
+// GdkPixbufAnimationIter's shape, not WIC's frame list: ONE CANVAS, and
+// each uimg_anim_next() composites the next frame onto it -- disposal,
+// transparency, a frame smaller than the canvas -- so a 300-frame GIF
+// costs one picture of memory rather than three hundred. Frame 0 again
+// after the last; the caller decides whether `loops` has run out.
+// uimg_decode() on the same bytes is frame 0 of this, for every caller
+// that wants a still (thumbnails, the wallpaper, Player's cover art).
+struct uimg_anim {
+    struct uimg frame;   // the canvas after the last next(); owned here
+    int frames;          // counted at open, without decoding any of them
+    int loops;           // 0 = forever, else how many times to play
+    int index;           // the frame `frame` holds; -1 before the first next()
+
+    // The codec's: what next() steps and close() releases.
+    int (*next)(struct uimg_anim *a, int *delay_ms);
+    void (*release)(struct uimg_anim *a);
+    void *priv;
+    uint8_t *file;       // the bytes, when uimg_anim_load() read them
+};
+
+// Both return 0 or a negative errno, as uimg_decode() does. open()
+// BORROWS `data` for the animation's lifetime; load() reads the file and
+// owns it.
+int uimg_anim_open(const void *data, size_t n, struct uimg_anim *a);
+int uimg_anim_load(const char *path, struct uimg_anim *a);
+
+// Composites the next frame into `a->frame` and says how long to show
+// it. A delay the file leaves at 0 or 10 ms comes back as 100, which is
+// what every browser does with one -- written that way, such a file
+// means "as fast as you like", and a viewer that obeyed would spin.
+int uimg_anim_next(struct uimg_anim *a, int *delay_ms);
+
+// Releases everything, including `a->frame`. Safe twice.
+void uimg_anim_close(struct uimg_anim *a);
+
 // --- codecs -----------------------------------------------------------
 //
 // Two rows in uimg.c's table, and the pair is the point: JPEG is what a
@@ -220,5 +265,10 @@ int uimg_rotate(const struct uimg *src, int quarters, struct uimg *out);
 extern const struct uimg_codec uimg_codec_jpeg;
 extern const struct uimg_codec uimg_codec_qoi;
 extern const struct uimg_codec uimg_codec_png;
+// BMP and GIF READ ONLY: both are what arrives from elsewhere -- Paint's
+// default and the web's animations -- and nothing here needs to write
+// either.
+extern const struct uimg_codec uimg_codec_bmp;
+extern const struct uimg_codec uimg_codec_gif;
 
 #endif

@@ -10416,3 +10416,45 @@ coordinates, a fold stage per hinge, painter's-order drawing through
 the first caller. Faces are culled by screen winding and sorted far to
 near; no depth buffer, which at 1920x1080 would be 8 MB for a solid
 that is convex once closed.
+
+## BMP and GIF fill the format's gaps the way browsers do, and an animation is one canvas
+
+Both decoders (2026-10-06) meet places where the file format says less
+than it seems to, and each gap is filled with what Chromium and Firefox
+do rather than what Pillow or GDI does -- browsers are where a person
+has seen these files, so they are what "looks right" means.
+
+- **A GIF's canvas starts transparent, and disposal 2 clears to
+  transparent**, not to the logical screen's background colour. The 89a
+  spec names the background colour; no browser has painted it in
+  decades, and painting it would put an opaque box behind every
+  animated sticker. Pillow agrees whenever the file has a transparent
+  index, which is where the host check compares against it.
+- **NETSCAPE2.0's loop count is repetitions**: N plays N+1 times, 0
+  forever, no block once. ImageMagick's `-loop 3` writes 2, which only
+  makes sense read that way.
+- **A delay of 0 or 10 ms is 100 ms** (`uimg_anim_next()`), the browsers'
+  clamp: such a file never chose a speed, and obeying it spins.
+- **An RLE BMP pixel the stream skips is transparent** (GDI paints
+  palette entry 0, a guess about intent), and **an alpha mask that is
+  zero everywhere means opaque** -- a writer that never filled the byte.
+  One non-zero alpha anywhere and every value is taken as written.
+- **A mask channel narrower than 8 bits is widened by repeating its
+  bits** (5-bit 31 is 255), as Chromium and libpng's sBIT do. Pillow
+  rounds down and ImageMagick rounds or shifts; the three differ by one
+  for 5- and 6-bit channels, and ImageMagick's 4-bit white is 240.
+
+**An animation is an iterator over ONE canvas** (`struct uimg_anim`,
+GdkPixbufAnimationIter's shape), not WIC's list of frames: a 300-frame
+GIF costs one picture of memory, and each `next()` composites a frame
+the way the file says. `uimg_decode()` is frame 0 of the same walk, so
+every caller that wants a still -- thumbnails, the wallpaper, cover art
+-- is unchanged, and a still opened as an animation is one frame, so a
+caller never asks which it has. Image Viewer drives it from the window
+timer, re-armed with each frame's own delay (`uapp_set_tick()`), so a
+still costs the viewer nothing it did not already pay.
+
+**A file is read up to its last whole frame**: a missing trailer or a
+broken block after a complete frame ends the animation there; the same
+before any frame, or a frame whose data ends before its pixels, is
+`-EINVAL`. That is cutting at a block boundary, not guessing at pixels.

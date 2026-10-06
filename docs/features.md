@@ -245,11 +245,15 @@ of throughput over the run, its phases marked -- benchmarks any
 writable disk volume, can be stopped, and keeps every run in a history
 compared with the one before.
 
-**Images are decoded in ring 3, and the kernel never sees one.** A
-baseline JPEG decoder sits behind a codec table keyed on magic bytes,
-so a second format is a row and a file rather than a branch. All fixed
+**Images are decoded in ring 3, and the kernel never sees one.** JPEG
+(baseline and progressive), PNG, QOI, BMP (every Windows and OS/2
+header, RLE and bit masks) and GIF sit behind a codec table keyed on
+magic bytes, so a format is a row and a file rather than a branch. An
+animated GIF plays in Image Viewer at its own frame delays, composited
+onto one canvas a frame at a time; `/usr/share/pictures` has samples of
+each. All fixed
 point, since there is no floating point in either ring. Files it cannot
-handle — progressive, arithmetic-coded, 12-bit, CMYK — are refused *by
+handle — arithmetic-coded, 12-bit, CMYK, a 16-bit PNG — are refused *by
 name*, which is a different answer from "corrupt" and reads as one.
 That is the opposite of the call made for fonts, which are parsed in
 ring 0 because the console needs glyphs before any process exists;

@@ -22,9 +22,22 @@ same encoder settings to keep in step.
                 Their tolerance is 0 -- QOI is lossless, so "close
                 enough" is not a thing that exists.
 
+                BMP and GIF the same way, Pillow writing and reading,
+                tolerance 0; and one ANIMATION, every frame as Pillow
+                composites it, for the frame iterator. The breadth for
+                both lives in tools/uimg_codec_hostcheck.py; these few
+                are what proves the codecs in ring 3.
+
   --wallpapers  data/wallpapers/*.jpg -- the desktop backgrounds, drawn
                 here rather than committed as somebody's photograph so
                 the repo carries no image it does not own.
+
+  --pictures    data/usr/share/pictures/ -- sample BMPs and GIFs, so a
+                machine can open each variant the decoders read with
+                no file brought from elsewhere: 24-bit, 8-bit palette,
+                RLE8 and a 32-bit alpha BMP; a still GIF and two
+                animated ones, one over transparency. The RLE8 and alpha
+                BMPs are packed HERE, since Pillow writes neither.
 
 (The app icons have their own generator, tools/gen_icons.py, because
 what they need is drawing code rather than encoder settings.)
@@ -40,6 +53,7 @@ import argparse
 import io
 import math
 import os
+import struct
 import sys
 
 try:
@@ -54,6 +68,7 @@ WALLPAPER_DIR = os.path.join(ROOT, "data", "wallpapers")
 # errno values from kernel/include/abi/errno.h, as POSITIVE numbers; the
 # test compares them against a negative return.
 EINVAL = 22
+ENOTSUP = 95
 # ENOTSUP (95) had a vector here until progressive JPEG stopped being a
 # refusal; the remaining -ENOTSUP paths (arithmetic coding, 12-bit, CMYK)
 # have no encoder here to produce a file with.
@@ -214,6 +229,21 @@ def build_vectors():
     ex[0x0112] = 6
     add("exif orientation 6", encode(noise(24, 16), quality=92,
                                      exif=ex.tobytes()), 3, exif=True)
+    # --- BMP and GIF -------------------------------------------------
+    #
+    # 13 wide on purpose: a BMP row pads to four bytes, and a width that
+    # needs no padding cannot show a decoder that forgot it.
+    def saved(im, fmt, **kw):
+        buf = io.BytesIO()
+        im.save(buf, format=fmt, **kw)
+        return buf.getvalue()
+
+    add("bmp 24-bit", saved(gradient(13, 7), "BMP"), 0)
+    add("bmp 8-bit palette", saved(noise(13, 7).quantize(37), "BMP"), 0)
+    add("bmp 1-bit", saved(gradient(13, 7).convert("1"), "BMP"), 0)
+    add("gif 256 colours", saved(noise(20, 12).quantize(256), "GIF"), 0)
+    add("gif interlaced", saved(gradient(24, 17).quantize(60), "GIF", interlace=True), 0)
+
     truncated = vectors[2]["jpeg"][:len(vectors[2]["jpeg"]) * 6 // 10]
     bad("truncated is refused", truncated, EINVAL)
     bad("not an image", b"this is not a JPEG, not even slightly\n", EINVAL)
@@ -230,10 +260,51 @@ def build_vectors():
     bogus[12] = 7          # channels: legal values are 3 and 4
     bad("qoi with an impossible channel count", bytes(bogus), EINVAL)
 
+    whole = saved(gradient(13, 7), "BMP")
+    bad("bmp truncated is refused", whole[:len(whole) - 20], EINVAL)
+    # A BMP that wraps a JPEG (BI_JPEG, a printer format): fine, refused.
+    jpg = bytearray(whole[:54])
+    jpg[30:34] = struct.pack("<I", 4)
+    bad("bmp wrapping a JPEG is unsupported", bytes(jpg) + b"\xff\xd8\xff\xd9", ENOTSUP)
+    gif = saved(noise(20, 12).quantize(256), "GIF")
+    bad("gif truncated is refused", gif[:len(gif) // 2], EINVAL)
+
     return vectors
 
 
-def write_vectors(vectors):
+def build_anim_vectors():
+    """One animation: three frames, disposals 2, 3 and 1 over a
+    transparent index, and a delay of 0 that uimg_anim_next() must turn
+    into 100 ms. The reference is each frame as PILLOW composites it,
+    with its fully transparent pixels written as 0 -- Pillow keeps the
+    palette's colour under alpha 0, the decoder writes nothing there."""
+    pal = [255, 0, 0, 0, 255, 0, 0, 0, 255, 9, 9, 9] + [0] * 756
+    frames = []
+    for k in range(3):
+        f = Image.new("P", (12, 9))
+        f.putpalette(pal)
+        for y in range(9):
+            for x in range(12):
+                f.putpixel((x, y), 3 if (k == 1 and x < 5) else (x + y + k) % 3)
+        frames.append(f)
+    buf = io.BytesIO()
+    frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:],
+                   duration=[50, 0, 90], loop=0, disposal=[2, 3, 1],
+                   transparency=3, optimize=False)
+    data = buf.getvalue()
+    ref = Image.open(io.BytesIO(data))
+    rgba = bytearray()
+    for k in range(ref.n_frames):
+        ref.seek(k)
+        raw = ref.convert("RGBA").tobytes()
+        for i in range(0, len(raw), 4):
+            rgba += raw[i:i + 4] if raw[i + 3] else bytes(4)
+    return [{"name": "gif three frames, disposals 2 3 1", "data": data,
+             "w": ref.width, "h": ref.height, "frames": ref.n_frames, "loops": 0,
+             "delays": [50, 100, 90], "rgba": bytes(rgba)}]
+
+
+def write_vectors(vectors, anims):
     out = ['// GENERATED by tools/gen_imgdata.py -- do not edit by hand.',
            '//',
            '// Each vector is a file and the RGBA **Pillow** decodes it to --',
@@ -272,6 +343,33 @@ def write_vectors(vectors):
     out.append("")
     out.append("#define UIMG_VECTOR_COUNT "
                "((int)(sizeof uimg_vectors / sizeof uimg_vectors[0]))")
+    out.append("")
+    out += ['// An animation, stepped through uimg_anim_next(): every frame as',
+            '// Pillow composites it, and each delay AFTER that call\'s clamp.',
+            'struct uimg_anim_vector {',
+            '    const char *name;',
+            '    const unsigned char *data;',
+            '    unsigned len;',
+            '    int w, h, frames, loops;',
+            '    const int *delays;',
+            '    const unsigned char *rgba; // frames * w * h * 4',
+            '};',
+            '']
+    for i, a in enumerate(anims):
+        out.append(c_bytes("uimg_anim%d_file" % i, a["data"]))
+        out.append(c_bytes("uimg_anim%d_rgba" % i, a["rgba"]))
+        out.append("static const int uimg_anim%d_delays[] = { %s };"
+                   % (i, ", ".join(str(d) for d in a["delays"])))
+        out.append("")
+    out.append("static const struct uimg_anim_vector uimg_anim_vectors[] = {")
+    for i, a in enumerate(anims):
+        out.append('    { "%s", uimg_anim%d_file, sizeof uimg_anim%d_file, %d, %d, %d, %d, '
+                   'uimg_anim%d_delays, uimg_anim%d_rgba },'
+                   % (a["name"], i, i, a["w"], a["h"], a["frames"], a["loops"], i, i))
+    out.append("};")
+    out.append("")
+    out.append("#define UIMG_ANIM_VECTOR_COUNT "
+               "((int)(sizeof uimg_anim_vectors / sizeof uimg_anim_vectors[0]))")
     out.append("")
     out.append("#endif")
     out.append("")
@@ -414,17 +512,161 @@ def build_wallpapers():
                                        os.path.getsize(path)))
 
 
+# --- sample pictures ---------------------------------------------------
+
+PICTURE_DIR = os.path.join(ROOT, "data", "usr", "share", "pictures")
+
+
+def bmp_bytes(w, h, bpp, comp, data, palette=b"", masks=b"", hs=40):
+    """A BMP from parts; masks inside the header from V2 (hs >= 52) on."""
+    info = struct.pack("<IiiHHIIiiII", hs, w, h, 1, bpp, comp, len(data), 2835, 2835,
+                       len(palette) // 4, 0)
+    if hs > 40:
+        info = (info + masks.ljust(16, b"\0")[:hs - 40]).ljust(hs, b"\0")
+    off = 14 + len(info) + len(palette)
+    return b"BM" + struct.pack("<IHHI", off + len(data), 0, 0, off) + info + palette + data
+
+
+def rle8(im):
+    """An 8-bit palette image as BI_RLE8: encoded runs, an end of line per
+    row, an end of bitmap -- bottom row first, as the format is."""
+    w, h = im.size
+    px = im.load()
+    out = bytearray()
+    for y in range(h - 1, -1, -1):
+        x = 0
+        while x < w:
+            n = 1
+            while x + n < w and n < 255 and px[x + n, y] == px[x, y]:
+                n += 1
+            out += bytes((n, px[x, y]))
+            x += n
+        out += b"\0\0"
+    out[-2:] = b"\0\1"
+    return bytes(out)
+
+
+def palette_bytes(im):
+    pal = im.getpalette()[:768]
+    return b"".join(bytes((pal[i + 2], pal[i + 1], pal[i], 0)) for i in range(0, len(pal), 3))
+
+
+def picture_orbit(n=24, size=200):
+    """Twelve dots round a ring, a bright head chasing round: opaque."""
+    frames = []
+    for k in range(n):
+        im = Image.new("RGB", (size, size), (22, 26, 34))
+        d = ImageDraw.Draw(im)
+        c = size / 2
+        for i in range(12):
+            a = 2 * math.pi * i / 12
+            age = (k * 12 // n - i) % 12
+            t = 1 - age / 12
+            r = 6 + 9 * t
+            x, y = c + 70 * math.cos(a), c + 70 * math.sin(a)
+            col = (int(40 + 200 * t), int(90 + 120 * t), int(200 + 40 * t))
+            d.ellipse([x - r, y - r, x + r, y + r], fill=col)
+        frames.append(im.quantize(64))
+    return frames
+
+
+def picture_bounce(n=20, size=160):
+    """A ball bouncing over TRANSPARENCY, each frame cleared after it
+    (disposal 2) -- the stage's own tint shows round the ball."""
+    frames = []
+    for k in range(n):
+        im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        # Height |sin| of a half turn per bounce: the floor at k = 0, the
+        # top half way, squashed for the one frame it touches.
+        y = 20 + (size - 70) * (1 - abs(math.sin(math.pi * k / n)))
+        squash = 1.25 if k == 0 else 1.0
+        rx, ry = 22 * squash, 22 / squash
+        cx = size / 2
+        d.ellipse([cx - rx, y - ry + 22, cx + rx, y + ry + 22], fill=(240, 120, 40, 255))
+        d.ellipse([cx - rx / 2.5 - 6, y + 22 - ry / 2 - 4, cx - 2, y + 22 - 2], fill=(255, 210, 160, 255))
+        frames.append(im)
+    return frames
+
+
+def build_pictures():
+    os.makedirs(PICTURE_DIR, exist_ok=True)
+    scene = wallpaper_dusk(320, 180)
+    out = {}
+
+    buf = io.BytesIO()
+    scene.save(buf, format="BMP")
+    out["dusk-24bit.bmp"] = buf.getvalue()
+
+    pal = scene.quantize(256)
+    buf = io.BytesIO()
+    pal.save(buf, format="BMP")
+    out["dusk-256-colours.bmp"] = buf.getvalue()
+
+    flat = wallpaper_slate(320, 180).quantize(16)
+    out["slate-rle8.bmp"] = bmp_bytes(320, 180, 8, 1, rle8(flat), palette_bytes(flat))
+
+    # 32-bit with an alpha mask in a V5 header: a soft badge on nothing.
+    badge = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    bd = ImageDraw.Draw(badge)
+    for r in range(60, 0, -1):
+        a = 255 if r < 54 else int(255 * (60 - r) / 6)
+        bd.ellipse([64 - r, 64 - r, 64 + r, 64 + r],
+                   fill=(int(40 + 3 * r), int(110 + r), 220, a))
+    rows = bytearray()
+    px = badge.load()
+    for y in range(127, -1, -1):
+        for x in range(128):
+            r_, g_, b_, a_ = px[x, y]
+            rows += bytes((b_, g_, r_, a_))
+    masks = struct.pack("<IIII", 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)
+    out["badge-alpha.bmp"] = bmp_bytes(128, 128, 32, 3, bytes(rows), masks=masks, hs=124)
+
+    buf = io.BytesIO()
+    sw = Image.new("RGB", (256, 128))
+    sd = ImageDraw.Draw(sw)
+    for i in range(128):
+        hue = i / 128
+        r_ = int(255 * max(0, min(1, abs(hue * 6 - 3) - 1)))
+        g_ = int(255 * max(0, min(1, 2 - abs(hue * 6 - 2))))
+        b_ = int(255 * max(0, min(1, 2 - abs(hue * 6 - 4))))
+        sd.rectangle([(i % 16) * 16, (i // 16) * 16, (i % 16) * 16 + 15, (i // 16) * 16 + 15],
+                     fill=(r_, g_, b_))
+    sw.quantize(128).save(buf, format="GIF")
+    out["swatches.gif"] = buf.getvalue()
+
+    fr = picture_orbit()
+    buf = io.BytesIO()
+    fr[0].save(buf, format="GIF", save_all=True, append_images=fr[1:], duration=60, loop=0)
+    out["orbit-animated.gif"] = buf.getvalue()
+
+    fr = picture_bounce()
+    buf = io.BytesIO()
+    fr[0].save(buf, format="GIF", save_all=True, append_images=fr[1:], duration=50, loop=0,
+               disposal=2, optimize=False)
+    out["bounce-animated.gif"] = buf.getvalue()
+
+    for name, data in out.items():
+        with open(os.path.join(PICTURE_DIR, name), "wb") as f:
+            f.write(data)
+        print("wrote %s: %d bytes" % (os.path.relpath(os.path.join(PICTURE_DIR, name), ROOT),
+                                      len(data)))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--vectors", action="store_true")
     ap.add_argument("--wallpapers", action="store_true")
+    ap.add_argument("--pictures", action="store_true")
     args = ap.parse_args()
-    if not args.vectors and not args.wallpapers:
-        args.vectors = args.wallpapers = True
+    if not args.vectors and not args.wallpapers and not args.pictures:
+        args.vectors = args.wallpapers = args.pictures = True
     if args.vectors:
-        write_vectors(build_vectors())
+        write_vectors(build_vectors(), build_anim_vectors())
     if args.wallpapers:
         build_wallpapers()
+    if args.pictures:
+        build_pictures()
 
 
 if __name__ == "__main__":

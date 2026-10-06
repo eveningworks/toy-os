@@ -56,6 +56,7 @@ import json as _json
 import os
 import re
 import atexit
+import contextlib
 import socket
 import sys
 import threading
@@ -224,6 +225,21 @@ class DebugConsole:
         print(f"gui_debug: could not re-attach to {self.sock_path}: {last}",
               file=sys.stderr)
         return False
+
+    @contextlib.contextmanager
+    def detached(self):
+        """Let go of the console socket for the length of a `with`, then
+        re-attach. QEMU serves ONE client per serial socket, so a tool
+        that also runs `vm.py exec`/`put` (which talk on this same
+        socket) must step aside or that call fails with EAGAIN."""
+        try:
+            self._s.close()
+        except OSError:
+            pass
+        try:
+            yield
+        finally:
+            self.reconnect()
 
     def send(self, command):
         """Run one debug-console command, return its output as text.

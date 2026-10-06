@@ -1408,6 +1408,11 @@ void uapp_inhibit_shortcuts(struct uapp *a, int on) {
 
 void uapp_poll_pause(struct uapp *a, int paused) { a->poll_paused = paused ? 1 : 0; }
 
+int uapp_set_tick(struct uapp *a, unsigned ms) {
+    if (!a->timer_armed || !ms) return 0;
+    return wmchan_send(WIN_REQ_TIMER, a->window, (int)ms, 0, 0, 0) ? 1 : 0;
+}
+
 void uapp_busy_begin(struct uapp *a) {
     a->cursor_before_busy = a->cursor;
     uapp_set_cursor(a, WIN_CURSOR_WAIT);

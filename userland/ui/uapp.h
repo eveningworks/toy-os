@@ -622,6 +622,12 @@ void uapp_inhibit_shortcuts(struct uapp *a, int on);
 // event behind the sleep.
 void uapp_poll_pause(struct uapp *a, int paused);
 
+// A new interval for the timer `tick_ms` armed, counted from NOW -- an
+// animation whose frames each name their own delay re-arms after every
+// one. Returns 0, changing nothing, for an app that named no tick_ms (it
+// polls) or for 0 ms; set a long interval to slow down, not 0.
+int uapp_set_tick(struct uapp *a, unsigned ms);
+
 void uapp_busy_begin(struct uapp *a);
 void uapp_busy_end(struct uapp *a);
 

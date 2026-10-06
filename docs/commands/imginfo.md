@@ -50,17 +50,23 @@ the word before it distinguishes the two cases that matter:
     imginfo: photo.jpg: unsupported: progressive JPEG is not supported by this build
     imginfo: photo.jpg: invalid: corrupt JPEG entropy-coded data
 
+An animated GIF says how many frames it has, and whether it loops:
+
+    /usr/share/pictures/orbit-animated.gif: gif 200x200, 4 components (89a, 12 frames, loops forever)
+
+`-d` and `-p` decode its FIRST frame, which is what every caller that
+wants a still gets.
+
 ## What it deliberately does not do
 
-**It does not convert or write anything.** There is no encoder in this
-system yet (`docs/roadmap.md` has the screenshot tool that would want
-one).
+**It does not convert or write anything.** The encoders exist (QOI, PNG
+and JPEG, for the screenshot tools); this command only reads.
 
-**It does not know about formats no codec claims.** Today that is
-everything except JPEG and QOI -- the codec table is
-`userland/lib/uimg.c`, and a third format is a row in it plus a file
-beside it. QOI is what the application icons are stored in, so
-`imginfo /usr/share/icons/notepad.qoi` reports one:
+**It does not know about formats no codec claims.** The table reads
+JPEG, PNG, QOI, BMP and GIF -- it is `userland/lib/uimg.c`, and another
+format is a row in it plus a file beside it. QOI is what the application
+icons are stored in, so `imginfo /usr/share/icons/notepad.qoi` reports
+one:
 
     /usr/share/icons/notepad.qoi: qoi 64x64, 4 components (all channels linear, alpha)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check uimg's QOI and PNG codecs against Pillow and zlib, on the HOST.
+"""Check uimg's QOI, PNG, BMP and GIF codecs against Pillow, zlib and ImageMagick, on the HOST.
 
 WHY A FOREIGN DECODER IS THE WHOLE POINT. An encoder tested by this
 repo's own decoder passes whenever the two share a mistake, and the two
@@ -21,12 +21,22 @@ this repo, which is the whole point -- a shared mistake passes that.
     python3 tools/uimg_codec_hostcheck.py --positive-control
     python3 tools/uimg_codec_hostcheck.py --keep /tmp/shots
 
+BMP and GIF are read-only here, so they get the DECODE half only: files
+Pillow and ImageMagick wrote, every header version and depth for BMP,
+interlacing, local colour tables and all three disposals for GIF -- each
+frame of an animation compared, through the codec's own iterator. A few
+variants neither tool writes (RLE4, a V4 header, an RLE delta, a top-down
+file) are built by hand, their expected pixels from a reading of the
+format written here in Python.
+
 The positive control is not optional reading: a clean run proves nothing
 until the harness has been seen to fail. It breaks the bit reversal in
-the deflate writer -- the single most likely real bug here -- and every
-PNG check must go red while the QOI ones stay green.
+the deflate writer -- the single most likely real bug here -- the PNG
+unfilter, BMP's bottom-up row order and GIF's KwKwK case, and every
+PNG, BMP and GIF check family must go red while the QOI ones stay green.
 
-Exit status is non-zero on any mismatch. Needs Pillow and gcc.
+Exit status is non-zero on any mismatch. Needs Pillow, ImageMagick
+(`magick`) and gcc.
 """
 import argparse
 import os
@@ -88,6 +98,8 @@ static int do_decode(const char *in, const char *out) {
     const struct uimg_codec *c = NULL;
     if (uimg_codec_png.probe(buf, (size_t)n)) c = &uimg_codec_png;
     else if (uimg_codec_qoi.probe(buf, (size_t)n)) c = &uimg_codec_qoi;
+    else if (uimg_codec_bmp.probe(buf, (size_t)n)) c = &uimg_codec_bmp;
+    else if (uimg_codec_gif.probe(buf, (size_t)n)) c = &uimg_codec_gif;
     if (!c) { fprintf(stderr, "rc=-22 no codec claimed it\n"); return 1; }
     if (!c->decode) { fprintf(stderr, "rc=-95 no decoder\n"); return 1; }
 
@@ -110,10 +122,53 @@ static int do_decode(const char *in, const char *out) {
     return 0;
 }
 
+// ANIM MODE: argv = "anim" <file.gif> <out>. Every frame through the
+// codec's own iterator: "w h frames loops", then per frame a line with
+// its delay and the canvas as 0xAARRGGBB. The delay is the FILE's --
+// uimg.c's clamp of 0/10 ms is not under test here.
+static int do_anim(const char *in, const char *out) {
+    FILE *f = fopen(in, "rb");
+    if (!f) return 2;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    unsigned char *buf = malloc((size_t)n);
+    if (!buf || fread(buf, 1, (size_t)n, f) != (size_t)n) return 2;
+    fclose(f);
+
+    struct uimg_anim a;
+    memset(&a, 0, sizeof a);
+    int rc = uimg_codec_gif.anim_open(buf, (size_t)n, &a);
+    fprintf(stderr, "rc=%d %s\n", rc, g_err);
+    if (rc < 0) return 1;
+    FILE *o = fopen(out, "wb");
+    if (!o) return 2;
+    fprintf(o, "%d %d %d %d\n", a.frame.w, a.frame.h, a.frames, a.loops);
+    for (int k = 0; k < a.frames; k++) {
+        int delay = 0;
+        rc = a.next(&a, &delay);
+        if (rc < 0) { fprintf(stderr, "frame %d rc=%d %s\n", k, rc, g_err); return 1; }
+        fprintf(o, "%d\n", delay);
+        for (int i = 0; i < a.frame.w * a.frame.h; i++) {
+            unsigned p = a.frame.px[i];
+            fputc((int)((p >> 24) & 0xFF), o);
+            fputc((int)((p >> 16) & 0xFF), o);
+            fputc((int)((p >> 8) & 0xFF), o);
+            fputc((int)(p & 0xFF), o);
+        }
+    }
+    fclose(o);
+    a.release(&a);
+    free(a.frame.px);
+    return 0;
+}
+
 // argv: <raw> <w> <h> <alpha 0|1> <out.qoi> <out.png>
 int main(int argc, char **argv) {
     if (argc == 4 && strcmp(argv[1], "decode") == 0)
         return do_decode(argv[2], argv[3]);
+    if (argc == 4 && strcmp(argv[1], "anim") == 0)
+        return do_anim(argv[2], argv[3]);
     if (argc != 7) return 2;
     struct uimg im;
     im.w = atoi(argv[2]);
@@ -193,9 +248,35 @@ def build(tmp, sabotage=False):
             f.write(ptext.replace(pbody,
                                    "        case 4: v += a + 0 * c; break;\n"))
 
+    bmp_c = os.path.join(ROOT, "userland", "lib", "uimg_bmp.c")
+    gif_c = os.path.join(ROOT, "userland", "lib", "uimg_gif.c")
+    if sabotage:
+        # BMP: every row where it would be had the file been top-down,
+        # which is what a decoder that forgets BMP is bottom-up draws.
+        # GIF: the KwKwK code (one the decoder is defining as it reads it)
+        # without its repeated first character -- LZW's classic slip,
+        # which any file with a run of one colour exercises.
+        for path, old, new, name in (
+                (bmp_c, "(size_t)(b.top_down ? y : b.h - 1 - y) * b.w",
+                 "(size_t)(b.top_down ? y : y) * b.w", "uimg_bmp_broken.c"),
+                (gif_c, "if (code == next) { g->stack[sp++] = (uint8_t)firstc; c = old; }",
+                 "if (code == next) { c = old; }", "uimg_gif_broken.c")):
+            text = open(path).read()
+            if text.count(old) != 1:
+                sys.exit("positive control: %s no longer looks as expected"
+                         % os.path.basename(path))
+            broken = os.path.join(tmp, name)
+            with open(broken, "w") as f:
+                f.write(text.replace(old, new))
+            if name.startswith("uimg_bmp"):
+                bmp_c = broken
+            else:
+                gif_c = broken
+
     exe = os.path.join(tmp, "uimgenc")
     cmd = ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-o", exe, src,
            os.path.join(ROOT, "userland", "lib", "uimg_qoi.c"), png_c, infl_c,
+           bmp_c, gif_c,
            os.path.join(ROOT, "kernel", "lib", "kcrc.c"),
            "-I" + shim,
            "-I" + os.path.join(ROOT, "userland"),
@@ -350,10 +431,448 @@ def compare(name, want, got, alpha):
     return None
 
 
+# --- BMP and GIF: the decode half only -----------------------------------
+
+def magick(*argv):
+    subprocess.run(["magick", *argv], check=True, capture_output=True)
+
+
+def run_decode(exe, src, tmp):
+    """(stderr, w, h, RGBA tuples or None) from the driver's decode mode."""
+    raw = os.path.join(tmp, "d.raw")
+    r = subprocess.run([exe, "decode", src, raw], capture_output=True)
+    err = r.stderr.decode().strip()
+    if r.returncode:
+        return err, 0, 0, None
+    body = open(raw, "rb").read()
+    nl = body.index(b"\n")
+    gw, gh, _alpha = (int(v) for v in body[:nl].split())
+    data = body[nl + 1:]
+    got = [(data[i * 4 + 1], data[i * 4 + 2], data[i * 4 + 3], data[i * 4])
+           for i in range(gw * gh)]
+    return err, gw, gh, got
+
+
+def run_anim(exe, src, tmp):
+    """(stderr, w, h, loops, [(delay, RGBA tuples)]) from the anim mode."""
+    raw = os.path.join(tmp, "a.raw")
+    r = subprocess.run([exe, "anim", src, raw], capture_output=True)
+    err = r.stderr.decode().strip()
+    if r.returncode:
+        return err, 0, 0, 0, None
+    body = open(raw, "rb").read()
+    nl = body.index(b"\n")
+    w, h, frames, loops = (int(v) for v in body[:nl].split())
+    p, out = nl + 1, []
+    for _ in range(frames):
+        nl = body.index(b"\n", p)
+        delay = int(body[p:nl])
+        p = nl + 1
+        px = [(body[p + i * 4 + 1], body[p + i * 4 + 2], body[p + i * 4 + 3], body[p + i * 4])
+              for i in range(w * h)]
+        p += w * h * 4
+        out.append((delay, px))
+    return err, w, h, loops, out
+
+
+def near(name, want, got, tol=0, clear_eq=False):
+    """Colour within `tol`, alpha EXACT. `clear_eq`: two fully transparent
+    pixels match whatever colour each carries -- Pillow keeps the palette
+    entry's RGB under alpha 0, this decoder writes 0."""
+    if len(want) != len(got):
+        return "%s: %d pixels, want %d" % (name, len(got), len(want))
+    for i, (a, b) in enumerate(zip(want, got)):
+        if clear_eq and a[3] == 0 and b[3] == 0:
+            continue
+        if a[3] != b[3] or any(abs(a[k] - b[k]) > tol for k in range(3)):
+            return "%s: pixel %d is %s, want %s" % (name, i, b, a)
+    return None
+
+
+def bmp16_ref(path):
+    """A 16-bit bit-mask BMP read HERE: each mask's bits widened by
+    repetition, an alpha channel that is zero everywhere taken as opaque.
+
+    The oracle for ARGB4444/1555, which neither foreign reader can be:
+    Pillow refuses 4444 and drops 1555's alpha bit, and ImageMagick
+    widens 4 bits by shifting, so its white is 240 -- and reads its own
+    1555 alpha as 128."""
+    d = open(path, "rb").read()
+    off, = struct.unpack("<I", d[10:14])
+    w, h = struct.unpack("<ii", d[18:26])
+    masks = struct.unpack("<IIII", d[54:70])
+
+    def widen(v, m):
+        if not m:
+            return 0
+        shift = (m & -m).bit_length() - 1
+        bits = bin(m).count("1")
+        x = (v & m) >> shift
+        r, got = 0, 0
+        while got < 8:
+            r, got = (r << bits) | x, got + bits
+        return r >> (got - 8)
+
+    stride = (w * 2 + 3) & ~3
+    out = []
+    for y in range(h):
+        row = off + (h - 1 - y) * stride
+        for x in range(w):
+            v, = struct.unpack("<H", d[row + 2 * x:row + 2 * x + 2])
+            out.append(tuple(widen(v, m) for m in masks))
+    if not any(p[3] for p in out):
+        out = [p[:3] + (255,) for p in out]
+    return out
+
+
+def bmp_build(w, h, bpp, comp, data, palette=b"", masks=b"", hs=40, clr=0, planes=1):
+    """A BMP from parts. `masks` go inside the header from V2 (hs >= 52)
+    on, after a Windows 3 one otherwise -- the two places the format
+    keeps them."""
+    info = struct.pack("<IiiHHIIiiII", hs, w, h, planes, bpp, comp, len(data),
+                       2835, 2835, clr, 0)
+    after = masks
+    if hs > 40:
+        info = (info + masks.ljust(16, b"\0")[:hs - 40]).ljust(hs, b"\0")
+        after = b""
+    off = 14 + len(info) + len(after) + len(palette)
+    return (b"BM" + struct.pack("<IHHI", off + len(data), 0, 0, off)
+            + info + after + palette + data)
+
+
+def bgra_rows(im, bottom_up=True, alpha_byte=None):
+    """32-bit pixel rows, bottom row first unless told otherwise."""
+    w, h = im.size
+    px = pixels(im.convert("RGBA"))
+    rows = range(h - 1, -1, -1) if bottom_up else range(h)
+    out = bytearray()
+    for y in rows:
+        for x in range(w):
+            r, g, b, a = px[y * w + x]
+            out += bytes((b, g, r, a if alpha_byte is None else alpha_byte))
+    return bytes(out)
+
+
+def bmp_hand_cases():
+    """(tag, bytes, w, h, want RGBA) for what neither tool writes."""
+    pal = b"".join(bytes((b, g, r, 0)) for (r, g, b) in
+                   ((0, 0, 0), (200, 30, 30), (30, 200, 30), (30, 30, 200)))
+    colour = [(0, 0, 0, 255), (200, 30, 30, 255), (30, 200, 30, 255), (30, 30, 200, 255)]
+    clear = (0, 0, 0, 0)
+
+    def grid(rows):  # rows TOP first, "." transparent, digits palette indices
+        return [clear if c == "." else colour[int(c)] for r in rows for c in r]
+
+    cases = []
+    # RLE4: an encoded run (alternating nibbles), a literal run padded to
+    # a 16-bit boundary, an end of line, an end of bitmap.
+    # (A literal run is 3 or more: 0, 2 is the DELTA escape.)
+    rle4 = bytes([4, 0x12, 0, 3, 0x30, 0x10, 0, 0,          # bottom row
+                  7, 0x33, 0, 0,
+                  0, 5, 0x12, 0x30, 0x10, 0x00, 2, 0x20, 0, 0,
+                  0, 1])
+    cases.append(("rle4 runs", bmp_build(7, 3, 4, 2, rle4, pal, clr=4), 7, 3,
+                  grid(["1230120", "3333333", "1212301"])))
+    # RLE8: an early end of line and a delta leave pixels unwritten,
+    # which are TRANSPARENT (uimg_bmp.c's browser rule).
+    rle8 = bytes([5, 1, 0, 0,
+                  2, 2, 0, 2, 1, 1,
+                  2, 3, 0, 0,
+                  0, 3, 1, 2, 3, 0,
+                  0, 1])
+    cases.append(("rle8 delta + early eol", bmp_build(5, 4, 8, 1, rle8, pal, clr=4), 5, 4,
+                  grid(["123..", "...33", "22...", "11111"])))
+
+    src = patterns("alpha", 11, 6)
+    want_a = pixels(src)
+    opaque = [(r, g, b, 255) for (r, g, b, _a) in want_a]
+    m32 = struct.pack("<IIII", 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)
+    cases.append(("top-down 32 BI_RGB", bmp_build(11, -6, 32, 0, bgra_rows(src, False)),
+                  11, 6, opaque))
+    cases.append(("32 BI_RGB, reserved byte ignored",
+                  bmp_build(11, 6, 32, 0, bgra_rows(src, alpha_byte=0x5A)), 11, 6, opaque))
+    cases.append(("V3 header, alpha mask", bmp_build(11, 6, 32, 3, bgra_rows(src), masks=m32, hs=56),
+                  11, 6, want_a))
+    cases.append(("V4 header, alpha mask", bmp_build(11, 6, 32, 3, bgra_rows(src), masks=m32, hs=108),
+                  11, 6, want_a))
+    cases.append(("V5 alpha all zero is opaque",
+                  bmp_build(11, 6, 32, 3, bgra_rows(src, alpha_byte=0), masks=m32, hs=124),
+                  11, 6, opaque))
+    # Three palette entries declared and stored (biClrUsed), 8-bit.
+    idx = bytes([0, 1, 2, 1, 0, 0, 0, 0])                    # one row, padded
+    cases.append(("8-bit, biClrUsed 3", bmp_build(5, 1, 8, 0, idx, pal[:12], clr=3), 5, 1,
+                  grid(["01210"])))
+    return cases
+
+
+def bmp_refusals():
+    """(tag, bytes, rc) -- -95 the file is fine and we are not, -22 broken."""
+    px = bytes(4 * 2 * 2)
+    good = bmp_build(2, 2, 32, 0, px)
+    return [
+        ("BI_JPEG", bmp_build(2, 2, 24, 4, b"\xff\xd8\xff\xd9"), -95),
+        ("OS/2 Huffman", bmp_build(2, 2, 1, 3, px, hs=64), -95),
+        ("truncated pixels", good[:-5], -22),
+        ("two planes", bmp_build(2, 2, 32, 0, px, planes=2), -22),
+        ("7-bit depth", bmp_build(2, 2, 7, 0, px), -22),
+        ("top-down RLE8", bmp_build(2, -2, 8, 1, b"\0\1", b"\0" * 8), -22),
+        ("header size 41", good[:14] + struct.pack("<I", 41) + good[18:], -22),
+    ]
+
+
+def gif_descriptors(d):
+    """[(offset of the 0x2C, interlaced?, end of its data)] by walking the
+    blocks -- what the truncation and interlace checks need to aim."""
+    gct = (2 << (d[10] & 7)) * 3 if d[10] & 0x80 else 0
+    p, out = 13 + gct, []
+    while p < len(d):
+        b = d[p]
+        if b == 0x3B:
+            break
+        if b == 0x21:
+            p += 2
+        else:
+            start, packed = p, d[p + 9]
+            p += 10
+            if packed & 0x80:
+                p += (2 << (packed & 7)) * 3
+            p += 1
+        while d[p]:
+            p += d[p] + 1
+        p += 1
+        if b == 0x2C:
+            out.append((start, bool(packed & 0x40), p))
+    return out
+
+
+def sweep_bmp_gif(exe, tmp, keep, quiet):
+    """The BMP and GIF decode checks. Returns (checks, failures); every
+    failure starts with "bmp " or "gif ", which the positive control
+    counts by."""
+    failures, checks = [], 0
+    where = keep or tmp
+
+    def say(tag, what="ok"):
+        if not quiet:
+            print("  %-34s %s" % (tag, what))
+
+    # --- BMP, written by Pillow and ImageMagick -------------------------
+    files = []
+    for (w, h) in ((1, 1), (7, 3), (13, 7), (129, 77)):
+        base = patterns("alpha", w, h)
+        for mode in ("1", "L", "P", "RGB", "RGBA"):
+            im = base.convert("RGB").quantize(37) if mode == "P" else base.convert(mode)
+            path = os.path.join(where, "pil_%s_%dx%d.bmp" % (mode, w, h))
+            im.save(path)
+            files.append(("bmp pillow %s %dx%d" % (mode, w, h), path, w, h, "pillow", 0))
+    for (w, h) in ((13, 7), (129, 77)):
+        rgba = os.path.join(tmp, "src_%dx%d.png" % (w, h))
+        rgb = os.path.join(tmp, "src_rgb_%dx%d.png" % (w, h))
+        bits = os.path.join(tmp, "src_bits_%dx%d.png" % (w, h))
+        patterns("alpha", w, h).save(rgba)
+        # Alpha that SURVIVES one bit: the "alpha" pattern's stays under
+        # 128 on a small image, which 1555 stores as all-clear -- and that
+        # decodes opaque by the zero-everywhere rule, testing nothing.
+        stripes = patterns("gradient", w, h)
+        stripes.putalpha(Image.eval(stripes.getchannel("R"), lambda v: 255 if v & 32 else 0))
+        stripes.save(bits)
+        patterns("gradient", w, h).convert("RGB").save(rgb)
+        # ORACLE PER FILE: Pillow wherever it reads the variant, bmp16_ref()
+        # where neither foreign reader can be one. 565/555 allow 1: Pillow
+        # widens 5 bits by v*255/31 rounded DOWN, this decoder (and
+        # Chromium) by repeating them, and the two differ by one.
+        for name, argv, oracle, tol in (
+                ("OS/2 1.x 24", [rgb, "BMP2:%s"], "pillow", 0),
+                ("OS/2 1.x 8", [rgb, "-type", "Palette", "BMP2:%s"], "pillow", 0),
+                ("win3 24", [rgb, "BMP3:%s"], "pillow", 0),
+                ("win3 4-bit", [rgb, "-colors", "9", "-type", "Palette", "BMP3:%s"], "pillow", 0),
+                ("win3 RLE8", [rgb, "-colors", "40", "-type", "Palette", "-compress", "RLE",
+                               "BMP3:%s"], "pillow", 0),
+                ("V5 24", [rgb, "BMP:%s"], "pillow", 0),
+                ("V5 32 alpha", [rgba, "BMP:%s"], "pillow", 0),
+                ("V5 RGB565", [rgb, "-define", "bmp:subtype=RGB565", "BMP:%s"], "pillow", 1),
+                ("V5 RGB555", [rgb, "-define", "bmp:subtype=RGB555", "BMP:%s"], "pillow", 1),
+                ("V5 ARGB4444", [rgba, "-define", "bmp:subtype=ARGB4444", "BMP:%s"], "bits", 0),
+                ("V5 ARGB1555", [bits, "-define", "bmp:subtype=ARGB1555", "BMP:%s"], "bits", 0)):
+            slug = "".join(ch if ch.isalnum() else "_" for ch in name)
+            path = os.path.join(where, "im_%s_%dx%d.bmp" % (slug, w, h))
+            magick(*[a % path if "%s" in a else a for a in argv])
+            files.append(("bmp magick %s %dx%d" % (name, w, h), path, w, h, oracle, tol))
+
+    for tag, path, w, h, oracle, tol in files:
+        checks += 1
+        err, gw, gh, got = run_decode(exe, path, tmp)
+        if got is None:
+            failures.append("%s: %s" % (tag, err))
+            continue
+        if (gw, gh) != (w, h):
+            failures.append("%s: decoded %dx%d" % (tag, gw, gh))
+            continue
+        want = (pixels(Image.open(path).convert("RGBA")) if oracle == "pillow"
+                else bmp16_ref(path))
+        e = near(tag, want, got, tol, clear_eq=True)
+        if e:
+            failures.append(e)
+        else:
+            say(tag)
+
+    for tag, blob, w, h, want in bmp_hand_cases():
+        tag = "bmp hand " + tag
+        path = os.path.join(where, "".join(ch if ch.isalnum() else "_" for ch in tag) + ".bmp")
+        open(path, "wb").write(blob)
+        checks += 1
+        err, gw, gh, got = run_decode(exe, path, tmp)
+        if got is None:
+            failures.append("%s: %s" % (tag, err))
+        elif (gw, gh) != (w, h):
+            failures.append("%s: decoded %dx%d" % (tag, gw, gh))
+        else:
+            e = near(tag, want, got)
+            if e:
+                failures.append(e)
+            else:
+                say(tag)
+
+    for tag, blob, rc in bmp_refusals():
+        tag = "bmp refuse " + tag
+        path = os.path.join(tmp, "refuse.bmp")
+        open(path, "wb").write(blob)
+        checks += 1
+        err, _w, _h, _got = run_decode(exe, path, tmp)
+        if ("rc=%d" % rc) not in err:
+            failures.append("%s: wanted rc=%d, got %s" % (tag, rc, err))
+        else:
+            say(tag, "refused with the right errno")
+
+    # --- GIF ------------------------------------------------------------
+    gifs = []
+    noise = patterns("noise", 40, 37).convert("RGB")
+    p = os.path.join(where, "pil_256.gif")
+    noise.quantize(256).save(p)
+    gifs.append(("gif pillow 256 colours", p, False))
+    p = os.path.join(where, "pil_2.gif")
+    noise.convert("1").save(p)
+    gifs.append(("gif pillow 2 colours", p, False))
+    p = os.path.join(where, "pil_1x1.gif")
+    patterns("flat", 1, 1).convert("RGB").save(p)
+    gifs.append(("gif pillow 1x1", p, False))
+    p = os.path.join(where, "pil_interlaced.gif")
+    patterns("gradient", 33, 29).convert("RGB").quantize(200).save(p, interlace=True)
+    gifs.append(("gif pillow interlaced", p, True))
+    src = os.path.join(tmp, "noise.png")
+    noise.save(src)
+    p = os.path.join(where, "im_interlaced.gif")
+    magick(src, "-colors", "64", "-interlace", "GIF", p)
+    gifs.append(("gif magick interlaced", p, True))
+
+    # Pillow's animation: disposals 2, 3, 1 over a transparent index,
+    # each frame its own delay.
+    pal = [255, 0, 0, 0, 255, 0, 0, 0, 255, 9, 9, 9] + [0] * 756
+    fr = []
+    for k in range(3):
+        f = Image.new("P", (12, 9))
+        f.putpalette(pal)
+        for y in range(9):
+            for x in range(12):
+                f.putpixel((x, y), 3 if (k == 1 and x < 5) else (x + y + k) % 3)
+        fr.append(f)
+    p = os.path.join(where, "pil_anim.gif")
+    fr[0].save(p, save_all=True, append_images=fr[1:], duration=[50, 70, 90], loop=0,
+               disposal=[2, 3, 1], transparency=3, optimize=False)
+    gifs.append(("gif pillow anim, disposals 2 3 1", p, False))
+
+    # ImageMagick's: frames smaller than the screen at offsets, their own
+    # colour tables, a fully transparent first frame, all three disposals.
+    parts = []
+    for k, c in enumerate([(255, 0, 0), (0, 200, 0), (0, 0, 255), (200, 200, 0)]):
+        f = Image.new("RGBA", (10 + k * 3, 8 + k * 2), c + (255,))
+        for x in range(f.width):
+            f.putpixel((x, 0), (0, 0, 0, 0))
+        fp = os.path.join(tmp, "f%d.png" % k)
+        f.save(fp)
+        parts.append(fp)
+    p = os.path.join(where, "im_anim.gif")
+    # `-set` per parenthesised frame: a bare -page is a setting that ends
+    # up applied to every frame at once.
+    argv = ["-size", "30x24", "xc:none", "-set", "page", "30x24+0+0"]
+    for fp, page, delay, disp in ((parts[0], "+0+0", 7, "None"),
+                                  (parts[1], "+5+3", 12, "Background"),
+                                  (parts[2], "+9+6", 0, "Previous"),
+                                  (parts[3], "+2+9", 30, "None")):
+        argv += ["(", fp, "-set", "page", page, "-set", "delay", str(delay),
+                 "-set", "dispose", disp, ")"]
+    magick(*argv, "-loop", "3", p)
+    gifs.append(("gif magick anim, offsets + disposals", p, False))
+
+    for tag, path, interlaced in gifs:
+        d = open(path, "rb").read()
+        if interlaced and not gif_descriptors(d)[0][1]:
+            # The PNG harness's lesson: a fixture that is not what its
+            # name says tests nothing and passes.
+            failures.append("%s: the fixture is not interlaced" % tag)
+            continue
+        ref = Image.open(path)
+        n = getattr(ref, "n_frames", 1)
+        checks += 1
+        err, w, h, loops, frames = run_anim(exe, path, tmp)
+        if frames is None:
+            failures.append("%s: %s" % (tag, err))
+            continue
+        if (w, h) != ref.size or len(frames) != n:
+            failures.append("%s: %dx%d, %d frames; Pillow says %dx%d, %d"
+                            % (tag, w, h, len(frames), ref.size[0], ref.size[1], n))
+            continue
+        bad = None
+        for k in range(n):
+            ref.seek(k)
+            want = pixels(ref.convert("RGBA"))
+            e = near("%s frame %d" % (tag, k), want, frames[k][1], clear_eq=True)
+            if not e and n > 1 and frames[k][0] != ref.info.get("duration", 0):
+                e = "%s frame %d: delay %d, Pillow says %s" % (tag, k, frames[k][0],
+                                                              ref.info.get("duration"))
+            if e:
+                bad = e
+                break
+        file_loop = ref.info.get("loop")
+        want_loops = 1 if file_loop is None else (0 if file_loop == 0 else file_loop + 1)
+        if not bad and loops != want_loops:
+            bad = "%s: loops %d, want %d (NETSCAPE says %s)" % (tag, loops, want_loops, file_loop)
+        # uimg_decode() is frame 0 of the same walk.
+        if not bad:
+            _e, _w, _h, still = run_decode(exe, path, tmp)
+            if still != frames[0][1]:
+                bad = "%s: the still is not frame 0" % tag
+        if bad:
+            failures.append(bad)
+        else:
+            say(tag, "ok, %d frame(s)" % n)
+
+    # --- a truncated GIF: the whole frames before the damage play ---------
+    d = open(os.path.join(where, "pil_anim.gif"), "rb").read()
+    desc = gif_descriptors(d)
+    cut = os.path.join(tmp, "cut.gif")
+    open(cut, "wb").write(d[:desc[2][0] + 14])          # inside frame 2's header
+    checks += 1
+    err, _w, _h, _l, frames = run_anim(exe, cut, tmp)
+    if frames is None or len(frames) != 2:
+        failures.append("gif truncated after two frames: %s"
+                        % (err if frames is None else "%d frames" % len(frames)))
+    else:
+        say("gif truncated after two frames", "plays the two")
+    open(cut, "wb").write(d[:desc[0][2] - 9])             # inside frame 0's data
+    checks += 1
+    err, _w, _h, _got = run_decode(exe, cut, tmp)
+    if "rc=-22" not in err:
+        failures.append("gif truncated inside frame 0: wanted rc=-22, got %s" % err)
+    else:
+        say("gif truncated inside frame 0", "refused")
+    return checks, failures
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--positive-control", action="store_true",
-                    help="break the deflate bit order; the PNG checks MUST fail")
+                    help="break each codec but QOI; its checks MUST fail")
     ap.add_argument("--keep", metavar="DIR", help="keep the encoded files here")
     args = ap.parse_args()
 
@@ -541,6 +1060,10 @@ def main():
             elif not args.positive_control:
                 print("  %-30s rejected" % "corrupt chunk")
 
+        c2, f2 = sweep_bmp_gif(exe, tmp, keep, args.positive_control)
+        checks += c2
+        failures += f2
+
     if args.positive_control:
         # BOTH HALVES MUST GO RED, AND QOI MUST NOT. The two sabotages
         # are deliberately in different files and different directions,
@@ -548,9 +1071,11 @@ def main():
         # than only that something failed.
         enc_bad = [f for f in failures if "png/" in f]
         dec_bad = [f for f in failures if f.startswith("decode ")]
+        bmp_bad = [f for f in failures if f.startswith("bmp ")]
+        gif_bad = [f for f in failures if f.startswith("gif ")]
         qoi_bad = [f for f in failures if "qoi" in f]
-        print("positive control: %d encode, %d decode, %d QOI checks failed"
-              % (len(enc_bad), len(dec_bad), len(qoi_bad)))
+        print("positive control: %d encode, %d decode, %d BMP, %d GIF, %d QOI checks failed"
+              % (len(enc_bad), len(dec_bad), len(bmp_bad), len(gif_bad), len(qoi_bad)))
         bad = False
         if not enc_bad:
             print("FAIL: the encode half did not redden -- it is untested")
@@ -558,6 +1083,10 @@ def main():
         if not dec_bad:
             print("FAIL: the decode half did not redden -- it is untested")
             bad = True
+        for name, hits in (("BMP", bmp_bad), ("GIF", gif_bad)):
+            if not hits:
+                print("FAIL: the %s checks did not redden -- they are untested" % name)
+                bad = True
         if qoi_bad:
             print("FAIL: the control also broke QOI, so it isolates nothing")
             for f in qoi_bad:
@@ -565,7 +1094,7 @@ def main():
             bad = True
         if bad:
             return 1
-        print("OK: both halves fail when the codec is wrong")
+        print("OK: every check family fails when its codec is wrong")
         return 0
 
     print("%d checks over %d images" % (checks, len(cases)))

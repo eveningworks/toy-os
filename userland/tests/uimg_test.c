@@ -22,6 +22,11 @@
 // rounding step. QOI's is 0: it is lossless, so "close enough" is not a
 // thing that exists, and a single wrong pixel is a bug.
 //
+// BMP and GIF are lossless too, so 0. The GIF ANIMATION is stepped
+// through uimg_anim_next() and every frame compared whole -- disposal is
+// the part of that format a single still cannot reach -- and each delay
+// AFTER the call's clamp, so a 0 in the file must come back as 100.
+//
 // A one-unit error in a single IDCT constant is caught only barely at 3
 // -- which is why the REFUSAL checks below matter too, and why
 // hostcheck's breadth is the primary evidence for the JPEG path. The
@@ -120,6 +125,68 @@ int main(int argc, char **argv) {
                  (total * 1000) / (im.w * im.h * 3), alpha_bad);
         ok(v->name, worst <= v->tol && alpha_bad == 0, detail);
         uimg_free(&im);
+    }
+
+    // --- animations ------------------------------------------------
+    for (int i = 0; i < UIMG_ANIM_VECTOR_COUNT; i++) {
+        const struct uimg_anim_vector *v = &uimg_anim_vectors[i];
+        char detail[160];
+        struct uimg_info info;
+        int rc = uimg_info(v->data, v->len, &info);
+        snprintf(detail, sizeof detail, "info rc %d, %d frames (want %d)", rc,
+                 info.frames, v->frames);
+        ok("anim: info counts the frames", rc == 0 && info.frames == v->frames, detail);
+
+        struct uimg_anim a;
+        rc = uimg_anim_open(v->data, v->len, &a);
+        snprintf(detail, sizeof detail, "rc %d (%s), %dx%d, %d frames, loops %d",
+                 rc, uimg_last_error(), a.frame.w, a.frame.h, a.frames, a.loops);
+        ok(v->name, rc == 0 && a.frame.w == v->w && a.frame.h == v->h &&
+                    a.frames == v->frames && a.loops == v->loops, detail);
+        if (rc < 0) continue;
+
+        // One round and then frame 0 again: the wrap is a fresh canvas,
+        // not whatever the last frame's disposal left.
+        size_t fpx = (size_t)v->w * v->h;
+        for (int k = 0; k <= v->frames; k++) {
+            int f = k % v->frames, delay = -1;
+            rc = uimg_anim_next(&a, &delay);
+            int bad = -1;
+            for (size_t p = 0; rc == 0 && p < fpx && bad < 0; p++) {
+                const unsigned char *w = v->rgba + ((size_t)f * fpx + p) * 4;
+                uint32_t want = ((uint32_t)w[3] << 24) | ((uint32_t)w[0] << 16) |
+                                ((uint32_t)w[1] << 8) | w[2];
+                if (a.frame.px[p] != want) bad = (int)p;
+            }
+            snprintf(detail, sizeof detail, "step %d: rc %d, frame index %d, delay %d (want %d), "
+                     "first wrong pixel %d", k, rc, a.index, delay, v->delays[f], bad);
+            ok("anim: each frame composited as Pillow does", rc == 0 && bad < 0 &&
+               a.index == f && delay == v->delays[f], detail);
+        }
+        uimg_anim_close(&a);
+    }
+
+    // A STILL through the same call: one frame, no delay, the pixels
+    // uimg_decode() gives -- so a caller never asks which kind it has.
+    for (int i = 0; i < UIMG_VECTOR_COUNT; i++) {
+        const struct uimg_vector *v = &uimg_vectors[i];
+        if (v->err || v->tol) continue;            // a lossless still
+        struct uimg_anim a;
+        struct uimg im;
+        int delay = -1;
+        int orc = uimg_anim_open(v->data, v->len, &a);
+        int nrc = orc == 0 ? uimg_anim_next(&a, &delay) : orc;
+        int drc = uimg_decode(v->data, v->len, &im);
+        int same = orc == 0 && nrc == 0 && drc == 0 && a.frame.w == im.w && a.frame.h == im.h &&
+                   !memcmp(a.frame.px, im.px, (size_t)im.w * im.h * sizeof *im.px);
+        char detail[160];
+        snprintf(detail, sizeof detail, "%s: open %d, next %d, decode %d, frames %d, delay %d",
+                 v->name, orc, nrc, drc, a.frames, delay);
+        ok("anim: a still is one frame, the decoded picture", same && a.frames == 1 && delay == 0,
+           detail);
+        if (orc == 0) uimg_anim_close(&a);
+        if (drc == 0) uimg_free(&im);
+        break;                                      // one is the point; the codecs are above
     }
 
     // --- the resampler ---------------------------------------------

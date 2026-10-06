@@ -2036,7 +2036,12 @@ window without going through it will find its layout polls timing out.
   after the first interval), and three refusals -- progressive,
   truncated, not-an-image -- which must come back as the RIGHT errno,
   since a decoder answering "broken" to everything would pass a test
-  that only asked whether it failed.
+  that only asked whether it failed. BMP and GIF vectors too (Pillow
+  writes and reads them, tolerance 0), and one ANIMATION -- each frame
+  as Pillow composites it, each delay after `uimg_anim_next()`'s clamp.
+  `--pictures` writes `data/usr/share/pictures/`: a sample of each BMP
+  and GIF kind the decoders read, two GIFs animated, the RLE8 and alpha
+  BMPs packed by hand because Pillow writes neither.
 - **`gen_icons.py`** -- draws the application icons into `data/icons/`
   (one 64x64 QOI per icon NAME) and `--check`s that the files on disk
   match the script, the same contract `gen_cursors.py` has. It holds
@@ -2096,7 +2101,24 @@ window without going through it will find its layout polls timing out.
   in any gate: it needs Pillow, and `/tests/uimg_test` is the version
   that runs in the guest.
 - **`uimg_codec_hostcheck.py`** -- the QOI and PNG codecs, BOTH WAYS,
-  against Pillow and Python's `zlib`.
+  against Pillow and Python's `zlib`; the BMP and GIF decoders over
+  files Pillow and **ImageMagick** wrote (it needs `magick`).
+
+  **BMP and GIF:** every header version (OS/2 1.x and 2.x, Windows 3,
+  V2-V5), 1/4/8/16/24/32 bits, RLE8, bit masks; for GIF interlacing,
+  local colour tables, frames at offsets and all three disposals, every
+  frame of an animation compared through the codec's iterator, delays
+  and the loop count included. What neither tool writes -- RLE4, a V4
+  header, an RLE delta, top-down -- is built by hand with its expected
+  pixels beside it. **The oracle is chosen per file**: Pillow where it
+  reads the variant; for ARGB4444/1555 a reading of the masks written in
+  the script, because Pillow refuses 4444 and drops 1555's alpha bit and
+  ImageMagick widens 4 bits to a white of 240. 565/555 allow 1 against
+  Pillow, which rounds a 5-bit channel down where the decoder repeats
+  its bits. GIF frames compare transparent pixels as equal whatever
+  their colour (Pillow keeps the palette entry's). Disposal is not under
+  the positive control, but breaking disposal 2 or 3 was seen to redden
+  the animation checks.
 
   **Encoding:** `uimg_qoi.c` and `uimg_png.c` compiled with the host gcc,
   run over eight images chosen for what they do to each format (a flat
@@ -3394,6 +3416,15 @@ window without going through it will find its layout polls timing out.
   `--only close-chooser`): closing the viewer while its Open chooser is
   up closes both -- an app with no `on_close` closes, question or not.
   In `gui_regress.py`.
+
+  **A GIF PLAYS and a BMP shows**: both are copied in with `vm.py put`
+  (inside `DebugConsole.detached()`, since QEMU serves one client per
+  serial socket and `put` needs it to start tftpd). The GIF's three
+  solid frames must cycle IN ORDER from RAW screendumps -- an animation
+  never settles -- at a mean interval under the viewer's 500 ms idle
+  tick, so the frame timer is what drives it; then Right to the BMP,
+  whose quadrants must be its colours the right way up and stay put.
+
 - **`blank_window_test.py`** -- opens EVERY app in the registry and
   requires its window to contain more than a flat fill. Reads the app
   list from the KERNEL (`gui apps`), so an app added tomorrow is covered

@@ -20,6 +20,7 @@ static const struct { const char *ext, *name, *icon; } TYPES[] = {
     { "png",     "PNG image",       "file-image" },
     { "qoi",     "QOI image",       "file-image" },
     { "bmp",     "Bitmap image",    "file-image" },
+    { "gif",     "GIF image",       "file-image" },
     { "ppm",     "PPM image",       "file-image" },
     { "wav",     "WAV audio",       "file-audio" },
     { "mp3",     "MP3 audio",       "file-audio" },

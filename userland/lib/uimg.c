@@ -16,6 +16,8 @@ static const struct uimg_codec *const codecs[] = {
     &uimg_codec_jpeg,
     &uimg_codec_qoi,
     &uimg_codec_png,
+    &uimg_codec_bmp,
+    &uimg_codec_gif,
 };
 #define CODEC_COUNT ((int)(sizeof codecs / sizeof codecs[0]))
 
@@ -123,6 +125,70 @@ int uimg_load(const char *path, struct uimg *out) {
     rc = uimg_decode(buf, len, out);
     free(buf);
     return rc;
+}
+
+// --- animation -------------------------------------------------------
+
+// A still, as an animation of one frame: decoded once at open, and
+// next() hands back the same canvas.
+static int still_next(struct uimg_anim *a, int *delay_ms) {
+    a->index = 0;
+    *delay_ms = 0;
+    return 0;
+}
+
+int uimg_anim_open(const void *data, size_t n, struct uimg_anim *a) {
+    memset(a, 0, sizeof *a);
+    a->index = -1;
+    const struct uimg_codec *c = uimg_probe(data, n);
+    if (!c) {
+        uimg_set_error("not an image format this build recognises");
+        return -EINVAL;
+    }
+    if (c->anim_open) return c->anim_open(data, n, a);
+
+    int rc = uimg_decode(data, n, &a->frame);
+    if (rc < 0) return rc;
+    a->frames = 1;
+    a->next = still_next;
+    return 0;
+}
+
+int uimg_anim_load(const char *path, struct uimg_anim *a) {
+    uint8_t *buf;
+    size_t len;
+    memset(a, 0, sizeof *a);
+    int rc = read_file(path, &buf, &len);
+    if (rc < 0) return rc;
+    rc = uimg_anim_open(buf, len, a);
+    if (rc < 0) {
+        free(buf);
+        return rc;
+    }
+    a->file = buf;
+    return 0;
+}
+
+int uimg_anim_next(struct uimg_anim *a, int *delay_ms) {
+    *delay_ms = 0;
+    if (!a->next) {
+        uimg_set_error("the animation is not open");
+        return -EINVAL;
+    }
+    int rc = a->next(a, delay_ms);
+    // Browsers' rule, and Windows Photos': a delay of 0 or 1
+    // hundredths is a file that never said, not a request to spin.
+    if (rc == 0 && a->frames > 1 && *delay_ms <= 10) *delay_ms = 100;
+    return rc;
+}
+
+void uimg_anim_close(struct uimg_anim *a) {
+    if (!a) return;
+    if (a->release) a->release(a);
+    uimg_free(&a->frame);
+    free(a->file);
+    memset(a, 0, sizeof *a);
+    a->index = -1;
 }
 
 // --- encoding ---------------------------------------------------------

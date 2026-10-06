@@ -168,6 +168,7 @@ is the bookkeeping that makes any other kind of mapping possible.
 - [x] ~~`MAP_SHARED` memory between two processes~~ DONE 2026-09-06 -- `SYS_SHM_OPEN` names an object, `MAP_SHARED` maps it
 - [x] ~~Copy-on-write, shared between this and `fork()`~~ DONE 2026-09-11 -- `PAGE_COW`, `vmm_fork_address_space()`/`vmm_cow_break()`
 - [ ] Guard pages around THREAD stacks -- kernel and user stacks have them; a thread stack is ring 3's own malloc and has none
+- [ ] Ring-3 ASLR: randomise the user stack, the mmap base and `ld-toy.so`'s base -- KASLR exists; ring 3 is laid out alike every run
 - [x] ~~A frame-size bound for ring 3~~ DONE 2026-08-18
 - [x] ~~A check on the ~1 MiB between a ring-3 image and its heap~~ DONE 2026-08-18
 
@@ -222,6 +223,7 @@ only expensive part of it.
 - [ ] Lock on resume: waking from the screensaver asks for the password, Windows' "On resume, display logon screen"
 - [ ] Password hashing + an `/etc/passwd`-shaped file
 - [ ] `su`-style user switching
+- [ ] Meltdown/Spectre mitigations (KPTI, retpolines), or a written decision -- the ASUS's Broadwell lets ring 3 read the kernel
 - [ ] Home directories + `~` expansion
 - [ ] `umask`-equivalent default permissions
 - [ ] uid/gid carried in the process control block, checked by the syscall layer rather than by each caller
@@ -401,6 +403,7 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~`fs_truncate()`~~ done
 - [x] ~~TRIM/discard on delete, so freed blocks are reported to the device~~ done
 - [ ] Boot-time `fsck` report (check, never repair) behind a config key
+- [ ] Drive health: SMART over AHCI/IDE and NVMe's health log, shown in Device Manager -- `smartctl`, GNOME Disks
 - [x] ~~Per-record checksums in the table itself~~ DONE 2026-09-12 -- FNV-1a per inode, verified on every read
 
 ### The clock
@@ -462,6 +465,7 @@ No dependency on the phases above; ordered among themselves.
 - [ ] A mount point deeper than one already mounted works, but nothing tests a three-level nest
 - [ ] `fs_check`/`fsck` only ever check the ROOT -- there is no way to fsck `/boot`
 - [ ] `parttable` still reads `blk_active()`'s disk only -- `mkpart --disk` writes any of them
+- [ ] Mount a disk image FILE -- a loop block device, Linux's `losetup`; a FAT image opened on the machine itself
 
 ### FAT32
 
@@ -688,9 +692,14 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] A Quick Settings flyout -- network and volume as ONE tray target, Windows 11's grouping, which the centred style's mockup drew
 - [ ] Alt+Tab window switching
 - [ ] Window snapping (half/quarter screen)
+- [ ] Virtual desktops -- Windows 11's Task View, KDE's; a window belongs to one, the taskbar shows the current one's
+- [ ] Always on top, from a window's menu -- KWin's Keep Above: a layer over normal windows and under the taskbar
+- [ ] Remember each app's window size and position across runs -- KWin's window rules; Windows keeps it per app
 - [ ] Resize from any edge or corner -- only the bottom-right grip works today
 - [x] ~~Per-window back buffers, so a slow app's redraw can't tear~~ DONE 2026-08-24 -- two buffers, `WIN_REQ_PRESENT` flips
 - [ ] Theme switching -- the theme object landed (`utheme.{h,c}`); a dark mode now needs a dark palette + a `WIN_EV_THEME` broadcast
+- [ ] Night light: a warm tint on a schedule -- KDE's Night Color; the Intel pipe's gamma table, the compositor elsewhere
+- [ ] A notification service: one API for an app's notice, a history, Do Not Disturb -- freedesktop Notifications, Windows' toasts
 - [ ] A user accent colour: a setting + an Appearance page (the `UTHEME_ACCENT` role exists; make it settable)
 - [ ] Migrate apps' `PAD`/`GAP`/size constants to the theme metrics (`utheme_pad/gap/indicator`), so chrome scales from one owner
 - [ ] Finish the 2026-08-21 toolkit centralizations -- only System Settings and Font Demo set `desc.focus`
@@ -701,6 +710,14 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~The CRT effect in DOOM~~ DONE 2026-10-03 -- Alt+C cycles the presets, a scanline per DOOM row, `/etc/doom.conf`
 - [x] ~~A cheaper `ucrt`~~ DONE 2026-10-03 -- SSE2 lanes, ~3x: DOOM's window holds 57-70 fps on the ASUS with any preset
 - [ ] The CRT effect fullscreen at 1080p: Classic 55 ms a frame on the ASUS (16 fps) -- measured, cause not established
+
+### Accessibility
+
+**Needs:** nothing for the input half; a high-contrast theme needs Theme switching (Desktop visual polish).
+
+- [ ] A screen magnifier in the compositor -- KWin's Zoom, Windows' Magnifier; it follows the pointer and the focus
+- [ ] A high-contrast theme -- Windows' contrast themes; a palette on Theme switching, checked against WCAG's 7:1
+- [ ] Sticky, slow and bounce keys in the input core -- Windows' Filter Keys, X11's AccessX; every keyboard gets them
 
 ### Screensavers
 
@@ -773,6 +790,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Solitaire (Klondike) beside Mines, its card art generated by a tool in `tools/`
 - [ ] An archive viewer that browses and extracts .zip and .tar over the existing inflate -- no compressing
 - [ ] Disk Usage: a treemap of where the space went -- Filelight, WinDirStat; needs a treemap widget
+- [ ] A Recycle Bin on the freedesktop Trash spec -- reverses `filemanager-design.md`'s first-version "No trash"
+- [ ] Syntax highlighting in Notepad -- KSyntaxHighlighting's shape: definitions as DATA files, C and Markdown first
 - [ ] `uapp_relayout()`: invalidate the layout and flush ONE pass before the next paint, as `uapp_redraw()` already does for painting
 - [x] ~~CPU/memory history graphs in Task Manager~~ DONE 2026-09-15 -- a Performance tab over `uui_chart`
 - [x] ~~Per-app settings persisted via `/etc/<app>.conf`~~ DONE 2026-09-12 -- desktop, files and settings all use it
@@ -932,6 +951,8 @@ run on, not by order.
 - [x] ~~Per-volume state in filesystem backends~~ done -- `struct t3_state`/`fat32_state`/`ramfs_state`, switched at `FS_OP`
 - [x] ~~A self-hosted installer: partition, format, copy the running system, write the bootloader~~ done -- `/bin/install`
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend
+- [ ] A USB gamepad for DOOM -- HID's generic-desktop gamepad and joystick usages, through the input core
+- [ ] Bluetooth, or a written decision against it -- the Intel cards' Bluetooth half is a USB device, Linux's `btusb`
 - [x] ~~Hub support (devices behind a hub, not just root ports)~~ DONE 2026-08-28 -- USB2 only; the TT path is hardware-only
 - [x] ~~Hot-plug: a device plugged in after boot enumerates, an unplugged one is torn down~~ DONE 2026-08-28
 - [x] ~~Composite devices: every boot interface binds, not just the first~~ DONE 2026-08-28
@@ -1217,6 +1238,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] The network debugger on a one-NIC machine: the OS's traffic through the debugger's card (KDNIC) -- stage 3c
 - [ ] Live kernel memory inspection without halting, drgn's shape, over `remote.py` -- `docs/kdebug-design.md` stage 1
 - [ ] A lockup detector: a CPU that stops scheduling, and a task stuck in an uninterruptible wait -- Linux's `softlockup` and `hung_task`
+- [ ] A hardware watchdog that RESETS a hung machine -- Intel's TCO timer (Linux `iTCO_wdt`) or ACPI's WDAT; nothing resets one today
 - [x] ~~The kernel debugger's processes as GDB threads, and `ps`/`dmesg`~~ DONE 2026-09-27 -- threads, and `tools/gdb/toyos.py`
 - [x] ~~Symbols for kernel modules and user programs in the debugger, and memory per thread~~ DONE 2026-09-27 -- `toy-symbols`
 - [x] ~~Send a file to the machine through the debugger~~ DONE 2026-09-28 -- `remote put`, written by `/bin/kdfiled`

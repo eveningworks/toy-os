@@ -44,6 +44,9 @@ static const char *content_type(const char *path) {
     if (!strcmp(dot, ".html") || !strcmp(dot, ".htm")) return "text/html";
     if (!strcmp(dot, ".qoi")) return "image/qoi";
     if (!strcmp(dot, ".jpg") || !strcmp(dot, ".jpeg")) return "image/jpeg";
+    if (!strcmp(dot, ".png")) return "image/png";
+    if (!strcmp(dot, ".bmp")) return "image/bmp";
+    if (!strcmp(dot, ".gif")) return "image/gif";
     return "application/octet-stream";
 }
 

@@ -453,6 +453,16 @@ partition's size and not the disk's). Host side:
 `seed_disk.py --partition`, `tfs3_writer.py --at-lba`,
 `mkpart_test.py --layout`. See `docs/decisions.md`.
 
+### Drive health: SMART over AHCI/IDE and NVMe's health log, shown in Device Manager -- `smartctl`, GNOME Disks
+
+Put on the roadmap 2026-10-06 (not scheduled). SATA reports health through SMART READ DATA and
+its threshold page (ATA `B0h`), NVMe through the SMART/Health log page
+(Get Log Page `02h`); both drivers exist and neither asks. The useful
+part is small: an overall verdict, temperature, power-on hours,
+reallocated and pending sectors, media errors -- what GNOME Disks shows
+and Windows' "Drive health" condenses to one line. A `/bin` command
+first, then Device Manager's properties pane.
+
 ### TFS3 correctness: the five findings
 
 Five defects found by reading `kernel/fs/tfs3.c` on 2026-09-11, none
@@ -768,6 +778,17 @@ Ordering note: this and `fork()`/`exec()`-style process model's COW are the same
 does either should look at the other first -- doing `fork()`/`exec()`-style process model's COW as
 a `fork()`-specific special case would mean writing it twice.
 
+### Ring-3 ASLR: randomise the user stack, the mmap base and `ld-toy.so`'s base -- KASLR exists; ring 3 is laid out alike every run
+
+Put on the roadmap 2026-10-06 (not scheduled). Nothing in `kernel/proc`, `kernel/mm` or
+`userland/ldso` draws on `krandom`, so a program's stack, its mappings
+and the loader sit at the same addresses on every run. Linux randomises
+all three by default (`randomize_va_space=2`) and the executable too
+when it is PIE. The cheap half is the stack top and the mmap base, at
+page granularity, with a `norandmaps`-style switch for debugging; a PIE
+main program is a later step, since `cc-design.md` emits `ET_EXEC` at a
+fixed base.
+
 ### `fork()`/`exec()`-style process model
 
 **BUILT 2026-09-11: `fork()`, `exec()` and copy-on-write are in**, and
@@ -989,6 +1010,20 @@ timer interrupt that still arrives while the CPU spins, which the LAPIC
 timer does unless interrupts are off; the NMI half is later and wants
 the performance-counter setup nothing here has yet.
 
+### A hardware watchdog that RESETS a hung machine -- Intel's TCO timer (Linux `iTCO_wdt`) or ACPI's WDAT; nothing resets one today
+
+Put on the roadmap 2026-10-06 (not scheduled). The lockup detector above REPORTS a stuck
+machine; this one RESETS it. Every test machine here is Intel, and the
+chipset carries a TCO timer -- in the LPC bridge's I/O space on older
+PCHs, behind the SMBus controller on Skylake and later, which is why
+Linux reaches it through `i2c-i801` as well as `lpc_ich`. ACPI's WDAT
+table describes a watchdog generically on machines that offer one. Two
+things decide whether it works: the firmware may have set and LOCKED
+`NO_REBOOT`, and whatever pets it must be something that stops when the
+machine is wedged -- init, not a timer interrupt. With `bootcfg try`, a
+trial boot that hangs then resets into the old default unattended, which
+is what remote work on a laptop with no one at its keyboard wants.
+
 ### Shell pipes & job control
 
 **Most of this milestone is BUILT.** What follows was written when none
@@ -1184,6 +1219,20 @@ first rough breakdown:
 - A login prompt -- even if the default (and only) account needs no
   password yet, having the concept in place makes every later step of
   this milestone meaningful instead of theoretical.
+
+### Meltdown/Spectre mitigations (KPTI, retpolines), or a written decision -- the ASUS's Broadwell lets ring 3 read the kernel
+
+Put on the roadmap 2026-10-06 (not scheduled). Every address space shares the kernel's mapping
+(`vmm.c`: PML4 entry 0), so on a CPU affected by Meltdown -- every Intel
+core before Coffee Lake's refresh, the ASUS's Broadwell included -- a
+ring-3 program can read kernel memory speculatively, which voids what
+KASLR and SMAP promise there. Linux answers with PTI (a second, user
+page table carrying only the entry stubs; PCID keeps the switch cheap)
+and retpolines or IBRS for Spectre v2; Windows with KVA Shadow. Nothing
+in the tree does either -- `cpu_features.h` only names the CPUID bits.
+Until there is more than one user the attacker is already the owner, so
+this lands with the user model; the honest alternative is a decision in
+`docs/decisions/` saying why not, and what that leaves exposed.
 
 ### Encryption at rest
 
@@ -1427,6 +1476,59 @@ there is no combined panel for the group to open -- `volume_popup.c`,
 work is a panel that hosts their controls (the sliders already live in
 `tray_slider_popup.c`) plus a tray item that stands for several; the
 styles themselves need nothing.
+
+### Virtual desktops -- Windows 11's Task View, KDE's; a window belongs to one, the taskbar shows the current one's
+
+Put on the roadmap 2026-10-06 (not scheduled). Each window carries a desktop number (or "all"),
+a switch hides one set and shows another, and the taskbar lists only the
+current desktop's windows, which is Windows 11's default. Ctrl+Super+
+Left/Right is Windows' binding. Alt+Tab, still unbuilt, should then
+answer "this desktop" first.
+
+### Always on top, from a window's menu -- KWin's Keep Above: a layer over normal windows and under the taskbar
+
+Put on the roadmap 2026-10-06 (not scheduled). A stacking LAYER rather than a flag the raise path
+checks: windows above, normal windows, then the taskbar, so a raise
+moves a window to the top of its own layer.
+
+### Remember each app's window size and position across runs -- KWin's window rules; Windows keeps it per app
+
+Put on the roadmap 2026-10-06 (not scheduled). Keyed by the app's desktop-entry name, written
+when a window closes, clamped to the current screen when it opens --
+the screen may have changed resolution since.
+
+### Night light: a warm tint on a schedule -- KDE's Night Color; the Intel pipe's gamma table, the compositor elsewhere
+
+Put on the roadmap 2026-10-06 (not scheduled). On the Intel driver, the pipe's gamma table
+costs nothing per frame; on virtio-gpu and a bare framebuffer the
+compositor multiplies the final frame, which is a per-pixel cost to
+measure first. A colour temperature, a schedule (fixed times, or sunset
+from the timezone's city), and a tray toggle.
+
+### A notification service: one API for an app's notice, a history, Do Not Disturb -- freedesktop Notifications, Windows' toasts
+
+Put on the roadmap 2026-10-06 (not scheduled). The crash notice, the screenshot card and the
+Close-all card are each drawn by their own code in `userland/wm/`; a
+`Notify(app, summary, body, actions)` shape -- the freedesktop
+specification's -- puts all of them, and every future one (Clock's
+alarms, update available, low battery), behind one card, one history in
+the calendar flyout and one Do Not Disturb switch.
+
+### Accessibility
+
+Put on the roadmap 2026-10-06 (not scheduled). Nothing here was planned before. What exists
+already: a huge pointer size, a switch for the WM's animations, and a
+focus ring that Tab moves. What is missing is below, each in the shape
+both Windows and KDE ship.
+
+- **Magnifier**: the compositor scales a region of the final frame
+  around the pointer or the focused control (KWin's Zoom), so no app
+  takes part.
+- **High contrast**: a palette on the theme object, checked against
+  WCAG's 7:1, which Theme switching makes possible.
+- **Filter keys**: sticky modifiers, a slow-key delay and a bounce-key
+  window, in the input core so a PS/2, USB and virtio keyboard all get
+  them (X11's AccessX is the same three).
 
 ### A layout engine for the GUI
 
@@ -1688,6 +1790,22 @@ descend. The per-directory change counters (`SYS_FS_GENERATION_OF`) let
 it rescan only what changed. The treemap is a `userland/ui/` widget
 with a second plausible caller in Task Manager's memory view.
 
+### A Recycle Bin on the freedesktop Trash spec -- reverses `filemanager-design.md`'s first-version "No trash"
+
+Put on the roadmap 2026-10-06 (not scheduled). A per-volume `.Trash/` holding `files/` and
+`info/*.trashinfo` (original path, deletion time), so a delete is a
+rename and Restore knows where it came from. `rm` stays permanent, as it
+is everywhere. The File Manager's design document ruled trash out of its
+first version; this is the decision to revisit.
+
+### Syntax highlighting in Notepad -- KSyntaxHighlighting's shape: definitions as DATA files, C and Markdown first
+
+Put on the roadmap 2026-10-06 (not scheduled). Kate reads a language from an XML definition
+(contexts, keywords, regular expressions) rather than code per language;
+a much smaller data format of the same shape keeps a new language a file,
+not a rebuild. Needs a styled run per span from `utext`, which the
+Markdown preview may already have shaped.
+
 ### GUI clipboard + drag-and-drop
 
 The clipboard half is BUILT, and it landed differently from the sketch
@@ -1832,6 +1950,15 @@ consulted, and `cd` across a boundary is the shell's lexical
 normalization doing exactly the right thing. `fs_list()` on a directory
 containing a mount point works because the mount point is a REAL
 directory on the parent filesystem -- rule 3 requires it.
+
+### Mount a disk image FILE -- a loop block device, Linux's `losetup`; a FAT image opened on the machine itself
+
+Put on the roadmap 2026-10-06 (not scheduled). A `block_device` whose reads and writes go to a
+file on another mount, so any filesystem driver can open an image
+without knowing it is one. The lock order matters: the backing mount's
+lock is taken beneath the loop mount's, which is the parent-before-child
+rule turned upside down unless the loop device always counts as the
+child.
 
 ### FAT32
 
@@ -2387,6 +2514,19 @@ Stretch, not required for "keyboard and mouse work": hub support (device
 behind a hub, not a root port), multiple simultaneous devices, anything
 beyond the boot protocol (full HID report-descriptor parsing for
 non-standard devices).
+
+### A USB gamepad for DOOM -- HID's generic-desktop gamepad and joystick usages, through the input core
+
+Put on the roadmap 2026-10-06 (not scheduled). `hid_parse.h` already walks report descriptors;
+a gamepad is its axes and buttons as absolute events, and DOOM maps them
+the way `doomgeneric` maps a joystick.
+
+### Bluetooth, or a written decision against it -- the Intel cards' Bluetooth half is a USB device, Linux's `btusb`
+
+Put on the roadmap 2026-10-06 (not scheduled). The Wi-Fi item's companion: the same Intel
+cards expose Bluetooth over internal USB, which the xHCI driver already
+enumerates. HCI over USB is the transport; L2CAP, pairing and a HID
+profile on top are the real work, and firmware loading comes first.
 
 ### Networking
 

@@ -105,10 +105,11 @@ TOOLS = [
     ("teapot_host", "teapot_hostcheck.py",     "the teapot mesh and the depth-tested triangle", False,
      None,                                                                                   False),
     # The two image harnesses, both host-only. The codec one runs the QOI
-    # and PNG codecs BOTH WAYS against Pillow and zlib; the other is the
-    # JPEG decoder against libjpeg.
-    ("uimg_codec",  "uimg_codec_hostcheck.py", "QOI and PNG both ways vs Pillow/zlib", False,
-     ("host_pillow", "needs gcc and Pillow"),                                                 False),
+    # and PNG codecs BOTH WAYS against Pillow and zlib, and the BMP and
+    # GIF decoders over files Pillow and ImageMagick wrote; the other is
+    # the JPEG decoder against libjpeg.
+    ("uimg_codec",  "uimg_codec_hostcheck.py", "QOI/PNG both ways, BMP/GIF read, vs Pillow+magick", False,
+     ("host_pillow_magick", "needs gcc, Pillow and ImageMagick"),                            False),
     ("uimg_jpeg",   "uimg_hostcheck.py",       "the JPEG decoder against libjpeg",   False,
      ("host_pillow", "needs gcc and Pillow"),                                                 False),
     # Compiles the vendored dash against tolibc with -nostdinc and
@@ -484,6 +485,12 @@ def precondition_met(kind):
         except ImportError:
             return False, why
         return True, why
+    if key == "host_pillow_magick":
+        # host_pillow plus ImageMagick, which writes the BMP and GIF
+        # variants Pillow cannot (RLE8, OS/2 headers, 16-bit masks,
+        # animations at offsets). A skip when missing, the same rule.
+        ok, _ = precondition_met(("host_pillow", why))
+        return ok and shutil.which("magick") is not None, why
     if key == "host_cc":
         # Host gcc only. A skip rather than a failure on a checkout
         # without it, same rule as host_audio above.
