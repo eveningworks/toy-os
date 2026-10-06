@@ -60,6 +60,7 @@ static int g_inited;
 void net_location_pci(struct net_device *dev, uint8_t bus, uint8_t device,
                       uint8_t function) {
     if (!dev) return;
+    k_snprintf(dev->device_id, sizeof dev->device_id, "pci:%02x:%02x.%x", bus, device, function);
     if (function)
         k_snprintf(dev->location, NET_LOC_MAX, "pci%u.%u.%u", bus, device, function);
     else

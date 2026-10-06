@@ -139,6 +139,11 @@ void usb_bind_drivers(struct usb_device_info *d, const uint8_t *cfg,
 int usb_device_count(void);
 const struct usb_device_info *usb_device_at(int index);
 
+// "usb:14:2357:0601" -- the port on its parent, then vendor:product; the
+// name userland/lib/udevice.c gives the device, which every device_id
+// field naming a USB device has to match.
+void usb_device_id(const struct usb_device_info *info, char *out, unsigned cap);
+
 // Brings one connected root port to "configured and described", adding
 // it to the table above. Returns its index, or -1. Called by xhci.c's
 // port scan; the split is the seam xhci.h describes. Cleans its slot up

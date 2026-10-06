@@ -290,39 +290,33 @@ static int r8169_disabled(void) {
     return 0;
 }
 
-static void r8169_probe(const struct pci_device *pci) {
-    if (r8169_disabled()) {
-        klog_write("r8169: disabled by `nor8169` on the boot line\n");
-        return;
-    }
-    if (g_probed) {
-        klog_printf("r8169: a second card at %02x:%02x.%u -- one is driven\n",
-                    pci->bus, pci->device, pci->function);
-        return;
-    }
+static void r8169_remove(const struct pci_device *pci);
+
+// A decline once this card is ours goes through r8169_remove(), which
+// undoes whatever got built -- this is a module, and an interrupt left
+// registered would outlive its unload.
+static int r8169_decline(const struct pci_device *pci, const char *why) {
+    r8169_remove(pci);
+    return pci_probe_decline(pci, "%s", why);
+}
+
+static int r8169_probe(const struct pci_device *pci) {
+    if (r8169_disabled()) return pci_probe_decline(pci, "off: `nor8169` on the boot line");
+    if (g_probed) return pci_probe_decline(pci, "a second card; one is driven");
     g_probed = 1;
 
     // The registers are in the first MEMORY BAR, which is BAR2 on every
     // part this matches: BAR0 is the I/O alias of the same window.
     uint64_t bar = pci_bar_mem_addr(pci, 2);
-    if (!bar) {
-        klog_write("r8169: BAR2 is not usable memory space\n");
-        return;
-    }
+    if (!bar) return r8169_decline(pci, "BAR2 is not usable memory space");
     g_r.mmio = (volatile uint8_t *)(uintptr_t)bar;   // identity-mapped below 4 GiB
 
-    if (!alloc_rings()) {
-        klog_write("r8169: not enough contiguous memory for the rings\n");
-        return;
-    }
+    if (!alloc_rings()) return r8169_decline(pci, "not enough contiguous memory for the rings");
 
     pci_command_update(pci, PCI_CMD_MEMORY | PCI_CMD_BUS_MASTER, 0);
 
     reg_write16(REG_IMR, 0);
-    if (!chip_reset()) {
-        klog_write("r8169: the chip never came out of reset\n");
-        return;
-    }
+    if (!chip_reset()) return r8169_decline(pci, "the chip never came out of reset");
 
     uint32_t xid = reg_read32(REG_TCR) & TCR_HWREV;
     for (int i = 0; i < NET_MAC_LEN; i++) g_dev.mac[i] = reg_read8(REG_IDR0 + i);
@@ -405,10 +399,11 @@ static void r8169_probe(const struct pci_device *pci) {
 
     g_dev.poll = r8169_rx_sweep;
     g_dev.poll_ms = 10;
-    if (!net_register(&g_dev)) { g_present = 0; return; }
+    if (!net_register(&g_dev)) return r8169_decline(pci, "the network core has no room for another card");
 
     update_link(&g_dev);
     if (!g_dev.link_up) phy_kick();
+    return 0;
 }
 
 // The inverse, in the order that keeps the handler safe: the chip's

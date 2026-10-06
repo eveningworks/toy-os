@@ -102,6 +102,7 @@ static uint32_t g_blk_size = 512;  // bytes per logical block
 static struct kmutex g_blk_lock;
 
 int virtio_blk_present(void) { return g_present; }
+const struct pci_device *virtio_blk_pci(void) { return g_present ? g_dev.pci : 0; }
 int virtio_blk_max_sectors_per_xfer(void) { return (int)g_max_xfer; }
 uint32_t virtio_blk_block_size(void) { return g_blk_size; }
 int virtio_blk_flush_supported(void) {
@@ -239,24 +240,20 @@ static const struct pci_match virtio_blk_matches[] = {
     VIRTIO_PCI_MATCH_MODERN(VIRTIO_ID_BLK), PCI_MATCH_ID(VIRTIO_PCI_VENDOR, 0x1001),
 };
 
-static void virtio_blk_probe(const struct pci_device *pci) {
-    if (g_dev.pci) {
-        klog_printf("virtio-blk: a second device at %02x:%02x.%u -- one is driven\n",
-                    pci->bus, pci->device, pci->function);
-        return;
-    }
+static int virtio_blk_probe(const struct pci_device *pci) {
+    if (g_dev.pci) return pci_probe_decline(pci, "a second virtio disk; one is driven");
     g_dev.name = "virtio-blk";
-    if (!virtio_pci_attach(pci, VIRTIO_ID_BLK, &g_dev)) return;
+    if (!virtio_pci_attach(pci, VIRTIO_ID_BLK, &g_dev))
+        return pci_probe_decline(pci, "the virtio transport did not attach");
 
     uint64_t wanted = VIRTIO_BLK_F_FLUSH | VIRTIO_BLK_F_SIZE_MAX
                     | VIRTIO_BLK_F_SEG_MAX | VIRTIO_BLK_F_RO
                     | VIRTIO_BLK_F_DISCARD | VIRTIO_BLK_F_BLK_SIZE;
-    if (!virtio_begin(&g_dev, wanted)) return;   // logged its own reason
+    if (!virtio_begin(&g_dev, wanted)) return pci_probe_decline(pci, "feature negotiation failed");
 
     if (!virtqueue_setup(&g_dev, 0, &g_vq)) {
-        klog_write(KLOG_ERR "virtio-blk: could not set up its request queue\n");
         virtio_fail(&g_dev);
-        return;
+        return pci_probe_decline(pci, "could not set up its request queue");
     }
 
     // Capacity is readable after FEATURES_OK; only USING a queue has to
@@ -295,5 +292,6 @@ static void virtio_blk_probe(const struct pci_device *pci) {
                 virtio_blk_flush_supported() ? "yes" : "no",
                 g_max_discard ? "yes" : "no",
                 g_readonly ? ", READ-ONLY" : "");
+    return 0;
 }
 PCI_DRIVER("virtio-blk", virtio_blk_matches, virtio_blk_probe);

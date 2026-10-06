@@ -11,6 +11,7 @@
 #include "block_stat.h"
 #include "clocksource.h" // clocksource_now_ns() -- the stat timers
 #include "heap.h"        // the partial-block bounce buffer
+#include "devevent.h"
 
 // driver-none: the block class registry itself
 
@@ -185,6 +186,10 @@ int blk_register_over(const struct block_device *dev,
                     dev->sector_count(), base_lba, blk_device_name(g_whole));
     } else {
         klog_printf("block: %s active (%u sectors)\n", e->name, dev->sector_count());
+        char id[24];
+        k_snprintf(id, sizeof id, "blk:%s", e->name);
+        devevent_add(QUERY_DEVEV_ADDED, id, dev->driver, "Registered as %s, %u sectors",
+                     e->name, dev->sector_count());
     }
     return 1;
 }

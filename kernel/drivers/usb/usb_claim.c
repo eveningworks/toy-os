@@ -17,6 +17,7 @@
 #include "vmm.h"
 #include "mmap.h"
 #include "futex.h"
+#include "devevent.h"
 
 #define USB_CLASS_HUB 9   // usb_enum.c's, and the same value the spec gives
 
@@ -120,6 +121,9 @@ int usb_claim_take(uint8_t slot, uint64_t pml4, int pid) {
     g_claims[free_slot].pid  = pid;
     klog_printf("usb: pid %d claimed slot %u (%04x:%04x)\n",
                 pid, slot, d->vendor_id, d->product_id);
+    char id[24];
+    usb_device_id(d, id, sizeof id);
+    devevent_add(QUERY_DEVEV_CLAIMED, id, "", "Taken by pid %d", pid);
     return 0;
 }
 
@@ -136,6 +140,13 @@ int usb_claim_drop(uint8_t slot, uint64_t pml4, int rebind) {
     k_memset(&g_claims[i], 0, sizeof g_claims[i]);
     klog_printf("usb: pid %d released slot %u%s\n", pid, slot,
                 rebind ? " (rebinding)" : "");
+    const struct usb_device_info *gone = dev_by_slot(slot);
+    if (gone) {
+        char id[24];
+        usb_device_id(gone, id, sizeof id);
+        devevent_add(QUERY_DEVEV_RETURNED, id, "", rebind ? "Given back by pid %d"
+                     : "Given back by pid %d, left without a driver", pid);
+    }
 
     // THE DEVICE IS LEFT AS THE HOLDER LEFT IT unless a rebind is
     // asked for -- its alternate setting, its clock, its endpoint

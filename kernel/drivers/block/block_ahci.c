@@ -73,6 +73,8 @@ int blk_ahci_init(void) {
     if (ahci_ncq_depth() && !word_on_cmdline("noncq"))
         AHCI_DEV.submit_batch = ahci_submit_batch;
 
+    AHCI_DEV.model = ahci_model();
+    AHCI_DEV.pci = ahci_pci();
     // No announcement: blk_register() already logs the device it accepts.
     return blk_register(&AHCI_DEV);
 }

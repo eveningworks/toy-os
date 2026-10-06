@@ -774,24 +774,17 @@ static int claim_port(int index) {
     return 1;
 }
 
-static void ahci_probe(const struct pci_device *dev) {
-    if (g_pci) {
-        klog_printf("ahci: a second HBA at %02x:%02x.%u -- one is driven\n",
-                    dev->bus, dev->device, dev->function);
-        return;
-    }
-    g_pci = dev;
+// Declines after the HBA was touched keep `g_pci`: one controller is
+// driven per boot, and a second is not offered the half-set-up state.
+static int ahci_probe(const struct pci_device *dev) {
+    if (g_pci) return pci_probe_decline(dev, "a second AHCI controller; one is driven");
 
-    uint64_t abar = pci_bar_mem_addr(g_pci, 5);
-    if (!abar) {
-        klog_write("ahci: controller found but BAR5 is unimplemented or I/O space\n");
-        return;
-    }
+    uint64_t abar = pci_bar_mem_addr(dev, 5);
+    if (!abar) return pci_probe_decline(dev, "BAR5 is unimplemented or I/O space");
     g_abar = (volatile uint8_t *)paging_map_device(abar, 0x1100);
-    if (!g_abar) {
-        klog_printf(KLOG_ERR "ahci: ABAR at 0x%llx could not be mapped\n", (unsigned long long)abar);
-        return;
-    }
+    if (!g_abar)
+        return pci_probe_decline(dev, "ABAR at 0x%llx could not be mapped", (unsigned long long)abar);
+    g_pci = dev;
 
     pci_command_update(g_pci, PCI_CMD_MEMORY | PCI_CMD_BUS_MASTER | PCI_CMD_INTX_DISABLE, 0);
 
@@ -807,11 +800,8 @@ static void ahci_probe(const struct pci_device *dev) {
                 g_port_count, g_port_count == 1 ? "" : "s",
                 ahci_command_slots(), ahci_command_slots() == 1 ? "" : "s");
 
-    if (!g_port_count) return;
-    if (!alloc_dma()) {
-        klog_write("ahci: out of contiguous memory for the command list -- no drive claimed\n");
-        return;
-    }
+    if (!g_port_count) return pci_probe_decline(dev, "no ports implemented");
+    if (!alloc_dma()) return pci_probe_decline(dev, "out of contiguous memory for the command list");
 
     for (int i = 0; i < g_port_count; i++) {
         // DET 3 is "device present, PHY communication established"; the
@@ -821,10 +811,7 @@ static void ahci_probe(const struct pci_device *dev) {
         if (claim_port(i)) break;
     }
 
-    if (g_active < 0) {
-        klog_write("ahci: no SATA drive on any implemented port\n");
-        return;
-    }
+    if (g_active < 0) return pci_probe_decline(dev, "no SATA drive on any implemented port");
 
     // THE COMMIT POINT. Everything the handler reads exists now; before
     // this the device is free to assert nothing.
@@ -855,6 +842,7 @@ static void ahci_probe(const struct pci_device *dev) {
         klog_printf("ahci: on %s vector %u\n",
                     g_pci->irq_msix ? "MSI-X" : "MSI", g_msi_vector);
     else if (g_irq) klog_printf("ahci: on IRQ %u\n", g_irq);
+    return 0;
 }
 
 // ---- transfers -------------------------------------------------------
@@ -1004,6 +992,7 @@ int ahci_irq_driven(void) { return g_irq != 0 || g_msi_vector != 0; }
 uint64_t ahci_cmd_sleeps(void) { return g_cmd_sleeps; }
 int ahci_lba48(void) { return g_lba48; }
 const char *ahci_model(void) { return g_model; }
+const struct pci_device *ahci_pci(void) { return g_active >= 0 ? g_pci : 0; }
 int ahci_port_count(void) { return g_port_count; }
 
 int ahci_port_status(int index, struct ahci_port_status *out) {

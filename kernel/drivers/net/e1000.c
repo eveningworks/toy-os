@@ -150,19 +150,15 @@ static void e1000_poll(struct net_device *dev) { drain_rx(dev); }
 static int g_probed;
 static const struct pci_match e1000_matches[] = { PCI_MATCH_ID(E1000_VENDOR, E1000_DEV_82540EM) };
 
-static void e1000_probe(const struct pci_device *pci) {
-    if (g_probed) {
-        klog_printf("e1000: a second card at %02x:%02x.%u -- one is driven\n",
-                    pci->bus, pci->device, pci->function);
-        return;
-    }
+// A decline AFTER an interrupt is registered must take it back first:
+// this is a module, and an unbound device does not stop it unloading.
+static int e1000_probe(const struct pci_device *pci) {
+    if (g_probed) return pci_probe_decline(pci, "a second card; one is driven");
     g_probed = 1;
 
     uint64_t bar = pci_bar_mem_addr(pci, 0);
-    if (!bar || pci_bar_is_io(pci->bar[0])) {
-        klog_write("e1000: BAR0 is not usable memory space\n");
-        return;
-    }
+    if (!bar || pci_bar_is_io(pci->bar[0]))
+        return pci_probe_decline(pci, "BAR0 is not usable memory space");
     g_e1000.mmio = (volatile uint8_t *)(uintptr_t)bar;   // identity-mapped below 4 GiB
 
     // Descriptors and buffers in one contiguous block each: the device
@@ -172,10 +168,8 @@ static void e1000_probe(const struct pci_device *pci) {
     uint64_t tx_ring = pmm_alloc_contiguous(1, PMM_ZONE_DMA32);
     uint64_t rx_bufs = pmm_alloc_contiguous((RX_DESCS * BUF_SIZE) / 4096, PMM_ZONE_DMA32);
     uint64_t tx_bufs = pmm_alloc_contiguous((TX_DESCS * BUF_SIZE) / 4096, PMM_ZONE_DMA32);
-    if (!rx_ring || !tx_ring || !rx_bufs || !tx_bufs) {
-        klog_write("e1000: not enough contiguous memory for the rings\n");
-        return;
-    }
+    if (!rx_ring || !tx_ring || !rx_bufs || !tx_bufs)
+        return pci_probe_decline(pci, "not enough contiguous memory for the rings");
     g_e1000.rx = (struct rx_desc *)(uintptr_t)rx_ring;
     g_e1000.tx = (struct tx_desc *)(uintptr_t)tx_ring;
     g_e1000.rx_buf = (uint8_t *)(uintptr_t)rx_bufs;
@@ -211,10 +205,7 @@ static void e1000_probe(const struct pci_device *pci) {
     reg_write(REG_TIPG, 0x0060200Au);   // the manual's IEEE 802.3 default
     reg_write(REG_TCTL, TCTL_EN | TCTL_PSP | (0x0Fu << 4) | (0x40u << 12));
 
-    if (!read_mac(g_dev.mac)) {
-        klog_write(KLOG_ERR "e1000: could not read the MAC address\n");
-        return;
-    }
+    if (!read_mac(g_dev.mac)) return pci_probe_decline(pci, "could not read the MAC address");
 
     net_location_pci(&g_dev, pci->bus, pci->device, pci->function);
     g_dev.driver = "e1000";
@@ -248,7 +239,16 @@ static void e1000_probe(const struct pci_device *pci) {
         klog_write("e1000: no usable interrupt line -- receiving by poll\n");
     }
 
-    if (!net_register(&g_dev)) g_present = 0;
+    if (!net_register(&g_dev)) {
+        g_present = 0;
+        reg_write(REG_IMC, 0xFFFFFFFFu);
+        if (g_msi_vector) pci_msi_release(pci, g_msi_vector);
+        else if (g_e1000.irq) { irq_mask(g_e1000.irq); irq_unregister_handler(g_e1000.irq, e1000_irq); }
+        g_msi_vector = 0;
+        g_e1000.irq = 0;
+        return pci_probe_decline(pci, "the network core has no room for another card");
+    }
+    return 0;
 }
 
 // The inverse: interrupts masked FIRST, so the handler can be

@@ -98,5 +98,6 @@ int blk_virtio_init(void) {
     // "block: <name> active (<n> sectors)" for every device it accepts,
     // and block_ata.c stays quiet for the same reason. A line here made
     // the boot log report virtio-blk twice, which reads as two disks.
+    VIRTIO_DEV.pci = virtio_blk_pci();
     return blk_register(&VIRTIO_DEV);
 }

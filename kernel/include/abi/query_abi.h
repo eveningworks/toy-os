@@ -552,6 +552,13 @@ struct query_fsstat {
 // Task Manager and meminfo only: the walk is why it is not a proc_info
 // field, which every pid lookup in the kernel reads.
 #define QUERY_PROCMEM 50
+// THE DEVICES' LIFECYCLE this boot, oldest first: a driver bound one,
+// declined one (and why), let one go, a process took one or gave it
+// back, a device was plugged in or pulled out (struct query_devevent).
+// LIST of the latest QUERY_DEVEVENT_KEEP; `seq` counts every event ever
+// recorded, so a gap says the ring wrapped. kernel/core/devevent.c;
+// Device Manager's Events section and `devctl events` read it.
+#define QUERY_DEVEVENT 51
 
 #define QUERY_REMOTE_SESSION  0 // a session opened or closed
 #define QUERY_REMOTE_COMMAND  1 // a command line the remote shell ran
@@ -969,7 +976,11 @@ struct query_driver {
     char file[64];      // the source file it declared itself in, for -v
     char desc[48];      // one line saying what it is, or "" -- also -v
     char devices[64];   // "enp3s0 usb:13", or "" for none
+    char module[16];    // the loaded module it came in, or "" when built in
 };
+
+#define QUERY_DEVEVENT_KEEP 128
+#define QUERY_DEVEVENT_TEXT 96 // also query_pcidev's `why`
 
 // QUERY_PCIDEV's record. Both fields can be empty at once -- a device
 // no driver matched and nobody has claimed, which is most of them.
@@ -982,7 +993,36 @@ struct query_pcidev {
     // the gate, since this kernel has no uid. Asked rather than probed:
     // probing means unbinding a live device to find out.
     uint32_t claimable;
+    // The last driver that LOOKED AT this device and declined it, and
+    // its reason ("no codec with an analog output"); "" when none did.
+    // Kept beside the binding rather than only in QUERY_DEVEVENT's ring,
+    // which wraps. Cleared when a driver binds it.
+    char     declined_by[16];
+    char     why[QUERY_DEVEVENT_TEXT];
 };
+
+// --- QUERY_DEVEVENT record ---------------------------------------------
+
+#define QUERY_DEVEV_BOUND     1 // a ring-0 driver took it
+#define QUERY_DEVEV_DECLINED  2 // a driver looked and said no; `text` says why
+#define QUERY_DEVEV_RELEASED  3 // its driver let go: an unbind, a module unloading
+#define QUERY_DEVEV_CLAIMED   4 // a process took it; `text` names the pid
+#define QUERY_DEVEV_RETURNED  5 // that process gave it back
+#define QUERY_DEVEV_ADDED     6 // it appeared: plugged in, a disk registered
+#define QUERY_DEVEV_REMOVED   7 // it went: unplugged, a disk unregistered
+#define QUERY_DEVEV_NO_DRIVER 8 // it appeared and no driver matched it
+
+struct query_devevent {
+    uint32_t seq;          // 1 for this boot's first event, then on
+    uint32_t kind;         // QUERY_DEVEV_*
+    uint64_t uptime_ms;
+    char     device_id[24];  // udevice's naming: "pci:00:1f.2", "usb:14:2357:0601"
+    char     driver[16];     // the driver involved, or ""
+    char     text[QUERY_DEVEVENT_TEXT];
+};
+
+_Static_assert(sizeof(struct query_devevent) <= 256,
+               "a query record must fit QUERY_RECORD_MAX -- see api/query.h");
 
 // QUERY_SOUND's record, one per registered sound device.
 struct query_sound {
@@ -1046,6 +1086,9 @@ struct query_blkdev {
     uint64_t persistent;// 0 for a RAM-backed live image
     uint64_t block_size;// the device's logical block, bytes: 512 or 4096.
                         // `sectors` and `base_lba` stay 512-byte units
+    char model[48];     // the drive's own name ("SAMSUNG MZNLN128HAHQ-000H1"), or ""
+    char driver[16];    // "ahci", "nvme"; "" for a partition
+    char device_id[24]; // its controller, udevice's naming ("pci:00:1f.2"), or ""
 };
 
 // QUERY_NETDEV's record -- one registered network device.
@@ -1084,6 +1127,9 @@ struct query_netdev {
     // whatever the cable says. Separate from link_up for the reason Linux
     // keeps IFF_UP apart from carrier: one is a decision, one is a fact.
     uint64_t admin_down;
+    // The bus device it is, udevice's naming ("pci:00:03.0",
+    // "usb:14:2357:0601"), or "" when the driver does not say.
+    char device_id[24];
 };
 
 // QUERY_PARTTABLE's record -- the table, not its entries.

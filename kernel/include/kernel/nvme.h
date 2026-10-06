@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include "block.h"
 
+struct pci_device;
+
 // An NVM Express controller -- see kernel/drivers/nvme.c.
 //
 // ONE controller, ONE I/O queue pair, and up to NVME_MAX_NS namespaces,
@@ -42,5 +44,6 @@ int nvme_irq_driven(void);
 uint64_t nvme_irq_count(void);
 uint64_t nvme_sleeps(void);
 const char *nvme_model(void);
+const struct pci_device *nvme_pci(void); // the controller driven, or NULL
 
 #endif

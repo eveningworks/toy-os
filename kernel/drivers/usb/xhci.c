@@ -3132,34 +3132,26 @@ static int usb_disabled(void) {
     return 0;
 }
 
-static void usb_probe(const struct pci_device *d) {
+static int usb_probe(const struct pci_device *d) {
     BOOT_REQUIRE(BOOT_SUB_PCI);
     BOOT_REQUIRE(BOOT_SUB_PMM);
 
-    if (usb_disabled()) {
-        klog_printf("usb: disabled by `nousb` on the boot line\n");
-        return;
-    }
-    if (!is_xhci(d)) return;
-    if (g_hc.pci) {
-        klog_printf("usb: a second xHCI at %02x:%02x.%u -- one is driven\n",
-                    d->bus, d->device, d->function);
-        return;
-    }
+    if (usb_disabled()) return pci_probe_decline(d, "USB is off: `nousb` on the boot line");
+    // The class match takes every USB host controller; only xHCI is driven.
+    if (!is_xhci(d))
+        return pci_probe_decline(d, "a USB %s controller; only xHCI is driven",
+                                 d->prog_if == 0x20 ? "2.0 (EHCI)" :
+                                 d->prog_if == 0x10 ? "1.1 (OHCI)" :
+                                 d->prog_if == 0x00 ? "1.1 (UHCI)" : "host");
+    if (g_hc.pci) return pci_probe_decline(d, "a second xHCI controller; one is driven");
 
     uint64_t bar0 = pci_bar_mem_addr(d, 0);
-    if (!bar0) {
-        klog_printf("usb: xHCI at %02x:%02x.%u has no usable memory BAR0\n",
-                    d->bus, d->device, d->function);
-        return;
-    }
+    if (!bar0) return pci_probe_decline(d, "no usable memory BAR0");
     uint64_t bar0_len = pci_bar_mem_size(d, 0);
     volatile void *win = paging_map_device(bar0, bar0_len ? bar0_len : 0x1000);
-    if (!win) {
-        klog_printf(KLOG_ERR "usb: xHCI register window at 0x%llx could not be mapped\n",
-                    (unsigned long long)bar0);
-        return;
-    }
+    if (!win)
+        return pci_probe_decline(d, "its register window at 0x%llx could not be mapped",
+                                 (unsigned long long)bar0);
 
     g_hc.pci = d;
     g_hc.cap = (volatile uint8_t *)win;
@@ -3224,7 +3216,7 @@ static void usb_probe(const struct pci_device *d) {
         g_hc_dead_source.caps = 0;
         g_hc_dead_source.poll = xhci_dead_heartbeat;
         input_register_source(&g_hc_dead_source);
-        return;
+        return pci_probe_decline(d, "the controller would not reset");
     }
 
     // PAGESIZE is only meaningful after reset. Bit n set means 2^(n+12).
@@ -3241,7 +3233,7 @@ static void usb_probe(const struct pci_device *d) {
     mw32(g_hc.op, XHCI_CONFIG, slots);
 
     USBT("usb: trace: setup_rings\n");
-    if (!setup_rings()) return;
+    if (!setup_rings()) return pci_probe_decline(d, "no memory for its rings");
     USBT("usb: trace: rings done\n");
 
     // PPC IS ON THIS LINE BECAUSE A RECOVERY DEPENDS ON IT. Port Power
@@ -3310,9 +3302,8 @@ static void usb_probe(const struct pci_device *d) {
     struct xhci_wait w; xhci_wait_start(&w, 100);
     while (mr32(g_hc.op, XHCI_USBSTS) & XHCI_STS_HCH) {
         if (xhci_wait_over(&w)) {
-            klog_printf("usb: controller will not start (usbsts 0x%x)\n",
-                        mr32(g_hc.op, XHCI_USBSTS));
-            return;
+            return pci_probe_decline(d, "the controller would not start (usbsts 0x%x)",
+                                     mr32(g_hc.op, XHCI_USBSTS));
         }
     }
     g_hc.running = 1;
@@ -3345,6 +3336,7 @@ static void usb_probe(const struct pci_device *d) {
     power_ports();
     scan_ports();
     log_usb3_ports();
+    return 0;
 }
 
 // --- introspection ----------------------------------------------------

@@ -116,19 +116,20 @@ static const struct pci_match virtio_rng_matches[] = {
     VIRTIO_PCI_MATCH_MODERN(VIRTIO_ID_RNG), PCI_MATCH_ID(VIRTIO_PCI_VENDOR, 0x1005),
 };
 
-static void virtio_rng_probe(const struct pci_device *pci) {
-    if (g_dev.pci) return; // virtio_test.c keeps a spare one on purpose
+static int virtio_rng_probe(const struct pci_device *pci) {
+    // virtio_test.c keeps a spare one on purpose
+    if (g_dev.pci) return pci_probe_decline(pci, "a second virtio-rng; one is driven");
     g_dev.name = "virtio-rng";
-    if (!virtio_pci_attach(pci, VIRTIO_ID_RNG, &g_dev)) return;
+    if (!virtio_pci_attach(pci, VIRTIO_ID_RNG, &g_dev))
+        return pci_probe_decline(pci, "the virtio transport did not attach");
 
     // virtio-rng defines no device feature bits at all, so the only
     // thing negotiated is VIRTIO_F_VERSION_1, which virtio_begin() adds.
-    if (!virtio_begin(&g_dev, 0)) return;   // logged its own reason
+    if (!virtio_begin(&g_dev, 0)) return pci_probe_decline(pci, "feature negotiation failed");
 
     if (!virtqueue_setup(&g_dev, 0, &g_vq)) {
-        klog_write(KLOG_ERR "virtio-rng: could not set up its request queue\n");
         virtio_fail(&g_dev);
-        return;
+        return pci_probe_decline(pci, "could not set up its request queue");
     }
 
     virtio_driver_ok(&g_dev);
@@ -142,11 +143,12 @@ static void virtio_rng_probe(const struct pci_device *pci) {
     if (!virtio_rng_read(probe, sizeof probe)) {
         klog_write("virtio-rng: present but the first request did not complete"
                    " -- not registered as an entropy source\n");
-        return;
+        return 0;   // driven, just not trusted
     }
 
     krandom_register_source("virtio-rng", rng_source, KRANDOM_VIRTIO);
     klog_printf("virtio-rng: entropy source registered (krandom is now %s)\n",
                 krandom_quality_name(krandom_quality()));
+    return 0;
 }
 PCI_DRIVER("virtio-rng", virtio_rng_matches, virtio_rng_probe);

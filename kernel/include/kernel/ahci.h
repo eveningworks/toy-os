@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+struct pci_device;
+
 // AHCI: SATA drives on a host bus adapter, the interface real hardware
 // presents where ata.c's legacy IDE controller increasingly does not.
 //
@@ -110,6 +112,7 @@ uint64_t ahci_ncq_cmds(void);
 uint64_t ahci_ncq_fallbacks(void);
 int      ahci_lba48(void);              // the drive's own addressing
 const char *ahci_model(void);           // IDENTIFY's model string, "" if none
+const struct pci_device *ahci_pci(void); // the HBA driven, or NULL
 
 // One entry per IMPLEMENTED port, in port order -- so `index` is a
 // position in that list and `port` is the hardware's own number, which

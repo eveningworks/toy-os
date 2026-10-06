@@ -113,7 +113,9 @@ const char *driver_devices_at(int i);   // "" when it bound nothing
 // A `.drivers` table that is not in the image -- a loaded module's.
 // Its declarations appear in every listing after the image's, until
 // the table is removed (the module unloading). At most 4 per table.
-int driver_add_table(const struct driver_decl *decls, int n);
+// `module` is the module's name, which QUERY_DRIVER reports beside each.
+int driver_add_table(const struct driver_decl *decls, int n, const char *module);
+const char *driver_module_at(int i);    // "" for a driver built into the image
 int driver_remove_table(const struct driver_decl *decls);
 
 void driver_query_init(void); // QUERY_DRIVER

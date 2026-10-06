@@ -64,6 +64,8 @@ int blk_nvme_init(void) {
     for (int i = 0; i < n; i++) {
         struct block_device *d = &g_nvme_dev[i];
         d->name = "nvme";
+        d->model = nvme_model();
+        d->pci = nvme_pci();
         d->driver = "nvme";
         d->sector_count = g_ops[i].count;
         d->read_sectors = g_ops[i].read;

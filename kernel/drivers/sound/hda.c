@@ -526,27 +526,26 @@ static void ctrl_quiesce(struct hda_ctrl *h) {
     h->mmio = 0;
 }
 
-static void ctrl_teardown(struct hda_ctrl *h, const char *why) {
-    klog_printf("%s: %s -- not registered\n", h->name, why);
+// The probe's way out after the controller was touched: quiet, then
+// declined, so the device is left with no driver and says why.
+static int ctrl_teardown(struct hda_ctrl *h, const char *why) {
     ctrl_quiesce(h);
+    return pci_probe_decline(h->pci, "%s", why);
 }
 
-static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index) {
+// 0 when the controller is registered as a sound device; otherwise the
+// probe's decline.
+static int ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index) {
     h->pci = d;
     h->index = index;
     k_snprintf(h->name, sizeof h->name, "hda%d", index);
 
     uint64_t bar0 = pci_bar_mem_addr(d, 0);
-    if (!bar0) {
-        klog_printf("%s: no memory BAR0 -- not driving it\n", h->name);
-        return;
-    }
+    if (!bar0) return pci_probe_decline(d, "no memory BAR0");
     uint64_t len = pci_bar_mem_size(d, 0);
     volatile void *win = paging_map_device(bar0, len ? len : 0x4000);
-    if (!win) {
-        klog_printf(KLOG_ERR "%s: BAR0 at 0x%llx could not be mapped\n", h->name, (unsigned long long)bar0);
-        return;
-    }
+    if (!win)
+        return pci_probe_decline(d, "BAR0 at 0x%llx could not be mapped", (unsigned long long)bar0);
     h->mmio = (volatile uint8_t *)win;
     pci_command_update(d, PCI_CMD_MEMORY | PCI_CMD_BUS_MASTER, 0);
     pci_command_update(d, PCI_CMD_INTX_DISABLE, 0);
@@ -565,7 +564,7 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     }
 
     h->dma_phys = pmm_alloc_contiguous(1, PMM_ZONE_DMA32);
-    if (!h->dma_phys) { h->mmio = 0; return; }
+    if (!h->dma_phys) { h->mmio = 0; return pci_probe_decline(d, "no contiguous frame for the command rings"); }
     h->corb = (volatile uint32_t *)(uintptr_t)h->dma_phys;
     h->rirb = (volatile uint64_t *)(uintptr_t)(h->dma_phys + 1024);
     h->bdl  = (struct hda_bdl_entry *)(uintptr_t)(h->dma_phys + 3072);
@@ -578,10 +577,8 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     mw32(h, HDA_GCTL, mr32(h, HDA_GCTL) & ~(uint32_t)GCTL_CRST);
     wait_reg32(h, HDA_GCTL, GCTL_CRST, 0);
     mw32(h, HDA_GCTL, GCTL_CRST);
-    if (wait_reg32(h, HDA_GCTL, GCTL_CRST, GCTL_CRST) != 0) {
-        ctrl_teardown(h, "controller never left reset");
-        return;
-    }
+    if (wait_reg32(h, HDA_GCTL, GCTL_CRST, GCTL_CRST) != 0)
+        return ctrl_teardown(h, "the controller never left reset");
     clocksource_delay_ms(30);   // was 3 ticks; real ms on a TSC
     mw16(h, HDA_WAKEEN, 0);
     uint16_t statests = mr16(h, HDA_STATESTS) & 0x7FFF;
@@ -591,7 +588,7 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     uint16_t gcap = mr16(h, HDA_GCAP);
     h->iss = (gcap >> 8) & 0xF;
     h->oss = (gcap >> 12) & 0xF;
-    if (!h->oss) { ctrl_teardown(h, "no output streams"); return; }
+    if (!h->oss) return ctrl_teardown(h, "no output streams");
     h->sd_index = h->iss; // the first OUTPUT descriptor follows the inputs
     h->sd = HDA_SD_BASE + (uint32_t)h->sd_index * 0x20;
     klog_printf("%s: %02x:%02x.%u gcap %#x (%d in, %d out) codecs %#x\n",
@@ -627,7 +624,7 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
         }
         found = 1;
     }
-    if (!found) { ctrl_teardown(h, "no codec with an analog output"); return; }
+    if (!found) return ctrl_teardown(h, "no codec with an analog output");
 
     // THE WIDTH: the deepest both DACs report (a headphone DAC is
     // usually the speaker's twin, but nothing promises it).
@@ -671,12 +668,12 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
 
     uint64_t ring_phys = 0;
     void *ring = sound_ring_alloc(&ring_phys);
-    if (!ring) { ctrl_teardown(h, "no contiguous frames for the ring"); return; }
+    if (!ring) return ctrl_teardown(h, "no contiguous frames for the ring");
     h->ring_phys = ring_phys;
     if (h->bits == 16 || (h->dev.depths & SND_DEPTH_16)) {
         h->bounce_phys = pmm_alloc_contiguous(SND_CHUNKS * SND_CHUNK_BYTES_S16 / 4096,
                                               PMM_ZONE_DMA32);
-        if (!h->bounce_phys) { ctrl_teardown(h, "no contiguous frames for the 16-bit copy"); return; }
+        if (!h->bounce_phys) return ctrl_teardown(h, "no contiguous frames for the 16-bit copy");
         h->bounce_mem = (int16_t *)(uintptr_t)h->bounce_phys;
         k_memset(h->bounce_mem, 0, SND_CHUNKS * SND_CHUNK_BYTES_S16);
     }
@@ -687,10 +684,8 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     uint8_t line = pci_irq_line(d);
     h->msi_vector = pci_msi_request(d, hda_irq);
     if (!h->msi_vector) {
-        if (line == 0xFF || line == 0 || line >= 16) {
-            ctrl_teardown(h, "no MSI and no usable INTx line");
-            return;
-        }
+        if (line == 0xFF || line == 0 || line >= 16)
+            return ctrl_teardown(h, "no MSI and no usable INTx line");
         h->irq = line;
         irq_register_handler(line, hda_irq);
         pci_command_update(d, 0, PCI_CMD_INTX_DISABLE);
@@ -709,13 +704,20 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     h->dev.stop = hda_dev_stop;
     h->dev.set_volume = hda_dev_volume;
     h->dev.set_format = hda_dev_format;
-    if (!sound_register(&h->dev, ring, ring_phys)) return;
+    if (!sound_register(&h->dev, ring, ring_phys)) {
+        if (h->msi_vector) pci_msi_release(d, h->msi_vector);
+        else { irq_mask(h->irq); irq_unregister_handler(h->irq, hda_irq); }
+        h->msi_vector = 0;
+        h->irq = 0;
+        return ctrl_teardown(h, "the sound core has no room for another card");
+    }
     h->registered = 1;
     klog_printf("%s: %02x:%02x.%u codec %04x:%04x spk pin %#x dac %#x%s%#x %s\n",
                 h->name, d->bus, d->device, d->function,
                 h->codec.vendor >> 16, h->codec.vendor & 0xFFFF, h->codec.spk.pin, h->codec.spk.dac,
                 h->codec.have_hp ? " hp pin " : " hp ", h->codec.have_hp ? h->codec.hp.pin : 0,
                 h->msi_vector ? "msi" : "intx");
+    return 0;
 }
 
 // `config set kernel.hda_tone on`: three seconds of 375 Hz written into
@@ -748,21 +750,36 @@ void hda_diag_tone(void) {
 
 static const struct pci_match hda_matches[] = { PCI_MATCH_CLASS(0x04, 0x03, PCI_ANY) };
 
+// The controller's NUMBER is its place among the bus's HDA functions,
+// not its slot: a declined controller frees its slot, and numbering by
+// slot would rename the next one -- and `audio_device`, and a card's
+// remembered format, are kept by that name.
+static int hda_number(const struct pci_device *d) {
+    int n = 0;
+    for (int i = 0; i < pci_device_count(); i++) {
+        const struct pci_device *o = pci_device_at(i);
+        if (o == d) return n;
+        if (pci_match_device(&hda_matches[0], o)) n++;
+    }
+    return n;
+}
+
 // Once per controller: a laptop has the PCH's and the GPU's.
-static void hda_probe(const struct pci_device *d) {
+static int hda_probe(const struct pci_device *d) {
     // A FREE SLOT, not the next one: hda_remove() frees one in the
-    // middle, and a bump counter would leak it and rename the
-    // controller on every re-probe. g_nctrl stays the high-water mark
-    // every walk over the array bounds itself with.
+    // middle, and a bump counter would leak it. g_nctrl stays the
+    // high-water mark every walk over the array bounds itself with.
     int slot = -1;
     for (int i = 0; i < HDA_MAX_CTRL; i++) if (!g_hc[i].pci) { slot = i; break; }
-    if (slot < 0) {
-        klog_printf("hda: a %dth controller at %02x:%02x.%u -- not driven\n",
-                    HDA_MAX_CTRL + 1, d->bus, d->device, d->function);
-        return;
+    if (slot < 0)
+        return pci_probe_decline(d, "already driving %d controllers", HDA_MAX_CTRL);
+    int r = ctrl_init(&g_hc[slot], d, hda_number(d));
+    if (r < 0) {
+        g_hc[slot].pci = 0;
+        return r;
     }
-    ctrl_init(&g_hc[slot], d, slot);
     if (slot >= g_nctrl) g_nctrl = slot + 1;
+    return 0;
 }
 
 // What makes HDA claimable from ring 3 (docs/umdf-design.md stage 2).
@@ -776,9 +793,8 @@ static void hda_remove(const struct pci_device *d) {
     for (int i = 0; i < g_nctrl; i++) if (g_hc[i].pci == d) { h = &g_hc[i]; break; }
     if (!h) return;
 
-    // `mmio` is 0 for a controller whose init failed: there is nothing
-    // to quiesce, but the SLOT still has to come free or the device can
-    // never be re-probed.
+    // A controller whose init failed was declined and never gets here;
+    // the check stays so a half-built one could only leak, not fault.
     if (h->mmio) {
         if (h->registered) sound_unregister(&h->dev);
         h->registered = 0;

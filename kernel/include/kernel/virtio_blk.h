@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+struct pci_device;
+
 // The virtio block device. See kernel/drivers/virtio/virtio_blk.c.
 //
 // Brings the driver up if a virtio-blk device is on the PCI bus:
@@ -17,6 +19,7 @@
 // Is there a working virtio-blk device? 0 when none was found, or when
 // one was found and refused.
 int virtio_blk_present(void);
+const struct pci_device *virtio_blk_pci(void);
 
 // Capacity in 512-byte sectors, clamped to 32 bits -- see the block
 // layer's own sector_count(), which is uint32_t.

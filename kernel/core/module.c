@@ -449,7 +449,7 @@ int module_load_image(const char *name, const void *image, uint32_t len) {
         return -ENOEXEC;
     }
 
-    if (m->ndrivers && (rc = driver_add_table(m->drivers, m->ndrivers)) != 0) {
+    if (m->ndrivers && (rc = driver_add_table(m->drivers, m->ndrivers, name)) != 0) {
         klog_printf(KLOG_ERR "module: %s: cannot register its drivers (%d)\n", name, rc);
         free_frames(m);
         return rc;

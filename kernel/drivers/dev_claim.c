@@ -26,6 +26,7 @@
 #include "query_abi.h"
 #include "initcall.h"
 #include "string.h"
+#include "devevent.h"
 
 // Keyed by the enumeration index, like g_bound[]. OCCUPANCY IS THE
 // PML4, NOT THE PID: the kernel context has no pid and a KTEST claims
@@ -76,6 +77,7 @@ int dev_claim_take(int index, uint64_t pml4, int pid) {
     g_claims[index].pid  = pid;
     klog_printf("dev: pid %d claimed pci %d (%02x:%02x.%u)\n",
                 pid, index, d->bus, d->device, d->function);
+    devevent_pci(QUERY_DEVEV_CLAIMED, d, "", "Taken by pid %d", pid);
     return 0;
 }
 
@@ -152,6 +154,8 @@ int dev_claim_drop(int index, uint64_t pml4, int rebind) {
     g_claims[index].pid  = 0;
     klog_printf("dev: pid %d released pci %d%s\n", pid, index,
                 rebind ? " (rebinding)" : "");
+    devevent_pci(QUERY_DEVEV_RETURNED, pci_device_at(index), "",
+                 rebind ? "Given back by pid %d" : "Given back by pid %d, left without a driver", pid);
     if (rebind) pci_device_rebind(index);
     return 0;
 }
@@ -170,6 +174,8 @@ void dev_claim_space_gone(uint64_t pml4) {
         // The mapping of these frames died with the address space, but
         // the DEVICE did not stop: dma_release() clears bus mastering
         // before they go back to the allocator.
+        devevent_pci(QUERY_DEVEV_RETURNED, pci_device_at(i), "",
+                     "pid %d exited holding it -- left without a driver", g_claims[i].pid);
         dev_irq_release(i);
         dma_release(i, 0);
         g_claims[i].pml4 = 0;
@@ -400,6 +406,12 @@ static int pcidev_fill(int index, void *out) {
     // removable: an UNBOUND device has no driver to ask for a remove().
     q->claimable = (!drv || pci_device_removable(index)) ? 1 : 0;
     if (drv) k_strlcpy(q->driver, drv, sizeof q->driver);
+    const char *why = 0;
+    const char *by = pci_device_declined(index, &why);
+    if (by) {
+        k_strlcpy(q->declined_by, by, sizeof q->declined_by);
+        k_strlcpy(q->why, why, sizeof q->why);
+    }
     return 1;
 }
 

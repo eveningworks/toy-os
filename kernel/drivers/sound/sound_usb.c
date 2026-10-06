@@ -729,8 +729,7 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
     audio_label(a, info);
     a->dev.name       = a->name;
     a->dev.driver     = "usb-audio";
-    k_snprintf(a->devid, sizeof a->devid, "usb:%u:%04x:%04x", info->root_port,
-               info->vendor_id, info->product_id);
+    usb_device_id(info, a->devid, sizeof a->devid);
     a->dev.device_id  = a->devid;
     a->dev.priv       = a;          // how every op finds THIS DAC
     a->dev.label      = a->label;

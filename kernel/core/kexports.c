@@ -108,6 +108,7 @@ EXPORT_SYMBOL(pci_command_update);
 EXPORT_SYMBOL(pci_msi_request);
 EXPORT_SYMBOL(pci_msi_release);
 EXPORT_SYMBOL(pci_irq_line);
+EXPORT_SYMBOL(pci_probe_decline);
 
 // --- irq.h -------------------------------------------------------------
 EXPORT_SYMBOL(irq_register_handler);

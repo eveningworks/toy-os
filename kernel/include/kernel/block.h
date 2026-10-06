@@ -36,6 +36,7 @@
 #define BLK_CAP_TRIM  0x02
 
 // One run of sectors to discard.
+struct pci_device;
 struct blk_range { uint32_t lba, count; };
 
 // One transfer of a batch (blkdev_submit_batch()). `buf` is written TO
@@ -58,6 +59,12 @@ struct block_device {
     // driver that fills this in cannot then forget to say so. NULL for
     // a partition, whose driver is the whole disk's.
     const char *driver;
+
+    // WHAT THE DISK IS AND WHAT IT HANGS OFF, for Device Manager and
+    // `lsblk`. Both optional: NULL for a partition (its disk's), a RAM
+    // disk, or a driver that does not know.
+    const char *model;               // "SAMSUNG MZNLN128HAHQ-000H1"
+    const struct pci_device *pci;    // its controller
 
     // Total addressable sectors, 512 bytes each -- whatever `block_size`
     // says. See block_size below.

@@ -40,6 +40,7 @@ static int g_extra_count;
 struct table {
     const struct driver_decl *decls;   // NULL when the slot is free
     int n;
+    char module[16];
     char devs[DRIVER_TABLE_DECLS_MAX][DRIVER_DEVS_MAX];
 };
 static struct table g_tables[DRIVER_TABLES_MAX];
@@ -165,7 +166,7 @@ void driver_bound(const char *name, const char *dev) {
     append_dev(e->devs, dev);
 }
 
-int driver_add_table(const struct driver_decl *decls, int n) {
+int driver_add_table(const struct driver_decl *decls, int n, const char *module) {
     if (!decls || n <= 0 || n > DRIVER_TABLE_DECLS_MAX) return -EINVAL;
     int free_slot = -1;
     for (int t = 0; t < DRIVER_TABLES_MAX; t++) {
@@ -175,6 +176,7 @@ int driver_add_table(const struct driver_decl *decls, int n) {
     if (free_slot < 0) return -ENOSPC;
     g_tables[free_slot].decls = decls;
     g_tables[free_slot].n = n;
+    k_strlcpy(g_tables[free_slot].module, module ? module : "?", sizeof g_tables[free_slot].module);
     k_memset(g_tables[free_slot].devs, 0, sizeof g_tables[free_slot].devs);
     return 0;
 }
@@ -190,6 +192,17 @@ int driver_remove_table(const struct driver_decl *decls) {
 }
 
 int driver_count(void) { return decl_count() + table_decls() + g_extra_count; }
+
+const char *driver_module_at(int i) {
+    i -= decl_count();
+    if (i < 0) return "";
+    for (int t = 0; t < DRIVER_TABLES_MAX; t++) {
+        if (!g_tables[t].decls) continue;
+        if (i < g_tables[t].n) return g_tables[t].module;
+        i -= g_tables[t].n;
+    }
+    return "";
+}
 
 const char *driver_name_at(int i) {
     struct slot sl;
@@ -235,6 +248,7 @@ static int drv_fill(int index, void *out) {
     k_strlcpy(q->file,    driver_file_at(index),    sizeof q->file);
     k_strlcpy(q->desc,    driver_desc_at(index),    sizeof q->desc);
     k_strlcpy(q->devices, driver_devices_at(index), sizeof q->devices);
+    k_strlcpy(q->module,  driver_module_at(index),  sizeof q->module);
     return 1;
 }
 

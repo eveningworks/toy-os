@@ -121,6 +121,7 @@ static int g_trim_supported = 0;
 // (which silently allocates past the end of a smaller image -- see
 // TFS2's own clamp).
 static uint32_t g_sector_count = 0;
+static char g_model[41];       // IDENTIFY's model, "" until a drive answers
 
 // ~1s at the 100Hz PIT tick rate. See wait_not_busy() below for why a
 // wall-clock bound, rather than ATA_POLL_LIMIT alone, is what this wait
@@ -1109,6 +1110,14 @@ void ata_init(void) {
     uint16_t identify[256];
     for (int i = 0; i < 256; i++) identify[i] = inw(REG_DATA);
     g_sector_count = (uint32_t)identify[60] | ((uint32_t)identify[61] << 16);
+    // Words 27-46: the model, two characters a word, high byte first,
+    // space-padded -- ahci.c's decode.
+    for (int i = 0; i < 20; i++) {
+        g_model[i * 2]     = (char)(identify[27 + i] >> 8);
+        g_model[i * 2 + 1] = (char)(identify[27 + i] & 0xFF);
+    }
+    g_model[40] = 0;
+    for (int i = 39; i >= 0 && g_model[i] == ' '; i--) g_model[i] = 0;
     if (ata_identify_logical_bytes(identify) != ATA_SECTOR_SIZE) {
         klog_printf(KLOG_ERR "ata: drive has %u-byte logical sectors -- not driven\n",
                     ata_identify_logical_bytes(identify));
@@ -1157,6 +1166,8 @@ int ata_trim_supported(void) {
 uint32_t ata_sector_count(void) {
     return g_present ? g_sector_count : 0;
 }
+
+const char *ata_model(void) { return g_model; }
 
 // Shared by ata_read_sectors()/ata_write_sectors(). A transfer that
 // runs past the end of the drive is a caller bug (or a filesystem

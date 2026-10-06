@@ -157,6 +157,7 @@ int ata_set_dma_forced_off(int off);
 // the drive fails cleanly and loudly rather than being handed to the
 // hardware.
 uint32_t ata_sector_count(void);
+const char *ata_model(void);   // IDENTIFY's model string, "" if none
 
 // Reads/writes exactly one ATA_SECTOR_SIZE-byte sector at 28-bit LBA
 // `lba`. Returns 1 on success, 0 on failure (no drive present, the

@@ -21,6 +21,7 @@
 #include "kfmt.h"
 #include "string.h"
 #include "pmm.h"
+#include "devevent.h"
 
 // driver-none: enumeration; xhci.c is the driver and the HID/net/audio drivers bind
 
@@ -385,6 +386,14 @@ int usb_enumerate_device(uint8_t root_port, uint8_t parent_port,
 
     d->in_use = 1;
     g_dev_count++;
+    {
+        static const char *const SPEED[] = { "?", "full", "low", "high", "super" };
+        char id[24];
+        usb_device_id(d, id, sizeof id);
+        devevent_add(QUERY_DEVEV_ADDED, id, "", "Plugged in at %s %u, %s speed",
+                     depth ? "hub port" : "port", parent_port,
+                     d->speed < 5 ? SPEED[d->speed] : "?");
+    }
 
     klog_printf("usb: %s %u: %04x:%04x \"%s\" %s, class %u/%u/%u, %u interface(s)\n",
                 depth ? "hub port" : "port", parent_port,
@@ -442,6 +451,11 @@ void usb_bind_drivers(struct usb_device_info *d, const uint8_t *cfg,
         }
         usb_hid_bind(d);   // no-op on a device with no HID boot interface
     }
+    char id[24];
+    usb_device_id(d, id, sizeof id);
+    if (d->bound) devevent_add(QUERY_DEVEV_BOUND, id, d->driver ? d->driver : "",
+                               "Driven by %s", d->driver ? d->driver : "a driver");
+    else devevent_add(QUERY_DEVEV_NO_DRIVER, id, "", "No driver in this build takes it");
 }
 
 int usb_enumerate_port(uint8_t port, uint8_t speed, int patient) {
@@ -476,6 +490,9 @@ void usb_detach_slot(uint8_t slot) {
     xhci_disable_slot(slot);
     if (d->cfg_phys) pmm_free_contiguous(d->cfg_phys, 1);
     d->cfg = 0; d->cfg_phys = 0; d->cfg_len = 0;
+    char id[24];
+    usb_device_id(d, id, sizeof id);
+    devevent_add(QUERY_DEVEV_REMOVED, id, "", "Unplugged");
     klog_printf("usb: %04x:%04x \"%s\" detached\n",
                 d->vendor_id, d->product_id,
                 d->product[0] ? d->product : "");

@@ -15,6 +15,7 @@
 #include "string.h"
 #include <stddef.h>
 #include "initcall.h"
+#include "devevent.h"   // devevent_pci_id -- the controller's name
 
 // driver-none: a QUERY provider over the block table
 
@@ -38,6 +39,9 @@ static int blkdev_fill(int index, void *out) {
     d->is_root = (blk_active() == e->dev) ? 1 : 0;
     d->persistent = e->dev->persistent ? 1 : 0;
     d->block_size = blkdev_block_size(e->dev);
+    if (e->dev->model) k_strlcpy(d->model, e->dev->model, sizeof d->model);
+    if (e->dev->driver) k_strlcpy(d->driver, e->dev->driver, sizeof d->driver);
+    if (e->dev->pci) devevent_pci_id(e->dev->pci, d->device_id, sizeof d->device_id);
     return 1;
 }
 

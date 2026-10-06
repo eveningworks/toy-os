@@ -43,6 +43,7 @@ static int netdev_fill(int index, void *out) {
     q->link_bps   = d->link_bps;
     k_strlcpy(q->location, d->location, sizeof q->location);
     q->admin_down = d->admin_down;
+    k_strlcpy(q->device_id, d->device_id, sizeof q->device_id);
     return 1;
 }
 

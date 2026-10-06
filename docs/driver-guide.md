@@ -65,6 +65,18 @@ see it.
 `INIT_BUS`. **A second controller is a second `probe()` call**, not a
 silent skip — say so if you only drive one.
 
+**`probe()` returns 0 when it drives the device, and DECLINES with
+`return pci_probe_decline(dev, "why");`** -- not its model, no medium, a
+resource it could not get, a second controller it does not drive.
+Linux's `dev_err_probe()`: the reason is logged under your name, kept
+beside the device and in the device-event ring, and the device stays
+UNBOUND -- `lspci` and the Device Manager say "no driver" and show the
+reason, a process may claim it, a module loaded later is offered it.
+**Undo what the probe set up before declining**: an interrupt you
+registered, memory you allocated. The bus turns bus mastering off and
+nothing more -- and in a module, a handler left registered outlives the
+unload (`r8169_decline()` routes every late failure through `remove()`).
+
 **The same file can be built as a MODULE** -- `<name> = module` in
 `build.conf`, where the name is your file's basename -- with no
 change to the declarations: the loader runs and registers the same

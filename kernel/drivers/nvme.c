@@ -477,28 +477,35 @@ static int create_io_queues(void) {
     return admin(&sq, 0);
 }
 
-static void nvme_probe(const struct pci_device *dev) {
-    if (g_pci) {
-        klog_printf("nvme: a second controller at %02x:%02x.%u -- one is driven\n",
-                    dev->bus, dev->device, dev->function);
-        return;
-    }
-    g_pci = dev;
+static int nvme_probe(const struct pci_device *dev) {
+    if (g_pci) return pci_probe_decline(dev, "a second NVMe controller; one is driven");
     uint64_t bar = pci_bar_mem_addr(dev, 0);
     uint64_t size = pci_bar_mem_size(dev, 0);
-    if (!bar || size < 0x2000) { klog_write("nvme: BAR0 is missing or too small\n"); return; }
+    if (!bar || size < 0x2000) return pci_probe_decline(dev, "BAR0 is missing or too small");
     g_regs = (volatile uint8_t *)paging_map_device(bar, size < 0x4000 ? size : 0x4000);
-    if (!g_regs) { klog_printf(KLOG_ERR "nvme: BAR0 at 0x%llx could not be mapped\n", (unsigned long long)bar); return; }
+    if (!g_regs)
+        return pci_probe_decline(dev, "BAR0 at 0x%llx could not be mapped", (unsigned long long)bar);
+    g_pci = dev;
 
     // Bus mastering on, the pin off until an interrupt is chosen below.
     pci_command_update(dev, PCI_CMD_MEMORY | PCI_CMD_BUS_MASTER | PCI_CMD_INTX_DISABLE, 0);
 
     uint64_t cap = rd64(REG_CAP);
     uint32_t vs = rd32(REG_VS);
-    if (!alloc_dma()) { klog_write("nvme: out of contiguous DMA memory\n"); g_regs = 0; return; }
-    if (!bring_up(cap) || !create_io_queues()) { nvme_fail("bring-up failed"); return; }
+    if (!alloc_dma()) {
+        g_regs = 0;
+        g_pci = 0;
+        return pci_probe_decline(dev, "out of contiguous DMA memory");
+    }
+    if (!bring_up(cap) || !create_io_queues()) {
+        nvme_fail("bring-up failed");
+        return pci_probe_decline(dev, "the controller did not come up");
+    }
 
-    if (!identify(1, 0)) { nvme_fail("IDENTIFY CONTROLLER failed"); return; }
+    if (!identify(1, 0)) {
+        nvme_fail("IDENTIFY CONTROLLER failed");
+        return pci_probe_decline(dev, "IDENTIFY CONTROLLER failed");
+    }
     const uint8_t *d = dma_at(OFF_SCRATCH);
     copy_ascii(g_model, d + 24, 40);
     uint32_t mdts = d[77];
@@ -532,6 +539,7 @@ static void nvme_probe(const struct pci_device *dev) {
                 g_max_bytes / 1024, g_vwc ? "yes" : "no (no volatile cache)",
                 g_dsm ? "yes" : "no",
                 g_msi_vector ? (dev->irq_msix ? "MSI-X" : "MSI") : g_irq ? "INTx" : "polled");
+    return 0;
 }
 
 static const struct pci_match nvme_matches[] = {
@@ -552,6 +560,7 @@ int nvme_irq_driven(void) { return g_irq || g_msi_vector; }
 uint64_t nvme_irq_count(void) { return g_irqs; }
 uint64_t nvme_sleeps(void) { return g_sleeps; }
 const char *nvme_model(void) { return g_model; }
+const struct pci_device *nvme_pci(void) { return g_dead ? 0 : g_pci; }
 
 // Refused, never clamped: past the end, empty, too big, or not whole
 // blocks of this namespace (the block layer refuses that first; this is

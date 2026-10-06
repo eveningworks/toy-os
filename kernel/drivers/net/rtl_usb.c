@@ -572,6 +572,7 @@ int usb_r8153_bind(struct usb_device_info *info, const uint8_t *cfg,
     d->dev.drv = d;
 
     net_location_usb(&d->dev, info->root_port, info->port);
+    usb_device_id(info, d->dev.device_id, sizeof d->dev.device_id);
     if (!net_register(&d->dev)) {
         d->in_use = 0;
         pmm_free_contiguous(d->mem_phys, d->mem_pages);

@@ -326,16 +326,13 @@ static int claim_dev(const struct pci_device *pci, struct input_dev *d) {
 static const struct pci_match virtio_input_matches[] = { VIRTIO_PCI_MATCH_MODERN(VIRTIO_ID_INPUT) };
 
 // Once per device: a keyboard, a mouse and a tablet are three probes.
-static void virtio_input_probe(const struct pci_device *pci) {
-    if (g_count >= MAX_INPUT_DEVICES) {
-        klog_printf("virtio-input: %02x:%02x.%u -- table full, not claimed\n",
-                    pci->bus, pci->device, pci->function);
-        return;
-    }
+static int virtio_input_probe(const struct pci_device *pci) {
+    if (g_count >= MAX_INPUT_DEVICES)
+        return pci_probe_decline(pci, "already driving %d input devices", MAX_INPUT_DEVICES);
     {
         struct input_dev *d = &g_devs[g_count];
         k_memset(d, 0, sizeof *d);
-        if (!claim_dev(pci, d)) return;
+        if (!claim_dev(pci, d)) return pci_probe_decline(pci, "the virtio transport did not come up");
 
         // Interrupts if the chipset routed this function anywhere;
         // idle polling if it did not. Deciding per device rather than
@@ -387,7 +384,7 @@ static void virtio_input_probe(const struct pci_device *pci) {
                         d->name, d->vdev.msix_vector);
         else if (d->irq) klog_printf("virtio-input: \"%s\" on IRQ %u\n", d->name, d->irq);
         g_count++;
-        if (g_count >= MAX_INPUT_DEVICES) return;
     }
+    return 0;
 }
 PCI_DRIVER("virtio-input", virtio_input_matches, virtio_input_probe);

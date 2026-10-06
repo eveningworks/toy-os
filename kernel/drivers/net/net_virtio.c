@@ -30,14 +30,15 @@ static const struct pci_match net_virtio_matches[] = {
     VIRTIO_PCI_MATCH_MODERN(VIRTIO_ID_NET), PCI_MATCH_ID(VIRTIO_PCI_VENDOR, 0x1000),
 };
 
-static void net_virtio_probe(const struct pci_device *pci) {
+static int net_virtio_probe(const struct pci_device *pci) {
     virtio_net_attach(pci);
-    if (!virtio_net_present()) return;
+    if (!virtio_net_present()) return pci_probe_decline(pci, "the virtio transport did not come up");
 
     net_location_pci(&VIRTIO_NET_DEV, pci->bus, pci->device, pci->function);
     k_memcpy(VIRTIO_NET_DEV.mac, virtio_net_mac(), NET_MAC_LEN);
     VIRTIO_NET_DEV.transmit = vnet_transmit;
     virtio_net_set_rx(vnet_rx);
     net_register(&VIRTIO_NET_DEV);
+    return 0;
 }
 PCI_DRIVER("virtio-net", net_virtio_matches, net_virtio_probe);

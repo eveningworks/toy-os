@@ -32,7 +32,7 @@ static int ata_dev_trim_ranges(const struct blk_range *r, int n) { return ata_tr
 // and this way the bit means "this device type can do TRIM" while the
 // call means "this drive would accept one", which are genuinely
 // different questions.
-static const struct block_device ATA_DEV = {
+static struct block_device ATA_DEV = {
     .name = "ata",
     .driver = "ata",
     .sector_count = ata_dev_sector_count,
@@ -51,5 +51,6 @@ void blk_ata_init(void) {
     // booting a live image, or have nothing attached at all. Leaving no
     // device registered is exactly what "RAM-only" means downstream.
     if (!ata_present()) return;
+    ATA_DEV.model = ata_model();
     blk_register(&ATA_DEV);
 }

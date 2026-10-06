@@ -3155,3 +3155,66 @@ passthrough breaks isochronous packets whose length varies, under KVM
 (398 phase jumps in 398 5 ms windows) as under TCG (364), against 0 on
 the ASUS and 0 from Linux on the host (docs/testing.md).
 
+
+## A driver that declines a device leaves it UNBOUND, and says why
+
+`pci_bind()` used to record a binding BEFORE `probe()` ran, and a probe
+returned nothing, so a driver that looked at a device and drove nothing
+-- `xhci` on the Lenovo's EHCI controller, `hda` on the ASUS's HDMI audio
+with no analog codec -- still read as its driver in `lspci`, `devctl` and
+the Device Manager. "A driver looked at it" was what `lspci` wanted when
+that was written; a Device Manager wants "what drives this", and the two
+had stopped being the same question.
+
+**Linux's contract, now ours:** `probe()` returns 0 or a negative errno,
+and a device whose probe failed is unbound. The REASON matters as much as
+the outcome -- "no driver" with no why sends a person to the source -- so
+the decline goes through `pci_probe_decline(dev, fmt, ...)`, Linux's
+`dev_err_probe()`: logged under the driver's name, kept beside the device
+(`QUERY_PCIDEV`'s `declined_by`/`why`, which survives the log wrapping)
+and recorded as an event. The bus records the binding while the probe
+runs, so the helper knows whose decline it is without a global, and
+clears bus mastering when it declines; everything else the probe built
+is the probe's to undo, and a MODULE's late decline must unregister its
+interrupt, or the handler outlives the unload.
+
+**Rejected: a third state, "bound but failed"** (Windows' Code 10, "this
+device cannot start"). It would keep the device away from a process that
+could claim it and from a module that could drive it, for a distinction
+the reason text already makes. **Rejected: re-offering a declined device
+to the same driver on every module load** -- a re-bind pass skips the
+driver that already said no; `pci_device_rebind()`, asked for one device
+on purpose, still asks it again.
+
+**hda's names stay put.** A declined controller frees its slot, and
+numbering by slot would have renamed the ASUS's Wildcat Point controller
+`hda1` -> `hda0` -- and `audio_device` and each card's remembered format
+are kept by that name. The number is the controller's place among the
+bus's HDA functions instead, which is what it was before on every
+machine whose controllers all bound.
+
+## Device events are a KEPT ring of the lifecycle, not a filter over the kernel log
+
+The Device Manager wanted per-device history ("Events", Windows'
+Properties tab; Linux's uevents). Three shapes were offered (2026-10-06)
+and the maintainer chose the first:
+
+1. **A kernel ring of lifecycle records, by device id** --
+   `kernel/core/devevent.c`, read as `QUERY_DEVEVENT`. Chosen.
+2. The ring plus a `dev_printf()` so a driver's own lines join the
+   device's history (Linux's `dev_info()` prefixes the device). Not now:
+   every driver's log calls would move, and the ring would fill with
+   chatter.
+3. Filtering `dmesg` by driver name, no kernel work. Rejected: `ahci:`
+   is not a device and two `hda` controllers share a prefix, and the
+   128 KiB log wraps -- an event list that forgets the boot is no list.
+
+**Kept, not broadcast**: nothing in ring 3 listens for device events
+(there is no udev); a reader asks afterwards, and the Device Manager's
+signature folds in the newest `seq`, so a change re-lists it. **The ring
+is the latest 128**, with a `seq` that counts every event, so a reader
+can tell it missed some. **Ids are `userland/lib/udevice.c`'s**
+(`pci:00:1f.2`, `usb:14:2357:0601`, `blk:ahci0`): the kernel names a
+device the way the reader does, which is why `usb_device_id()` exists and
+why usb-audio's device id moved off the root port (a card behind a hub
+used to carry an id no list contained).

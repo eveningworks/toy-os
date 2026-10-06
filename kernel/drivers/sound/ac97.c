@@ -192,18 +192,12 @@ static void ac97_probe_vra(void) {
 
 static const struct pci_match ac97_matches[] = { PCI_MATCH_CLASS(0x04, 0x01, PCI_ANY) };
 
-static void ac97_probe(const struct pci_device *dev) {
-    if (g_pci) {
-        klog_printf("ac97: a second codec at %02x:%02x.%u -- one is driven\n",
-                    dev->bus, dev->device, dev->function);
-        return;
-    }
+static int ac97_probe(const struct pci_device *dev) {
+    if (g_pci) return pci_probe_decline(dev, "a second AC97 codec; one is driven");
+    if (!pci_bar_is_io(dev->bar[0]) || !pci_bar_is_io(dev->bar[1]))
+        return pci_probe_decline(dev, "memory BARs where I/O ports were expected");
     g_pci = dev;
 
-    if (!pci_bar_is_io(g_pci->bar[0]) || !pci_bar_is_io(g_pci->bar[1])) {
-        klog_write("ac97: unexpected memory BARs -- not driving it\n");
-        return;
-    }
     k_snprintf(g_devid, sizeof g_devid, "pci:%02x:%02x.%x", dev->bus, dev->device, dev->function);
     ac97_dev.device_id = g_devid;
     g_nam  = (uint16_t)pci_bar_addr(g_pci->bar[0]);
@@ -216,8 +210,8 @@ static void ac97_probe(const struct pci_device *dev) {
     uint64_t deadline = coarse_ticks() + 100; // a real codec takes ~1ms
     while (!(inl(g_nabm + GLOB_STA) & GS_CODEC_READY) && coarse_ticks() < deadline) { }
     if (!(inl(g_nabm + GLOB_STA) & GS_CODEC_READY)) {
-        klog_write("ac97: codec never came ready -- not driving it\n");
-        return;
+        g_pci = 0;
+        return pci_probe_decline(dev, "the codec never came ready");
     }
     outw(g_nam + NAM_RESET, 1); // any write resets the mixer to defaults
     ac97_set_volume(&ac97_dev, 100);
@@ -225,14 +219,12 @@ static void ac97_probe(const struct pci_device *dev) {
 
     uint64_t ring_phys = 0;
     void *ring = sound_ring_alloc(&ring_phys);
-    if (!ring) {
-        klog_write("ac97: no contiguous frames for the ring\n");
-        return;
-    }
+    if (!ring) return pci_probe_decline(dev, "no contiguous frames for the ring");
     g_bdl_phys = pmm_alloc_contiguous(1, PMM_ZONE_DMA32);
     uint64_t bounce_phys = pmm_alloc_contiguous(SND_CHUNKS * SND_CHUNK_BYTES_S16 / 4096,
                                                 PMM_ZONE_DMA32);
-    if (!g_bdl_phys || !bounce_phys) return;
+    if (!g_bdl_phys || !bounce_phys)
+        return pci_probe_decline(dev, "no contiguous frames for the buffer list");
     g_bdl = (struct bdl_entry *)(uintptr_t)g_bdl_phys;
     g_bounce.buf = (int16_t *)(uintptr_t)bounce_phys;
     k_memset(g_bounce.buf, 0, SND_CHUNKS * SND_CHUNK_BYTES_S16);
@@ -249,10 +241,8 @@ static void ac97_probe(const struct pci_device *dev) {
     uint8_t line = pci_irq_line(g_pci);
     g_msi_vector = pci_msi_request(g_pci, ac97_irq);
     if (!g_msi_vector) {
-        if (line == 0xFF || line == 0 || line >= 16) {
-            klog_write("ac97: no usable INTx line -- not driving it\n");
-            return;
-        }
+        if (line == 0xFF || line == 0 || line >= 16)
+            return pci_probe_decline(dev, "no MSI and no usable INTx line");
         irq_register_handler(line, ac97_irq);
         // INTx may arrive DISABLED in the command register (firmware's
         // choice); clearing it is the half AHCI's bring-up calls the
@@ -264,7 +254,12 @@ static void ac97_probe(const struct pci_device *dev) {
         irq_unmask(line);
     }
 
-    if (!sound_register(&ac97_dev, ring, ring_phys)) return;
+    if (!sound_register(&ac97_dev, ring, ring_phys)) {
+        if (g_msi_vector) pci_msi_release(dev, g_msi_vector);
+        else { irq_mask(line); irq_unregister_handler(line, ac97_irq); }
+        g_msi_vector = 0;
+        return pci_probe_decline(dev, "the sound core has no room for another card");
+    }
     if (g_msi_vector)
         klog_printf("ac97: %02x:%02x.%u nam %#x nabm %#x %s vector %u\n",
                     g_pci->bus, g_pci->device, g_pci->function,
@@ -274,6 +269,7 @@ static void ac97_probe(const struct pci_device *dev) {
         klog_printf("ac97: %02x:%02x.%u nam %#x nabm %#x irq %u\n",
                     g_pci->bus, g_pci->device, g_pci->function,
                     g_nam, g_nabm, line);
+    return 0;
 }
 
 // LETTING GO, which is the gate on being CLAIMED: a device whose

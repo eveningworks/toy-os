@@ -11,6 +11,7 @@
 #include "usb.h"
 #include "xhci_regs.h"
 #include "string.h"
+#include "kfmt.h"
 #include <stddef.h>
 
 // driver-none: a QUERY provider over the enumerated devices
@@ -23,6 +24,10 @@ static uint64_t abi_speed(uint8_t s) {
         case XHCI_SPEED_SUPER: return QUERY_USB_SPEED_SUPER;
         default:               return QUERY_USB_SPEED_UNKNOWN;
     }
+}
+
+void usb_device_id(const struct usb_device_info *info, char *out, unsigned cap) {
+    k_snprintf(out, cap, "usb:%u:%04x:%04x", info->port, info->vendor_id, info->product_id);
 }
 
 static int usb_q_count(void) { return usb_device_count(); }

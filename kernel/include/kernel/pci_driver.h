@@ -29,7 +29,12 @@ struct pci_driver {
     const char *name;                 // the DRIVER_DECLARE name
     const struct pci_match *matches;
     int nmatches;
-    void (*probe)(const struct pci_device *dev);
+    // 0: the driver drives this device. NEGATIVE: it looked and declined
+    // -- not its part, no medium, a resource it could not get -- and the
+    // device stays UNBOUND: no driver in `lspci`, claimable by a process,
+    // probed again by a module loaded later. Linux's probe() contract.
+    // Decline through pci_probe_decline(), which records why.
+    int (*probe)(const struct pci_device *dev);
     // Undoes probe() for one device: quiesce the hardware, unregister
     // from the class, free what probe allocated. Optional; a driver
     // without one holds every device it bound until reboot, and a
@@ -64,6 +69,18 @@ const struct pci_driver *pci_driver_at(int i);
 // The driver pci_bind() handed this device to, or NULL.
 const char *pci_device_driver(const struct pci_device *d);
 
+// A probe's way of saying no: `return pci_probe_decline(d, "no codec
+// with an analog output");` -- Linux's dev_err_probe(). Logs the reason
+// under the declining driver's name, keeps it beside the device (QUERY_PCIDEV)
+// and in the device-event ring, and returns -ENODEV. Undo what the probe
+// set up FIRST: the bus turns off bus mastering, nothing more.
+int pci_probe_decline(const struct pci_device *d, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+
+// The driver that last declined device `index` and why, or 0 when none
+// did since it was last bound. `why` may be NULL.
+const char *pci_device_declined(int index, const char **why);
+
 // --- handing a device back ---------------------------------------------
 //
 // The kernel LETTING GO of a device, so a ring-3 driver can take it
@@ -85,8 +102,8 @@ int pci_device_removable(int index);
 int pci_device_release(int index);
 
 // Re-probes one device the bus left unbound -- what undoes a release.
-// 1 bound, 0 no driver matched, negative errno for a bad index or a
-// device that is already bound.
+// 1 bound, 0 no driver matched or the one that did declined, negative
+// errno for a bad index or a device that is already bound.
 int pci_device_rebind(int index);
 
 // --- tables that are not in the image: loadable modules ----------------
