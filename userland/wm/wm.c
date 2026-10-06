@@ -102,6 +102,7 @@ int title_btn_armed_kind = -1;
 int title_btn_pressed_active = 0;
 int title_hover_win = -1;
 int title_hover_kind = -1;
+int title_tab_idx = -1;   // the tab a hover or an armed press is on
 
 int wm_exit_requested = 0;
 

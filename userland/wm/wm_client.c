@@ -1106,6 +1106,42 @@ static void req_title(int from, struct wmchan_msg *m) {
     on_window_title(from, m->window, m->text);
 }
 
+// TITLE-BAR TABS: the count and the active one, then the labels one
+// request each (a request carries WIN_TITLE_LEN of text). The bar is
+// damaged per label, so the strip fills in as they arrive.
+static void req_tabs(int from, struct wmchan_msg *m) {
+    int idx = find_client_window(from, m->window);
+    if (idx < 0) return;
+    struct window *w = &windows[idx];
+    int n = m->a < 0 ? 0 : m->a > WIN_TABS_MAX ? WIN_TABS_MAX : m->a;
+    for (int i = w->ntabs; i < n; i++) w->tab[i][0] = '\0';
+    w->ntabs = n;
+    w->active_tab = m->b >= 0 && m->b < n ? m->b : 0;
+    wm_damage_rect(w->x, w->y, w->w, WM_TITLEBAR_H);
+    redraw_pending = 1;
+}
+
+static void req_tab(int from, struct wmchan_msg *m) {
+    int idx = find_client_window(from, m->window);
+    if (idx < 0 || m->a < 0 || m->a >= windows[idx].ntabs) return;
+    struct window *w = &windows[idx];
+    int i = 0;
+    for (; m->text[i] && i < WIN_TITLE_MAX - 1; i++) w->tab[m->a][i] = m->text[i];
+    w->tab[m->a][i] = '\0';
+    wm_damage_rect(w->x, w->y, w->w, WM_TITLEBAR_H);
+    redraw_pending = 1;
+}
+
+void wm_client_send_tab(struct window *win, int tab, int action) {
+    if (!wm_client_is_client_window(win)) return;
+    struct win_event ev = {0};
+    ev.type = WIN_EV_TAB;
+    ev.window = win->client_win;
+    ev.a = tab;
+    ev.b = action;
+    if (!win_events_push(win->client_pid, &ev)) note_dropped(win);
+}
+
 static void req_notice(int from, struct wmchan_msg *m) {
     crash_notice_piece(from, m->a, m->b, (unsigned)m->c, m->text);
 }
@@ -1274,6 +1310,8 @@ static void req_activate(int from, struct wmchan_msg *m) {
 static void (*const wm_req_table[])(int, struct wmchan_msg *) = {
     [WIN_REQ_TITLE] = req_title,
     [WIN_REQ_NOTICE] = req_notice,
+    [WIN_REQ_TABS] = req_tabs,
+    [WIN_REQ_TAB] = req_tab,
     [WIN_REQ_HINTS] = req_hints,
     [WIN_REQ_FULLSCREEN] = req_fullscreen,
     [WIN_REQ_CURSOR] = req_cursor,

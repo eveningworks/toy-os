@@ -81,6 +81,23 @@ static int mode_is_auto(const char *name) {
 // over the window body below the title bar entirely.
 static void damage_title_buttons(int win);
 
+// A point on a window's title-bar tabs: 3 a tab, 4 its close box, 5
+// the "+", with the tab in *out_tab; -1 for none. The close box first:
+// it sits inside its tab.
+static int title_tab_hit(const struct window *w, int mx, int my, int *out_tab) {
+    if (w->ntabs <= 0) return -1;
+    struct tab_rects t;
+    title_tabs(w, &t);
+    *out_tab = -1;
+    if (uui_hit(t.new_x, t.new_y, t.new_size, t.new_size, mx, my)) return 5;
+    for (int i = 0; i < t.n; i++) {
+        if (!uui_hit(t.x[i], t.y, t.w[i], t.h, mx, my)) continue;
+        *out_tab = i;
+        return uui_hit(t.close_x[i], t.close_y, t.close_size, t.close_size, mx, my) ? 4 : 3;
+    }
+    return -1;
+}
+
 static int title_btn_hit_test(int mx, int my, int *out_kind) {
     for (int i = window_count - 1; i >= 0; i--) {
         struct window *w = &windows[i];
@@ -92,6 +109,9 @@ static int title_btn_hit_test(int mx, int my, int *out_kind) {
         if (uui_hit(r.min_x, r.y, r.size, r.size, mx, my)) { *out_kind = 0; return i; }
         if (uui_hit(r.max_x, r.y, r.size, r.size, mx, my)) { *out_kind = 1; return i; }
         if (uui_hit(r.close_x, r.y, r.size, r.size, mx, my)) { *out_kind = 2; return i; }
+        int tab;
+        int k = title_tab_hit(w, mx, my, &tab);
+        if (k >= 0) { *out_kind = k; title_tab_idx = tab; return i; }
         return -1; // over the title bar, but not a button
     }
     return -1;
@@ -331,6 +351,32 @@ void wm_handle_left_click(int mx, int my) {
                 title_btn_pressed_active = 1;
                 title_hover_win = -1;
                 title_hover_kind = -1;
+                redraw_pending = 1;
+                return;
+            }
+            // THE TABS: a tab is chosen on PRESS (Explorer's and every
+            // browser's) and the window raised, as any title-bar click
+            // raises it; its close box and the "+" arm like the buttons
+            // above and act on release. None of them starts a drag or
+            // counts toward a double click.
+            int tab;
+            int tk = title_tab_hit(w, mx, my, &tab);
+            if (tk == 3) {
+                bring_to_front(i);
+                w = &windows[window_count - 1];
+                wm_client_send_tab(w, tab, WIN_TAB_SELECT);
+                wm_damage_rect(w->x, w->y, w->w, WM_TITLEBAR_H);
+                redraw_pending = 1;
+                return;
+            }
+            if (tk == 4 || tk == 5) {
+                title_btn_armed_win = i;
+                title_btn_armed_kind = tk;
+                title_tab_idx = tab;
+                title_btn_pressed_active = 1;
+                title_hover_win = -1;
+                title_hover_kind = -1;
+                damage_title_buttons(i);
                 redraw_pending = 1;
                 return;
             }
@@ -1237,6 +1283,11 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
            : (title_btn_armed_kind == 1) ? r.max_x
            : r.close_x;
     int now_over = uui_hit(bx, r.y, r.size, r.size, mx, my);
+    if (title_btn_armed_kind >= 4) {   // a tab's close box, or the "+"
+        int tab = -1;
+        now_over = title_tab_hit(w, mx, my, &tab) == title_btn_armed_kind &&
+                   (title_btn_armed_kind == 5 || tab == title_tab_idx);
+    }
 
     if (buttons & 0x1) {
         if (now_over != title_btn_pressed_active) {
@@ -1252,7 +1303,11 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
     // damaged FIRST: a close may renumber windows[], after which the
     // armed index names another window.
     damage_title_buttons(title_btn_armed_win);   // the pressed look leaves
-    if (now_over) {
+    if (now_over && title_btn_armed_kind >= 4) {
+        wm_client_send_tab(&windows[title_btn_armed_win],
+                           title_btn_armed_kind == 5 ? -1 : title_tab_idx,
+                           title_btn_armed_kind == 5 ? WIN_TAB_NEW : WIN_TAB_CLOSE);
+    } else if (now_over) {
         int idx = title_btn_armed_win;
         if (title_btn_armed_kind == 0) {
             wm_window_minimize(idx);
@@ -1399,15 +1454,20 @@ void wm_update_content_hover(int mx, int my, uint8_t buttons) {
 // frequent enough to collide every time.
 static void damage_title_buttons(int win) {
     if (win < 0 || win >= window_count) return;
+    if (windows[win].ntabs > 0) {   // a tab's hover lives anywhere along the bar
+        wm_damage_rect(windows[win].x, windows[win].y, windows[win].w, WM_TITLEBAR_H);
+        return;
+    }
     struct btn_rects r = title_buttons(&windows[win]);
     wm_damage_rect(r.min_x, r.y, (r.close_x + r.size) - r.min_x, r.size);
 }
 
 void wm_update_title_hover(int mx, int my) {
     if (title_btn_armed_win >= 0) return;
-    int kind = -1;
+    int kind = -1, was_tab = title_tab_idx;
+    title_tab_idx = -1;
     int win = title_btn_hit_test(mx, my, &kind);
-    if (win != title_hover_win || kind != title_hover_kind) {
+    if (win != title_hover_win || kind != title_hover_kind || title_tab_idx != was_tab) {
         damage_title_buttons(title_hover_win);   // the one losing its highlight
         damage_title_buttons(win);               // the one gaining it
         title_hover_win = win;

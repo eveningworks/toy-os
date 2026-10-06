@@ -1462,6 +1462,15 @@ void uapp_set_widgets(struct uapp *a, struct uui_item *items, int count) {
 int uapp_fullscreen(const struct uapp *a) { return a ? a->fullscreen : 0; }
 int uapp_scanout(const struct uapp *a)    { return a ? a->lease_on : 0; }
 
+int uapp_set_tabs(struct uapp *a, const char *const *labels, int n, int active) {
+    if (n < 0) n = 0;
+    if (n > WIN_TABS_MAX) n = WIN_TABS_MAX;
+    int ok = wmchan_send(WIN_REQ_TABS, a->window, n, active, 0, 0);
+    for (int i = 0; i < n && ok; i++)
+        ok = wmchan_send(WIN_REQ_TAB, a->window, i, 0, 0, labels[i] ? labels[i] : "");
+    return ok;
+}
+
 int uapp_set_title(struct uapp *a, const char *title) {
     // OVER THE CHANNEL, which carries the string itself. The kernel path
     // below can only say "it changed" -- struct win_event is 24 bytes --
@@ -1764,6 +1773,10 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
     }
     case WIN_EV_DRAG_LEAVE:
         if (a->router.count) { uui_router_extern_leave(&a->router); a->dirty = 1; }
+        break;
+
+    case WIN_EV_TAB:
+        if (d->on_tab) { d->on_tab(a, (int)ev->a, (int)ev->b); a->dirty = 1; }
         break;
 
     case WIN_EV_USER:

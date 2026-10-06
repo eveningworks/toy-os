@@ -361,6 +361,24 @@ static void cmd_windows(struct dbg_out *o, int json) {
                     dbg_out_write(o, "\"icon\":null,");
                 }
             }
+            // The TABS' own rects (title_tabs(), what is drawn and hit),
+            // for the same reason as the icon's: a test must not derive
+            // geometry the compositor knows.
+            {
+                struct tab_rects t;
+                title_tabs(w, &t);
+                dbg_out_printf(o, "\"active_tab\":%d,\"tabs\":[", w->ntabs ? w->active_tab : -1);
+                for (int k = 0; k < t.n; k++)
+                    dbg_out_printf(o, "%s{\"label\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
+                                 "\"close\":{\"x\":%d,\"y\":%d,\"size\":%d}}",
+                                 k ? "," : "", w->tab[k], t.x[k], t.y, t.w[k], t.h,
+                                 t.close_x[k], t.close_y, t.close_size);
+                if (t.n)
+                    dbg_out_printf(o, "],\"new_tab\":{\"x\":%d,\"y\":%d,\"size\":%d},",
+                                 t.new_x, t.new_y, t.new_size);
+                else
+                    dbg_out_write(o, "],\"new_tab\":null,");
+            }
             // The FLAG, not the decorated title: wm_render.c appends
             // "(Not Responding)" at draw time, so the title here is the
             // client's own and a test looking for the suffix in it finds

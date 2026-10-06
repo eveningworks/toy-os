@@ -106,6 +106,7 @@ enum {
     // Undo and Redo (fm_undo.c): commands, and CMD_UNDO the worker's op.
     CMD_UNDO, CMD_REDO, CMD_TOAST,
     CMD_VIEW_SIZES,          // View > Folder sizes (fm_sizes.c)
+    CMD_OPEN_TAB, CMD_NEW_TAB, CMD_CLOSE_TAB,   // fm_tabs.c
 };
 
 // The Recycle Bin's folder, as uui_fileview and the breadcrumb see it --
@@ -137,6 +138,10 @@ void fm_history_record(int pane, const char *dir);
 // sites complete.
 void fm_history_sync(void);
 int  fm_history_back(int pane);      // 1 moved, 0 nowhere to go, -1 all gone
+int  fm_history_size(void);           // one pane's history, in bytes (a tab keeps two)
+void fm_history_save(int pane, void *out);
+void fm_history_load(int pane, const void *in);   // NULL: empty
+void fm_history_replay(int pane, const char *dir); // set_dir without a record
 int  fm_history_forward(int pane);
 int  fm_history_can_back(int pane);
 int  fm_history_can_forward(int pane);
@@ -331,6 +336,16 @@ void undo_toast_hide(void);
 int  undo_toast_tick(void);        // 1 when it timed out and the window should repaint
 void undo_toast_action(void);      // its button
 void fm_job_undo(struct ufu_op *op, int redo);
+
+// --- tabs in the title bar (fm_tabs.c) ---------------------------------------
+void tabs_init(struct uapp *a);
+void tabs_sync(struct uapp *a);      // after a navigation: the labels follow
+int  tabs_count(void);
+int  tab_current(void);
+void tab_select(struct uapp *a, int i);
+void tab_new(struct uapp *a, const char *dir);
+void tab_close(struct uapp *a, int i);
+void tab_step(struct uapp *a, int delta);
 
 // --- folder sizes (fm_sizes.c) -----------------------------------------------
 extern int g_sizes_on;

@@ -199,6 +199,9 @@ static const struct uui_menu_item view_items[] = {
 
 // "See more": what Explorer puts behind its "..." -- the rarer verbs.
 static const struct uui_menu_item more_items[] = {
+    UUI_MENU("New tab",            CMD_NEW_TAB,    "Ctrl+T"),
+    UUI_MENU("Close tab",          CMD_CLOSE_TAB,  "Ctrl+W"),
+    UUI_MENU_SEP,
     UUI_MENU("Undo",               CMD_UNDO,       "Ctrl+Z"),
     UUI_MENU("Redo",               CMD_REDO,       "Ctrl+Y"),
     UUI_MENU_SEP,
@@ -280,6 +283,7 @@ static const struct uui_toolbar_item viewbar_items[] = {
 // Properties last with a separator before it.
 static const struct uui_menu_item ctx_items[] = {
     UUI_MENU("Open",        CMD_OPEN,     "Enter"),
+    UUI_MENU("Open in new tab", CMD_OPEN_TAB, 0),   // dropped for anything but a folder
     UUI_MENU("Edit in Notepad", CMD_EDIT, 0),   // dropped for anything but a text file
     UUI_MENU_SEP,
     UUI_MENU("Cut",         CMD_CLIP_CUT,   "Ctrl+X"),
@@ -342,6 +346,7 @@ static int build_ctx_items(void) {
     }
     for (int i = 0; i < (int)(sizeof ctx_items / sizeof ctx_items[0]); i++) {
         if (ctx_items[i].code == CMD_EDIT && !can_edit) continue;
+        if (ctx_items[i].code == CMD_OPEN_TAB && !uui_fileview_selected_is_dir(active())) continue;
         g_ctx_built[n++] = ctx_items[i];
     }
     return n;
@@ -637,6 +642,7 @@ static void scope_chosen(int sel) {
 void path_sync(void) {
     const char *dir = uui_fileview_dir(active());
     sizes_follow(dir, 0);
+    tabs_sync(g_app);
     const struct uui_toolbar_item *want = in_bin(active()) ? bin_toolbar_items : toolbar_items;
     if (g_toolbar.items != want) {
         g_toolbar.items = want;
@@ -799,6 +805,14 @@ void do_command(struct uapp *a, int code) {
     case CMD_EMPTY_BIN:      do_empty_bin(); break;
     case CMD_UNDO:           do_undo(0); break;
     case CMD_VIEW_SIZES:     sizes_set(!g_sizes_on); break;
+    case CMD_NEW_TAB:        tab_new(a, uui_fileview_dir(active())[0] == '/' ? uui_fileview_dir(active()) : "/home"); break;
+    case CMD_CLOSE_TAB:      tab_close(a, tab_current()); break;
+    case CMD_OPEN_TAB: {
+        char path[PATH_MAX_LEN];
+        if (uui_fileview_selected_is_dir(active()) &&
+            uui_fileview_selected_path(active(), path, sizeof path)) tab_new(a, path);
+        break;
+    }
     case CMD_REDO:           do_undo(1); break;
     case CMD_MKDIR:
         if (g_opt.rename_dialog) open_prompt(CMD_MKDIR, "New folder", "New folder");
@@ -1308,6 +1322,11 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         return;
     }
 
+    if (key == '\t' && (mods & KEY_MOD_CTRL)) {   // Ctrl+Tab: the next tab, Shift: the previous
+        tab_step(a, (mods & KEY_MOD_SHIFT) ? -1 : 1);
+        uapp_redraw(a);
+        return;
+    }
     switch (key) {
     case '\t':       do_command(a, CMD_SWAP);    return;
     case KEY_F5:     do_command(a, CMD_COPY);    return;
@@ -1332,6 +1351,8 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     if (key == 0x18) { do_command(a, CMD_CLIP_CUT);   return; } // Ctrl-X
     if (key == 0x16) { do_command(a, CMD_CLIP_PASTE); return; } // Ctrl-V
     if (key == 0x1A) { do_command(a, CMD_UNDO); return; }       // Ctrl-Z
+    if (key == 0x14) { do_command(a, CMD_NEW_TAB); return; }    // Ctrl-T
+    if (key == 0x17) { do_command(a, CMD_CLOSE_TAB); return; }  // Ctrl-W
     if (key == 0x19) { do_command(a, CMD_REDO); return; }       // Ctrl-Y
 
     // MOVING A DIVIDER FROM THE KEYBOARD. GtkPaned focuses its handle
@@ -1582,6 +1603,13 @@ static void raise_conflict(struct uapp *a) {
     uapp_redraw(a);
 }
 
+// A click on a title-bar tab, from the compositor.
+static void on_tab(struct uapp *a, int tab, int action) {
+    if (action == WIN_TAB_SELECT) tab_select(a, tab);
+    else if (action == WIN_TAB_CLOSE) tab_close(a, tab);
+    else if (action == WIN_TAB_NEW) do_command(a, CMD_NEW_TAB);
+}
+
 // The worker posted. Both cases run HERE, on the main thread.
 static int on_user(struct uapp *a, int a0, int a1) {
     (void)a1;
@@ -1681,6 +1709,7 @@ static void on_open(struct uapp *a) {
             g_pane[i].icon_px = ugfx_char_h() * 6;
     layout_all(uapp_width(a), uapp_height(a));
     if (g_start_select) uui_fileview_select_name(&g_pane[0], g_start_select);
+    tabs_init(a);   // one tab, the window as it opened
     refresh_status();
 }
 
@@ -1868,6 +1897,7 @@ int main(int argc, char **argv) {
         .on_resize    = on_resize,
         .on_clipboard = on_clipboard,
         .on_user      = on_user,
+        .on_tab       = on_tab,
     };
     return uapp_run(&desc);
 }

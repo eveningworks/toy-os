@@ -229,6 +229,11 @@ struct window {
     uint64_t ping_sent_ns;
     uint64_t ping_sent_tsc;  // rdtsc, for a figure finer than the clocksource under an emulator   // for the round-trip figure `gui compositor` reports
     int not_responding;   // no answer within WM_PING_TIMEOUT_TICKS
+    // TITLE-BAR TABS (WIN_REQ_TABS), drawn in place of the title; the
+    // client decides what they are, this only draws and reports clicks.
+    char tab[WIN_TABS_MAX][WIN_TITLE_MAX];
+    int ntabs;            // 0 = no tabs: the title as ever
+    int active_tab;
     uint64_t ping_blocked_tick;   // since when a ping found the inbox full; 0 = it did not
 
     // --- events the client's inbox could not take (stage 8) --------

@@ -10600,3 +10600,26 @@ column with a percentage: the details columns ARE the sort keys by
 index, so a fifth column in the middle would have re-mapped Sort, and
 one at the end is the first a narrow pane drops.
 
+## Title-bar tabs are drawn by the compositor and decided by the app
+
+**Picked 2026-10-06 by the maintainer**: the File Manager's tabs in the
+TITLE BAR, as Windows 11 Explorer has them, rather than a strip inside
+the window. Explorer gets there with client-side decorations -- the app
+draws its own title bar. toy-os's title bar is the compositor's (moving,
+the buttons, the window menu, snapping), and handing it to a client
+would move all of that into every app that wanted a tab. So the split
+is KWin's old window tabs': **the client sends what the tabs ARE**
+(`WIN_REQ_TABS` with the count and the active one, then a `WIN_REQ_TAB`
+per label -- a request carries only `WIN_TITLE_LEN` of text) **and the
+compositor draws them and reports clicks** (`WIN_EV_TAB`: select on
+press, close and new on release, as its own buttons commit). It decides
+nothing: closing a tab is the app's to do or refuse. One geometry
+helper, `title_tabs()`, serves drawing, hit-testing and
+`gui windows --json`, so a test clicks what is drawn.
+
+A tab is the whole visible state of the window -- both panes' folders,
+their Back/Forward histories, the active pane -- saved when it is left
+and restored when chosen; the panes themselves are shared, so a tab
+costs paths, not listings. Closing the last tab closes the window, as
+in Explorer and every browser.
+

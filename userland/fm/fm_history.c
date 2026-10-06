@@ -36,6 +36,22 @@ static struct pane_history g_hist[2];
 // button would never reach anything older.
 static int g_replaying;
 
+// A TAB OWNS ITS PANES' HISTORIES (fm_tabs.c): saved when it is left,
+// put back when it is chosen -- Back in a tab never goes to another
+// tab's folders, as in Explorer and every browser.
+int fm_history_size(void) { return (int)sizeof g_hist[0]; }
+void fm_history_save(int pane, void *out) { memcpy(out, &g_hist[pane], sizeof g_hist[pane]); }
+void fm_history_load(int pane, const void *in) {
+    if (in) memcpy(&g_hist[pane], in, sizeof g_hist[pane]);
+    else { memset(&g_hist[pane], 0, sizeof g_hist[pane]); g_hist[pane].at = -1; }
+}
+// Put a pane where a restored history says it is, without recording it.
+void fm_history_replay(int pane, const char *dir) {
+    g_replaying = 1;
+    uui_fileview_set_dir(&g_pane[pane], dir);
+    g_replaying = 0;
+}
+
 void fm_history_record(int pane, const char *dir) {
     if (pane < 0 || pane > 1 || !dir || !dir[0] || g_replaying) return;
     struct pane_history *h = &g_hist[pane];

@@ -284,6 +284,15 @@
 // compositor may still be reading is a half-painted frame on screen.
 #define WIN_EV_BUF_RELEASE 42
 
+// A CLICK ON ONE OF THIS WINDOW'S TITLE-BAR TABS (WIN_REQ_TABS). a: the
+// tab's index, -1 for the new-tab button. b: WIN_TAB_*. The compositor
+// draws the tabs and decides nothing: the client owns what a tab is,
+// and answers with a new WIN_REQ_TABS.
+#define WIN_EV_TAB 43
+#define WIN_TAB_SELECT 0
+#define WIN_TAB_CLOSE  1
+#define WIN_TAB_NEW    2
+
 #define WIN_EV_RAW_WHEEL 12 // a: notches, + = up/away, - = down/toward.
                             // Separate from RAW_MOUSE because the
                             // driver's wheel is a read-and-reset
@@ -1224,6 +1233,14 @@ struct win_popup_pos {
 // a: piece index | (pieces << 8), b: WIN_NOTICE_*, c: WIN_NOTICE_F_*.
 // The card goes up when the last piece arrives; nothing answers.
 #define WIN_REQ_NOTICE     39
+// TABS IN THE TITLE BAR -- Windows 11 Explorer's, DRAWN BY THE COMPOSITOR,
+// which keeps the title bar it owns (moving, the buttons, the menu) as
+// KWin's window tabs did. WIN_REQ_TABS: a = how many (0 = none, the
+// title again), b = the active one; then one WIN_REQ_TAB each: a =
+// index, text = its label. Clicks come back as WIN_EV_TAB.
+#define WIN_REQ_TABS 41
+#define WIN_REQ_TAB  42
+#define WIN_TABS_MAX 8
 #define WIN_NOTICE_SCREENSHOT 1   // "Screenshot saved", the image as its thumbnail
 #define WIN_NOTICE_F_COPIED   0x1 // it is on the clipboard already: say so
 #define WIN_NOTICE_PIECES_MAX 4   // so a path of up to 124 bytes

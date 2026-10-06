@@ -322,6 +322,10 @@ extern int content_hover_win;
 
 extern int title_hover_win;
 extern int title_hover_kind;
+// TITLE-BAR TABS extend the kinds above: 3 a tab (selects on PRESS, as
+// Explorer's do), 4 a tab's close box, 5 the new-tab button (both
+// armed, committed on release). Which tab: title_tab_idx.
+extern int title_tab_idx;
 
 extern int redraw_pending;
 // Window damage is SHRUNK by a margin for the next `n` rendered frames
@@ -540,6 +544,18 @@ int  wm_damage_verify_enabled(void);
 // since it's fundamentally a layout/drawing computation.
 struct btn_rects { int min_x, max_x, close_x, y, size; };
 struct btn_rects title_buttons(const struct window *win);
+
+// A window's title-bar TABS, laid out ONCE for drawing, hit-testing and
+// `gui windows --json` -- three callers that must not disagree.
+struct tab_rects {
+    int n, y, h;                    // y/h shared by every tab
+    int x[WIN_TABS_MAX], w[WIN_TABS_MAX];
+    int close_x[WIN_TABS_MAX], close_y, close_size;
+    int new_x, new_y, new_size;     // the "+" after the last tab
+};
+void title_tabs(const struct window *win, struct tab_rects *t);
+// Tell the client a tab was clicked (WIN_EV_TAB).
+void wm_client_send_tab(struct window *win, int tab, int action);
 
 // The app icon at the FAR LEFT of a title bar -- Windows' system-menu
 // icon, KWin's and XFWM's window-menu button. Returns the

@@ -2978,6 +2978,14 @@ window without going through it will find its layout polls timing out.
   control counts only a folder's top level: the subfolder check reddens
   (3000 instead of 4000).
 
+- **`tabs_gui_test.py`** -- the File Manager's tabs in the title bar
+  (`WIN_REQ_TABS`, drawn by toywm; `fm_tabs.c` decides). Clicks land
+  on the rects `gui windows --json` exports per window (`tabs[]` with
+  each close box, `new_tab`, `active_tab`), never on a formula. Each
+  tab's own Back history is checked with a step only that tab took --
+  a history shared between tabs would stay put. Its positive control
+  stops a tab from restoring its history: that check reddens.
+
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window
   (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
   driven through Notepad, Image Viewer and Audio Player. 17 checks: the

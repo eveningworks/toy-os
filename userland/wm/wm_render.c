@@ -154,6 +154,88 @@ struct btn_rects title_buttons(const struct window *win) {
     return r;
 }
 
+// See wm_internal.h. The strip starts past the app icon and stops short
+// of the buttons; tabs share the room, between a floor that keeps a few
+// characters of each and a ceiling that stops one tab filling the bar.
+void title_tabs(const struct window *win, struct tab_rects *t) {
+    t->n = win->ntabs;
+    int icon = WM_TITLEBAR_H - 8 >= 10 ? WM_TITLEBAR_H - 8 + 5 : 0;
+    int start = win->x + 5 + icon + 4;
+    struct btn_rects r = title_buttons(win);
+    t->new_size = btn_size();
+    int room = r.min_x - 16 - t->new_size - start;
+    int each = t->n ? room / t->n : 0;
+    int ceil = ugfx_char_w() * 15, floor = ugfx_char_w() * 6;
+    if (each > ceil) each = ceil;
+    if (each < floor) each = floor;
+    t->y = win->y + 4;
+    t->h = WM_TITLEBAR_H - 3;
+    t->close_size = t->h - 10;
+    t->close_y = t->y + (t->h - t->close_size) / 2;
+    int x = start;
+    for (int i = 0; i < t->n; i++) {
+        t->x[i] = x;
+        t->w[i] = each;
+        t->close_x[i] = x + each - t->close_size - 5;
+        x += each + 2;
+    }
+    t->new_x = x + 2;
+    t->new_y = win->y + (WM_TITLEBAR_H - t->new_size) / 2;
+}
+
+// THE TABS, in place of the title: the active one in the window's own
+// chrome colour, joined to the client area below like a sheet pulled
+// forward; the rest as lighter text on the bar. Each has a close box;
+// a "+" follows. Hover shades come from uui_state_bg, as the buttons'.
+static void draw_title_tabs(const struct window *win, int idx, uint32_t bar, uint32_t barfg) {
+    struct tab_rects t;
+    title_tabs(win, &t);
+    struct btn_rects r = title_buttons(win);
+    uint32_t sheet = UTHEME_CHROME;
+    for (int i = 0; i < t.n; i++) {
+        if (t.x[i] + t.w[i] > r.min_x - 8) break;   // never over the buttons
+        int active = i == win->active_tab;
+        int hot = idx >= 0 && title_hover_win == idx && title_tab_idx == i &&
+                  (title_hover_kind == 3 || title_hover_kind == 4);
+        uint32_t bg = active ? sheet : hot ? uui_state_bg(bar, UUI_STATE_HOVER) : bar;
+        uint32_t fg = active ? UTHEME_TEXT : barfg;
+        if (active || hot) uui_fill_round_rect(wm_surface(), t.x[i], t.y, t.w[i], t.h + 6, 6, bg);
+        if (active) ugfx_fill_rect(wm_surface(), t.x[i], t.y + t.h - 2, t.w[i], 3, sheet);
+        // A hairline between two resting tabs; the chosen one and a
+        // hovered one are their own edge.
+        int next_bare = i + 1 < t.n && i + 1 != win->active_tab &&
+                        !(idx >= 0 && title_hover_win == idx && title_tab_idx == i + 1);
+        if (!active && !hot && next_bare)
+            ugfx_fill_rect(wm_surface(), t.x[i] + t.w[i] + 1, t.y + 5, 1, t.h - 8,
+                           ugfx_blend(bar, barfg, 90));
+        int tx = t.x[i] + 8;
+        const struct uimg *fi = icon_get("folder", ugfx_char_h());
+        if (fi) {
+            ugfx_blit_alpha(wm_surface(), tx, t.y + (t.h - fi->h) / 2, fi->w, fi->h, fi->px, fi->w);
+            tx += fi->w + 6;
+        }
+        int room = t.close_x[i] - 4 - tx;
+        ugfx_draw_string_clipped(wm_surface(), tx, t.y + (t.h - ugfx_char_h()) / 2, room,
+                                 win->tab[i], fg, bg);
+        // The close box: a cross, in a disc when hovered.
+        int cs = t.close_size, cx = t.close_x[i], cy = t.close_y;
+        if (idx >= 0 && title_hover_win == idx && title_hover_kind == 4 && title_tab_idx == i)
+            uui_fill_round_rect(wm_surface(), cx, cy, cs, cs, cs / 2, uui_state_bg(bg, UUI_STATE_HOVER));
+        int m = cs / 3;
+        ugfx_draw_line(wm_surface(), cx + m, cy + m, cx + cs - m - 1, cy + cs - m - 1, fg, GEOM_AA);
+        ugfx_draw_line(wm_surface(), cx + cs - m - 1, cy + m, cx + m, cy + cs - m - 1, fg, GEOM_AA);
+    }
+    // The new-tab "+".
+    int ns = t.new_size;
+    if (t.new_x + ns <= r.min_x - 4) {
+        if (idx >= 0 && title_hover_win == idx && title_hover_kind == 5)
+            uui_fill_round_rect(wm_surface(), t.new_x, t.new_y, ns, ns, 6, uui_state_bg(bar, UUI_STATE_HOVER));
+        int c = ns / 2, a = ns / 4;
+        ugfx_fill_rect(wm_surface(), t.new_x + c - a, t.new_y + c - 1, 2 * a, 2, barfg);
+        ugfx_fill_rect(wm_surface(), t.new_x + c - 1, t.new_y + c - a, 2, 2 * a, barfg);
+    }
+}
+
 // See wm_internal.h. Two pixels smaller than a title-bar button so the
 // artwork sits INSIDE the bar rather than filling it edge to edge, and
 // centred on the same basis title_buttons() uses so the left and right
@@ -1100,6 +1182,10 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     // title several characters early and every window reads as
     // truncated. ugfx_text_fit_chars() exists for exactly this
     // (ui/ugfx.h's "no widget does character arithmetic on a string").
+    if (win->ntabs > 0) {
+        draw_title_tabs(win, idx, glass ? UTHEME_ACCENT : titlebar, titletext);
+        shown = "";
+    }
     char title_buf[WIN_TITLE_MAX + 20];
     int avail_px = r.min_x - text_x;
     int max_chars = avail_px > 0 ? ugfx_text_fit_chars(shown, avail_px) : 0;

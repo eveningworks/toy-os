@@ -346,6 +346,11 @@ struct uapp_desc {
     // on the MAIN one, which is the entire point: the worker produces a
     // result and posts, and the widget tree is only ever touched here.
     int (*on_user)(struct uapp *a, int a0, int a1);
+
+    // A click on one of the window's TITLE-BAR TABS (uapp_set_tabs()):
+    // `tab` its index (-1 for the new-tab button), `action` WIN_TAB_*.
+    // The app decides what happens and answers with uapp_set_tabs().
+    void (*on_tab)(struct uapp *a, int tab, int action);
 };
 
 // The ordinary path: open, run until closed, clean up. Returns the
@@ -572,6 +577,12 @@ int  uapp_scanout(const struct uapp *a);      // drawing the display's own buffe
 
 // one call inside it.
 void uapp_track_child(struct uapp *a, int pid);
+// TABS IN THE TITLE BAR, drawn by the compositor (win_proto.h's
+// WIN_REQ_TABS): `n` labels, `active` the chosen one; n = 0 takes them
+// away and the title shows again. Clicks arrive as desc.on_tab. Sends
+// n + 1 requests, so call it when the tabs CHANGE, not per frame.
+// 1 when all were sent, 0 when the channel refused one.
+int uapp_set_tabs(struct uapp *a, const char *const *labels, int n, int active);
 int uapp_set_title(struct uapp *a, const char *title);
 
 // Name the WIN_CURSOR_* for this window's content area. THE ESCAPE
