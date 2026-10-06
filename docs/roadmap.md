@@ -219,6 +219,7 @@ only expensive part of it.
 - [ ] Per-file owner + permission bits -- TFS3's inode already reserves the room for them
 - [ ] Permission checks in `fs_ops` calls
 - [ ] A login prompt (even single-user-by-default)
+- [ ] Lock on resume: waking from the screensaver asks for the password, Windows' "On resume, display logon screen"
 - [ ] Password hashing + an `/etc/passwd`-shaped file
 - [ ] `su`-style user switching
 - [ ] Home directories + `~` expansion
@@ -662,6 +663,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~A JPEG encoder~~ DONE 2026-09-16 -- baseline 4:2:0, Annex K tables, checked against libjpeg's own loss
 - [x] ~~EXIF orientation~~ DONE 2026-09-16 -- applied in the decoder, as every viewer does
 - [ ] A wallpaper picker in System Settings, rather than only Image Viewer's Desktop menu
+- [ ] Dropdown lists sized to the room they have -- `uui_dropdown` shows six rows and scrolls, where Qt (so Breeze) shows 10 and Windows 11 about 20
 - [x] ~~Desktop icon repositioning/dragging~~ done
 - [x] ~~Desktop icons are a letter in a tile~~ DONE 2026-08-23 -- real artwork, composited, on the desktop, the Start menu and the taskbar
 - [ ] Per-size icon art (freedesktop's `16x16/`, `48x48/`), if one 64px master ever looks mushy at menu-row size
@@ -699,6 +701,13 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~The CRT effect in DOOM~~ DONE 2026-10-03 -- Alt+C cycles the presets, a scanline per DOOM row, `/etc/doom.conf`
 - [x] ~~A cheaper `ucrt`~~ DONE 2026-10-03 -- SSE2 lanes, ~3x: DOOM's window holds 57-70 fps on the ASUS with any preset
 - [ ] The CRT effect fullscreen at 1080p: Classic 55 ms a frame on the ASUS (16 fps) -- measured, cause not established
+
+### Screensavers
+
+- [ ] Tumbling solid and gfxdemo's cube onto `lib/usolid.h`, which Desktop cube introduced
+- [ ] Fullscreen savers draw on the display's own buffers (`UAPP_SCANOUT`), skipping the compositor's copy
+- [ ] A saver can animate out on wake -- asked to end with a deadline instead of killed, so Desktop cube can unfold
+- [ ] More savers that start from the captured desktop -- XScreenSaver's `decayscreen` and `jigsaw` are the shape
 
 ### GUI clipboard + drag-and-drop
 
@@ -1088,6 +1097,7 @@ hand as a throwaway probe during a real hunt (see roadmap-details).
 - [x] ~~`ps` says what a blocked process WAITS ON (`block(key)`, `block(pipe)`)~~ DONE 2026-08-22
 - [x] ~~`font glyph <char>` -- a glyph's coverage map, its line box, and whether it has ink inside~~ DONE 2026-08-24
 - [ ] `lsfd` -- a process's open descriptors and what each one names
+- [ ] `gui tray --json` reports each tray item's TEXT, not just its rect -- a clock test reads the time instead of comparing pixels
 
 ### Kernel test harness
 

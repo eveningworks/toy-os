@@ -7334,3 +7334,26 @@ injection, the window server's queue or the client's event loop, and
 not tried with real input; a positive check would replay the burst
 through QMP's `input-send-event` instead of `gui click`.
 
+## Fullscreen savers draw on the display's own buffers (`UAPP_SCANOUT`), skipping the compositor's copy
+
+A fullscreen client that never reads its surface back may set
+`UAPP_SCANOUT` and be lent the display's buffers (`docs/scanout-design.md`),
+so the compositor stops copying its window every frame. Desktop cube only
+writes -- it restores its backdrop from its own copy -- so it qualifies;
+the other savers probably do too, but each must be checked, since one that
+blends reads the destination. The lease needs a cursor
+plane today; a saver hides the pointer anyway, which is worth checking
+against the lease policy before assuming it applies. Measure first:
+`guictl compositor` on the ASUS at 1920x1080 with Desktop cube up, then
+with the flag.
+
+## A saver can animate out on wake -- asked to end with a deadline instead of killed, so Desktop cube can unfold
+
+`wm_idle.c`'s `stop_saver()` sends SIGKILL on purpose: a saver that could
+refuse would be a way to lose the machine, and Windows and XScreenSaver
+both kill theirs. macOS fades out. The shape that keeps the guarantee is
+ASK, THEN KILL: a close event the saver may answer with a short animation,
+and a kill after a fixed deadline (around 300 ms) whatever it does -- the
+same pattern as the Leave page's refusal handling, with no way to refuse.
+Input during the animation must still reach nothing behind it.
+
