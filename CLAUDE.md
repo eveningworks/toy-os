@@ -42,6 +42,8 @@ cross-compiler -- host and target are both x86-64, so plain system
   2026-09-29): a Design canvas, one artboard per option, in toy-os's own
   palette and with real data, published BEFORE the choice is asked and
   before any code -- for a new app, a redesign, even a marker in a tree.
+  **Not for a change that is only TEXT** (a banner, a message): concrete
+  examples in the chat are enough (2026-10-06).
   How: `.claude/skills/toy-os-feature-workflow/references/questions-that-worked.md`.
 - **Before adding a feature to a GUI app, consider whether it should be
   a reusable `userland/ui/` widget** -- and ask the user either way.

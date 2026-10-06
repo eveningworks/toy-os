@@ -63,6 +63,10 @@ struct tosh {
     tosh_out_fn out;
     void *ctx;
     int last_status; // exit code of the last external command
+    // The first line of `help`, or NULL: the PROGRAM's, since it knows
+    // the build -- this library is in libuapp.so, and a version compiled
+    // in here would change the library on every commit.
+    const char *banner;
 
     // The parser's scratch, IN THE OBJECT rather than on the stack: a
     // ring-3 frame is budgeted at 2 KiB and these are 2.5 KiB. One line

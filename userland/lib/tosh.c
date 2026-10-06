@@ -883,13 +883,32 @@ static int run_simple(struct tosh *sh, const char **argv, int argc,
         return 0;
     }
     if (seq(cmd, "help")) {
-        emit(sh, "tosh -- the toy-os shell, running in ring 3.\n"
-                 "builtins: cd pwd jobs fg bg help  (everything else is a program)\n"
-                 "quoting: \"a b\" and 'a b' are one argument, \\ escapes one character\n"
-                 "redirection: cmd > file, cmd >> file, cmd < file\n"
-                 "job control: cmd & backgrounds, Ctrl-Z suspends, `jobs` lists,\n"
-                 "             `fg [n]` resumes in front, `bg [n]` behind\n"
-                 "anything else is spawned from /bin, /usr/bin or /tests\n");
+        // bash's `help` in this repo's --help shape (lib/uargs.h):
+        // sections, two columns, and where the full manual is.
+        emit(sh, sh->banner ? sh->banner : "tosh -- the toy-os shell");
+        emit(sh, "\n\n"
+                 "Built-in commands:\n"
+                 "  cd [DIR]      change the directory (/ when DIR is left out)\n"
+                 "  pwd           print the working directory\n"
+                 "  jobs          list background and stopped jobs\n"
+                 "  fg [N]        bring job N to the foreground (the latest by default)\n"
+                 "  bg [N]        resume stopped job N in the background\n"
+                 "  help          show this text\n"
+                 "\n"
+                 "Command lines:\n"
+                 "  a | b         send a's output to b (up to four stages)\n"
+                 "  cmd > file    write the output to file; >> appends\n"
+                 "  cmd < file    read the input from file\n"
+                 "  cmd &         run in the background\n"
+                 "  \"a b\" 'a b'   one argument with a space in it; \\ escapes one character\n"
+                 "\n"
+                 "Keys:\n"
+                 "  Tab     complete             Ctrl-R  search history\n"
+                 "  Ctrl-C  interrupt            Ctrl-Z  suspend\n"
+                 "  Ctrl-D  end the session\n"
+                 "\n"
+                 "Any other name runs a program from /bin, /usr/bin or /tests.\n"
+                 "A command's full manual: doc NAME\n");
         return 0;
     }
 
