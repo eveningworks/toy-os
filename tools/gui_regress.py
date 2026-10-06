@@ -138,6 +138,7 @@ TOOLS = [
     ("filedialog", "filedialog_test.py", "the shared file chooser, as an owned window"),
     ("trashgui",   "trash_gui_test.py",  "the Recycle Bin: File Manager and desktop Delete, trash:/, Restore"),
     ("undogui",    "undo_gui_test.py",   "Undo/Redo: the toast's button, Ctrl+Z/Y, rename and new folder"),
+    ("searchgui",  "search_gui_test.py", "search: typing filters, Enter walks subfolders, results open in place"),
     ("forcequit", "forcequit_test.py", "not-responding detection and force quit"),
     ("dialog", "dialog_test.py", "the confirm dialog, by pixel value"),
     ("leave", "leave_test.py", "the Leave page: Restart/Shut down/Exit to shell, apps asked to close, Restart into"),

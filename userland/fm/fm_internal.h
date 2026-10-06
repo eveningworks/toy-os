@@ -16,6 +16,7 @@
 #include "ui/uui_pathbar.h"
 #include "ui/uui_places.h"
 #include "ui/uui_button.h"
+#include "ui/uui_segmented.h"
 #include "lib/uimg.h"
 
 // The File Manager's own header, shared by the files it is split across
@@ -75,6 +76,8 @@
 #define ID_DP_PROPS 19
 #define ID_TOAST    20  // the undo toast's button
 #define ID_TOAST_X  21  // ...and its dismiss
+#define ID_SCOPE    22  // the search strip's Look in switch
+#define ID_SEARCH_STOP 23
 
 // The commands, shared by the menu bar, the toolbar, the context menu
 // and the function keys -- one code per act, so those four cannot
@@ -105,8 +108,9 @@ enum {
 };
 
 // The Recycle Bin's folder, as uui_fileview and the breadcrumb see it --
-// KIO's trash:/.
+// KIO's trash:/. A search's results are "search:" + the folder searched.
 #define FM_BIN "trash:/"
+#define FM_SEARCH "search:"
 
 // The dialog's answers. ONE widget serves both questions the app asks
 // (a conflict, a delete), so `g_dialog_kind` says which one is up and
@@ -327,8 +331,21 @@ int  undo_toast_tick(void);        // 1 when it timed out and the window should 
 void undo_toast_action(void);      // its button
 void fm_job_undo(struct ufu_op *op, int redo);
 
+// --- search into subfolders (fm_search.c) -----------------------------------
+void search_start(const char *root, const char *query);
+void search_stop(void);
+int  search_running(void);
+void search_status(char *out, int cap);
+const struct uui_fileview_source *search_source(void);
+int  in_search(const struct uui_fileview *fv);
+const char *search_scope(const char *dir);     // "search:/usr" -> "/usr", else NULL
+int  search_item_flags(int code, unsigned *out);
+int  search_strip_shown(void);                 // files.c: the Look in strip is up
+extern struct uui_segmented g_scope_seg;
+extern struct uui_button g_search_stop;
+
 // --- the Recycle Bin (fm_trash.c) -------------------------------------------
-void bin_init(struct uui_fileview *fv);      // the trash:/ resolver, per pane
+const struct uui_fileview_source *bin_source(void);   // trash:/
 int  in_bin(const struct uui_fileview *fv);  // the pane is showing the bin
 int  bin_count(void);
 int  bin_item_flags(int code, unsigned *out);  // 1 when the bin decides `code`
@@ -352,6 +369,7 @@ int  poll_job(void);
 #define POST_DONE     1
 #define POST_CONFLICT 2
 #define POST_THUMB    3   // fm_thumbs.c's worker, and its wake-up
+#define POST_SEARCH   4   // fm_search.c's worker: results, or (a1 = 1) done
 
 int  fm_job_running(void);
 void fm_job_cancel(void);

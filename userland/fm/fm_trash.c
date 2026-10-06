@@ -79,12 +79,7 @@ static const struct uui_fileview_source g_bin_src = {
     .cell = bin_cell, .compare = bin_compare,
 };
 
-static const struct uui_fileview_source *resolve(void *ctx, const char *dir) {
-    (void)ctx;
-    return strcmp(dir, FM_BIN) == 0 ? &g_bin_src : 0;
-}
-
-void bin_init(struct uui_fileview *fv) { uui_fileview_set_resolver(fv, resolve, 0); }
+const struct uui_fileview_source *bin_source(void) { return &g_bin_src; }
 
 int in_bin(const struct uui_fileview *fv) { return uui_fileview_source(fv) == &g_bin_src; }
 

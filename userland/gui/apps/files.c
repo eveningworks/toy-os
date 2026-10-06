@@ -364,6 +364,7 @@ static enum uui_fileview_sort sort_key_of(int code) {
 static unsigned menu_item_flags(int code) {
     unsigned bin;
     if (bin_item_flags(code, &bin)) return bin;   // the Recycle Bin's own rules
+    if (search_item_flags(code, &bin)) return bin;   // ...and a search's
     if (code == CMD_UNDO || code == CMD_REDO)
         return undo_can(code == CMD_REDO) ? 0 : UUI_MI_DISABLED;
     switch (code) {
@@ -441,6 +442,8 @@ struct uui_item g_widgets[] = {
     { .ops = &uui_button_ops, .widget = &g_cancel_btn, .id = ID_CANCEL, .hidden = 1 },
     { .ops = &uui_button_ops, .widget = &g_toast_btn, .id = ID_TOAST, .hidden = 1 },
     { .ops = &uui_button_ops, .widget = &g_toast_x, .id = ID_TOAST_X, .hidden = 1 },
+    { .ops = &uui_segmented_ops, .widget = &g_scope_seg, .id = ID_SCOPE, .hidden = 1, .name = "scope" },
+    { .ops = &uui_button_ops, .widget = &g_search_stop, .id = ID_SEARCH_STOP, .hidden = 1 },
     { .ops = &uui_textbox_ops, .widget = &g_addr[0], .id = ID_ADDR_L, .name = "addr0" },
     { .ops = &uui_textbox_ops, .widget = &g_addr[1], .id = ID_ADDR_R, .name = "addr1" },
     // LAST, so it is hit-tested FIRST: input order is the reverse of
@@ -571,6 +574,60 @@ void refresh_status(void) {
 // re-run on every reload, and reading the shared box from it let a search
 // typed for one pane re-filter the other the next time the disk changed.
 static char g_query[2][UUI_TEXTBOX_MAX];
+// THE SEARCH STRIP (fm_search.c's results): Look in this folder, its
+// subfolders, or the whole computer; a Stop while the walk runs. Up
+// whenever the active pane has a query or shows results.
+struct uui_segmented g_scope_seg;
+struct uui_button g_search_stop;
+static const char *const g_scope_names[] = { "This folder", "Subfolders too", "Whole computer" };
+static char g_scope[2][PATH_MAX_LEN];   // the real folder a pane's search is about
+static int g_keep_query;                // the next navigation keeps the query (a scope switch)
+
+int search_strip_shown(void) {
+    return g_query[g_active][0] || in_search(active());
+}
+
+// A pane's virtual folders: the Recycle Bin, and a search's results.
+static const struct uui_fileview_source *resolve_virtual(void *ctx, const char *dir) {
+    (void)ctx;
+    if (strcmp(dir, FM_BIN) == 0) return bin_source();
+    if (search_scope(dir)) return search_source();
+    return 0;
+}
+
+// Search below `scope` for the active pane's query: the results become
+// the pane's folder ("search:" + scope), and on_pane_dir starts the walk.
+static void search_into(const char *scope) {
+    if (!g_query[g_active][0]) { set_note("type what to look for, then Enter"); return; }
+    char dir[PATH_MAX_LEN + 8];
+    snprintf(dir, sizeof dir, "%s%s", FM_SEARCH, scope);
+    strlcpy(g_scope[g_active], scope, sizeof g_scope[g_active]);
+    g_keep_query = 1;
+    if (!strcmp(uui_fileview_dir(active()), dir)) {   // already there: search again
+        search_start(scope, g_query[g_active]);
+        reload_pane(active());
+    } else {
+        fm_goto(g_active, dir);
+    }
+    g_keep_query = 0;
+}
+
+// The strip's switch, chosen: back to filtering the folder, or into its
+// subfolders, or everything from the root.
+static void scope_chosen(int sel) {
+    const char *real = search_scope(uui_fileview_dir(active()));
+    const char *scope = g_scope[g_active][0] ? g_scope[g_active] : (real ? real : uui_fileview_dir(active()));
+    if (sel == 0) {
+        search_stop();
+        g_keep_query = 1;
+        fm_goto(g_active, scope);
+        g_keep_query = 0;
+        reload_pane(active());   // the filter applies again
+    } else {
+        search_into(sel == 2 ? "/" : scope);
+        if (sel == 2) strlcpy(g_scope[g_active], scope, sizeof g_scope[g_active]);
+    }
+}
 
 // The breadcrumb and the places follow the ACTIVE pane; the search box's
 // hint names the folder it would search, as Explorer's does.
@@ -594,6 +651,8 @@ void path_sync(void) {
     if (!g_tree_on) tree_select_path(dir);
     if (!g_search_on && strcmp(uui_textbox_text(&g_search), g_query[g_active]) != 0)
         uui_textbox_set_text(&g_search, g_query[g_active]);
+    const char *sc = search_scope(dir);
+    g_scope_seg.selected = !sc ? 0 : !strcmp(sc, "/") ? 2 : 1;
     const char *base = in_bin(active()) ? "Recycle Bin"
                      : (dir[0] == '/' && !dir[1]) ? "System" : k_path_basename(dir);
     snprintf(g_search_hint, sizeof g_search_hint, "Search %s", base);
@@ -721,9 +780,9 @@ void do_command(struct uapp *a, int code) {
     // added on 2026-09-19.
     // A command the bin greys is refused here too: a key reaches this
     // without asking menu_item_flags().
-    if (in_bin(active()) && (menu_item_flags(code) & UUI_MI_DISABLED) &&
+    if ((in_bin(active()) || in_search(active())) && (menu_item_flags(code) & UUI_MI_DISABLED) &&
         code != CMD_UP) {
-        set_note("not in the Recycle Bin");
+        set_note(in_bin(active()) ? "not in the Recycle Bin" : "not in search results");
         return;
     }
     switch (code) {
@@ -924,6 +983,12 @@ static void on_widget(struct uapp *a, int id, int reason) {
         uapp_redraw(a);
         return;
     }
+    if (id == ID_SCOPE) {   // the Look in switch moved
+        scope_chosen(g_scope_seg.selected);
+        refresh_status();
+        uapp_redraw(a);
+        return;
+    }
     if (id == ID_SEARCH) {
         if (reason == UUI_REASON_PRESS) {
             g_search_on = 1;
@@ -1033,6 +1098,10 @@ static void on_action(struct uapp *a, int code) {
     if (g_modal != MODAL_NONE) return;
     if (code == ID_DP_OPEN)  do_command(a, CMD_OPEN);
     if (code == ID_DP_PROPS) do_command(a, CMD_PROPERTIES);
+    if (code == ID_SEARCH_STOP) {
+        search_stop();
+        uapp_redraw(a);
+    }
     if (code == ID_TOAST_X) {
         undo_toast_hide();
         uapp_redraw(a);
@@ -1148,10 +1217,18 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // query and the listing follows it; Esc empties it, Enter hands the
     // keyboard back to the listing with the results still up.
     if (g_search_on) {
-        if (key == 0x1B) search_clear();
-        else if (key == '\n' || key == '\r') {
+        if (key == 0x1B) {
+            const char *sc = search_scope(uui_fileview_dir(active()));
+            if (sc) scope_chosen(0);   // out of the results, to the folder
+            search_clear();
+        } else if (key == '\n' || key == '\r') {
+            // ENTER SEARCHES THE SUBFOLDERS, with the results up and the
+            // keyboard back on the listing; typing alone only filters.
             g_search_on = 0;
             uui_textbox_set_active(&g_search, 0);
+            strlcpy(g_query[g_active], uui_textbox_text(&g_search), sizeof g_query[g_active]);
+            const char *sc = search_scope(uui_fileview_dir(active()));
+            if (g_query[g_active][0]) search_into(sc ? sc : uui_fileview_dir(active()));
         } else if (uui_textbox_key_mods(&g_search, key, mods)) {
             search_apply();
         }
@@ -1338,6 +1415,10 @@ static int on_tick(struct uapp *a) {
 // the same one, so a double click here and `open x.txt` at a prompt
 // cannot disagree.
 static void on_pane_open(void *ctx, const char *path) {
+    if (in_search(&g_pane[(int)(intptr_t)ctx])) {   // a folder among results: go there
+        struct sys_stat st;
+        if (sys_stat(path, &st) == 0 && st.is_dir) { fm_goto((int)(intptr_t)ctx, path); return; }
+    }
     if (in_bin(&g_pane[(int)(intptr_t)ctx])) {   // Explorer's rule: a deleted file is not opened
         snprintf(g_stat_note, sizeof g_stat_note, "restore %s to open it",
                  k_path_basename(path));
@@ -1373,8 +1454,18 @@ static void on_pane_dir(void *ctx, const char *dir) {
     int i = (int)(intptr_t)ctx;
     undo_toast_hide();   // it was about the folder being left
     // A NEW FOLDER ENDS A SEARCH, Explorer's rule: the query was about
-    // the folder you left. Re-listed without the filter.
-    if (g_query[i][0]) {
+    // the folder you left. Re-listed without the filter. Entering a
+    // search's results, or switching its scope, keeps it.
+    const char *sc = search_scope(dir);
+    if (sc) {
+        if (g_keep_query || g_query[i][0]) search_start(sc, g_query[i]);
+    } else if (g_keep_query) {
+        /* the strip's "This folder": the filter stays */
+    } else {
+        search_stop();
+        g_scope[i][0] = '\0';
+    }
+    if (g_query[i][0] && !sc && !g_keep_query) {
         g_query[i][0] = '\0';
         if (i == g_active) uui_textbox_set_text(&g_search, "");
         uui_fileview_reload(&g_pane[i]);
@@ -1385,7 +1476,8 @@ static void on_pane_dir(void *ctx, const char *dir) {
     // save that does not happen. Two keys, so the whole document is
     // rewritten twice per navigation -- 512 bytes, and the alternative
     // is a dirty flag that has to be right.
-    uconf_set(FILES_CONF, i ? "right" : "left", dir);
+    // A search is not a place to come back to: the folder it searched is.
+    uconf_set(FILES_CONF, i ? "right" : "left", sc ? (g_scope[i][0] ? g_scope[i] : sc) : dir);
     // AFTER that write: a pane showing /etc would otherwise read it as a
     // change and repaint a second time on every navigation there.
     pane_listed(i);
@@ -1491,6 +1583,13 @@ static int on_user(struct uapp *a, int a0, int a1) {
     if (a0 == POST_DONE) {
         g_apply_all = -1;       // one operation, one memory
         fm_job_finished();
+        return 1;
+    }
+    if (a0 == POST_SEARCH) {
+        for (int i = 0; i < 2; i++)
+            if (in_search(&g_pane[i])) uui_fileview_reload(&g_pane[i]);
+        if (a1) ulogf("files: search done, %d found\n", uui_fileview_count(active()));
+        refresh_status();
         return 1;
     }
     if (a0 == POST_THUMB) {
@@ -1608,6 +1707,9 @@ int main(int argc, char **argv) {
     g_nav.compact = 0;
     uui_pathbar_init(&g_path, "System", "drive");
     uui_pathbar_set_scheme(&g_path, FM_BIN, "Recycle Bin", "place-trash");
+    uui_pathbar_set_scheme(&g_path, "search:/", "Search results", "tb-find");
+    uui_segmented_init(&g_scope_seg, g_scope_names, 3, 0);
+    uui_button_init(&g_search_stop, 0, 0, 0, 0, "Stop", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_SEARCH_STOP);
     uui_textbox_init(&g_search, "");
     g_search.placeholder = g_search_hint;
     // The places are the file chooser's (ui/uui_filedialog.c) -- one
@@ -1650,7 +1752,7 @@ int main(int argc, char **argv) {
                            i ? g_right_entries : g_left_entries, PANE_FILES);
         g_pane[i].on_open = on_pane_open;
         g_pane[i].ctx = (void *)(intptr_t)i;
-        bin_init(&g_pane[i]);
+        uui_fileview_set_resolver(&g_pane[i], resolve_virtual, 0);
         uui_fileview_set_thumb(&g_pane[i], g_opt.thumbs ? pane_thumb : 0, 0);
         uui_fileview_set_filter(&g_pane[i], pane_filter, (void *)(intptr_t)i);
         g_pane[i].single_click = g_opt.single_click;

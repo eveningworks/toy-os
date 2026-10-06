@@ -10559,3 +10559,27 @@ icon is resampled twice (to the master, then to the bar), and 1.5 came
 out faint on a real frame. No new tool dependency: an SVG rasteriser
 would have been the obvious way, and none is required to build.
 
+
+
+## Search: typing filters the folder, Enter walks the tree below it
+
+**Chosen 2026-10-06 by the maintainer** (artboard C of the File Manager
+round). Explorer searches subfolders as you type because Windows Search
+keeps an index; toy-os has none, and walking a disk per keystroke is the
+cost Dolphin's filter bar exists to avoid. So the two stay apart:
+TYPING filters the folder you are in, as before, and ENTER walks every
+folder below it on a thread of its own (`fm_search.c`, over the shared
+`lib/uwalk.h`), the results filling in as they are found -- Dolphin's
+filter bar beside its "From here (including subfolders)" search. A
+**Look in** strip (This folder / Subfolders too / Whole computer, a
+live count, Stop) is up whenever there is a query.
+
+The results are the `search:<folder>` virtual folder (the convention
+"A virtual folder is a `uui_fileview` source"), so Back, the breadcrumb
+("Search results > usr") and every verb on a selection work on the real
+paths; a pane's saved folder records the folder searched, never the
+search. A hidden folder is not searched unless Options shows hidden
+files, and a Recycle Bin never is. **The walk is depth-first over an
+explicit stack**: a breadth-first queue grows with the tree's width and
+has no bound worth naming; a stack holds one frame per level.
+

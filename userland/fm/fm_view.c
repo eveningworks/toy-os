@@ -15,6 +15,9 @@
 // --- layout and drawing ------------------------------------------------
 
 static int toolbar_h(void) { return uui_toolbar_height(&g_toolbar); }
+// The search strip under the command bar: 0 while there is no query.
+static int strip_h(void) { return search_strip_shown() ? ugfx_char_h() + 16 : 0; }
+static const char *LOOK_IN = "Look in";
 
 // THE CHROME IS A WASH OF THE ACCENT (the colour-coded design chosen
 // 2026-10-01): the bars at one strength, the places pane lighter, a line
@@ -132,7 +135,22 @@ void layout_all(int cw, int ch) {
     (void)status_w;
 
     // --- the body: side column | panes | details pane -------------------
-    int top = nh + tb;
+    // --- the search strip: Look in, the switch, the status, Stop ---------
+    int sh = strip_h();
+    widget_by_id(ID_SCOPE)->hidden = !sh;
+    widget_by_id(ID_SEARCH_STOP)->hidden = !sh || !search_running();
+    if (sh) {
+        int lx = 12 + ugfx_text_width(LOOK_IN) + 10;
+        int sw, shh;
+        uui_segmented_natural_size(&g_scope_seg, &sw, &shh);
+        uui_segmented_set_geometry(&g_scope_seg, lx, nh + tb + (sh - shh) / 2);
+        if (search_running()) {
+            int bw, bh;
+            uui_button_natural_size(&g_search_stop, &bw, &bh);
+            uui_button_set_geometry(&g_search_stop, cw - bw - 10, nh + tb + (sh - bh) / 2, bw, bh);
+        }
+    }
+    int top = nh + tb + sh;
     int body_h = ch - top - sb;
     int split_w = uui_splitter_thickness();
     int minw = min_col_w();
@@ -414,6 +432,24 @@ void on_draw(struct uapp *a, struct uapp_draw *d) {
     ugfx_fill_rect(d->surface, 0, 0, cw, nh + tb, chrome());       // nav row + command bar
     ugfx_fill_rect(d->surface, 0, nh - 1, cw, 1, chrome_line());
     ugfx_fill_rect(d->surface, 0, nh + tb - 1, cw, 1, chrome_line());
+    int sh = strip_h();
+    if (sh) {
+        // A step lighter than the chrome, as Explorer's search options bar.
+        int y = nh + tb;
+        uint32_t sbg = ugfx_blend(chrome(), UTHEME_WHITE, 120);
+        ugfx_fill_rect(d->surface, 0, y, cw, sh, sbg);
+        ugfx_fill_rect(d->surface, 0, y + sh - 1, cw, 1, chrome_line());
+        uint32_t dim = uui_state_bg(UTHEME_TEXT, UUI_STATE_DISABLED);
+        int ty = y + (sh - ugfx_char_h()) / 2;
+        ugfx_draw_string_clipped(d->surface, 12, ty, cw, LOOK_IN, dim, sbg);
+        if (search_scope(uui_fileview_dir(active()))) {
+            char st[96];
+            search_status(st, sizeof st);
+            int sx = g_scope_seg.x + g_scope_seg.w + 16;
+            int right = widget_by_id(ID_SEARCH_STOP)->hidden ? cw - 10 : g_search_stop.x - 10;
+            ugfx_draw_string_elided(d->surface, sx, ty, right - sx, st, dim, sbg);
+        }
+    }
     uui_statusbar_draw(d->surface, &g_status);
     if (g_dpane) details_draw(d->surface);
     if (!widget_by_id(ID_CANCEL)->hidden) uui_button_draw_one(d->surface, &g_cancel_btn);

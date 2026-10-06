@@ -2960,6 +2960,17 @@ window without going through it will find its layout polls timing out.
   checks redden. In-place rename selects the STEM, so the test types
   "cherry", not "cherry.txt".
 
+- **`search_gui_test.py`** -- the File Manager's search into subfolders
+  (`fm_search.c` over `lib/uwalk.h`) against a fixture whose expected
+  set is written by hand: typing filters only the folder, Enter lists
+  the matches below it (three levels deep, a matching folder) and NOT
+  one under a hidden folder, a result opens at its real path, and the
+  strip's "This folder" goes back to the filter. **Wait for the layout
+  BEFORE the "search done" log line**: the frame after the last result
+  is the one to read, and an idle window draws no other -- reading the
+  log first swallowed it. Its positive control stops the walk from
+  descending: the subfolder check reddens.
+
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window
   (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
   driven through Notepad, Image Viewer and Audio Player. 17 checks: the

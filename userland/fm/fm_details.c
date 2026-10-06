@@ -48,7 +48,7 @@ static int described(char *path, int cap, const struct sys_dirent **ent) {
     // The selection's REAL path -- in the Recycle Bin, where it lies in
     // the bin, not "trash:/" joined with its name.
     if (e) return uui_fileview_selected_path(fv, path, cap);
-    if (in_bin(fv)) return 0;   // the bin itself is no folder to describe
+    if (in_bin(fv) || in_search(fv)) return 0;   // a virtual folder is nothing to describe
     strlcpy(path, dir, (size_t)cap);
     return 1;
 }
@@ -104,7 +104,8 @@ static void draw_marked(struct ugfx_surface *s, uint32_t bg) {
     const struct uimg *ico = icon_get("file", bh * 2 / 3);
     if (ico) ugfx_blit_alpha(s, bx + (bw - ico->w) / 2, by + (bh - ico->h) / 2, ico->w, ico->h, ico->px, ico->w);
     char title[48], h[24], path[UUI_FILEVIEW_PATH_MAX];
-    snprintf(title, sizeof title, "%d items selected", marks);
+    if (marks) snprintf(title, sizeof title, "%d items selected", marks);
+    else snprintf(title, sizeof title, "Nothing selected");
     int y = by + bh + 10;
     const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
     ugfx_draw_string_clipped(s, bx, y, bw, title, UTHEME_TEXT, bg);
@@ -120,11 +121,16 @@ static void draw_marked(struct ugfx_surface *s, uint32_t bg) {
     human_size(h, sizeof h, bytes);
     uint32_t dim = uui_state_bg(UTHEME_TEXT, UUI_STATE_DISABLED);
     int kw = ugfx_char_advance('n') * 9;
-    ugfx_draw_string_clipped(s, bx, y, kw, "Size", dim, bg);
-    ugfx_draw_string_clipped(s, bx + kw, y, bw - kw, h, UTHEME_TEXT, bg);
-    y += line_h();
+    if (marks) {   // nothing selected has no size worth a "0B"
+        ugfx_draw_string_clipped(s, bx, y, kw, "Size", dim, bg);
+        ugfx_draw_string_clipped(s, bx + kw, y, bw - kw, h, UTHEME_TEXT, bg);
+        y += line_h();
+    }
     ugfx_draw_string_clipped(s, bx, y, kw, "Location", dim, bg);
-    ugfx_draw_string_elided(s, bx + kw, y, bw - kw, uui_fileview_dir(fv), UTHEME_TEXT, bg);
+    // A virtual folder by its name, not its "trash:/" spelling.
+    const char *where = in_bin(fv) ? "Recycle Bin" : in_search(fv) ? "Search results"
+                      : uui_fileview_dir(fv);
+    ugfx_draw_string_elided(s, bx + kw, y, bw - kw, where, UTHEME_TEXT, bg);
 }
 
 void details_draw(struct ugfx_surface *s) {
