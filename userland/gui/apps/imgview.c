@@ -50,10 +50,9 @@
 #include "ui/utheme.h"
 #include "keyboard.h"
 
-#define PATH_MAX_LEN 64          // NOT FS_PATH_MAX (4096 since
-                                 // 2026-09-15) -- this app's own
-                                 // buffers, still the old bound.
-                                 // See docs/roadmap.md.
+#define PATH_MAX_LEN 256         // NOT FS_PATH_MAX -- this app's own
+                                 // buffers; the shared widgets it uses
+                                 // (uui_fileview, uopen) carry the same bound.
 #define MAX_FILES 64
 #define WALLPAPER_DIR "/usr/share/wallpapers"
 #define DEFAULT_DIR WALLPAPER_DIR

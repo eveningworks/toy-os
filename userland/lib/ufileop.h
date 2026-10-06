@@ -28,10 +28,10 @@
 // the kernel's version of it). `ttf.h` solved the same problem the same
 // way and for the same reason: one implementation then serves a
 // program, a thread and a test with no shared mutable state at all.
-// `struct ufileop` is ~30 KB, so it belongs at file scope or on a heap,
+// `struct ufileop` is tens of KB, so it belongs at file scope or on a heap,
 // never on a ring-3 frame (those are capped at 2 KiB).
 
-#define UFILEOP_PATH_MAX 64    // FS_PATH_MAX
+#define UFILEOP_PATH_MAX 256   // NOT FS_PATH_MAX (4096): the walk's own bound
 #define UFILEOP_BUF 4096       // one TFS3 block-ish
 #define UFILEOP_MAX_DIRS 64    // pending directories in a tree walk
 

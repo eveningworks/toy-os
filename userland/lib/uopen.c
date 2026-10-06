@@ -12,7 +12,7 @@
 #include <stdio.h>
 #include <ctype.h>
 
-#define UOPEN_PATH_MAX 64 // FS_PATH_MAX
+#define UOPEN_PATH_MAX 256 // NOT FS_PATH_MAX (4096): this file's own bound
 #define DESKTOP_ENTRY_DIR "/usr/wm/applications"
 
 // A space/comma-separated list, matched whole -- ".md" must not match

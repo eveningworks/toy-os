@@ -751,6 +751,7 @@ def teardown_fixture(dbg):
     """
     dbg.send(f"sh rm -r {SRC}")
     dbg.send(f"sh rm -r {DST}")
+    dbg.send("sh rm -r /fmlong")
 
 
 def run(dbg, qmp, tmp, res):
@@ -1640,6 +1641,20 @@ def run(dbg, qmp, tmp, res):
         type_path(path)
         dbg.key(K_ENTER)
         return wait_layout(dbg, win, lambda l: l.dir.get(0) == path) or layout_now(dbg, win)
+
+    # A path past the old 64-byte bound of the app's and the shared
+    # widgets' buffers, which used to be refused as though it were
+    # missing. Its own root, so no listing of the fixture changes.
+    longp = "/fmlong/a-folder-name-of-some-length/and-another-one-below-it/leaf"
+    dbg.send(f"sh mkdir /fmlong")
+    dbg.send(f"sh mkdir /fmlong/a-folder-name-of-some-length")
+    dbg.send(f"sh mkdir /fmlong/a-folder-name-of-some-length/and-another-one-below-it")
+    dbg.send(f"sh mkdir {longp}")
+    lay = goto(longp) or lay
+    res.check(f"a {len(longp)}-byte path opens (the bound was 64)",
+              len(longp) > 64 and lay.dir.get(0) == longp, f"dir0={lay.dir.get(0)!r}")
+    lay = goto(SRC) or lay
+    dbg.send("sh rm -r /fmlong")
 
     home = lay.dir.get(0) or SRC
     gone = f"{SRC}/gone"

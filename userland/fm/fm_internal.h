@@ -37,10 +37,10 @@
 //   fm_modal.c   Rename / New folder (the two prompts with a text field)
 //   fm_details.c the details pane: a preview and the selection's facts
 
-#define PATH_MAX_LEN 64          // NOT FS_PATH_MAX (4096 since
-                                 // 2026-09-15) -- this app's own
-                                 // buffers, still the old bound.
-                                 // See docs/roadmap.md.
+#define PATH_MAX_LEN 256         // NOT FS_PATH_MAX -- this app's own
+                                 // buffers; the shared widgets it uses
+                                 // (uui_fileview, uui_places, ufileop,
+                                 // uopen) carry the same bound.
 #define PANE_FILES  SYS_LISTDIR_MAX
 
 // The Properties window is a PROCESS, not a dialog in this one. See

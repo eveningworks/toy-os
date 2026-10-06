@@ -492,7 +492,7 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~`rename()` as a directory operation, atomic through the journal~~ done
 - [x] ~~Raise `FS_PATH_MAX` (64)~~ -- 4096 now, with paths off the kernel stack
 - [ ] Report a name longer than 63 bytes from `readdir()` -- needs a releasing allocator or a variable-length dirent
-- [ ] Let the GUI apps open a path longer than 63 bytes -- four still hold a private `PATH_MAX_LEN` of 64
+- [x] ~~Let the GUI apps open a path longer than 63 bytes~~ DONE 2026-10-06 -- 256 across the GUI; the shell still holds 64
 - [x] ~~Room in the inode for owner/mode (for Multi-user & file permissions) and `time_t` (POSIX compatibility)~~ done
 - [x] ~~Symlink FORMAT support (fast symlinks inline in the pointer area)~~ done
 - [ ] Symlink IMPLEMENTATION (create/read, backend-internal resolve loop with an ELOOP-style hop cap)

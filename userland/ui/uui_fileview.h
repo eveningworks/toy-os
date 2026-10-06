@@ -39,7 +39,7 @@
 // that a JPEG named .dat is listed and a text file named photo.jpg is
 // not. A widget that filtered by extension would take that away.
 
-#define UUI_FILEVIEW_PATH_MAX 64 // FS_PATH_MAX (kernel/include/api/fs.h)
+#define UUI_FILEVIEW_PATH_MAX 256 // NOT FS_PATH_MAX (4096): a widget's own bound
 
 // ~300ms at the PIT's 100 Hz, the same threshold the desktop's icons and
 // the file picker each defined for themselves before this widget was the

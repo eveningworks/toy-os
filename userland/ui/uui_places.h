@@ -21,7 +21,7 @@
 // for uui_places_take(), and the app goes there.
 
 #define UUI_PLACES_MAX       16
-#define UUI_PLACES_PATH_MAX  64
+#define UUI_PLACES_PATH_MAX  256
 #define UUI_PLACES_LABEL_MAX 24
 
 struct uui_place {
