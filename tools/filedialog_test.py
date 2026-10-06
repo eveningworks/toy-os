@@ -631,9 +631,11 @@ def check_owner_close(dbg, res):
 
 
 def check_other_apps(dbg, res):
-    for path, title, label in ((IMGVIEW, None, "Image Viewer"),
-                               (PLAYER, None, "Audio Player")):
-        dbg.spawn(path, title=title)
+    # BY ITS WINDOW, not by its process: a Ctrl+O sent before the app's
+    # window exists goes nowhere, and the Player's first window waits on
+    # reading its first file's tags and cover.
+    for path, label in ((IMGVIEW, "Image Viewer"), (PLAYER, "Audio Player")):
+        dbg.spawn(path, title=label)
         dbg.settle()
         dbg.key(CTRL_O, mods="ctrl")
         dlg = wait_dialog(dbg, True)
