@@ -12,5 +12,30 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(ping *)",
+      "Bash(graft ask *)",
+      "Bash(graft grep *)",
+      "Bash(graft skeleton *)",
+      "Bash(graft callers *)",
+      "Bash(graft map)",
+      "Bash(ruff check *)",
+      "Bash(nm *)",
+      "Bash(lsusb *)",
+      "Bash(lsusb)",
+      "Bash(size *)",
+      "Bash(systemctl --user status *)",
+      "Bash(systemctl --user is-active *)",
+      "Bash(readelf *)",
+      "Bash(objdump *)",
+      "Bash(addr2line *)",
+      "Bash(lspci *)",
+      "Bash(lspci)",
+      "Bash(xxd *)",
+      "Bash(ffprobe *)",
+      "Bash(shellcheck *)"
+    ]
   }
 }
