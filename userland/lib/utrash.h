@@ -69,5 +69,8 @@ int utrash_restore(const struct utrash_item *it);
 // (ufileop_remove, which reports progress a big folder needs): drops
 // its info file. 0 or -errno.
 int utrash_forget(const struct utrash_item *it);
+// The same, from the item's path inside the bin ("<bin>/files/NAME") --
+// what a caller deleting a list of paths has. -EINVAL for any other path.
+int utrash_forget_path(const char *files_path);
 
 #endif

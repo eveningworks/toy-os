@@ -81,6 +81,36 @@ typedef const struct uimg *(*uui_fileview_thumb_fn)(void *ctx, const char *dir,
                                                      const struct sys_dirent *e,
                                                      int px);
 
+// A VIRTUAL FOLDER: rows the CALLER supplies instead of a directory's,
+// with columns of its own -- KDE's KIO workers (trash:/, zip:/,
+// filenamesearch:/) and a Windows shell folder are this. The view's
+// `dir` is then a name like "trash:/", and a resolver (below) maps it to
+// its source on every reload, so Back, Forward and a saved folder reach
+// it like any other.
+//
+// **A SOURCE'S ROWS ARE ITS OWN**: the filter is not applied (the source
+// filters), so entry `index` is exactly the position `list` wrote it at
+// and stays valid for `path`, `cell` and `compare` until the next
+// reload. There is no "..", no drag out, no drop in, and activating a
+// folder reports `on_open` with its real path instead of descending.
+struct uui_table_column;
+struct uui_fileview_source {
+    // Fill `out` (at most `cap`) for `dir`; the count, or -errno.
+    int (*list)(void *ctx, const char *dir, struct sys_dirent *out, int cap);
+    // Entry `index`'s REAL path -- what opening, copying and thumbnails
+    // use. Required: a virtual folder has no directory to join.
+    int (*path)(void *ctx, int index, char *out, int cap);
+    // The details view's columns, the NAME FIRST (the widget draws that
+    // one), and each other cell's text; `compare` sorts by a column
+    // (NULL: by its text).
+    const struct uui_table_column *cols;
+    int ncols;
+    void (*cell)(void *ctx, int index, int col, char *out, int cap);
+    int (*compare)(void *ctx, int index_a, int index_b, int col);
+    void *ctx;
+};
+typedef const struct uui_fileview_source *(*uui_fileview_resolve_fn)(void *ctx, const char *dir);
+
 struct uui_fileview {
     struct uui_table table; // the whole visual/input mechanism
 
@@ -109,6 +139,10 @@ struct uui_fileview {
 
     uui_fileview_thumb_fn thumb; // NULL = every file gets the generic icon
     void *thumb_ctx;
+
+    uui_fileview_resolve_fn resolve; // NULL = every dir is a directory
+    void *resolve_ctx;
+    const struct uui_fileview_source *src; // this listing's; OWNED
 
     // --- marks ------------------------------------------------------
     //
@@ -235,6 +269,12 @@ void uui_fileview_set_filter(struct uui_fileview *fv,
                               uui_fileview_filter_fn fn, void *ctx);
 void uui_fileview_set_thumb(struct uui_fileview *fv,
                              uui_fileview_thumb_fn fn, void *ctx);
+// Virtual folders: `fn` answers a source for a dir it serves, else NULL.
+// Asked on every reload. See struct uui_fileview_source.
+void uui_fileview_set_resolver(struct uui_fileview *fv,
+                                uui_fileview_resolve_fn fn, void *ctx);
+// The listing's source, or NULL for a directory.
+const struct uui_fileview_source *uui_fileview_source(const struct uui_fileview *fv);
 
 // The icons-mode cell rectangle for a VIEW position, content-relative.
 // For tests and layout logs (docs/gui-guidelines.md: a test asks the

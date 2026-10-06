@@ -306,6 +306,16 @@ int utrash_restore(const struct utrash_item *it) {
     return utrash_forget(it);
 }
 
+int utrash_forget_path(const char *files_path) {
+    struct utrash_item it;
+    char files[UTRASH_PATH];
+    if (!k_path_dirname(files_path, files, sizeof files) ||
+        strcmp(k_path_basename(files), "files") ||
+        !k_path_dirname(files, it.bin, sizeof it.bin)) return -EINVAL;
+    strlcpy(it.name, k_path_basename(files_path), sizeof it.name);
+    return utrash_forget(&it);
+}
+
 int utrash_forget(const struct utrash_item *it) {
     char ip[UTRASH_PATH + 80];
     if (!info_path(it->bin, it->name, ip, sizeof ip)) return -ENAMETOOLONG;

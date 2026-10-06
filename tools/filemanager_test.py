@@ -752,6 +752,8 @@ def teardown_fixture(dbg):
     dbg.send(f"sh rm -r {SRC}")
     dbg.send(f"sh rm -r {DST}")
     dbg.send("sh rm -r /fmlong")
+    # Delete moves to the Recycle Bin now: what this tool deleted is there.
+    dbg.send("sh trash empty")
 
 
 def run(dbg, qmp, tmp, res):

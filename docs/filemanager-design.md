@@ -268,7 +268,8 @@ Stated so they are limitations rather than discoveries:
   itself.
 - **No drag-and-drop, no clipboard.** Their milestone, not this one --
   and this app is designed so that neither is a prerequisite.
-- **No trash.** Delete is delete, as `rm` is.
+- ~~**No trash.** Delete is delete, as `rm` is.~~ Reversed 2026-10-06:
+  Delete moves to a Recycle Bin (`lib/utrash.h`); `rm` stays permanent.
 - **No progress bar for a copy**, per above.
 - **No pagination past 256 entries.** `SYS_LISTDIR`'s ABI gap; the view
   says so in its status line rather than truncating silently, exactly as

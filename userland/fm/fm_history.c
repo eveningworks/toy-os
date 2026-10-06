@@ -75,7 +75,8 @@ static int go(int pane, int delta) {
     int dead = -1;
     for (int want = h->at + delta; want >= 0 && want < h->count; want += delta) {
         struct sys_stat st;
-        if (sys_stat(h->dir[want], &st) != 0 || !st.is_dir) {
+        int is_bin = strcmp(h->dir[want], FM_BIN) == 0;   // always there
+        if (!is_bin && (sys_stat(h->dir[want], &st) != 0 || !st.is_dir)) {
             if (dead < 0) dead = want;
             continue;
         }

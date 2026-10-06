@@ -199,6 +199,7 @@ def icon_place_desktop_tile():   return _tile((47, 154, 146), icon_place_desktop
 def icon_place_documents_tile(): return _tile((74, 134, 214), icon_place_documents)
 def icon_place_music_tile():     return _tile((214, 92, 143), icon_place_music)
 def icon_place_pictures_tile():  return _tile((74, 163, 107), icon_place_pictures)
+def icon_place_trash_tile():     return _tile((104, 112, 125), icon_place_trash)
 
 
 # A FOLDER OF A KNOWN KIND is the plain folder's shape in the kind's
@@ -624,6 +625,41 @@ def icon_tb_delete():
     d.polygon([(14, 26), (50, 26), (46, 58), (18, 58)], outline=TB_INK, width=4)
     d.rectangle([26, 32, 32, 52], fill=TB_INK)
     d.rectangle([38, 32, 44, 52], fill=TB_INK)
+    return im
+
+
+# THE RECYCLE BIN'S VERBS (lib/utrash.h): the delete glyph's can, with
+# what happens to its contents drawn inside -- an arrow rising out of it
+# (Restore) or a cross (Empty: gone for good).
+def _bin_can(d):
+    d.rectangle([18, 6, 46, 12], fill=TB_INK)
+    d.rectangle([8, 14, 56, 20], fill=TB_INK)
+    d.polygon([(12, 22), (52, 22), (48, 58), (16, 58)], outline=TB_INK, width=4)
+
+
+def icon_tb_bin_restore():
+    im, d = _tb()
+    _bin_can(d)
+    d.rectangle([29, 34, 35, 52], fill=TB_INK)
+    d.polygon([(32, 24), (43, 37), (21, 37)], fill=TB_INK)
+    return im
+
+
+def icon_tb_bin_empty():
+    im, d = _tb()
+    _bin_can(d)
+    d.line([23, 31, 41, 49], fill=TB_INK, width=5)
+    d.line([41, 31, 23, 49], fill=TB_INK, width=5)
+    return im
+
+
+def icon_place_trash():
+    im, d = _place()
+    d.rectangle([20, 6, 44, 12], fill=PLACE_INK)
+    d.rectangle([8, 14, 56, 20], fill=PLACE_INK)
+    d.polygon([(12, 22), (52, 22), (48, 58), (16, 58)], fill=PLACE_INK)
+    for x in (24, 32, 40):
+        d.line([x, 30, x, 50], fill=(200, 215, 240, 255), width=4)
     return im
 
 
@@ -1149,6 +1185,9 @@ ICONS = {
     "place-documents": icon_place_documents_tile,
     "place-music": icon_place_music_tile,
     "place-pictures": icon_place_pictures_tile,
+    "place-trash": icon_place_trash_tile,
+    "tb-bin-restore": icon_tb_bin_restore,
+    "tb-bin-empty": icon_tb_bin_empty,
     "tb-details": icon_tb_details,
     "tb-chart": icon_tb_chart,
     "tb-gear": icon_tb_gear,

@@ -1157,14 +1157,14 @@ $(DASH_GEN)/.stamp: $(wildcard $(DASH_SRC)/*.c) $(DASH_SRC)/nodetypes \
 # accidentally depend on third-party code. docs/libc-design.md's Stage 6
 # is what it is for: a program nobody working on this repo wrote,
 # compiled against this C library.
-# The File Manager is seven translation units, and `userland/fm/` is
+# The File Manager is several translation units, and `userland/fm/` is
 # outside USERLAND_PROGRAM_DIRS for the same reason `userland/wm/` is:
 # those directories turn every .c into its own ELF, which is right for a
 # program and wrong for one program's parts. Listed rather than
 # wildcarded, again as toywm is -- a stray .c dropped in there should
 # fail to link with an undefined symbol, not be absorbed silently.
 EXTRA_OBJS_files = fm/fm_view fm/fm_jobs fm/fm_tree fm/fm_thumbs fm/fm_modal \
-                   fm/fm_history fm/fm_details fm/fm_options
+                   fm/fm_history fm/fm_details fm/fm_options fm/fm_trash
 # System Settings, the same way: userland/settings/ is its parts.
 EXTRA_OBJS_settings = settings/set_registry settings/set_page settings/set_owner \
                       settings/set_sysinfo settings/set_clock settings/set_preview settings/set_startup settings/set_keyboard \

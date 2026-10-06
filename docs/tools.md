@@ -2942,6 +2942,15 @@ window without going through it will find its layout polls timing out.
   `/etc/start-menu.conf` (read with `sh cat`, after asserting a launch
   had put it there), and a launch while off unrecorded. Hover on opens a
   rested-on folder, off does not. Positive controls in its docstring.
+- **`trash_gui_test.py`** -- the Recycle Bin through the GUI: the
+  desktop's Delete ("Move") and Shift+Delete, the File Manager's Delete
+  and Shift+Delete, `trash:/` as a folder with no "..", Restore on the
+  bin's command bar, and Back out of it. Every outcome is read back
+  through `/bin/trash list` and `ls`, never from the app that did it.
+  Reuses `filemanager_test.py`'s layout reader. Its positive control
+  routes both Deletes back to a permanent remove: the four "into the
+  bin" checks redden.
+
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window
   (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
   driven through Notepad, Image Viewer and Audio Player. 17 checks: the

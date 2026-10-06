@@ -152,7 +152,12 @@ static int tree_build_head(void) {
 // panel behaves this way; Explorer's "expand to current folder" is the
 // same, as an option).
 void tree_reveal_path(const char *path) {
-    if (!path || path[0] != '/') return;
+    if (!path) return;
+    if (path[0] != '/') {   // a virtual folder: a place row, no ancestors
+        tree_rebuild();
+        tree_select_path(path);
+        return;
+    }
     char prefix[PATH_MAX_LEN];
     int len = (int)strlen(path);
     for (int i = 1; i < len && i < PATH_MAX_LEN; i++) {

@@ -45,7 +45,10 @@ static int described(char *path, int cap, const struct sys_dirent **ent) {
     const char *dir = uui_fileview_dir(fv);
     *ent = e;
     if (uui_fileview_mark_count(fv) > 1) return 0;
-    if (e) return k_path_join(dir, e->name, path, (size_t)cap);
+    // The selection's REAL path -- in the Recycle Bin, where it lies in
+    // the bin, not "trash:/" joined with its name.
+    if (e) return uui_fileview_selected_path(fv, path, cap);
+    if (in_bin(fv)) return 0;   // the bin itself is no folder to describe
     strlcpy(path, dir, (size_t)cap);
     return 1;
 }
@@ -67,9 +70,9 @@ static void refresh(void) {
         uui_fileinfo_set(&g_info, &g_fi);
     }
     g_info.preview = 0;
-    if (e && !e->is_dir && g_opt.thumbs)
-        g_info.preview = pane_thumb(0, uui_fileview_dir(active()), e,
-                                    uui_fileinfo_preview_px(&g_info, g_dw));
+    char parent[UUI_FILEVIEW_PATH_MAX];
+    if (e && !e->is_dir && g_opt.thumbs && k_path_dirname(path, parent, sizeof parent))
+        g_info.preview = pane_thumb(0, parent, e, uui_fileinfo_preview_px(&g_info, g_dw));
 }
 
 // Where the buttons go: under whatever the pane drew.

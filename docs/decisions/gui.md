@@ -4687,10 +4687,10 @@ dialog is the Options alternative for anyone who prefers it. Options is
 a window of its own with a sidebar of pages (Dolphin's Configure
 dialog), holding the start folder, single- or double-click, the view a
 new window uses, thumbnails, hidden names, extensions, how Rename works
-and whether Delete asks. **Delete asks by default and says why**: there
-is no Recycle Bin, so the card names the file, what it is and that it
-cannot come back -- the answer every desktop gives only for a
-PERMANENT delete, which is the only kind here.
+and whether Delete asks. **Delete asks by default and says why** -- the
+card names the file and what it is. (Written while there was no Recycle
+Bin and every delete was permanent; "Delete moves to a Recycle Bin, one
+per volume, on the freedesktop layout" below replaced that.)
 
 ## File operations are child processes, not loops inside the window
 
@@ -10458,3 +10458,49 @@ still costs the viewer nothing it did not already pay.
 broken block after a complete frame ends the animation there; the same
 before any frame, or a frame whose data ends before its pixels, is
 `-EINVAL`. That is cutting at a block boundary, not guessing at pixels.
+
+## Delete moves to a Recycle Bin, one per volume, on the freedesktop layout
+
+**Decided 2026-10-06, by the maintainer, from a canvas of options.** The
+File Manager's and the desktop's Delete move the item to a Recycle Bin;
+Shift+Delete, Delete inside the bin, and Empty delete for good, and
+always ask. The existing "Ask before deleting" option now governs only
+the move to the bin (Windows 11 does not ask at all; the maintainer
+kept the question). `rm` stays permanent, as it is on every system that
+has a bin, and `/bin/trash` is the bin from a prompt (`gio trash`'s
+shape). No size cap or automatic emptying yet.
+
+**One bin per volume, because a delete must be a RENAME.** Windows keeps
+`$Recycle.Bin` on each drive and freedesktop keeps `.Trash-$uid` at each
+mount's top for the same reason: moving a tree to another disk to
+"delete" it is slow, can fail half way, and needs the very space being
+freed. The system volume's bin is `/home/.Trash` (the spec's "home
+trash" -- toy-os has one home), any other persistent volume's is
+`<mount>/.Trash-0`. **A RAM volume and a read-only one have no bin**, and
+a delete there says so on its card and is permanent, as Windows does for
+a drive with no Recycle Bin. A selection that mixes the two kinds is one
+permanent delete, said once, rather than one request with two outcomes.
+
+**The freedesktop layout, not a format of our own**: `files/` plus
+`info/NAME.trashinfo` with a percent-encoded `Path=` and a local
+`DeletionDate=`, so a Linux desktop reading the same disk -- a USB stick
+above all -- sees the same bin. The info file is created FIRST with
+O_EXCL, which claims the name in the bin atomically; the rename follows.
+A second item of the same name becomes `NAME.2.EXT`, the extension kept
+so the bin's own listing still knows the type.
+
+**Restore never re-creates the folder an item came from** (Windows
+does): that folder being gone usually means it was deleted on purpose,
+and quietly bringing it back resurrects a path the user removed. A
+restore onto a name that is now taken is refused too; both say why.
+
+**The bin is a virtual folder, `trash:/`, and that is KIO's shape**:
+uui_fileview asks a resolver for a SOURCE on every reload, so Back,
+Forward, the saved pane folder and the breadcrumb (which names a scheme
+root) reach the bin with no special case each. The alternative -- the
+File Manager listing `/home/.Trash/files` itself -- would show bin
+names instead of where things came from, one volume at a time, and
+would teach every caller what a bin looks like on disk. The same source
+hook is what search results, the inside of a .zip, Recent and folder
+sizes are planned on.
+

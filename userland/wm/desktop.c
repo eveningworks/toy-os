@@ -1245,7 +1245,8 @@ void desktop_update_drag(int mx, int my, uint8_t buttons) {
 // --- the desktop's verbs: open, copy, cut, paste, delete, new folder ----
 //
 // THE DESKTOP DOES NO FILE WORK ITSELF. A copy or a move is `/bin/cp -r`
-// or `/bin/mv` spawned with an argv, a delete is `/bin/rm -r`, an open
+// or `/bin/mv` spawned with an argv, a delete is `/bin/trash put` (to the
+// Recycle Bin; Shift+Delete is `/bin/rm -r`, for good), an open
 // is `/bin/open` -- the compositor must not block on a file operation,
 // and those programs already exist (docs/conventions/gui.md, "long
 // work belongs in a child process"). Only mkdir is a syscall, because
@@ -1376,30 +1377,41 @@ static void paste_from(const struct uclip *c, int op) {
     }
 }
 
-// Delete asks first, through the WM's own confirm dialog. The paths are
-// snapshotted when the dialog opens: the selection may change under it.
+// Delete asks first, through the WM's own confirm dialog, and moves the
+// items to the Recycle Bin; Shift+Delete deletes them for good. The paths
+// are snapshotted when the dialog opens: the selection may change under it.
 static char g_del_paths[DESKTOP_FILES_MAX][PATH_BUF];
 static int g_del_count;
-static char g_del_msg[64];
+static int g_del_forever;
+static char g_del_msg[PATH_BUF + 40];
 static void delete_confirmed(void) {
     static char *argv[DESKTOP_FILES_MAX + 3];
     int k = 0;
-    argv[k++] = "/bin/rm";
-    argv[k++] = "-r";
+    argv[k++] = g_del_forever ? "/bin/rm" : "/bin/trash";
+    argv[k++] = g_del_forever ? "-r" : "put";
     for (int i = 0; i < g_del_count; i++) argv[k++] = g_del_paths[i];
     argv[k] = 0;
     spawn_argv(argv);
     g_del_count = 0;
 }
-static void menu_delete(void *ctx) {
-    (void)ctx;
+static void delete_selected(int forever) {
+    g_del_forever = forever;
     g_del_count = selected_paths(g_del_paths, DESKTOP_FILES_MAX);
     if (g_del_count == 0) return;
     if (g_del_count == 1)
-        k_snprintf(g_del_msg, sizeof g_del_msg, "Delete %s?", k_path_basename(g_del_paths[0]));
+        k_snprintf(g_del_msg, sizeof g_del_msg, forever ? "Permanently delete %s?"
+                                                         : "Move %s to the Recycle Bin?",
+                   k_path_basename(g_del_paths[0]));
     else
-        k_snprintf(g_del_msg, sizeof g_del_msg, "Delete %d items from the desktop?", g_del_count);
-    confirm_dialog_open_labelled(g_del_msg, "Delete", "Cancel", delete_confirmed, 0);
+        k_snprintf(g_del_msg, sizeof g_del_msg, forever ? "Permanently delete %d items?"
+                                                         : "Move %d items to the Recycle Bin?",
+                   g_del_count);
+    confirm_dialog_open_labelled(g_del_msg, forever ? "Delete" : "Move", "Cancel",
+                                 delete_confirmed, 0);
+}
+static void menu_delete(void *ctx) {
+    (void)ctx;
+    delete_selected(0);
 }
 
 // "New folder", then "New folder 2", ... -- Explorer's and Dolphin's
@@ -1579,7 +1591,7 @@ int desktop_handle_key(int key, unsigned mods) {
         damage_rename();
         return 1;
     }
-    if (key == KEY_DELETE) { menu_delete(0); return 1; }
+    if (key == KEY_DELETE) { delete_selected((mods & KEY_MOD_SHIFT) != 0); return 1; }
     if (key == KEY_F2) { menu_rename(0); return 1; }
     if (key == KEY_F5) { menu_refresh(0); return 1; }
     if ((key == '\n' || key == '\r') && (mods & KEY_MOD_ALT)) { menu_properties(0); return 1; }

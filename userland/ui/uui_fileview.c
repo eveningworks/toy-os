@@ -38,18 +38,21 @@ static const struct uui_table_column fv_cols_details[] = {
 };
 #define FV_NAME_MIN_CHARS 16   // the name column is never squeezed below this
 
-// How many details columns fit `w`: all four, or fewer from the end.
-static int fv_fit_columns(int w) {
+// How many of `cols` fit `w`: all of them, or fewer from the end --
+// the name, first, keeps at least FV_NAME_MIN_CHARS.
+static int fv_fit_cols(const struct uui_table_column *cols, int count, int w) {
     int per = ugfx_char_advance('0');
     if (per <= 0) per = ugfx_char_w();
-    int n = 4, fixed = 0;
-    for (int i = 1; i < 4; i++) fixed += fv_cols_details[i].width_chars;
+    int n = count, fixed = 0;
+    for (int i = 1; i < count; i++) fixed += cols[i].width_chars;
     while (n > 2 && w < (fixed + FV_NAME_MIN_CHARS) * per) {
         n--;
-        fixed -= fv_cols_details[n].width_chars;
+        fixed -= cols[n].width_chars;
     }
     return n;
 }
+
+static int fv_fit_columns(int w) { return fv_fit_cols(fv_cols_details, 4, w); }
 static const struct uui_table_column fv_cols_list[] = {
     { "Name", 0, UUI_TALIGN_LEFT },
 };
@@ -75,7 +78,16 @@ static int fv_is_up_row(const struct uui_fileview *fv, int row) {
     return fv->has_up && row == 0;
 }
 
+// An entry's real path: the source's answer in a virtual folder, else
+// the directory joined with its name.
+static int fv_entry_path(const struct uui_fileview *fv, const struct sys_dirent *e,
+                         char *out, int cap) {
+    if (fv->src) return fv->src->path(fv->src->ctx, (int)(e - fv->entries), out, cap);
+    return k_path_join(fv->dir, e->name, out, (size_t)cap);
+}
+
 static void ic_reveal(struct uui_fileview *fv); // icons mode, below
+static void fv_details_cols(struct uui_fileview *fv);
 static void ic_clamp(struct uui_fileview *fv);   // ...and its range check
 
 int uui_fileview_row_count(const struct uui_fileview *fv) {
@@ -138,6 +150,15 @@ static int fv_compare(void *ctx, int row_a, int row_b, int col) {
     const struct sys_dirent *b = fv_entry(fv, row_b);
     if (!a || !b) return 0;
 
+    if (fv->src && col > 0) {
+        int ia = (int)(a - fv->entries), ib = (int)(b - fv->entries);
+        if (fv->src->compare) return fv->src->compare(fv->src->ctx, ia, ib, col);
+        char ta[64], tb[64];
+        fv->src->cell(fv->src->ctx, ia, col, ta, sizeof ta);
+        fv->src->cell(fv->src->ctx, ib, col, tb, sizeof tb);
+        return strcmp(ta, tb);
+    }
+
     int negate = 0;
     enum dirsort_key key = fv_col_key(col, &negate);
     // A directory has no meaningful size (SYS_LISTDIR reports 0), so
@@ -180,6 +201,10 @@ static void fv_cell(void *ctx, int row, int col, char *out, int cap) {
 
     const struct sys_dirent *e = fv_entry(fv, row);
     if (!e) { out[0] = '\0'; return; }
+    if (fv->src && col > 0) {
+        fv->src->cell(fv->src->ctx, (int)(e - fv->entries), col, out, cap);
+        return;
+    }
 
     switch (col) {
     case FV_COL_NAME:
@@ -265,7 +290,7 @@ static int fv_marked_row(const struct uui_fileview *fv, int n) {
 int uui_fileview_marked_path(const struct uui_fileview *fv, int n, char *out, int cap) {
     const struct sys_dirent *e = fv_entry(fv, fv_marked_row(fv, n));
     if (!e) return 0;
-    return k_path_join(fv->dir, e->name, out, (size_t)cap);
+    return fv_entry_path(fv, e, out, cap);
 }
 
 int uui_fileview_marked_is_dir(const struct uui_fileview *fv, int n) {
@@ -363,6 +388,7 @@ _Static_assert(UUI_FILEVIEW_SORT_NAME == FV_COL_NAME && UUI_FILEVIEW_SORT_MODIFI
 void uui_fileview_set_sort(struct uui_fileview *fv, enum uui_fileview_sort key, int dir) {
     int shown = fv->table.col_count;
     if (fv->table.cols == fv_cols_details) fv->table.col_count = 4;
+    else if (fv->src && fv->table.cols == fv->src->cols) fv->table.col_count = fv->src->ncols;
     uui_table_set_sort(&fv->table, (int)key, dir);
     fv->table.col_count = shown;
 }
@@ -392,8 +418,7 @@ void uui_fileview_set_mode(struct uui_fileview *fv, enum uui_fileview_mode mode)
         // walk order and differ from `ls` (lib/dirsort.h's whole point).
         uui_table_set_sort(&fv->table, FV_COL_NAME, 1);
     } else {
-        fv->table.cols = fv_cols_details;
-        fv->table.col_count = fv_fit_columns(fv->table.w);
+        fv_details_cols(fv);
         uui_table_set_header(&fv->table, 1);
     }
 }
@@ -412,6 +437,27 @@ void uui_fileview_set_thumb(struct uui_fileview *fv,
                              uui_fileview_thumb_fn fn, void *ctx) {
     fv->thumb = fn;
     fv->thumb_ctx = ctx;
+}
+
+void uui_fileview_set_resolver(struct uui_fileview *fv,
+                                uui_fileview_resolve_fn fn, void *ctx) {
+    fv->resolve = fn;
+    fv->resolve_ctx = ctx;
+}
+
+const struct uui_fileview_source *uui_fileview_source(const struct uui_fileview *fv) {
+    return fv->src;
+}
+
+// The details columns for the current listing: a source's, or the four.
+static void fv_details_cols(struct uui_fileview *fv) {
+    if (fv->src) {
+        fv->table.cols = fv->src->cols;
+        fv->table.col_count = fv_fit_cols(fv->src->cols, fv->src->ncols, fv->table.w);
+    } else {
+        fv->table.cols = fv_cols_details;
+        fv->table.col_count = fv_fit_columns(fv->table.w);
+    }
 }
 
 static int fv_at_root(const struct uui_fileview *fv) {
@@ -457,9 +503,20 @@ int uui_fileview_reload(struct uui_fileview *fv) {
     uui_fileview_clear_dimmed(fv); // ...and so do the dim bits and the anchor
     fv->anchor = -1;
     rb_clear(&fv->band);           // its selection is those rows
-    fv->has_up = fv->navigable && !fv_at_root(fv);
 
-    int n = sys_listdir(fv->dir, fv->entries, fv->cap);
+    // A virtual folder, or a directory again: the columns follow, and a
+    // sort on a column the new set lacks falls back to the name.
+    const struct uui_fileview_source *was = fv->src;
+    fv->src = fv->resolve ? fv->resolve(fv->resolve_ctx, fv->dir) : 0;
+    if (fv->src != was) {
+        if (fv->mode == UUI_FILEVIEW_DETAILS) fv_details_cols(fv);
+        int ncols = fv->src ? fv->src->ncols : 4;
+        if (fv->table.sort_col >= ncols) uui_table_set_sort(&fv->table, FV_COL_NAME, 1);
+    }
+    fv->has_up = !fv->src && fv->navigable && !fv_at_root(fv);
+
+    int n = fv->src ? fv->src->list(fv->src->ctx, fv->dir, fv->entries, fv->cap)
+                    : sys_listdir(fv->dir, fv->entries, fv->cap);
     if (n < 0) {
         // A directory that cannot be read is NOT an empty one, and a
         // caller conflating the two reports a missing path as empty
@@ -472,7 +529,7 @@ int uui_fileview_reload(struct uui_fileview *fv) {
     // rather than hides, exactly as /bin/ls does.
     fv->truncated = (n >= fv->cap);
 
-    if (fv->filter) {
+    if (fv->filter && !fv->src) {
         int kept = 0;
         for (int i = 0; i < n; i++) {
             if (!fv->filter(fv->filter_ctx, fv->dir, &fv->entries[i])) continue;
@@ -569,7 +626,7 @@ int uui_fileview_selected_is_dir(const struct uui_fileview *fv) {
 int uui_fileview_selected_path(const struct uui_fileview *fv, char *out, int cap) {
     const struct sys_dirent *e = fv_entry(fv, fv->table.selected);
     if (!e) return 0; // nothing selected, or the ".." row -- see the header
-    return k_path_join(fv->dir, e->name, out, (size_t)cap);
+    return fv_entry_path(fv, e, out, cap);
 }
 
 // **A REFRESH MUST NOT MOVE THE VIEW, AND THAT IS WHY `reveal` IS AN
@@ -625,7 +682,7 @@ int uui_fileview_activate(struct uui_fileview *fv) {
     const struct sys_dirent *e = fv_entry(fv, row);
     if (!e) return 0;
 
-    if (e->is_dir) {
+    if (e->is_dir && !fv->src) {
         if (!fv->navigable) return 0;
         char next[UUI_FILEVIEW_PATH_MAX];
         if (!k_path_join(fv->dir, e->name, next, sizeof next)) return 0;
@@ -634,7 +691,7 @@ int uui_fileview_activate(struct uui_fileview *fv) {
 
     if (fv->on_open) {
         char p[UUI_FILEVIEW_PATH_MAX];
-        if (k_path_join(fv->dir, e->name, p, sizeof p)) fv->on_open(fv->ctx, p);
+        if (fv_entry_path(fv, e, p, sizeof p)) fv->on_open(fv->ctx, p);
     }
     return 1;
 }
@@ -943,8 +1000,15 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
         // A thumbnail if the app has one READY (see uui_fileview_thumb_fn
         // -- this is a lookup, never a decode), else the generic icon.
         const struct uimg *thumb = 0;
-        if (!is_dir && e && fv->thumb)
-            thumb = fv->thumb(fv->thumb_ctx, fv->dir, e, px);
+        if (!is_dir && e && fv->thumb) {
+            // A virtual folder's file lives somewhere real: its folder.
+            char real[UUI_FILEVIEW_PATH_MAX], parent[UUI_FILEVIEW_PATH_MAX];
+            if (!fv->src)
+                thumb = fv->thumb(fv->thumb_ctx, fv->dir, e, px);
+            else if (fv_entry_path(fv, e, real, sizeof real) &&
+                     k_path_dirname(real, parent, sizeof parent))
+                thumb = fv->thumb(fv->thumb_ctx, parent, e, px);
+        }
         int ax = x, ay = y + 2, aw = cw, ah = px; // the artwork, for ic_wash
         if (thumb) {
             int tx2 = x + (cw - thumb->w) / 2;
@@ -1163,6 +1227,8 @@ static int ic_key(struct uui_fileview *fv, int key) {
 void uui_fileview_set_geometry(struct uui_fileview *fv, int x, int y, int w, int h) {
     fv->table.x = x; fv->table.y = y; fv->table.w = w; fv->table.h = h;
     if (fv->table.cols == fv_cols_details) fv->table.col_count = fv_fit_columns(w);
+    else if (fv->src && fv->table.cols == fv->src->cols)
+        fv->table.col_count = fv_fit_cols(fv->src->cols, fv->src->ncols, w);
     uui_table_set_rows(&fv->table, uui_fileview_row_count(fv));
 }
 
@@ -1610,6 +1676,7 @@ static int fv_ops_drag_start(void *w, int cx, int cy, struct uui_drag *d) {
     struct uui_fileview *fv = (struct uui_fileview *)w;
     int row = fv->press_row;
     if (row < 0 || fv_is_up_row(fv, row)) return 0;   // empty space: a band
+    if (fv->src) return 0;   // a virtual folder's rows are not files to carry
 
     // This press is a drag now, not a click: no band, no deferred
     // clear, and the next click is not a double.
@@ -1664,7 +1731,7 @@ static void fv_ops_drag_end(void *w, int dropped) {
 static int fv_ops_drag_over(void *w, int cx, int cy, const struct uui_drag *d) {
     struct uui_fileview *fv = (struct uui_fileview *)w;
     fv->drop_row = -2;
-    if (d->kind != UUI_DRAG_FILES || cx == UUI_NOWHERE) return 0;
+    if (d->kind != UUI_DRAG_FILES || cx == UUI_NOWHERE || fv->src) return 0;
 
     int row = uui_fileview_hit(fv, cx, cy);
     int trow = -1;

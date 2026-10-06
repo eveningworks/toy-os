@@ -20,7 +20,7 @@
 // Too narrow for every segment, the first ones fold into "..." after
 // the root, and that button goes to the parent of the first one shown.
 
-#define UUI_PATHBAR_MAX   128
+#define UUI_PATHBAR_MAX   256
 #define UUI_PATHBAR_SEGS  24
 
 struct uui_pathbar {
@@ -28,6 +28,11 @@ struct uui_pathbar {
     char path[UUI_PATHBAR_MAX];
     const char *root_label;   // what "/" is called ("System"); NULL = "/"
     const char *root_icon;    // icon_get() name beside it; NULL = none
+    // A VIRTUAL FOLDER'S ROOT: a path beginning "trash:/" shows its
+    // registered label as the root chip instead of "System" -- KIO's
+    // URL navigator names a scheme the same way. See set_scheme.
+    struct { const char *prefix, *label, *icon; } scheme[4];
+    int nscheme;
 
     int hot;      // hovered segment, UUI_PATHBAR_ELIDED, or -1; OWNED
     int armed;    // pressed segment awaiting its release, or -1; OWNED
@@ -42,6 +47,10 @@ struct uui_pathbar {
 #define UUI_PATHBAR_ELIDED (-2)   // the "..." button
 
 void uui_pathbar_init(struct uui_pathbar *p, const char *root_label, const char *root_icon);
+// Name a virtual folder's root: `prefix` ("trash:/") shows as `label`
+// with `icon`. The strings are NOT copied.
+void uui_pathbar_set_scheme(struct uui_pathbar *p, const char *prefix,
+                            const char *label, const char *icon);
 // Shows `path`. Ends an edit in progress: the app calls this after it
 // has navigated, and a field left open over the new place would lie.
 void uui_pathbar_set_path(struct uui_pathbar *p, const char *path);

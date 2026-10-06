@@ -8,6 +8,7 @@
 #include "lib/udate.h"
 #include "lib/human.h"
 #include "lib/ufileop.h"
+#include "lib/utrash.h"
 #include "ui/uui_dialog.h"
 #include <pthread.h>
 #include "lib/uclip.h"
@@ -15,6 +16,7 @@
 #include "kpath.h"
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 
 // --- the job queue ----------------------------------------------------
 //
@@ -104,6 +106,12 @@ static int queue_from_paths(int op, const char *what, const struct uclip *c,
 void do_drop_extern(const char *dest, int copy) {
     static struct uclip c;
     uclip_drag_load(&c);
+    // Dropped on the Recycle Bin: deleted, the way a drop on Explorer's
+    // bin is -- copy or not.
+    if (strcmp(dest, FM_BIN) == 0) {
+        if (queue_from_paths(CMD_TRASH, "Recycle", &c, "")) start_job();
+        return;
+    }
     if (!queue_from_paths(copy ? CMD_COPY : CMD_MOVE, copy ? "Copy" : "Move", &c, dest))
         return;
     for (int i = 0; i < g_job_count; i++) {
@@ -119,6 +127,10 @@ void do_drop_extern(const char *dest, int copy) {
 }
 
 void do_drop(struct uui_fileview *src, const char *dest, int copy) {
+    if (strcmp(dest, FM_BIN) == 0) {
+        if (queue_from(CMD_TRASH, "Recycle", src, "")) start_job();
+        return;
+    }
     if (!queue_from(copy ? CMD_COPY : CMD_MOVE, copy ? "Copy" : "Move", src, dest))
         return;
     // A FOLDER INTO ITSELF is refused before a byte moves: the engine
@@ -356,6 +368,18 @@ static void *worker_main(void *arg) {
         case CMD_DELETE:
             ufileop_remove(g_job_path[i], 1, &g_engine, &policy);
             break;
+        case CMD_TRASH: {
+            int e = utrash_put(g_job_path[i], 0);
+            if (e) worker_error(0, g_job_path[i], -e);
+            break;
+        }
+        case CMD_PURGE:
+            // The info file goes only once its item is gone: a half-
+            // deleted folder stays listed, and Empty again finishes it.
+            if (ufileop_remove(g_job_path[i], 1, &g_engine, &policy) == UFILEOP_OK &&
+                utrash_forget_path(g_job_path[i]) != 0)
+                worker_error(0, g_job_path[i], EIO);
+            break;
         default: break;
         }
     }
@@ -488,20 +512,53 @@ void delete_picture(void) {
     if (pic != g_dialog.picture) uui_dialog_set_picture(&g_dialog, pic);
 }
 
-void do_delete(void) {
+// WHAT A DELETE DOES, decided when it is asked for: into the Recycle Bin
+// (the default), for good (Shift+Delete, or a volume with no bin), or
+// out of the bin itself (Delete inside it, or Empty).
+enum { DEL_TRASH, DEL_FOREVER, DEL_PURGE, DEL_EMPTY };
+static int g_del_mode;
+static char g_del_note[96];
+
+// Every operand has a bin to go to. One that does not -- /tmp is RAM,
+// /boot is read-only -- makes the whole delete a permanent one, said
+// on the card, rather than splitting one request into two behaviours.
+static int all_binnable(struct uui_fileview *fv, char *volume, int cap) {
+    char path[PATH_MAX_LEN], bin[PATH_MAX_LEN];
+    int marks = uui_fileview_mark_count(fv);
+    for (int i = 0; i < (marks ? marks : 1); i++) {
+        int ok = marks ? uui_fileview_marked_path(fv, i, path, sizeof path)
+                       : uui_fileview_selected_path(fv, path, sizeof path);
+        if (ok && !utrash_bin_for(path, bin, sizeof bin)) {
+            k_path_dirname(path, volume, (size_t)cap);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+void do_delete(int forever) {
     int n = operand_count();
     if (n == 0) { set_note("nothing selected"); return; }
-    // Options can say not to ask -- and then this is the whole question.
-    if (!g_opt.confirm_delete) { commit_delete(); return; }
-
     struct uui_fileview *fv = active();
+    char where[PATH_MAX_LEN] = "";
+    g_del_mode = in_bin(fv) ? DEL_PURGE
+               : forever ? DEL_FOREVER
+               : all_binnable(fv, where, sizeof where) ? DEL_TRASH : DEL_FOREVER;
+    // Options can say not to ask before the BIN -- never before a delete
+    // that cannot be taken back.
+    if (g_del_mode == DEL_TRASH && !g_opt.confirm_delete) { commit_delete(); return; }
+
     int marks = uui_fileview_mark_count(fv);
+    const char *verb = g_del_mode == DEL_TRASH ? "Move" : "Permanently delete";
+    const char *tail = g_del_mode == DEL_TRASH ? " to the Recycle Bin?" : "?";
     g_del_path[0] = '\0';
     if (n == 1) {
         if (marks == 1) uui_fileview_marked_path(fv, 0, g_del_path, sizeof g_del_path);
         else uui_fileview_selected_path(fv, g_del_path, sizeof g_del_path);
-        const char *name = k_path_basename(g_del_path);
-        snprintf(g_del_title, sizeof g_del_title, "Delete %s?", name);
+        const char *name = g_del_mode == DEL_PURGE ? uui_fileview_selected_name(fv)
+                                                    : k_path_basename(g_del_path);
+        if (!name) name = k_path_basename(g_del_path);
+        snprintf(g_del_title, sizeof g_del_title, "%s %s%s", verb, name, tail);
         struct sys_stat st;
         char h[24], when[48];
         if (sys_stat(g_del_path, &st) == 0) {
@@ -527,30 +584,83 @@ void do_delete(void) {
             else if (sys_stat(path, &st) == 0) bytes += st.size;
         }
         human_size(h, sizeof h, bytes);
-        snprintf(g_del_title, sizeof g_del_title, "Delete %d items?", n);
+        snprintf(g_del_title, sizeof g_del_title, "%s %d items%s", verb, n, tail);
         if (dirs)
             snprintf(g_del_facts, sizeof g_del_facts, "%d file%s (%s) and %d folder%s with what is in them",
                      n - dirs, n - dirs == 1 ? "" : "s", h, dirs, dirs == 1 ? "" : "s");
         else
             snprintf(g_del_facts, sizeof g_del_facts, "%d files, %s in all", n, h);
     }
-    snprintf(g_del_where, sizeof g_del_where, "in %s", uui_fileview_dir(fv));
+    if (g_del_mode == DEL_PURGE) strlcpy(g_del_where, "in the Recycle Bin", sizeof g_del_where);
+    else snprintf(g_del_where, sizeof g_del_where, "in %s", uui_fileview_dir(fv));
+
+    if (g_del_mode == DEL_TRASH)
+        strlcpy(g_del_note, "You can restore it from the Recycle Bin.", sizeof g_del_note);
+    else if (where[0])
+        snprintf(g_del_note, sizeof g_del_note,
+                 "%s has no Recycle Bin, so this cannot be taken back.", where);
+    else
+        strlcpy(g_del_note, "This cannot be taken back.", sizeof g_del_note);
+
     // Verb buttons, the KDE/GNOME/macOS rule: the button says what it
-    // does. Delete is the default, as it was when Enter meant yes, and
-    // red, because it cannot be taken back.
-    static const struct uui_dialog_button btns[] = {
+    // does. Red only for what cannot be taken back.
+    static const struct uui_dialog_button bin_btns[] = {
+        { "Cancel", DLG_CANCEL, 0 },
+        { "Move",   DLG_DELETE, 0 },
+    };
+    static const struct uui_dialog_button del_btns[] = {
         { "Cancel", DLG_CANCEL, 0 },
         { "Delete", DLG_DELETE, UUI_DLG_DANGER },
     };
     g_dialog_kind = DIALOG_DELETE;
+    uui_dialog_open(&g_dialog, g_del_title, g_del_rows, 2,
+                    g_del_mode == DEL_TRASH ? bin_btns : del_btns, 2, 1, DLG_CANCEL);
+    uui_dialog_set_note(&g_dialog, g_del_note);
+    delete_picture();
+}
+
+void do_empty_bin(void) {
+    if (bin_count() == 0) { set_note("the Recycle Bin is empty"); return; }
+    char h[24];
+    human_size(h, sizeof h, bin_bytes());
+    g_del_mode = DEL_EMPTY;
+    g_del_path[0] = '\0';
+    snprintf(g_del_title, sizeof g_del_title, "Empty the Recycle Bin?");
+    snprintf(g_del_facts, sizeof g_del_facts, "%d item%s, %s in all", bin_count(),
+             bin_count() == 1 ? "" : "s", h);
+    strlcpy(g_del_where, "on every disk", sizeof g_del_where);
+    static const struct uui_dialog_button btns[] = {
+        { "Cancel", DLG_CANCEL, 0 },
+        { "Empty",  DLG_DELETE, UUI_DLG_DANGER },
+    };
+    g_dialog_kind = DIALOG_DELETE;
     uui_dialog_open(&g_dialog, g_del_title, g_del_rows, 2, btns, 2, 1, DLG_CANCEL);
-    uui_dialog_set_note(&g_dialog,
-                        "It is deleted for good -- there is no Recycle Bin to get it back from.");
+    uui_dialog_set_note(&g_dialog, "They are deleted for good.");
     delete_picture();
 }
 
 void commit_delete(void) {
-    if (queue_from_selection(CMD_DELETE, "Delete")) start_job();
+    switch (g_del_mode) {
+    case DEL_TRASH:
+        if (queue_from(CMD_TRASH, "Recycle", active(), "")) start_job();
+        break;
+    case DEL_FOREVER:
+        if (queue_from(CMD_DELETE, "Delete", active(), "")) start_job();
+        break;
+    case DEL_PURGE:
+        if (queue_from(CMD_PURGE, "Delete", active(), "")) start_job();
+        break;
+    case DEL_EMPTY:
+        if (g_job_count > 0) { set_note("busy"); return; }
+        g_job_at = g_job_failures = 0;
+        g_job_op = CMD_PURGE;
+        strlcpy(g_job_what, "Empty", sizeof g_job_what);
+        g_job_dest[0] = '\0';
+        g_job_count = bin_paths(g_job_path, JOB_MAX);
+        for (int i = 0; i < g_job_count; i++) g_job_isdir[i] = 0;
+        start_job();
+        break;
+    }
 }
 
 void commit_mkdir(const char *name) {

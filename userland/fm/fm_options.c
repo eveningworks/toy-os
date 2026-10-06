@@ -238,7 +238,7 @@ void options_open(struct uapp *a) {
     uui_checkbox_init(&g_thumbs, 0, 0, 0, "Show thumbnails", bg, fg);
     uui_checkbox_init(&g_hidden, 0, 0, 0, "Show names that start with a dot", bg, fg);
     uui_checkbox_init(&g_ext, 0, 0, 0, "Show file extensions", bg, fg);
-    uui_checkbox_init(&g_confirm, 0, 0, 0, "Ask before deleting", bg, fg);
+    uui_checkbox_init(&g_confirm, 0, 0, 0, "Ask before moving to the Recycle Bin", bg, fg);
     uui_button_init(&g_defaults, 0, 0, 0, 0, "Defaults", UTHEME_BUTTON_BG, UTHEME_TEXT, OPT_DEFAULTS);
     uui_button_init(&g_ok, 0, 0, 0, 0, "OK", UTHEME_ACCENT, UTHEME_ACCENT_TEXT, OPT_OK);
     uui_button_init(&g_cancel, 0, 0, 0, 0, "Cancel", UTHEME_BUTTON_BG, UTHEME_TEXT, OPT_CANCEL);

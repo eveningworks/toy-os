@@ -136,6 +136,7 @@ TOOLS = [
     ("startmenu", "start_menu_test.py", "the Start menu: folders, search, keyboard"),
     ("startset", "start_settings_test.py", "the Start menu's settings: list style, power, folders, hover"),
     ("filedialog", "filedialog_test.py", "the shared file chooser, as an owned window"),
+    ("trashgui",   "trash_gui_test.py",  "the Recycle Bin: File Manager and desktop Delete, trash:/, Restore"),
     ("forcequit", "forcequit_test.py", "not-responding detection and force quit"),
     ("dialog", "dialog_test.py", "the confirm dialog, by pixel value"),
     ("leave", "leave_test.py", "the Leave page: Restart/Shut down/Exit to shell, apps asked to close, Restart into"),

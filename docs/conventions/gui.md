@@ -4943,6 +4943,27 @@ re-marked on a row that no longer means the same file only if the
 file was replaced under the same name, which is the case a snapshot
 cannot help with either.
 
+## A VIRTUAL FOLDER IS A `uui_fileview` SOURCE, RESOLVED FROM ITS NAME ON EVERY RELOAD
+
+A listing that is not a directory -- the Recycle Bin (`trash:/`), and
+the planned search results, archive insides and Recent -- is a
+`struct uui_fileview_source` (KDE's KIO worker, a Windows shell
+folder): the caller's rows, its own details columns (the name first),
+and each entry's REAL path. The view's `dir` is the folder's name, and
+`uui_fileview_set_resolver()` maps a name to its source on every reload,
+so Back, Forward, a saved pane folder and the breadcrumb
+(`uui_pathbar_set_scheme()`) reach it with no special case of their own.
+
+**Every path accessor answers the REAL path** (`fv_entry_path()`):
+open, copy, Properties, thumbnails and the details pane must never join
+`trash:/` with a name. **A source's rows are its own** -- the widget's
+filter is skipped, so an entry's index is the position the source wrote
+it at, valid for its `path`/`cell`/`compare` until the next reload; no
+"..", no drag out, no drop in, and activating a folder reports
+`on_open` instead of descending. **A watcher polls what the source is
+built from** (`fm_watch_path()`), since `SYS_FS_GENERATION_OF("trash:/")`
+is an error, and an error compared with itself never reports a change.
+
 ## THE DESKTOP'S ICON SIZE IS A NAMED SETTING, THE ICONS ARE CENTRED, AND A CAPTION IS TWO LINES
 
 `desktop.icon_size` = `small` | `medium` | `large` (32/48/64 px),

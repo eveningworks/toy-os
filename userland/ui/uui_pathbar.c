@@ -1,5 +1,6 @@
 // pathbar -- a breadcrumb path. See ui/uui_pathbar.h.
 #include "ui/uui_pathbar.h"
+#include <stdio.h>
 #include "ui/uui_widget.h"
 #include "ui/uui_primitives.h"
 #include "ui/uui_describe.h"
@@ -15,10 +16,18 @@
 
 // --- the path, as segments ----------------------------------------------
 
+// How long a "scheme:/" prefix the path opens with -- the root of a
+// virtual folder, which is not a component -- or 0.
+static int scheme_len(const char *path) {
+    int i = 0;
+    while ((path[i] >= 'a' && path[i] <= 'z') || (path[i] >= '0' && path[i] <= '9')) i++;
+    return (i > 0 && path[i] == ':' && path[i + 1] == '/') ? i + 2 : 0;
+}
+
 // Component `k` (1-based) of the path: where it starts and its length.
 // 0 when there is no such component.
 static int component(const char *path, int k, int *start, int *len) {
-    int i = 0, n = 0;
+    int i = scheme_len(path), n = 0;
     while (path[i]) {
         while (path[i] == '/') i++;
         if (!path[i]) break;
@@ -38,15 +47,41 @@ static int seg_count(const char *path) {
 // Segment `k`'s path: "/" for the root, else the path up to its end.
 static void seg_path(const char *path, int k, char *out, int cap) {
     int s, l;
-    if (k <= 0 || !component(path, k, &s, &l)) { strlcpy(out, "/", (size_t)cap); return; }
+    if (k <= 0 || !component(path, k, &s, &l)) {
+        int sl = scheme_len(path);
+        if (sl) snprintf(out, (size_t)cap, "%.*s", sl, path);
+        else strlcpy(out, "/", (size_t)cap);
+        return;
+    }
     int n = s + l < cap - 1 ? s + l : cap - 1;
     memcpy(out, path, (size_t)n);
     out[n] = '\0';
 }
 
+// The root chip's label and icon: a registered scheme's, else the
+// filesystem root's.
+static int root_scheme(const struct uui_pathbar *p) {
+    int sl = scheme_len(p->path);
+    for (int i = 0; sl && i < p->nscheme; i++)
+        if (!strncmp(p->path, p->scheme[i].prefix, (size_t)sl) && !p->scheme[i].prefix[sl])
+            return i;
+    return -1;
+}
+
+static const char *root_icon(const struct uui_pathbar *p) {
+    int i = root_scheme(p);
+    return i >= 0 ? p->scheme[i].icon : p->root_icon;
+}
+
 static void seg_label(const struct uui_pathbar *p, int k, char *out, int cap) {
     int s, l;
-    if (k == 0) { strlcpy(out, p->root_label ? p->root_label : "/", (size_t)cap); return; }
+    if (k == 0) {
+        int i = root_scheme(p), sl = scheme_len(p->path);
+        if (i >= 0) strlcpy(out, p->scheme[i].label, (size_t)cap);
+        else if (sl) snprintf(out, (size_t)cap, "%.*s", sl, p->path);
+        else strlcpy(out, p->root_label ? p->root_label : "/", (size_t)cap);
+        return;
+    }
     if (k == UUI_PATHBAR_ELIDED) { strlcpy(out, "...", (size_t)cap); return; }
     if (!component(p->path, k, &s, &l)) { out[0] = '\0'; return; }
     if (l > cap - 1) l = cap - 1;
@@ -76,7 +111,7 @@ static int seg_w(const struct uui_pathbar *p, int k, int last) {
     char label[UUI_PATHBAR_MAX];
     seg_label(p, k, label, sizeof label);
     int w = 2 * PAD + text_w(label, last);
-    if (k == 0 && p->root_icon) w += icon_px() + 4;
+    if (k == 0 && root_icon(p)) w += icon_px() + 4;
     return w;
 }
 
@@ -147,6 +182,15 @@ void uui_pathbar_init(struct uui_pathbar *p, const char *root_label, const char 
     p->hot = p->armed = -1;
     strlcpy(p->path, "/", sizeof p->path);
     uui_textbox_init(&p->edit, "");
+}
+
+void uui_pathbar_set_scheme(struct uui_pathbar *p, const char *prefix,
+                            const char *label, const char *icon) {
+    if (p->nscheme >= (int)(sizeof p->scheme / sizeof p->scheme[0])) return;
+    p->scheme[p->nscheme].prefix = prefix;
+    p->scheme[p->nscheme].label = label;
+    p->scheme[p->nscheme].icon = icon;
+    p->nscheme++;
 }
 
 void uui_pathbar_set_path(struct uui_pathbar *p, const char *path) {
@@ -238,8 +282,8 @@ static void op_draw(struct ugfx_surface *s, const void *w) {
         uint32_t sbg = chip;
 
         int tx = x + PAD;
-        if (k == 0 && p->root_icon) {
-            const struct uimg *ico = icon_get(p->root_icon, icon_px());
+        if (k == 0 && root_icon(p)) {
+            const struct uimg *ico = icon_get(root_icon(p), icon_px());
             if (ico) ugfx_blit_alpha(s, tx, p->y + (p->h - ico->h) / 2,
                                      ico->w, ico->h, ico->px, ico->w);
             tx += icon_px() + 4;

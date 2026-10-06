@@ -246,6 +246,21 @@ static const struct uui_toolbar_item toolbar_items[] = {
     { "tb-pane",    "Show the details pane", CMD_VIEW_DPANE, "Details", UUI_TB_END, 0, TINT_NAV },
 };
 
+// THE RECYCLE BIN'S COMMAND BAR, swapped in while the active pane shows
+// it (path_sync): its verbs are not the folder's -- nothing is created,
+// pasted or renamed in a bin -- and Explorer's bin swaps its bar too.
+static const struct uui_toolbar_item bin_toolbar_items[] = {
+    { "tb-bin-restore", "Put it back where it was deleted from", CMD_RESTORE, "Restore", 0, 0, TINT_GREEN },
+    { "tb-bin-restore", "Put everything back", CMD_RESTORE_ALL, "Restore all", 0, 0, TINT_GREEN },
+    UUI_TOOLBAR_SEP,
+    { "tb-delete",    "Delete for good (Del)", CMD_DELETE_FOREVER, "Delete permanently", 0, 0, TINT_RED },
+    { "tb-bin-empty", "Delete everything here for good", CMD_EMPTY_BIN, "Empty Recycle Bin", 0, 0, TINT_RED },
+    UUI_TOOLBAR_SEP,
+    { "tb-sort",    0,                  CMD_MENU_SORT,  "Sort", UUI_TB_MENU, 0, TINT_TEAL },
+    { "tb-view",    0,                  CMD_MENU_VIEW,  "View", UUI_TB_MENU, 0, TINT_ORANGE },
+    { "tb-pane",    "Show the details pane", CMD_VIEW_DPANE, "Details", UUI_TB_END, 0, TINT_NAV },
+};
+
 // The status bar's view switch, at its right end, as in Explorer.
 static const struct uui_toolbar_item viewbar_items[] = {
     { "tb-details", "Details", CMD_VIEW_DETAILS, 0, 0, 0, TINT_NAV },
@@ -273,6 +288,16 @@ static const struct uui_menu_item ctx_items[] = {
     UUI_MENU("New folder",  CMD_MKDIR,    "F7"),
     UUI_MENU_SEP,
     UUI_MENU("Properties",  CMD_PROPERTIES, 0),
+};
+
+// ...and inside the Recycle Bin: what a deleted item can have done to it.
+static const struct uui_menu_item bin_ctx_items[] = {
+    UUI_MENU("Restore",            CMD_RESTORE,        0),
+    UUI_MENU_SEP,
+    UUI_MENU("Copy",               CMD_CLIP_COPY,      "Ctrl+C"),
+    UUI_MENU("Delete permanently", CMD_DELETE_FOREVER, "Del"),
+    UUI_MENU_SEP,
+    UUI_MENU("Properties",         CMD_PROPERTIES,     0),
 };
 
 // The context menu as OPENED: ctx_items minus the rows that do not
@@ -304,6 +329,11 @@ static int build_ctx_items(void) {
         !uui_fileview_selected_is_dir(active()))
         can_edit = looks_like_text(path);
     int n = 0;
+    if (in_bin(active())) {
+        for (int i = 0; i < (int)(sizeof bin_ctx_items / sizeof bin_ctx_items[0]); i++)
+            g_ctx_built[n++] = bin_ctx_items[i];
+        return n;
+    }
     for (int i = 0; i < (int)(sizeof ctx_items / sizeof ctx_items[0]); i++) {
         if (ctx_items[i].code == CMD_EDIT && !can_edit) continue;
         g_ctx_built[n++] = ctx_items[i];
@@ -327,6 +357,8 @@ static enum uui_fileview_sort sort_key_of(int code) {
 // two toggles tick when their thing is SHOWN -- so "Second pane" is
 // checked in the default two-pane state, not when the option was used.
 static unsigned menu_item_flags(int code) {
+    unsigned bin;
+    if (bin_item_flags(code, &bin)) return bin;   // the Recycle Bin's own rules
     switch (code) {
     case CMD_UP: {
         const char *d = uui_fileview_dir(&g_pane[g_active]);
@@ -533,6 +565,14 @@ static char g_query[2][UUI_TEXTBOX_MAX];
 // hint names the folder it would search, as Explorer's does.
 void path_sync(void) {
     const char *dir = uui_fileview_dir(active());
+    const struct uui_toolbar_item *want = in_bin(active()) ? bin_toolbar_items : toolbar_items;
+    if (g_toolbar.items != want) {
+        g_toolbar.items = want;
+        g_toolbar.count = want == bin_toolbar_items
+                        ? (int)(sizeof bin_toolbar_items / sizeof bin_toolbar_items[0])
+                        : (int)(sizeof toolbar_items / sizeof toolbar_items[0]);
+        g_toolbar.hot = g_toolbar.armed = -1;
+    }
     if (!uui_pathbar_is_editing(&g_path) && strcmp(g_path.path, dir) != 0)
         uui_pathbar_set_path(&g_path, dir);
     uui_places_select_path(&g_places, dir);
@@ -543,7 +583,8 @@ void path_sync(void) {
     if (!g_tree_on) tree_select_path(dir);
     if (!g_search_on && strcmp(uui_textbox_text(&g_search), g_query[g_active]) != 0)
         uui_textbox_set_text(&g_search, g_query[g_active]);
-    const char *base = (dir[0] == '/' && !dir[1]) ? "System" : k_path_basename(dir);
+    const char *base = in_bin(active()) ? "Recycle Bin"
+                     : (dir[0] == '/' && !dir[1]) ? "System" : k_path_basename(dir);
     snprintf(g_search_hint, sizeof g_search_hint, "Search %s", base);
 }
 
@@ -588,7 +629,8 @@ static void path_navigate(const char *typed) {
     strlcpy(was, uui_fileview_dir(active()), sizeof was);
     static char scratch[KPATH_SCRATCH_FOR(PATH_MAX_LEN)];
     struct kpath_scratch sc = { scratch, sizeof scratch };
-    if (!k_path_resolve(was, typed, path, sizeof path, &sc)) { set_note("path too long"); return; }
+    if (strcmp(typed, FM_BIN) == 0) strlcpy(path, typed, sizeof path);   // not a relative path
+    else if (!k_path_resolve(was, typed, path, sizeof path, &sc)) { set_note("path too long"); return; }
     if (!fm_goto(g_active, path)) {
         uui_fileview_set_dir(active(), was);   // see addr_end_edit on why not fm_goto
         snprintf(g_stat_note, sizeof g_stat_note, "no such folder: %s", k_path_basename(path));
@@ -666,10 +708,21 @@ void do_command(struct uapp *a, int code) {
     // the uapp and the locals this one already has, which is more code
     // saying less. It crossed 20 branches when Back and Forward were
     // added on 2026-09-19.
+    // A command the bin greys is refused here too: a key reaches this
+    // without asking menu_item_flags().
+    if (in_bin(active()) && (menu_item_flags(code) & UUI_MI_DISABLED) &&
+        code != CMD_UP) {
+        set_note("not in the Recycle Bin");
+        return;
+    }
     switch (code) {
     case CMD_COPY:   do_copy(); break;
     case CMD_MOVE:   do_move(); break;
-    case CMD_DELETE: do_delete(); break;
+    case CMD_DELETE:         do_delete(0); break;
+    case CMD_DELETE_FOREVER: do_delete(1); break;
+    case CMD_RESTORE:        bin_restore(0); break;
+    case CMD_RESTORE_ALL:    bin_restore(1); break;
+    case CMD_EMPTY_BIN:      do_empty_bin(); break;
     case CMD_MKDIR:
         if (g_opt.rename_dialog) open_prompt(CMD_MKDIR, "New folder", "New folder");
         else create_and_rename(CMD_MKDIR);
@@ -1158,7 +1211,9 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     case KEY_F7:     do_command(a, CMD_MKDIR);   return;
     case KEY_F2:     do_command(a, CMD_RENAME);  return;
     case KEY_F8:
-    case KEY_DELETE: do_command(a, CMD_DELETE);  return;
+    case KEY_DELETE:
+        do_command(a, (mods & KEY_MOD_SHIFT) ? CMD_DELETE_FOREVER : CMD_DELETE);
+        return;
     default: break;
     }
     if (key == 0x12 && (mods & KEY_MOD_CTRL)) { do_command(a, CMD_REFRESH); return; } // Ctrl-R
@@ -1242,7 +1297,7 @@ static int on_tick(struct uapp *a) {
     if (gen != g_seen_generation) {
         g_seen_generation = gen;
         for (int i = 0; i < 2; i++)
-            if (sys_fs_generation_of(uui_fileview_dir(&g_pane[i])) != g_pane_gen[i])
+            if (sys_fs_generation_of(fm_watch_path(uui_fileview_dir(&g_pane[i]))) != g_pane_gen[i])
                 reload_pane(&g_pane[i]);
         int places = g_places.count;
         uui_places_refresh(&g_places);  // free space moved, or a disk came
@@ -1259,7 +1314,11 @@ static int on_tick(struct uapp *a) {
 // the same one, so a double click here and `open x.txt` at a prompt
 // cannot disagree.
 static void on_pane_open(void *ctx, const char *path) {
-    (void)ctx;
+    if (in_bin(&g_pane[(int)(intptr_t)ctx])) {   // Explorer's rule: a deleted file is not opened
+        snprintf(g_stat_note, sizeof g_stat_note, "restore %s to open it",
+                 k_path_basename(path));
+        return;
+    }
     char exec[PATH_MAX_LEN];
     if (!uopen_resolve(path, exec, sizeof exec)) {
         // Said out loud rather than doing nothing: a double click that
@@ -1449,7 +1508,7 @@ void refresh_dim(void) {
 }
 
 void pane_listed(int pane) {
-    g_pane_gen[pane] = sys_fs_generation_of(uui_fileview_dir(&g_pane[pane]));
+    g_pane_gen[pane] = sys_fs_generation_of(fm_watch_path(uui_fileview_dir(&g_pane[pane])));
 }
 
 void reload_pane(struct uui_fileview *fv) {
@@ -1523,6 +1582,7 @@ int main(int argc, char **argv) {
     g_viewbar.compact = 1;
     g_nav.compact = 0;
     uui_pathbar_init(&g_path, "System", "drive");
+    uui_pathbar_set_scheme(&g_path, FM_BIN, "Recycle Bin", "place-trash");
     uui_textbox_init(&g_search, "");
     g_search.placeholder = g_search_hint;
     // The places are the file chooser's (ui/uui_filedialog.c) -- one
@@ -1533,6 +1593,7 @@ int main(int argc, char **argv) {
     uui_places_add(&g_places, "Documents", "place-documents", "/usr/share/doc");
     uui_places_add(&g_places, "Music",     "place-music",     "/usr/share/music");
     uui_places_add(&g_places, "Pictures",  "place-pictures",  "/usr/share/wallpapers");
+    uui_places_add(&g_places, "Recycle Bin", "place-trash",   FM_BIN);
     uui_places_refresh(&g_places);
     uui_button_init(&g_dp_open, 0, 0, 0, 0, "Open", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_DP_OPEN);
     uui_button_init(&g_dp_props, 0, 0, 0, 0, "Properties", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_DP_PROPS);
@@ -1559,6 +1620,7 @@ int main(int argc, char **argv) {
                            i ? g_right_entries : g_left_entries, PANE_FILES);
         g_pane[i].on_open = on_pane_open;
         g_pane[i].ctx = (void *)(intptr_t)i;
+        bin_init(&g_pane[i]);
         uui_fileview_set_thumb(&g_pane[i], g_opt.thumbs ? pane_thumb : 0, 0);
         uui_fileview_set_filter(&g_pane[i], pane_filter, (void *)(intptr_t)i);
         g_pane[i].single_click = g_opt.single_click;

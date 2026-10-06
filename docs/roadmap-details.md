@@ -1790,9 +1790,9 @@ descend. The per-directory change counters (`SYS_FS_GENERATION_OF`) let
 it rescan only what changed. The treemap is a `userland/ui/` widget
 with a second plausible caller in Task Manager's memory view.
 
-### A Recycle Bin on the freedesktop Trash spec -- reverses `filemanager-design.md`'s first-version "No trash"
+### A Recycle Bin on the freedesktop Trash spec
 
-Put on the roadmap 2026-10-06 (not scheduled). A per-volume `.Trash/` holding `files/` and
+DONE 2026-10-06 (`lib/utrash.h`; decisions: "Delete moves to a Recycle Bin, one per volume"). As planned: a per-volume `.Trash/` holding `files/` and
 `info/*.trashinfo` (original path, deletion time), so a delete is a
 rename and Restore knows where it came from. `rm` stays permanent, as it
 is everywhere. The File Manager's design document ruled trash out of its

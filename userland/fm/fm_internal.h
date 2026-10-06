@@ -36,6 +36,7 @@
 //   fm_thumbs.c  the lazy thumbnail cache
 //   fm_modal.c   Rename / New folder (the two prompts with a text field)
 //   fm_details.c the details pane: a preview and the selection's facts
+//   fm_trash.c   the Recycle Bin's folder (trash:/) and its verbs
 
 #define PATH_MAX_LEN 256         // NOT FS_PATH_MAX -- this app's own
                                  // buffers; the shared widgets it uses
@@ -92,7 +93,16 @@ enum {
     CMD_SORT_ASC, CMD_SORT_DESC,
     CMD_VIEW_LARGE, CMD_VIEW_DPANE,
     CMD_SELECT_ALL, CMD_OPTIONS,
+    // The Recycle Bin (fm_trash.c). DELETE moves to it; DELETE_FOREVER
+    // (Shift+Delete, and Delete inside the bin) does not.
+    CMD_DELETE_FOREVER, CMD_RESTORE, CMD_RESTORE_ALL, CMD_EMPTY_BIN,
+    // The worker's own operations, never a user's command.
+    CMD_TRASH, CMD_PURGE,
 };
+
+// The Recycle Bin's folder, as uui_fileview and the breadcrumb see it --
+// KIO's trash:/.
+#define FM_BIN "trash:/"
 
 // The dialog's answers. ONE widget serves both questions the app asks
 // (a conflict, a delete), so `g_dialog_kind` says which one is up and
@@ -293,9 +303,20 @@ void do_move(void);
 void do_drop(struct uui_fileview *src, const char *dest, int copy);
 // A drop from ANOTHER window: the files are in the drag slot (lib/uclip.h).
 void do_drop_extern(const char *dest, int copy);
-void do_delete(void);     // opens the dialog; commit_delete() acts
+void do_delete(int forever); // asks (or not, per Options); commit_delete() acts
 void delete_picture(void);   // the delete card's picture, again (a thumbnail landed)
 void commit_delete(void);
+void do_empty_bin(void);  // asks, then purges every bin
+
+// --- the Recycle Bin (fm_trash.c) -------------------------------------------
+void bin_init(struct uui_fileview *fv);      // the trash:/ resolver, per pane
+int  in_bin(const struct uui_fileview *fv);  // the pane is showing the bin
+int  bin_count(void);
+int  bin_item_flags(int code, unsigned *out);  // 1 when the bin decides `code`
+unsigned long long bin_bytes(void);
+void bin_restore(int all);
+int  bin_paths(char (*out)[PATH_MAX_LEN], int cap);
+const char *fm_watch_path(const char *dir);  // what a pane on `dir` polls
 void commit_mkdir(const char *name);
 void commit_newfile(const char *name);
 void commit_rename(const char *name);
