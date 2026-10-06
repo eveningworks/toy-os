@@ -22,10 +22,13 @@
 // and `hw_pos + SND_RING_BYTES` (all the way around), and never touch
 // the control page except to read it.
 
-// 16-bit signed little-endian stereo at 48 kHz -- AC'97's native
-// format, and the one every card this registry will hold can do.
-// Rate/format negotiation is deliberately NOT in the v1 ABI: the field
-// exists so a reader can check it, not so a caller can choose.
+// **32-BIT SIGNED LITTLE-ENDIAN STEREO AT 48 kHz, FULL SCALE IN THE TOP
+// BITS** -- ALSA's S32_LE. One format for every device, PipeWire's and
+// the Windows audio engine's shape: whatever the card is, the ring is
+// this, and the DRIVER converts at the edge. A 24-bit sample is the top
+// three bytes (what HDA's 32-bit container and USB's 3-byte subslot
+// want), a 16-bit device takes the top two, rounded
+// (snd_s32_to_s16() below). Rate negotiation is still not in the ABI.
 // --- WHAT A CARD CAN DO, as opposed to what this stack asks of it ----
 //
 // SND_RATE and SND_CHANNELS below are what the shared ring IS -- one
@@ -62,22 +65,49 @@
 #define SND_DEPTH_24  (1u << 3)
 #define SND_DEPTH_32  (1u << 4)
 
-#define SND_RATE      48000
-#define SND_CHANNELS  2
-#define SND_FRAME_BYTES 4 // 2 channels x 16-bit
+#define SND_RATE        48000
+#define SND_CHANNELS    2
+#define SND_SAMPLE_BITS 32
+#define SND_FRAME_BYTES 8 // 2 channels x 32-bit
 
-// The ring: 32 chunks of 2 KiB = 64 KiB, ~341 ms. A chunk is one
-// completion interrupt (~47/s) and one hardware descriptor.
-#define SND_CHUNKS      32
-#define SND_CHUNK_BYTES 2048
-#define SND_RING_BYTES  (SND_CHUNKS * SND_CHUNK_BYTES)
+// The ring: 32 chunks of 512 frames = 128 KiB, ~341 ms. A chunk is one
+// completion interrupt (~94/s) and one hardware descriptor. SIZED IN
+// FRAMES: a chunk is a length of TIME to everything that schedules
+// around it (soundd's lead, a driver's copy-ahead), and it stayed 512
+// frames when the frame doubled.
+#define SND_CHUNKS       32
+#define SND_CHUNK_FRAMES 512
+#define SND_CHUNK_BYTES  (SND_CHUNK_FRAMES * SND_FRAME_BYTES)
+#define SND_RING_BYTES   (SND_CHUNKS * SND_CHUNK_BYTES)
+
+// A 16-bit device's chunk, in a driver's own bounce buffer: the same
+// frames at half the bytes.
+#define SND_CHUNK_BYTES_S16 (SND_CHUNK_FRAMES * SND_CHANNELS * 2)
+
+// HOW FAR AHEAD A CONVERTING DRIVER READS THE RING: the chunk this many
+// past the one that just finished is converted into the driver's own
+// buffer. soundd keeps at least eight chunks written ahead while the
+// engine runs, and the USB driver already copied about three ahead
+// before there was a constant for it.
+#define SND_CONVERT_LEAD 3
+
+// One s32 ring sample as a 16-bit device takes it: ROUNDED, not cut,
+// so the narrowing adds half an LSB of error rather than a whole one of
+// bias, and clamped, since rounding up from the very top would wrap.
+static inline int16_t snd_s32_to_s16(int32_t v) {
+    int64_t r = ((int64_t)v + 0x8000) >> 16;
+    return (int16_t)(r > 32767 ? 32767 : r);
+}
 
 // Where SYS_SND_OPEN maps the control page (the ring follows on the
 // next page) -- fixed, like WIN_FB_VADDR, so an
 // app computes addresses instead of being told them.
 #define SND_MAP_VADDR 0x8F00000000ULL
 
-#define SND_CTL_MAGIC 0x534e4431 // "SND1"
+// "SND2": the s32 ring. A reader built against "SND1"'s s16 ring finds
+// a different magic and refuses, rather than playing every sample as
+// two half-volume ones.
+#define SND_CTL_MAGIC 0x534e4432 // "SND2"
 
 // A client's application name, and deliberately PROC_NAME_MAX
 // (abi/proc_info.h) rather than a size of this ABI's own: it is filled
@@ -90,6 +120,7 @@ struct snd_ctl_page {
     uint32_t rate;       // SND_RATE
     uint32_t channels;   // SND_CHANNELS
     uint32_t ring_bytes; // SND_RING_BYTES
+    uint32_t sample_bits; // SND_SAMPLE_BITS -- checked, never chosen
     // Byte offset INTO THE RING of the chunk the hardware is playing
     // now. Written by the kernel on every completion interrupt; only
     // ever a multiple of SND_CHUNK_BYTES. Volatile to the app.
@@ -232,6 +263,8 @@ struct snd_register_msg {
     char     name[SND_DRV_NAME_MAX];    // "hda-ring3"
     char     label[SND_DRV_LABEL_MAX];  // what a person sees
     uint32_t rates, depths;             // SND_RATE_*/SND_DEPTH_*
+    uint32_t bits;                      // the width it plays the ring at
+    uint32_t reserved;
     uint64_t page;                      // the driver's snd_driver_page
     uint64_t ring_phys;                 // OUT: where the ring is
 };

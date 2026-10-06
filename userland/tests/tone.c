@@ -22,7 +22,7 @@
 #define AMPLITUDE   12000
 
 static volatile struct snd_ctl_page *g_ctl;
-static volatile int16_t *g_ring;
+static volatile int32_t *g_ring;   // the s32 ring (abi/sound_abi.h)
 
 static uint32_t g_wr;      // byte cursor into the ring
 static uint32_t g_frame;   // total frames generated, for phase
@@ -30,9 +30,12 @@ static uint32_t g_frame;   // total frames generated, for phase
 static void put_frame(void) {
     // Angle in TURNS (fixed.h): the cycle position of frame n at 440Hz.
     fx_t angle = (fx_t)(((uint64_t)g_frame * TONE_HZ % SND_RATE) * FX_ONE / SND_RATE);
-    int16_t s = (int16_t)((fx_sin(angle) * AMPLITUDE) >> FX_SHIFT);
-    g_ring[g_wr / 2] = s;
-    g_ring[g_wr / 2 + 1] = s;
+    // Built as s16 and placed in the TOP half: the captured 16-bit
+    // device output is then exactly this AMPLITUDE, which is what the
+    // host's check reads.
+    int32_t s = (int32_t)(int16_t)((fx_sin(angle) * AMPLITUDE) >> FX_SHIFT) * 65536;
+    g_ring[g_wr / 4] = s;
+    g_ring[g_wr / 4 + 1] = s;
     g_wr = (g_wr + SND_FRAME_BYTES) % SND_RING_BYTES;
     g_frame++;
 }
@@ -52,7 +55,7 @@ int main(void) {
         return sys_errno() == ENODEV ? 0 : 1;
     }
     g_ctl = (volatile struct snd_ctl_page *)(uintptr_t)SND_MAP_VADDR;
-    g_ring = (volatile int16_t *)(uintptr_t)(SND_MAP_VADDR + 4096);
+    g_ring = (volatile int32_t *)(uintptr_t)(SND_MAP_VADDR + 4096);
     if (g_ctl->magic != SND_CTL_MAGIC || g_ctl->rate != SND_RATE) {
         sys_print("tone: bad control page\n");
         return 1;

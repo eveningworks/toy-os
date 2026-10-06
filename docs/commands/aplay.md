@@ -10,7 +10,7 @@
 
 ## Description
 
-Play an audio file, or say what one contains. WAV, MP3 and MIDI, and
+Play an audio file, or say what one contains. WAV, FLAC, MP3 and MIDI, and
 each arrived exactly as the codec table (`userland/lib/usnd.h`)
 promised it would: a file and a row, not a second mechanism.
 
@@ -19,6 +19,12 @@ A MIDI file is rendered through a SoundFont from `/usr/share/soundfonts`
 outranks it. `-i` names the bank it would use without loading it, so it
 answers instantly even for a 30 MB bank; playing loads the bank first,
 which is the pause before the first note.
+
+FLAC is played at every depth it allows, 4 to 32 bits, mono or stereo,
+and a 24-bit file reaches a 24-bit card whole -- the sound path is 32
+bits wide from decoder to driver, and only a 16-bit card rounds it down.
+Seeking lands on the exact sample. More than two channels is refused,
+as for every format here.
 
 The MP3 side is MPEG-1 Layer III only. Layer I/II, the half-rate
 MPEG-2/2.5 sample rates, free-format and intensity stereo are refused by

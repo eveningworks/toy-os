@@ -84,9 +84,13 @@
 #define SD_STS_ACK  0x1C // BCIS | FIFOE | DESE
 #define SD_STS_BCIS 0x04
 
-// 48 kHz base, 16-bit, 2 channels -- SND_RATE/SND_CHANNELS as the codec
-// spells them.
+// 48 kHz base, 2 channels -- SND_RATE/SND_CHANNELS as the codec spells
+// them -- at a sample width, bits 6:4: 001 = 16, 010 = 20, 011 = 24,
+// 100 = 32. 20/24/32 sit MSB-justified in a 32-bit container, so the
+// s32 ring is what the engine reads for any of them.
 #define HDA_FMT_48K_S16_STEREO 0x0011
+#define HDA_FMT_48K_STEREO(bits) \
+    (0x0001 | ((bits) == 32 ? 0x40 : (bits) == 24 ? 0x30 : (bits) == 20 ? 0x20 : 0x10))
 #define HDA_STREAM_TAG 1
 
 // The CORB is 256 4-byte verbs and the RIRB 256 8-byte responses, so a

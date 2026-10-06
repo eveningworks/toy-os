@@ -287,15 +287,18 @@ looping its last third of a second. The kernel stops there — it never
 mixes, exactly as ALSA's dmix, PulseAudio and Windows' audio engine
 never do it in kernel space. **A USB card is the second implementer of
 that registry**, on an isochronous OUT endpoint the xHCI driver grew
-for it — the format is refused rather than resampled (48 kHz stereo
-s16, which is what the ABI fixes), the samples are copied into the
+for it — the rate is refused rather than resampled (48 kHz, which
+is what the ABI fixes), the deepest sample width it offers is taken, the samples are copied into the
 driver's own packet frame because 192 bytes per USB frame divides
 neither the ring nor its chunks, and unplugging it mid-playback
 publishes `device_gone` so an app can tell that from being stopped.
 Which card plays is the first one discovered until somebody chooses in
 the tray's volume flyout, and that choice persists. Above the line,
 `userland/lib/usnd.h` is a
-codec table — WAV and **MP3**, with the rate, channel and width
+codec table — WAV, **FLAC** (every depth to 32 bits, exact seeking) and
+**MP3** — and the whole path from a codec to the card is **32 bits
+wide**, so a 24-bit file reaches a 24-bit DAC whole and only a 16-bit
+card rounds it, in its own driver. The rate, channel and width
 conversion happening once in the library and never in a codec — a
 sixteen-voice mixer with stereo gains, and a sink interface whose second
 row is **`soundd`**: a supervised service that owns the card and mixes

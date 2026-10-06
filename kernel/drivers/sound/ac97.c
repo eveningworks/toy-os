@@ -72,6 +72,9 @@ static uint8_t g_msi_vector;   // LAPIC vector, 0 when on the INTx pin
 static uint16_t g_nam, g_nabm;
 static struct bdl_entry *g_bdl; // one pmm frame; identity-mapped
 static uint64_t g_bdl_phys;
+// AC97 IS 16-BIT, so the engine plays this narrowed copy of the s32 ring,
+// kept ahead by the core (kernel/sound.h, struct snd_bounce).
+static struct snd_bounce g_bounce;
 
 static void ac97_irq(uint64_t *regs) {
     (void)regs;
@@ -79,6 +82,7 @@ static void ac97_irq(uint64_t *regs) {
     if (!(sr & SR_ACK)) return; // not ours (a shared line is legal)
     uint8_t civ = inb(g_nabm + PO_CIV) & 31;
     sound_period_done((uint32_t)civ * SND_CHUNK_BYTES);
+    sound_bounce_period(&g_bounce, (uint32_t)civ * SND_CHUNK_BYTES);
     // One behind the player: the engine never sees "last valid".
     outb(g_nabm + PO_LVI, (uint8_t)((civ + 31) & 31));
     outw(g_nabm + PO_SR, sr & SR_ACK); // RW1C: only the bits seen
@@ -94,6 +98,7 @@ static int ac97_start(const struct sound_device *dev) {
     while ((inb(g_nabm + PO_CR) & CR_RR) && ++spins < 1000000u) { }
     if (inb(g_nabm + PO_CR) & CR_RR) return -1;
 
+    sound_bounce_start(&g_bounce);
     outl(g_nabm + PO_BDBAR, (uint32_t)g_bdl_phys);
     outb(g_nabm + PO_LVI, 31);
     outw(g_nabm + PO_SR, SR_ACK);
@@ -140,6 +145,7 @@ static const struct sound_device ac97_dev = {
     // might manage would describe something nothing can ask for.
     .rates = SND_RATE_48000,
     .depths = SND_DEPTH_16,
+    .bits = 16,
     .start = ac97_start,
     .stop = ac97_stop,
     .set_volume = ac97_set_volume,
@@ -182,11 +188,15 @@ static void ac97_probe(const struct pci_device *dev) {
         return;
     }
     g_bdl_phys = pmm_alloc_contiguous(1, PMM_ZONE_DMA32);
-    if (!g_bdl_phys) return;
+    uint64_t bounce_phys = pmm_alloc_contiguous(SND_CHUNKS * SND_CHUNK_BYTES_S16 / 4096,
+                                                PMM_ZONE_DMA32);
+    if (!g_bdl_phys || !bounce_phys) return;
     g_bdl = (struct bdl_entry *)(uintptr_t)g_bdl_phys;
+    g_bounce.buf = (int16_t *)(uintptr_t)bounce_phys;
+    k_memset(g_bounce.buf, 0, SND_CHUNKS * SND_CHUNK_BYTES_S16);
     for (int i = 0; i < SND_CHUNKS; i++) {
-        g_bdl[i].addr = (uint32_t)(ring_phys + (uint64_t)i * SND_CHUNK_BYTES);
-        g_bdl[i].samples = SND_CHUNK_BYTES / 2;
+        g_bdl[i].addr = (uint32_t)(bounce_phys + (uint64_t)i * SND_CHUNK_BYTES_S16);
+        g_bdl[i].samples = SND_CHUNK_BYTES_S16 / 2;
         g_bdl[i].flags = 0x8000; // IOC
     }
 

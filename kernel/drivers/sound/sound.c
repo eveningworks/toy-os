@@ -113,6 +113,7 @@ void *sound_ring_alloc(uint64_t *out_phys) {
         g_ctl->rate = SND_RATE;
         g_ctl->channels = SND_CHANNELS;
         g_ctl->ring_bytes = SND_RING_BYTES;
+        g_ctl->sample_bits = SND_SAMPLE_BITS;
     }
     if (out_phys) *out_phys = g_map_phys + 4096;
     return g_ring;
@@ -140,8 +141,9 @@ int sound_register(const struct sound_device *dev, void *ring, uint64_t ring_phy
     // plug did not, so the tray's device list showed devices that were
     // no longer attached (api/setting.h).
     setting_choices_changed();
-    klog_printf("sound: %s registered (48kHz s16le stereo, %u KiB ring)\n",
-                dev->name, (unsigned)(SND_RING_BYTES / 1024));
+    klog_printf("sound: %s registered (48kHz stereo, s32 ring of %u KiB, card at %u-bit)\n",
+                dev->name, (unsigned)(SND_RING_BYTES / 1024),
+                (unsigned)(dev->bits ? dev->bits : 16));
 
     // A plug does not steal the stream: the newcomer is only switched
     // to when it is the one somebody CHOSE, and never while a process
@@ -252,6 +254,34 @@ void sound_period_done(uint32_t hw_pos) {
     }
     g_last_pos = hw_pos;
     g_ctl->hw_pos = hw_pos;
+}
+
+// --- converting drivers --------------------------------------------------
+
+static void bounce_one(struct snd_bounce *b, uint32_t chunk) {
+    const int32_t *src = (const int32_t *)(g_ring + chunk * SND_CHUNK_BYTES);
+    int16_t *dst = b->buf + chunk * (SND_CHUNK_BYTES_S16 / 2);
+    for (uint32_t i = 0; i < SND_CHUNK_FRAMES * SND_CHANNELS; i++)
+        dst[i] = snd_s32_to_s16(src[i]);
+}
+
+void sound_bounce_start(struct snd_bounce *b) {
+    if (!g_ring || !b->buf) return;
+    for (uint32_t c = 0; c <= SND_CONVERT_LEAD; c++) bounce_one(b, c);
+    b->next = SND_CONVERT_LEAD + 1;
+}
+
+// Converts up to the chunk LEAD past the one now playing. Walking from
+// `next` rather than converting one chunk per call is what keeps two
+// periods reported by one interrupt from leaving a chunk unconverted --
+// it would play whatever that slot held a lap ago.
+void sound_bounce_period(struct snd_bounce *b, uint32_t hw_pos) {
+    if (!g_ring || !b->buf) return;
+    uint32_t want = (hw_pos / SND_CHUNK_BYTES + SND_CONVERT_LEAD + 1) % SND_CHUNKS;
+    for (int guard = 0; b->next != want && guard < SND_CHUNKS; guard++) {
+        bounce_one(b, b->next);
+        b->next = (b->next + 1) % SND_CHUNKS;
+    }
 }
 
 static void snd_unmap_owner(void) {
@@ -387,6 +417,36 @@ KTEST("sound", "period zeroing walks exactly the consumed chunks") {
     k_memset(g_ring, 0, SND_RING_BYTES);
     g_last_pos = 0;
     g_ctl->hw_pos = 0;
+}
+
+KTEST("sound", "a converting driver's buffer is the ring, narrowed and ahead") {
+    if (!sound_ring_alloc(0)) { KTEST_SKIP("no contiguous frames"); return; }
+    static int16_t buf[SND_CHUNKS * SND_CHUNK_BYTES_S16 / 2];
+    struct snd_bounce b = { buf, 0 };
+    int32_t *ring = (int32_t *)g_ring;
+    for (uint32_t i = 0; i < SND_RING_BYTES / 4; i++)
+        ring[i] = (int32_t)((i * 2654435761u) & 0xFFFFFF00u);
+    k_memset(buf, 0, sizeof buf);
+    sound_bounce_start(&b);
+    // Chunks 0..LEAD now, the next one not yet.
+    uint32_t per = SND_CHUNK_BYTES_S16 / 2;
+    KTEST_ASSERT_EQ(buf[0], snd_s32_to_s16(ring[0]));
+    KTEST_ASSERT_EQ(buf[SND_CONVERT_LEAD * per + 5], snd_s32_to_s16(ring[SND_CONVERT_LEAD * per + 5]));
+    KTEST_ASSERT_EQ(buf[(SND_CONVERT_LEAD + 1) * per], 0);
+    // Two chunks finished in one report (chunk 2 now playing): both of
+    // the next two arrive, up to LEAD past it, and not one more.
+    sound_bounce_period(&b, 2 * SND_CHUNK_BYTES);
+    KTEST_ASSERT_EQ(buf[(SND_CONVERT_LEAD + 1) * per + 7],
+                    snd_s32_to_s16(ring[(SND_CONVERT_LEAD + 1) * per + 7]));
+    KTEST_ASSERT_EQ(buf[(SND_CONVERT_LEAD + 2) * per + 7],
+                    snd_s32_to_s16(ring[(SND_CONVERT_LEAD + 2) * per + 7]));
+    KTEST_ASSERT_EQ(buf[(SND_CONVERT_LEAD + 3) * per + 7], 0);
+    // Rounded, and clamped at the top rather than wrapped.
+    KTEST_ASSERT_EQ(snd_s32_to_s16(0x7FFFFFFF), 32767);
+    KTEST_ASSERT_EQ(snd_s32_to_s16((int32_t)0x80000000), -32768);
+    KTEST_ASSERT_EQ(snd_s32_to_s16(0x00018000), 2);
+    KTEST_ASSERT_EQ(snd_s32_to_s16(0x00017FFF), 1);
+    k_memset(g_ring, 0, SND_RING_BYTES);
 }
 
 // --- KTESTs: the device list, with fake devices ------------------------
@@ -545,6 +605,7 @@ static int sound_q_fill(int index, void *out) {
     q->active = (index == g_active);
     q->rates = d->rates;
     q->depths = d->depths;
+    q->bits = d->bits;
     return 1;
 }
 

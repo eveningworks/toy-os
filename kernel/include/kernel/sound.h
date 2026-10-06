@@ -57,13 +57,29 @@ struct sound_device {
     // spells them in. 0 from a driver that does not report, which is
     // not the same as "nothing".
     //
-    // NOTHING READS THESE TO DECIDE ANYTHING. The stack is compiled
-    // around SND_RATE/SND_CHANNELS; this is the fact that would have
-    // to exist first for that to change, reported so the question can
-    // be answered with a measurement rather than a guess.
+    // The RATE masks decide nothing (the stack is compiled around
+    // SND_RATE). The DEPTH a driver plays at is its own choice from
+    // what the card offers -- the ring is always s32 -- and `bits` says
+    // which it took, for lssound and the log.
     uint32_t rates;
     uint32_t depths;
+    uint32_t bits;
 };
+
+// --- a driver whose card cannot read the s32 ring directly -------------
+//
+// AC97, and an HDA codec without 20/24/32-bit support, DMA from a 16-bit
+// buffer of their own. The core keeps it filled: each chunk is narrowed
+// (snd_s32_to_s16) SND_CONVERT_LEAD chunks before the card reaches it.
+// `buf` is SND_CHUNKS * SND_CHUNK_BYTES_S16 bytes the driver allocated
+// for DMA; start() before the engine starts, period() with the same
+// position the driver hands sound_period_done().
+struct snd_bounce {
+    int16_t *buf;
+    uint32_t next;     // the next ring chunk to convert
+};
+void sound_bounce_start(struct snd_bounce *b);
+void sound_bounce_period(struct snd_bounce *b, uint32_t hw_pos);
 
 // A driver that found its hardware registers here, handing the core
 // nothing -- the core hands IT the ring: `ring` is SND_RING_BYTES of

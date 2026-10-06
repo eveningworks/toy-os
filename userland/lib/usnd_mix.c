@@ -40,7 +40,7 @@
 #define GAIN_UNITY 256
 
 struct voice {
-    const int16_t *pcm;     // caller-owned clip samples, device format
+    const int32_t *pcm;     // caller-owned clip samples, device format
     uint64_t frames, pos;
     int gain_l, gain_r;
     // Bumped every time the slot is handed out. A handle carries it, so
@@ -64,29 +64,33 @@ static int g_st_open, g_st_paused, g_st_done;
 // The caller-fed source. A plain SPSC ring: the producer writes at
 // `head`, the mixer reads at `tail`, and neither ever writes the
 // other's index.
-static int16_t *g_push;
+static int32_t *g_push;     // widened from the producer's s16 as it is queued
 static long g_push_head, g_push_tail;
 static int g_push_on;
 static int g_push_gain = 256;
 
 // .bss, not stack: the ring-3 frame budget is 2 KiB and these are 20.
-static int32_t g_acc[MIX_FRAMES * USND_CHANNELS];
-static int16_t g_scratch[MIX_FRAMES * USND_CHANNELS];
-static int16_t g_out[MIX_FRAMES * USND_CHANNELS];
+// 64-bit, because one full-scale s32 voice already fills 32.
+static int64_t g_acc[MIX_FRAMES * USND_CHANNELS];
+static int32_t g_scratch[MIX_FRAMES * USND_CHANNELS];
+static int32_t g_out[MIX_FRAMES * USND_CHANNELS];
 
 // THE TAP: the last TAP_FRAMES frames handed to the sink, so usnd_peek()
 // can return what is PLAYING -- `pending()` behind the newest written.
 // Larger than any sink ring here, or the playing frames would already
 // be overwritten.
+// Kept NARROWED to s16: it is only ever read by usnd_peek(), whose
+// callers' arithmetic is scaled for 16 bits, and at 32768 frames the
+// difference is 128 KiB of .bss.
 #define TAP_FRAMES 32768
 static int16_t g_tap[TAP_FRAMES * USND_CHANNELS];
 static uint64_t g_tap_written;
 
-static void tap_store(const int16_t *src, long frames) {
+static void tap_store(const int32_t *src, long frames) {
     for (long i = 0; i < frames; i++) {
         long at = (long)(g_tap_written++ % TAP_FRAMES) * USND_CHANNELS;
-        g_tap[at] = src[i * USND_CHANNELS];
-        g_tap[at + 1] = src[i * USND_CHANNELS + 1];
+        g_tap[at] = (int16_t)(src[i * USND_CHANNELS] >> 16);
+        g_tap[at + 1] = (int16_t)(src[i * USND_CHANNELS + 1] >> 16);
     }
 }
 
@@ -94,10 +98,10 @@ static void tap_store(const int16_t *src, long frames) {
 
 // PER CHANNEL, because panning is a different gain left and right --
 // which is the whole of what a game means by "the sound is over there".
-static void add_voice(const int16_t *src, long frames, int gain_l, int gain_r) {
+static void add_voice(const int32_t *src, long frames, int gain_l, int gain_r) {
     for (long f = 0; f < frames; f++) {
-        g_acc[f * 2]     += ((int32_t)src[f * 2]     * gain_l) >> 8;
-        g_acc[f * 2 + 1] += ((int32_t)src[f * 2 + 1] * gain_r) >> 8;
+        g_acc[f * 2]     += ((int64_t)src[f * 2]     * gain_l) >> 8;
+        g_acc[f * 2 + 1] += ((int64_t)src[f * 2 + 1] * gain_r) >> 8;
     }
 }
 
@@ -144,10 +148,10 @@ static void mix(long frames) {
     // loudest bug an audio path can have -- it turns a slightly-too-loud
     // mix into full-scale noise.
     for (long i = 0; i < frames * USND_CHANNELS; i++) {
-        int32_t v = g_acc[i] * g_volume / 100;
-        if (v > 32767) v = 32767;
-        else if (v < -32768) v = -32768;
-        g_out[i] = (int16_t)v;
+        int64_t v = g_acc[i] * g_volume / 100;
+        if (v > INT32_MAX) v = INT32_MAX;
+        else if (v < INT32_MIN) v = INT32_MIN;
+        g_out[i] = (int32_t)v;
     }
 }
 
@@ -362,7 +366,7 @@ int usnd_clip_play(const struct usnd_clip *c, int gain) {
 
 int usnd_push_open(void) {
     if (g_push_on) return -EBUSY;
-    int16_t *buf = malloc((size_t)USND_PUSH_FRAMES * USND_CHANNELS * sizeof(int16_t));
+    int32_t *buf = malloc((size_t)USND_PUSH_FRAMES * USND_CHANNELS * sizeof(int32_t));
     if (!buf) { usnd_fail("out of memory"); return -ENOMEM; }
     pthread_mutex_lock(&g_lock);
     g_push = buf;
@@ -376,7 +380,7 @@ void usnd_push_close(void) {
     if (!g_push_on) return;
     pthread_mutex_lock(&g_lock);
     g_push_on = 0;
-    int16_t *buf = g_push;
+    int32_t *buf = g_push;
     g_push = 0;
     pthread_mutex_unlock(&g_lock);
     // Freed OUTSIDE the lock, but only after the mixer can no longer
@@ -405,8 +409,9 @@ long usnd_push(const int16_t *pcm, long frames) {
         long run = USND_PUSH_FRAMES - idx;
         if (run > space) run = space;
         if (run > frames - n) run = frames - n;
-        memcpy(g_push + idx * USND_CHANNELS, pcm + n * USND_CHANNELS,
-               (size_t)run * USND_CHANNELS * sizeof(int16_t));
+        const int16_t *src = pcm + n * USND_CHANNELS;
+        int32_t *dst = g_push + idx * USND_CHANNELS;
+        for (long i = 0; i < run * USND_CHANNELS; i++) dst[i] = (int32_t)src[i] * 65536;
         g_push_head += run;
         n += run;
     }

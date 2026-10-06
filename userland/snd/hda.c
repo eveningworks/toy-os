@@ -50,6 +50,8 @@ struct hda_state {
     uint32_t sd;            // our output stream descriptor's base
     uint32_t chunk;         // the ring chunk the card has finished
     int      running;
+    uint16_t fmt;           // HDA_FMT_48K_STEREO(dev->bits)
+    uint32_t chunk_bytes;   // one BDL entry at that width
     struct hda_codec codec;
 };
 
@@ -151,10 +153,21 @@ static int hda_open(struct snd_dev *dev) {
         // NOT A FAILURE, AN ANSWER: a display-audio codec's pins are
         // all digital, so there is no analog route to find.
         if (hda_codec_pick_outputs(&g_st.codec) != 0) continue;
-        hda_codec_route_output(&g_st.codec, &g_st.codec.spk,
-                               HDA_FMT_48K_S16_STEREO, HDA_STREAM_TAG);
+        // The deepest width the DAC reports, as kernel/drivers/sound/
+        // hda.c picks it: 20/24/32 read the s32 ring directly, 16 plays
+        // the host's narrowed copy in the rest of this DMA grant.
         hda_codec_pcm_support(&g_st.codec, g_st.codec.spk.dac,
                               &dev->rates, &dev->depths);
+        dev->bits = (dev->depths & SND_DEPTH_32) ? 32 : (dev->depths & SND_DEPTH_24) ? 24 :
+                    (dev->depths & SND_DEPTH_20) ? 20 : 16;
+        g_st.fmt = HDA_FMT_48K_STEREO(dev->bits);
+        g_st.chunk_bytes = dev->bits == 16 ? SND_CHUNK_BYTES_S16 : SND_CHUNK_BYTES;
+        if (dev->bits == 16) {
+            dev->bounce = (int16_t *)((uint8_t *)dev->dma + HDA_RING_BYTES);
+            dev->bounce_phys = dev->dma_phys + HDA_RING_BYTES;
+            memset(dev->bounce, 0, SND_CHUNKS * SND_CHUNK_BYTES_S16);
+        }
+        hda_codec_route_output(&g_st.codec, &g_st.codec.spk, g_st.fmt, HDA_STREAM_TAG);
         dev->priv = &g_st;
         return 0;
     }
@@ -167,7 +180,7 @@ static void hda_close(struct snd_dev *dev) {
 }
 
 static int hda_start(struct snd_dev *dev, uint64_t ring_phys) {
-    (void)dev;
+    uint64_t base = dev->bounce ? dev->bounce_phys : ring_phys;
     mw32(g_st.sd + SD_CTL, 0);
     for (int i = 0; i < 100 && (mr32(g_st.sd + SD_CTL) & SD_CTL_RUN); i++) usleep(100);
     mw32(g_st.sd + SD_CTL, SD_CTL_SRST);
@@ -180,16 +193,16 @@ static int hda_start(struct snd_dev *dev, uint64_t ring_phys) {
     // this process owns -- and is built here rather than once at open,
     // because it is start() that is handed the address.
     for (int k = 0; k < SND_CHUNKS; k++) {
-        g_st.bdl[k].addr = ring_phys + (uint64_t)k * SND_CHUNK_BYTES;
-        g_st.bdl[k].len = SND_CHUNK_BYTES;
+        g_st.bdl[k].addr = base + (uint64_t)k * g_st.chunk_bytes;
+        g_st.bdl[k].len = g_st.chunk_bytes;
         g_st.bdl[k].ioc = 1;
     }
     uint64_t bdl = g_st.dma_phys + 3072;
     mw32(g_st.sd + SD_BDPL, (uint32_t)bdl);
     mw32(g_st.sd + SD_BDPU, (uint32_t)(bdl >> 32));
-    mw32(g_st.sd + SD_CBL, SND_RING_BYTES);
+    mw32(g_st.sd + SD_CBL, SND_CHUNKS * g_st.chunk_bytes);
     mw16(g_st.sd + SD_LVI, SND_CHUNKS - 1);
-    mw16(g_st.sd + SD_FMT, HDA_FMT_48K_S16_STEREO);
+    mw16(g_st.sd + SD_FMT, g_st.fmt);
     mw8(g_st.sd + SD_STS, SD_STS_ACK);
     mw32(HDA_INTCTL, INTCTL_GIE | INTCTL_CIE |
                      (1u << ((mr16(HDA_GCAP) >> 8) & 0xF)));
@@ -220,7 +233,7 @@ static int hda_period(struct snd_dev *dev) {
     // LPIB is still the correction, in BOTH directions: the interrupt
     // count includes RIRB's, so it can run ahead as well as behind.
     uint32_t next = (g_st.chunk + 1) % SND_CHUNKS;
-    uint32_t lc = (mr32(g_st.sd + SD_LPIB) / SND_CHUNK_BYTES) % SND_CHUNKS;
+    uint32_t lc = (mr32(g_st.sd + SD_LPIB) / g_st.chunk_bytes) % SND_CHUNKS;
     uint32_t behind = (lc + SND_CHUNKS - next) % SND_CHUNKS;
     if (behind > SND_CHUNKS / 2) next = lc;
     else if (behind >= 2) next = (lc + SND_CHUNKS - 1) % SND_CHUNKS;
@@ -253,7 +266,7 @@ const struct snd_driver snd_driver = {
     .abi = SND_DRIVER_ABI,
     .name = "hda",
     .label = "HD Audio (ring 3)",
-    .dma_bytes = HDA_RING_BYTES,
+    .dma_bytes = HDA_RING_BYTES + SND_CHUNKS * SND_CHUNK_BYTES_S16,  // + a 16-bit copy
     .match = hda_match,
     .open = hda_open,
     .close = hda_close,

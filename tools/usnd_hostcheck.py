@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check userland/lib/usnd_mp3.c against ffmpeg, on the HOST, over many files.
+"""Check userland/lib/usnd_mp3.c against ffmpeg and usnd_flac.c against flac, on the HOST.
 
 WHY A HOST HARNESS EXISTS BESIDE THE GUEST TEST. The same split
 tools/uimg_hostcheck.py makes for JPEG, for the same reason:
@@ -19,12 +19,24 @@ fails on a threshold, the way uimg_hostcheck tolerates IDCT differences.
 A real bug is not subtle here -- a wrong Huffman table or a misplaced
 region boundary produces garbage, not a slightly different waveform.
 
+**FLAC IS THE OPPOSITE CASE: EXACT OR WRONG.** A lossless decoder has no
+error bound to hide in, so every FLAC sample must equal what `flac -d`
+(Xiph's reference decoder) produces, after this codec's s32 output is
+shifted back down to the file's own depth. The sweep is shaped by what
+the format can do rather than by what is common: 8 to 32 bits, mono and
+stereo, compression levels 0-8 (fixed predictors, LPC, every stereo
+decorrelation), exhaustive model search, block sizes from 192 to 32768,
+files written by ffmpeg's encoder as well as Xiph's, wasted bits, a
+silent stretch (CONSTANT subframes) and a noise burst (VERBATIM). Then
+SEEKING, with and without a seek table: each landing must equal the
+same stretch of a straight decode.
+
   python3 tools/usnd_hostcheck.py                  # the standard sweep
-  python3 tools/usnd_hostcheck.py --file x.mp3     # one real file
+  python3 tools/usnd_hostcheck.py --file x.mp3     # one real MP3
   python3 tools/usnd_hostcheck.py --keep DIR       # keep the artifacts
 
-Exit status is non-zero if any file exceeds --tolerance. Needs gcc, lame
-and ffmpeg.
+Exit status is non-zero if any MP3 exceeds --tolerance or any FLAC
+sample differs. Needs gcc, lame, ffmpeg and flac.
 """
 import argparse
 import math
@@ -91,11 +103,11 @@ int main(int argc, char **argv) {
     if (rc != 0) { fprintf(stderr, "open: %s (%d)\n", usnd_last_error(), rc); return 3; }
     fprintf(stderr, "rate=%u ch=%u detail=%s\n", s.fmt.rate, s.fmt.channels, s.detail);
 
-    int16_t buf[4096 * 2];
+    int32_t buf[4096 * 2];
     for (;;) {
         long n = usnd_codec_mp3.read(&s, buf, 4096);
         if (n <= 0) break;
-        fwrite(buf, sizeof(int16_t), (size_t)n * s.fmt.channels, stdout);
+        fwrite(buf, sizeof(int32_t), (size_t)n * s.fmt.channels, stdout);
     }
     usnd_codec_mp3.close(&s);
     return 0;
@@ -160,11 +172,13 @@ def source(rate=44100, secs=3.0):
 
 
 def decode_ffmpeg(path, channels, rate):
+    """s32, like the decoder's own output -- the comparison keeps every bit
+    the float synthesis produces rather than ffmpeg's rounding to 16."""
     out = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", path, "-f", "s16le",
+        ["ffmpeg", "-v", "error", "-i", path, "-f", "s32le",
          "-ac", str(channels), "-ar", str(rate), "-"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout
-    return struct.unpack("<%dh" % (len(out) // 2), out)
+    return struct.unpack("<%di" % (len(out) // 4), out)
 
 
 def compare(ours, theirs, channels):
@@ -206,8 +220,286 @@ def compare(ours, theirs, channels):
         err += d * d
         if abs(d) > peak:
             peak = abs(d)
-    rms = math.sqrt(err / (n / step)) / 32768.0
-    return (rms, best_lag, n, peak)
+    rms = math.sqrt(err / (n / step)) / 2147483648.0
+    return (rms, best_lag, n, peak // 65536)
+
+
+# --- FLAC: exact, against Xiph's own decoder -------------------------------
+
+FLAC_MAIN_C = r"""
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "lib/usnd.h"
+#include "lib/usnd_internal.h"
+#include "rt/sys.h"
+
+extern const struct usnd_codec usnd_codec_flac;
+static const char *g_err = "";
+const char *usnd_last_error(void) { return g_err; }
+void usnd_fail(const char *m) { g_err = m; }
+
+// argv: <file> [seek target...]. With no targets, the whole stream as
+// s32 on stdout; with targets, for each one a seek and 1000 frames.
+int main(int argc, char **argv) {
+    if (argc < 2) return 2;
+    struct usnd_stream s;
+    memset(&s, 0, sizeof s);
+    s.fd = sys_open(argv[1], 0);
+    if (s.fd < 0) return 2;
+    s.codec = &usnd_codec_flac;
+    int rc = usnd_codec_flac.open(&s);
+    if (rc != 0) { fprintf(stderr, "open: %s (%d)\n", usnd_last_error(), rc); return 3; }
+    fprintf(stderr, "rate=%u ch=%u bps=%u frames=%llu\n", s.fmt.rate, s.fmt.channels,
+            s.fmt.bits, (unsigned long long)s.frames);
+    static int32_t buf[4096 * 2];
+    if (argc == 2) {
+        for (;;) {
+            long n = usnd_codec_flac.read(&s, buf, 4096);
+            if (n < 0) { fprintf(stderr, "read: %s\n", usnd_last_error()); return 4; }
+            if (n == 0) break;
+            fwrite(buf, sizeof(int32_t), (size_t)n * s.fmt.channels, stdout);
+        }
+    } else {
+        for (int i = 2; i < argc; i++) {
+            if (usnd_codec_flac.seek(&s, strtoull(argv[i], 0, 10)) != 0) return 5;
+            long got = 0;
+            while (got < 1000) {
+                long n = usnd_codec_flac.read(&s, buf, 1000 - got);
+                if (n <= 0) break;
+                fwrite(buf, sizeof(int32_t), (size_t)n * s.fmt.channels, stdout);
+                got += n;
+            }
+            if (got != 1000) { fprintf(stderr, "seek %s: %ld frames\n", argv[i], got); return 6; }
+        }
+    }
+    usnd_codec_flac.close(&s);
+    return 0;
+}
+"""
+
+
+def flac_source(bps, channels, rate, secs=1.5, wasted=0):
+    """Integer samples at `bps`, shaped for what each subframe type needs:
+    tones and clicks (LPC/fixed), a silent stretch (CONSTANT), a noise
+    burst (VERBATIM wins there), and the channels different enough that
+    each stereo decorrelation is a real choice."""
+    n = int(rate * secs)
+    full = (1 << (bps - 1)) - 1
+    seed = 0x2468ACE1
+    out = []
+    for i in range(n):
+        t = i / rate
+        v = 0.4 * math.sin(2 * math.pi * 440 * t) + 0.2 * math.sin(2 * math.pi * 1733 * t)
+        if i % (rate // 4) < 30:
+            v += 0.3
+        seed = (seed * 1103515245 + 12345) & 0xFFFFFFFF
+        noise = ((seed >> 8) & 0xFFFF) / 32768.0 - 1.0
+        frame = []
+        for c in range(channels):
+            x = v if c == 0 else 0.6 * v + 0.3 * math.sin(2 * math.pi * 997 * t)
+            if n * 0.40 < i < n * 0.50:
+                x = 0.0                                      # silence
+            elif n * 0.70 < i < n * 0.75:
+                x = 0.95 * noise * (1 if c == 0 else -1)     # a noise burst
+            q = int(x * full * 0.9)
+            q = max(-full - 1, min(full, q))
+            if wasted:
+                q = (q >> wasted) << wasted
+            frame.append(q)
+        out.append(frame)
+    return out
+
+
+def write_raw(path, frames, bps):
+    width = (bps + 7) // 8
+    body = bytearray()
+    for frame in frames:
+        for v in frame:
+            body += (v & ((1 << (8 * width)) - 1)).to_bytes(width, "little")
+    open(path, "wb").write(bytes(body))
+
+
+def write_wav_any(path, frames, bps, rate):
+    """For ffmpeg, which reads WAV: 8 unsigned, 16/24/32 signed."""
+    ch = len(frames[0])
+    width = (bps + 7) // 8
+    body = bytearray()
+    for frame in frames:
+        for v in frame:
+            if bps == 8:
+                body += bytes(((v + 128) & 0xFF,))
+            else:
+                body += (v & ((1 << (8 * width)) - 1)).to_bytes(width, "little")
+    block = ch * width
+    hdr = b"RIFF" + struct.pack("<I", 36 + len(body)) + b"WAVE"
+    hdr += b"fmt " + struct.pack("<IHHIIHH", 16, 1, ch, rate, rate * block, block, width * 8)
+    hdr += b"data" + struct.pack("<I", len(body))
+    open(path, "wb").write(hdr + bytes(body))
+
+
+def write_wav_ext(path, frames, bps, rate):
+    """WAVE_FORMAT_EXTENSIBLE with wValidBitsPerSample = bps, the samples
+    LEFT-justified in their container -- how a 12- or 20-bit stream reaches
+    `flac`, whose raw input takes only whole bytes of depth."""
+    ch = len(frames[0])
+    width = (bps + 7) // 8
+    up = width * 8 - bps
+    body = bytearray()
+    for frame in frames:
+        for v in frame:
+            body += ((v << up) & ((1 << (8 * width)) - 1)).to_bytes(width, "little")
+    block = ch * width
+    guid = bytes.fromhex("0100000000001000800000aa00389b71")      # KSDATAFORMAT_SUBTYPE_PCM
+    fmt = struct.pack("<HHIIHHHHI", 0xFFFE, ch, rate, rate * block, block, width * 8,
+                      22, bps, 3 if ch == 2 else 4) + guid
+    hdr = b"RIFF" + struct.pack("<I", 4 + 8 + len(fmt) + 8 + len(body)) + b"WAVE"
+    hdr += b"fmt " + struct.pack("<I", len(fmt)) + fmt
+    hdr += b"data" + struct.pack("<I", len(body))
+    open(path, "wb").write(hdr + bytes(body))
+
+
+def flac_reference(path, bps):
+    if bps % 8:
+        # `flac -d` writes raw only at whole bytes of depth; anything else
+        # comes out as a WAV with the samples left-justified, shifted back.
+        wav = subprocess.run(["flac", "-d", "-s", "-c", path], stdout=subprocess.PIPE,
+                             check=True).stdout
+        p, width = 12, 0
+        while p + 8 <= len(wav):
+            cid, clen = wav[p:p + 4], struct.unpack("<I", wav[p + 4:p + 8])[0]
+            if cid == b"fmt ":
+                ch_, blk = struct.unpack("<H", wav[p + 10:p + 12])[0], struct.unpack("<H", wav[p + 20:p + 22])[0]
+                width = blk // ch_
+            elif cid == b"data":
+                data = wav[p + 8:p + 8 + clen]
+                up = width * 8 - bps
+                fmtc = {2: "h", 4: "i"}.get(width)
+                if fmtc:
+                    vals = struct.unpack("<%d%s" % (len(data) // width, fmtc), data)
+                else:
+                    vals = [int.from_bytes(data[i:i + 3], "little", signed=True)
+                            for i in range(0, len(data), 3)]
+                return [v >> up for v in vals]
+            p += 8 + clen + (clen & 1)
+        raise ValueError("flac -d wrote no data chunk")
+    raw = subprocess.run(["flac", "-d", "-s", "-c", "--force-raw-format", "--endian=little",
+                          "--sign=signed", path], stdout=subprocess.PIPE, check=True).stdout
+    width = (bps + 7) // 8
+    if width == 2:
+        return list(struct.unpack("<%dh" % (len(raw) // 2), raw))
+    if width == 4:
+        return list(struct.unpack("<%di" % (len(raw) // 4), raw))
+    if width == 1:
+        return list(struct.unpack("<%db" % len(raw), raw))
+    return [int.from_bytes(raw[i:i + 3], "little", signed=True) for i in range(0, len(raw), 3)]
+
+
+# (label, bps, channels, rate, encoder, args, wasted)
+FLAC_CASES = [
+    ("16-bit stereo -0", 16, 2, 44100, "flac", ["-0"], 0),
+    ("16-bit stereo -5", 16, 2, 44100, "flac", ["-5"], 0),
+    ("16-bit stereo -8 -e -p", 16, 2, 44100, "flac", ["-8", "-e", "-p"], 0),
+    ("16-bit mono -8", 16, 1, 48000, "flac", ["-8"], 0),
+    ("8-bit mono 22.05k", 8, 1, 22050, "flac", ["-5"], 0),
+    ("12-bit stereo", 12, 2, 32000, "flac", ["-8"], 0),
+    ("20-bit stereo", 20, 2, 48000, "flac", ["-8"], 0),
+    ("24-bit stereo 96k", 24, 2, 96000, "flac", ["-8"], 0),
+    ("32-bit stereo", 32, 2, 48000, "flac", ["-5"], 0),
+    ("24-bit, low 8 bits wasted", 24, 2, 48000, "flac", ["-5"], 8),
+    ("blocks of 192", 16, 2, 44100, "flac", ["-5", "-b", "192"], 0),
+    ("blocks of 32768, no seektable", 16, 2, 44100, "flac",
+     ["--lax", "-5", "-b", "32768", "--no-seektable"], 0),
+    ("ffmpeg level 12", 16, 2, 44100, "ffmpeg", ["-compression_level", "12"], 0),
+    ("ffmpeg 24-bit", 24, 2, 48000, "ffmpeg", ["-compression_level", "8"], 0),
+]
+
+
+def flac_sweep(work, sabotage):
+    """Builds the codec (broken on purpose under --positive-control),
+    encodes every case, compares. Returns (fails, checks)."""
+    src = os.path.join(REPO, "userland", "lib", "usnd_flac.c")
+    if sabotage:
+        # THE CONTROL: the zig-zag that turns a Rice code back into a
+        # signed residual, dropped. Every case has Rice-coded frames.
+        text = open(src).read()
+        old = "out[i] = (int64_t)(u >> 1) ^ -(int64_t)(u & 1);"
+        if text.count(old) != 1:
+            sys.exit("positive control: residual()'s zig-zag no longer looks as expected")
+        src = os.path.join(work, "usnd_flac_broken.c")
+        open(src, "w").write(text.replace(old, "out[i] = (int64_t)(u >> 1);"))
+    main_c = os.path.join(work, "flac_main.c")
+    open(main_c, "w").write(FLAC_MAIN_C)
+    binary = os.path.join(work, "usnd_flac_host")
+    r = subprocess.run(["gcc", "-O2", "-std=gnu11", "-Wall", "-Wextra", "-Werror",
+                        "-I" + os.path.join(work, "inc"), "-I" + os.path.join(REPO, "userland"),
+                        src, main_c, "-o", binary], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(r.stderr)
+        print("usnd_hostcheck: the FLAC codec did not compile on the host")
+        return 1, 1
+
+    fails, checks = 0, 0
+    for label, bps, ch, rate, enc, args, wasted in FLAC_CASES:
+        frames = flac_source(bps, ch, rate, wasted=wasted)
+        slug = "".join(c if c.isalnum() else "_" for c in label)
+        path = os.path.join(work, slug + ".flac")
+        if enc == "flac" and bps % 8:
+            wav = os.path.join(work, slug + ".wav")
+            write_wav_ext(wav, frames, bps, rate)
+            subprocess.run(["flac", "-s", "-f"] + args + ["-o", path, wav], check=True)
+        elif enc == "flac":
+            raw = os.path.join(work, slug + ".raw")
+            write_raw(raw, frames, bps)
+            subprocess.run(["flac", "-s", "-f", "--force-raw-format", "--endian=little",
+                            "--sign=signed", "--channels=%d" % ch, "--bps=%d" % bps,
+                            "--sample-rate=%d" % rate] + args + ["-o", path, raw], check=True)
+        else:
+            wav = os.path.join(work, slug + ".wav")
+            write_wav_any(wav, frames, bps, rate)
+            fmt = ["-sample_fmt", "s32"] if bps > 16 else []
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", wav, "-c:a", "flac"] + fmt
+                           + args + [path], check=True)
+        checks += 1
+        r = subprocess.run([binary, path], capture_output=True)
+        if r.returncode != 0:
+            print(f"  FAIL  flac {label} -- decoder exited {r.returncode}: "
+                  f"{r.stderr.decode(errors='replace').strip()}")
+            fails += 1
+            continue
+        ours = struct.unpack("<%di" % (len(r.stdout) // 4), r.stdout)
+        want = flac_reference(path, bps)
+        shift = 32 - bps
+        bad = None
+        if len(ours) != len(want):
+            bad = f"{len(ours)} samples, the reference has {len(want)}"
+        else:
+            for i, (a, b) in enumerate(zip(ours, want)):
+                if (a >> shift) != b or (shift and a & ((1 << shift) - 1)):
+                    bad = f"sample {i} is {a >> shift} (s32 {a:#x}), want {b}"
+                    break
+        if bad:
+            fails += 1
+        print(f"  {'FAIL' if bad else 'ok  '}  flac {label:30s} "
+              f"{bad or 'exact, %d samples' % len(want)}")
+
+        if label in ("16-bit stereo -5", "blocks of 32768, no seektable") and not bad:
+            checks += 1
+            targets = [0, 1, 4095, 4096, 33333, len(want) // ch - 1000]
+            r = subprocess.run([binary, path] + [str(t) for t in targets], capture_output=True)
+            got = struct.unpack("<%di" % (len(r.stdout) // 4), r.stdout) if r.returncode == 0 else ()
+            sbad = None if r.returncode == 0 else r.stderr.decode(errors="replace").strip()
+            per = 1000 * ch
+            for k, t in enumerate(targets):
+                if sbad:
+                    break
+                if list(got[k * per:(k + 1) * per]) != list(ours[t * ch:t * ch + per]):
+                    sbad = f"a seek to {t} lands somewhere else"
+            if sbad:
+                fails += 1
+            print(f"  {'FAIL' if sbad else 'ok  '}  flac {label + ' -- seeks':30s} "
+                  f"{sbad or 'all %d land exactly' % len(targets)}")
+    return fails, checks
 
 
 def main():
@@ -226,7 +518,7 @@ def main():
                          "check MUST go red, and the run fails if any passes")
     args = ap.parse_args()
 
-    for tool in ("gcc", "ffmpeg", "lame"):
+    for tool in ("gcc", "ffmpeg", "lame", "flac"):
         if not shutil.which(tool):
             print(f"usnd_hostcheck: {tool} is not on PATH")
             return 2
@@ -296,7 +588,7 @@ def main():
                 rate = int(tok[5:])
             if tok.startswith("ch="):
                 channels = int(tok[3:])
-        ours = struct.unpack("<%dh" % (len(r.stdout) // 2), r.stdout)
+        ours = struct.unpack("<%di" % (len(r.stdout) // 4), r.stdout)
         theirs = decode_ffmpeg(path, channels, rate)
         got = compare(ours, theirs, channels)
         if not got:
@@ -313,6 +605,11 @@ def main():
         # is exactly what a weak positive control looks like.
         print(f"  {'ok  ' if ok else 'FAIL'}  {label:16s} rms {rms:.2e}  "
               f"worst {peak:5d}/32768  lag {lag}  samples {n}")
+
+    if not args.file:
+        ffails, fchecks = flac_sweep(work, args.positive_control)
+        fails += ffails
+        cases += [None] * fchecks
 
     if not args.keep:
         shutil.rmtree(work, ignore_errors=True)

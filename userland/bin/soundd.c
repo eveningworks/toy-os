@@ -49,14 +49,14 @@ struct client {
     int      fd;
     int      gain;              // 0..100 from /etc/sound.conf; 100 by default
     volatile struct snd_ctl_page *ctl;
-    volatile int16_t *ring;
+    volatile int32_t *ring;   // s32, abi/sound_abi.h
 };
 
 static struct client g_cl[MAX_CLIENTS];
 static int g_beacon = -1;
 
 static volatile struct snd_ctl_page *g_hw;
-static volatile int16_t *g_hwring;
+static volatile int32_t *g_hwring;
 static uint32_t g_wr;      // our write cursor into the hardware ring
 static int g_running;
 static uint32_t g_prev_lead; // the unstarted ring's fill, one pass ago
@@ -123,7 +123,7 @@ static int stream_open(void) {
     if (g_open) return 1;
     if (sys_snd_open() != 0) return 0;
     g_hw = (volatile struct snd_ctl_page *)(uintptr_t)SND_MAP_VADDR;
-    g_hwring = (volatile int16_t *)(uintptr_t)(SND_MAP_VADDR + 4096);
+    g_hwring = (volatile int32_t *)(uintptr_t)(SND_MAP_VADDR + 4096);
     if (g_hw->magic != SND_CTL_MAGIC) { sys_snd_ctl(SND_CTL_CLOSE); return 0; }
     g_wr = 0;
     g_running = 0;
@@ -191,14 +191,16 @@ static int32_t gain_q15(int pct) {
     return a + (b - a) * frac / 5;
 }
 
-// Saturating, because a sum of several s16 streams does not fit in one:
-// wrapping turns a loud moment into a crack, and clipping is what every
-// mixer does instead.
-static int16_t sat_add(int32_t a, int32_t b) {
-    int32_t v = a + b;
-    if (v > 32767) return 32767;
-    if (v < -32768) return -32768;
-    return (int16_t)v;
+// CLIPPED ONCE, AT THE END: the clients are summed in 64 bits, where any
+// number of full-scale s32 streams fits, and only the total is clamped --
+// wrapping would turn a loud moment into a crack. Clamping per client
+// (what the s16 mixer did) made the result depend on the ORDER the
+// clients were added in, whenever one pushed the sum over and the next
+// pulled it back.
+static int32_t clamp32(int64_t v) {
+    if (v > INT32_MAX) return INT32_MAX;
+    if (v < INT32_MIN) return INT32_MIN;
+    return (int32_t)v;
 }
 
 static int name_is_client(const char *n) {
@@ -234,7 +236,8 @@ static void adopt(const char *name) {
     // "not ready yet" rather than "broken" -- unmap and look again next
     // pass. Anything else is a ring this build cannot mix.
     if (ctl->magic != SND_CTL_MAGIC || ctl->rate != SND_RATE ||
-        ctl->channels != SND_CHANNELS || ctl->ring_bytes != SND_RING_BYTES) {
+        ctl->channels != SND_CHANNELS || ctl->ring_bytes != SND_RING_BYTES ||
+        ctl->sample_bits != SND_SAMPLE_BITS) {
         sys_munmap(p, SND_CLIENT_BYTES);
         sys_close(fd);
         return;
@@ -245,7 +248,7 @@ static void adopt(const char *name) {
     c->gain = 100;   // until the config is read; silence-by-default would
                      // make a missing file sound like a broken daemon
     c->fd = fd;
-    c->ring = (volatile int16_t *)((uintptr_t)p + 4096);
+    c->ring = (volatile int32_t *)((uintptr_t)p + 4096);
     c->ctl = ctl; // last: a non-null ctl is what makes the slot live
     fprintf(stderr, "soundd: client %s as \"%s\"\n", name,
             c->app[0] ? c->app : "(unnamed)");
@@ -401,8 +404,11 @@ static int clients_ready(void) {
     return 1;
 }
 
+#define CHUNK_SAMPLES (SND_CHUNK_FRAMES * SND_CHANNELS)
+
 static void mix_chunk(uint32_t dst) {
-    static int16_t acc[SND_CHUNK_BYTES / 2];
+    static int64_t acc[CHUNK_SAMPLES];
+    static int32_t out[CHUNK_SAMPLES];
     memset(acc, 0, sizeof acc);
 
     int voices = 0;
@@ -419,25 +425,25 @@ static void mix_chunk(uint32_t dst) {
         // (aplay never exited; found on the laptop, not in QEMU).
         if (src == c->ctl->wr_pos) { g_starved_chunks++; continue; } // silence
 
-        const volatile int16_t *s = c->ring + src / 2;
+        const volatile int32_t *s = c->ring + src / 4;
         int32_t g = gain_q15(c->gain);
         if (g == 32768) {
-            for (unsigned k = 0; k < SND_CHUNK_BYTES / 2; k++)
-                acc[k] = sat_add(acc[k], s[k]);
+            for (unsigned k = 0; k < CHUNK_SAMPLES; k++) acc[k] += s[k];
         } else if (g != 0) {
-            for (unsigned k = 0; k < SND_CHUNK_BYTES / 2; k++)
-                acc[k] = sat_add(acc[k], ((int32_t)s[k] * g) >> 15);
+            for (unsigned k = 0; k < CHUNK_SAMPLES; k++)
+                acc[k] += ((int64_t)s[k] * g) >> 15;
         }
         // g == 0 is muted: the chunk is still CONSUMED and zeroed below,
         // so a muted client keeps playing into nothing rather than
         // stalling on a ring that never drains.
-        for (unsigned k = 0; k < SND_CHUNK_BYTES / 2; k++)
-            ((volatile int16_t *)s)[k] = 0;
+        for (unsigned k = 0; k < CHUNK_SAMPLES; k++)
+            ((volatile int32_t *)s)[k] = 0;
         c->ctl->hw_pos = (src + SND_CHUNK_BYTES) % SND_RING_BYTES;
         voices++;
     }
     (void)voices;
-    memcpy((void *)((uintptr_t)g_hwring + dst), acc, SND_CHUNK_BYTES);
+    for (unsigned k = 0; k < CHUNK_SAMPLES; k++) out[k] = clamp32(acc[k]);
+    memcpy((void *)((uintptr_t)g_hwring + dst), out, SND_CHUNK_BYTES);
 }
 
 int main(void) {

@@ -224,9 +224,15 @@ static int render(const char *path, struct pcm *out, uint64_t seek_to) {
     out->d = malloc((size_t)cap * 4);
     out->frames = 0;
     if (!out->d) { usnd_close(&s); return -ENOMEM; }
+    // usnd_read() gives s32; this test's thresholds are in 16-bit units,
+    // so it keeps the top half, which is what a 16-bit card would play.
+    static int32_t tmp[1024 * 2];
     long n;
-    while (out->frames < cap && (n = usnd_read(&s, out->d + out->frames * 2, 1024)) > 0)
+    while (out->frames < cap &&
+           (n = usnd_read(&s, tmp, cap - out->frames < 1024 ? cap - out->frames : 1024)) > 0) {
+        for (long i = 0; i < n * 2; i++) out->d[out->frames * 2 + i] = (int16_t)(tmp[i] >> 16);
         out->frames += n;
+    }
     usnd_close(&s);
     return 0;
 }
@@ -507,13 +513,13 @@ static void check_shipped(void) {
     unsigned long long load = sys_monotonic_ns() - t0;
     check("the shipped song opens with the installed bank", rc == 0, usnd_last_error());
     if (rc == 0) {
-        static int16_t buf[1024 * 2];
+        static int32_t buf[1024 * 2];
         long frames = 0, n;
         int loud = 0;
         t0 = sys_monotonic_ns();
         while (frames < 20L * RATE && (n = usnd_read(&st, buf, 1024)) > 0) {
             for (long i = 0; i < n * 2; i++)
-                if (buf[i] > 3000 || buf[i] < -3000) loud = 1;
+                if (buf[i] > 3000 * 65536 || buf[i] < -3000 * 65536) loud = 1;
             frames += n;
         }
         unsigned long long ns = sys_monotonic_ns() - t0;

@@ -107,6 +107,15 @@ struct hda_ctrl {
     uint32_t diag;     // kernel.hda_tone: completions left; the handler
                        // leaves the ring alone and stops the stream at 0
 
+    // The width the card plays at, the deepest its DACs share: 20, 24
+    // or 32 straight off the s32 ring, else 16 from a narrowed copy the
+    // core keeps ahead (`bounce`, its own DMA frames).
+    int      bits;
+    uint16_t fmt;
+    uint32_t chunk_bytes;      // one BDL entry at that width
+    uint64_t ring_phys, bounce_phys;
+    struct snd_bounce bounce;
+
     struct sound_device dev;
     char name[SOUND_NAME_MAX];
     char label[40];
@@ -311,10 +320,11 @@ static void jack_update(struct hda_ctrl *h) {
 
 // --- the stream ------------------------------------------------------
 
-static void bdl_fill(struct hda_ctrl *h, uint64_t ring_phys) {
+static void bdl_fill(struct hda_ctrl *h) {
+    uint64_t base = h->bounce.buf ? h->bounce_phys : h->ring_phys;
     for (int i = 0; i < SND_CHUNKS; i++) {
-        h->bdl[i].addr = ring_phys + (uint64_t)i * SND_CHUNK_BYTES;
-        h->bdl[i].len = SND_CHUNK_BYTES;
+        h->bdl[i].addr = base + (uint64_t)i * h->chunk_bytes;
+        h->bdl[i].len = h->chunk_bytes;
         h->bdl[i].ioc = 1;
     }
 }
@@ -330,9 +340,9 @@ static int stream_start(struct hda_ctrl *h) {
 
     mw32(h, sd + SD_BDPL, (uint32_t)(h->dma_phys + 3072));
     mw32(h, sd + SD_BDPU, (uint32_t)((h->dma_phys + 3072) >> 32));
-    mw32(h, sd + SD_CBL, SND_RING_BYTES);
+    mw32(h, sd + SD_CBL, SND_CHUNKS * h->chunk_bytes);
     mw16(h, sd + SD_LVI, SND_CHUNKS - 1);
-    mw16(h, sd + SD_FMT, HDA_FMT_48K_S16_STEREO);
+    mw16(h, sd + SD_FMT, h->fmt);
     mw8(h, sd + SD_STS, SD_STS_ACK);
 
     // The codec side again: a stream reset leaves the converter as it
@@ -340,11 +350,12 @@ static int stream_start(struct hda_ctrl *h) {
     for (int p = 0; p < 2; p++) {
         struct hda_out *o = p ? &h->codec.hp : &h->codec.spk;
         if (!(p ? h->codec.have_hp : h->codec.have_spk)) continue;
-        hda_cmd(h, o->dac, V4(VERB_SET_FORMAT, HDA_FMT_48K_S16_STEREO), 0);
+        hda_cmd(h, o->dac, V4(VERB_SET_FORMAT, h->fmt), 0);
         hda_cmd(h, o->dac, V12(VERB_SET_CONV, HDA_STREAM_TAG << 4), 0);
     }
 
     h->chunk = 0;
+    if (h->bounce.buf && !h->diag) sound_bounce_start(&h->bounce);
     mw32(h, HDA_INTCTL, mr32(h, HDA_INTCTL) | INTCTL_GIE | (1u << h->sd_index));
     mw32(h, sd + SD_CTL, ((uint32_t)HDA_STREAM_TAG << SD_CTL_STREAM_SHIFT) |
                          SD_CTL_RUN | SD_CTL_IOCE | SD_CTL_FEIE | SD_CTL_DEIE);
@@ -415,12 +426,13 @@ static void hda_irq_one(struct hda_ctrl *h) {
             // interrupt (measured) and QEMU reports exactly. LPIB only
             // pulls the count forward when interrupts were coalesced.
             uint32_t lpib = mr32(h, h->sd + SD_LPIB);
-            uint32_t lc = (lpib / SND_CHUNK_BYTES) % SND_CHUNKS;
+            uint32_t lc = (lpib / h->chunk_bytes) % SND_CHUNKS;
             uint32_t next = (h->chunk + 1) % SND_CHUNKS;
             uint32_t ahead = (lc + SND_CHUNKS - next) % SND_CHUNKS;
             if (ahead >= 2 && ahead < SND_CHUNKS / 2) next = (lc + SND_CHUNKS - 1) % SND_CHUNKS;
             h->chunk = next;
             sound_period_done(next * SND_CHUNK_BYTES);
+            if (h->bounce.buf) sound_bounce_period(&h->bounce, next * SND_CHUNK_BYTES);
         }
         mw8(h, h->sd + SD_STS, s & SD_STS_ACK);
     }
@@ -463,7 +475,7 @@ static const char *vendor_name(uint32_t vendor) {
     }
 }
 
-static void diag_tone(struct hda_ctrl *h, int16_t *ring);
+static void diag_tone(struct hda_ctrl *h, int32_t *ring);
 static struct hda_ctrl *test_ctrl(void);
 
 // The hardware half: every engine off and the controller back in
@@ -475,7 +487,10 @@ static void ctrl_quiesce(struct hda_ctrl *h) {
     mw8(h, HDA_RIRBCTL, 0);
     mw32(h, HDA_GCTL, 0); // back into reset
     if (h->dma_phys) pmm_free_contiguous(h->dma_phys, 1);
-    h->dma_phys = 0;
+    if (h->bounce_phys)
+        pmm_free_contiguous(h->bounce_phys, SND_CHUNKS * SND_CHUNK_BYTES_S16 / 4096);
+    h->dma_phys = h->bounce_phys = 0;
+    h->bounce.buf = 0;
     h->mmio = 0;
 }
 
@@ -582,16 +597,28 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     }
     if (!found) { ctrl_teardown(h, "no codec with an analog output"); return; }
 
-    hda_codec_route_output(&h->codec, &h->codec.spk,
-                           HDA_FMT_48K_S16_STEREO, HDA_STREAM_TAG);
+    // THE WIDTH: the deepest both DACs report (a headphone DAC is
+    // usually the speaker's twin, but nothing promises it).
+    hda_codec_pcm_support(&h->codec, h->codec.spk.dac, &h->dev.rates, &h->dev.depths);
+    uint32_t depths = h->dev.depths;
+    if (h->codec.have_hp) {
+        uint32_t hp_depths = 0;
+        hda_codec_pcm_support(&h->codec, h->codec.hp.dac, 0, &hp_depths);
+        depths &= hp_depths;
+    }
+    h->bits = (depths & SND_DEPTH_32) ? 32 : (depths & SND_DEPTH_24) ? 24 :
+              (depths & SND_DEPTH_20) ? 20 : 16;
+    h->fmt = HDA_FMT_48K_STEREO(h->bits);
+    h->chunk_bytes = h->bits == 16 ? SND_CHUNK_BYTES_S16 : SND_CHUNK_BYTES;
+
+    hda_codec_route_output(&h->codec, &h->codec.spk, h->fmt, HDA_STREAM_TAG);
     if (want_dump())
         klog_printf("%s: spk route %02x %02x %02x %02x %02x %02x (%d) vol nid %02x offset %u steps %u\n",
                     h->name, h->codec.spk.path[0], h->codec.spk.path[1], h->codec.spk.path[2], h->codec.spk.path[3],
                     h->codec.spk.path[4], h->codec.spk.path[5], h->codec.spk.len, h->codec.spk.vol_nid,
                     h->codec.spk.vol_offset, h->codec.spk.vol_steps);
     if (h->codec.have_hp) {
-        hda_codec_route_output(&h->codec, &h->codec.hp,
-                               HDA_FMT_48K_S16_STEREO, HDA_STREAM_TAG);
+        hda_codec_route_output(&h->codec, &h->codec.hp, h->fmt, HDA_STREAM_TAG);
         if (want_dump())
             klog_printf("%s: hp route %02x %02x %02x %02x %02x %02x (%d) vol nid %02x\n",
                         h->name, h->codec.hp.path[0], h->codec.hp.path[1], h->codec.hp.path[2], h->codec.hp.path[3],
@@ -611,7 +638,15 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     uint64_t ring_phys = 0;
     void *ring = sound_ring_alloc(&ring_phys);
     if (!ring) { ctrl_teardown(h, "no contiguous frames for the ring"); return; }
-    bdl_fill(h, ring_phys);
+    h->ring_phys = ring_phys;
+    if (h->bits == 16) {
+        h->bounce_phys = pmm_alloc_contiguous(SND_CHUNKS * SND_CHUNK_BYTES_S16 / 4096,
+                                              PMM_ZONE_DMA32);
+        if (!h->bounce_phys) { ctrl_teardown(h, "no contiguous frames for the 16-bit copy"); return; }
+        h->bounce.buf = (int16_t *)(uintptr_t)h->bounce_phys;
+        k_memset(h->bounce.buf, 0, SND_CHUNKS * SND_CHUNK_BYTES_S16);
+    }
+    bdl_fill(h);
 
     // Interrupts: a vector if the machine has one, else the pin. The
     // handler exists before either is armed; registration is last.
@@ -629,8 +664,7 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     }
     mw32(h, HDA_INTCTL, INTCTL_GIE | INTCTL_CIE); // jack events from here on
 
-    hda_codec_pcm_support(&h->codec, h->codec.spk.dac,
-                          &h->dev.rates, &h->dev.depths);
+    h->dev.bits = (uint32_t)h->bits;
     k_snprintf(h->label, sizeof h->label, "%s HD Audio", vendor_name(h->codec.vendor));
     h->dev.name = h->name;
     h->dev.label = h->label;
@@ -655,13 +689,16 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
 // plays over whatever stream is open, which is fine for a diagnostic.
 // NON-BLOCKING: the handler counts the completions and stops the
 // engine -- a wait on coarse_ticks() from a syscall hung the test laptop.
-static void diag_tone(struct hda_ctrl *h, int16_t *ring) {
-    for (uint32_t i = 0; i < SND_RING_BYTES / 4; i++) {
+// Written into whichever buffer the engine READS -- the ring, or the
+// 16-bit copy -- since nothing converts during the tone.
+static void diag_tone(struct hda_ctrl *h, int32_t *ring) {
+    for (uint32_t i = 0; i < SND_CHUNKS * SND_CHUNK_FRAMES; i++) {
         int32_t v = (fx_sin((fx_t)((i % 128) * (FX_ONE / 128))) * 8000) >> 16;
-        ring[2 * i] = ring[2 * i + 1] = (int16_t)v;
+        if (h->bounce.buf) h->bounce.buf[2 * i] = h->bounce.buf[2 * i + 1] = (int16_t)v;
+        else ring[2 * i] = ring[2 * i + 1] = v << 16;
     }
     set_volume(h, 50);
-    h->diag = 3 * SND_RATE * SND_FRAME_BYTES / SND_CHUNK_BYTES; // ~3 s of chunks
+    h->diag = 3 * SND_RATE / SND_CHUNK_FRAMES; // ~3 s of chunks
     if (stream_start(h) != 0) h->diag = 0;
 }
 
@@ -670,7 +707,7 @@ void hda_diag_tone(void) {
     if (!h) { klog_write("hda: no registered controller for the tone\n"); return; }
     uint64_t phys = 0;
     void *ring = sound_ring_alloc(&phys);
-    if (ring) diag_tone(h, (int16_t *)ring);
+    if (ring) diag_tone(h, (int32_t *)ring);
 }
 
 static const struct pci_match hda_matches[] = { PCI_MATCH_CLASS(0x04, 0x03, PCI_ANY) };

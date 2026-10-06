@@ -35,14 +35,17 @@ the stream is on.
 * hda0       QEMU HD Audio            hda
              rates:  16 22.05 32 44.1 48 88.2 96 kHz
              depths: 16-bit
+             plays:  16-bit
 ```
 
 **WHAT A CARD SAYS IS NOT WHAT THIS STACK USES.** The shared ring is 48
-kHz, 16-bit, stereo everywhere (`SND_RATE` and `SND_CHANNELS` in
-`abi/sound_abi.h`), `usnd` resamples every file to it, and nothing asks
-a card for anything else. These numbers are read off the hardware and
-reported unchanged — they are the facts a per-device format would have
-to be built on, gathered before building it rather than after.
+kHz, 32-bit, stereo everywhere (`SND_RATE`, `SND_SAMPLE_BITS` and
+`SND_CHANNELS` in `abi/sound_abi.h`), and `usnd` resamples every file to
+it. The rates are read off the hardware and reported unchanged; the
+DEPTH is the one place the card's answer is used -- its driver plays at
+the deepest width it offers, and `plays:` says which (QEMU's HDA codec
+offers only 16, so the driver rounds the 32-bit stream down; a laptop's
+codec usually plays 24).
 
 **Why it exists at all.** There was no way to *list* the sound devices.
 The only view was the `audio_device` setting's choice list, which
@@ -70,7 +73,12 @@ manage would describe something nothing can ask for.
 **`usb-audio`** reports every alternate setting its descriptor walk
 saw, including the ones the driver cannot use — the same list the
 refusal line in `dmesg` prints when a device offers no 48 kHz stereo
-s16 stream.
+stream it can write.
+
+**`bits`** is the width the driver PLAYS at, which is its choice from
+that list: the deepest HDA format the codec offers, the deepest USB
+alternate setting. The stream above it is always 32-bit, so a 16-bit
+card here means the driver rounds every sample to 16 bits on the way out.
 
 ## See also
 

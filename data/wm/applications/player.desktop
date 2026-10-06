@@ -4,4 +4,4 @@ Exec=/bin/wm/apps/player
 Category=multimedia
 Comment=Plays audio files through the sound card
 Icon=player
-Handles=.wav .mp3 .mid .midi .kar
+Handles=.wav .flac .mp3 .mid .midi .kar

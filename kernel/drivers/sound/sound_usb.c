@@ -66,8 +66,8 @@ struct audio_dev {
     // is the rate's share of one service interval -- NOT the endpoint's
     // wMaxPacketSize, which is a ceiling a device may set well above the
     // rate (the G6's is sized for 384 kHz). `ring_bytes` is what that
-    // costs in the s16 ring; `wire_bytes` is what it costs on the wire,
-    // and the two differ on every device wider than 16 bits.
+    // costs in the s32 ring; `wire_bytes` is what it costs on the wire,
+    // and the two differ on every device narrower than 32 bits.
     uint16_t frames;
     uint16_t ring_bytes;
     uint16_t wire_bytes;
@@ -135,23 +135,29 @@ static int set_interface(uint8_t slot, uint8_t ifnum, uint8_t alt) {
 }
 
 
-// One s16 sample, MSB-aligned into the device's subslot. A 24-bit
-// device wants the sample in the TOP of three bytes -- writing it into
-// the bottom is a 256x attenuation, which sounds like silence rather
+// One s32 ring sample as the device's subslot holds it: the TOP bytes,
+// rounded, little-endian. Writing a narrower sample into the bottom of a
+// wide subslot is a 256x attenuation, which sounds like silence rather
 // than like a bug.
-static void write_sample(uint8_t *dst, int16_t v, uint8_t subslot) {
-    uint16_t u = (uint16_t)v;
+static void write_sample(uint8_t *dst, int32_t v, uint8_t subslot) {
     switch (subslot) {  // dispatch-ok: the three widths usb_audio_parse accepts
-        case 2:
+        case 2: {
+            uint16_t u = (uint16_t)snd_s32_to_s16(v);
             dst[0] = (uint8_t)u; dst[1] = (uint8_t)(u >> 8);
             break;
-        case 3:
-            dst[0] = 0; dst[1] = (uint8_t)u; dst[2] = (uint8_t)(u >> 8);
+        }
+        case 3: {
+            int64_t r = ((int64_t)v + 0x80) >> 8;
+            uint32_t u = (uint32_t)(r > 0x7FFFFF ? 0x7FFFFF : r);
+            dst[0] = (uint8_t)u; dst[1] = (uint8_t)(u >> 8); dst[2] = (uint8_t)(u >> 16);
             break;
-        default:
-            dst[0] = 0; dst[1] = 0;
-            dst[2] = (uint8_t)u; dst[3] = (uint8_t)(u >> 8);
+        }
+        default: {
+            uint32_t u = (uint32_t)v;
+            dst[0] = (uint8_t)u; dst[1] = (uint8_t)(u >> 8);
+            dst[2] = (uint8_t)(u >> 16); dst[3] = (uint8_t)(u >> 24);
             break;
+        }
     }
 }
 
@@ -159,7 +165,7 @@ static void copy_one_packet(struct audio_dev *a, uint8_t slot) {
     uint8_t *dst = a->pkt + (uint32_t)slot * a->wire_bytes;
     uint32_t at = a->copy_pos;
 
-    if (a->s.subslot == 2) {
+    if (a->s.subslot == 4) {
         uint32_t n = a->ring_bytes;
         // The ring wraps mid-packet on most laps -- 192 divides neither
         // the ring nor a chunk -- so this is two copies, not one.
@@ -171,16 +177,16 @@ static void copy_one_packet(struct audio_dev *a, uint8_t slot) {
         return;
     }
 
-    // Sample at a time, because the widths differ. `at` is always even
-    // and the ring is a whole number of frames, so a sample never
-    // straddles the wrap and only the loop's step has to check it.
+    // Sample at a time, because the widths differ. `at` is always a
+    // multiple of 4 and the ring is a whole number of frames, so a sample
+    // never straddles the wrap and only the loop's step has to check it.
     uint32_t samples = (uint32_t)a->frames * SND_CHANNELS;
     for (uint32_t i = 0; i < samples; i++) {
-        int16_t v = (int16_t)((uint16_t)a->ring[at] |
-                              ((uint16_t)a->ring[at + 1] << 8));
+        int32_t v;
+        k_memcpy(&v, a->ring + at, 4);
         write_sample(dst, v, a->s.subslot);
         dst += a->s.subslot;
-        at += 2;
+        at += 4;
         if (at >= SND_RING_BYTES) at = 0;
     }
     a->copy_pos = at;
@@ -443,17 +449,17 @@ static uint32_t interval_us(uint8_t speed, uint8_t b_interval) {
 }
 
 // What the device offered, when none of it was usable. The point is
-// that "no 48 kHz stereo s16 stream" is not actionable on a machine
+// that "no 48 kHz stereo PCM stream" is not actionable on a machine
 // nobody here owns -- the version and the alternates are.
 static void log_refusal(uint8_t slot, const struct usb_audio_report *rep) {
     if (rep->uac_major)
         klog_printf("usb-audio: slot %u: UAC %u.%02u device offers no %u Hz "
-                    "stereo s16 stream (%u alternate(s)):\n", slot,
+                    "stereo PCM stream (%u alternate(s)):\n", slot,
                     rep->uac_major, rep->uac_minor, (unsigned)SND_RATE,
                     rep->alts_seen);
     else
         klog_printf("usb-audio: slot %u: audio device with no class header "
-                    "offers no %u Hz stereo s16 stream (%u alternate(s)):\n",
+                    "offers no %u Hz stereo PCM stream (%u alternate(s)):\n",
                     slot, (unsigned)SND_RATE, rep->alts_seen);
 
     for (uint8_t i = 0; i < rep->alt_count; i++) {
@@ -656,6 +662,7 @@ int usb_audio_bind(struct usb_device_info *info, const uint8_t *cfg,
         a->dev.rates  |= snd_rate_mask(rep.alts[i].rate);
         a->dev.depths |= snd_depth_mask(rep.alts[i].bits);
     }
+    a->dev.bits = s.bits;   // the alternate setting taken: the deepest usable
 
     if (!sound_register(&a->dev, (void *)a->ring, 0)) {
         a->in_use = 0;
@@ -822,7 +829,7 @@ static const uint8_t G6_AUDIO_CFG[] = {
     0x85, 0x03, 0x40, 0x00, 0x02,
 };
 
-KTEST("usb-audio", "the G6's UAC2 descriptors yield its 24-bit alternate") {
+KTEST("usb-audio", "the G6's UAC2 descriptors yield its deepest alternate, the 32-bit one") {
     struct usb_audio_stream s;
     struct usb_audio_report rep;
     KTEST_ASSERT(usb_audio_parse(G6_AUDIO_CFG, sizeof G6_AUDIO_CFG, &s, &rep));
@@ -830,13 +837,14 @@ KTEST("usb-audio", "the G6's UAC2 descriptors yield its 24-bit alternate") {
     KTEST_ASSERT_EQ(s.uac2, 1);
     KTEST_ASSERT_EQ(rep.uac_major, 2);
     KTEST_ASSERT_EQ(s.ifnum, 1);
-    KTEST_ASSERT_EQ(s.alt, 1);        // 24-bit, not alt 2's 32
-    KTEST_ASSERT_EQ(s.ep, 0x01);      // the OUT endpoint, not 0x81's feedback
-    KTEST_ASSERT_EQ(s.subslot, 3);
-    KTEST_ASSERT_EQ(s.bits, 24);
-    // 294 is the ENDPOINT's ceiling, sized for 384 kHz plus a frame.
-    // Sending that many every 125 us is what it must not do.
-    KTEST_ASSERT_EQ(s.mps, 294);
+    KTEST_ASSERT_EQ(s.alt, 2);        // 32-bit, over alt 1's 24
+    KTEST_ASSERT_EQ(s.ep, rep.alts[2].ep);
+    KTEST_ASSERT(!(s.ep & 0x80));     // the OUT endpoint, not a feedback one
+    KTEST_ASSERT_EQ(s.subslot, 4);
+    KTEST_ASSERT_EQ(s.bits, 32);
+    // The ENDPOINT's ceiling, sized for 384 kHz plus a frame. Sending
+    // that many every 125 us is what it must not do.
+    KTEST_ASSERT_EQ(s.mps, rep.alts[2].mps);
     KTEST_ASSERT_EQ(s.interval, 1);
     KTEST_ASSERT_EQ(s.terminal_link, 33);
     KTEST_ASSERT_EQ(s.ac_ifnum, 0);
@@ -914,20 +922,21 @@ KTEST("usb-audio", "bInterval means microframes at high speed and frames below")
     KTEST_ASSERT_EQ(interval_us(XHCI_SPEED_FULL, 8), 8000);
 }
 
-KTEST("usb-audio", "an s16 sample is written to the TOP of a wide subslot") {
-    // Into the bottom is a 256x attenuation, which sounds like silence
-    // rather than like a bug.
+KTEST("usb-audio", "an s32 sample becomes the TOP bytes of the subslot, rounded") {
+    // The bottom bytes would be a 256x attenuation, which sounds like
+    // silence rather than like a bug.
     uint8_t b[4] = {0xAA, 0xAA, 0xAA, 0xAA};
-    write_sample(b, (int16_t)0x1234, 3);
-    KTEST_ASSERT_EQ(b[0], 0x00);
+    write_sample(b, 0x12345678, 4);
+    KTEST_ASSERT_EQ(b[0], 0x78);
+    KTEST_ASSERT_EQ(b[3], 0x12);
+    write_sample(b, 0x12345680, 3);            // 0x80 rounds the 24-bit sample up
+    KTEST_ASSERT_EQ(b[0], 0x57);
     KTEST_ASSERT_EQ(b[1], 0x34);
     KTEST_ASSERT_EQ(b[2], 0x12);
-    write_sample(b, (int16_t)0x1234, 4);
-    KTEST_ASSERT_EQ(b[0], 0x00);
-    KTEST_ASSERT_EQ(b[1], 0x00);
-    KTEST_ASSERT_EQ(b[2], 0x34);
-    KTEST_ASSERT_EQ(b[3], 0x12);
-    write_sample(b, (int16_t)0x1234, 2);
-    KTEST_ASSERT_EQ(b[0], 0x34);
+    write_sample(b, 0x12348000, 2);            // and 0x8000 the 16-bit one
+    KTEST_ASSERT_EQ(b[0], 0x35);
     KTEST_ASSERT_EQ(b[1], 0x12);
+    write_sample(b, 0x7FFFFFFF, 3);            // the top clamps, never wraps
+    KTEST_ASSERT_EQ(b[2], 0x7F);
+    KTEST_ASSERT_EQ(b[1], 0xFF);
 }

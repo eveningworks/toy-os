@@ -219,7 +219,7 @@ static void tone_fill(volatile int16_t *ring) {
     // 440 Hz at SND_RATE, in fixed point: fx_sin takes TURNS, so one
     // period is FX_ONE and the step is that over the samples per cycle.
     uint32_t per_cycle = SND_RATE / TONE_HZ;
-    for (uint32_t i = 0; i < SND_RING_BYTES / 4; i++) {
+    for (uint32_t i = 0; i < SND_CHUNKS * SND_CHUNK_FRAMES; i++) {
         int32_t v = (fx_sin((fx_t)((i % per_cycle) * (FX_ONE / per_cycle))) * 8000) >> 16;
         ring[2 * i] = ring[2 * i + 1] = (int16_t)v;
     }
@@ -242,7 +242,7 @@ static int stream_start(struct ctrl *h, uint64_t phys) {
     uint64_t bdl = phys + 3072;
     mw32(h, sd + SD_BDPL, (uint32_t)bdl);
     mw32(h, sd + SD_BDPU, (uint32_t)(bdl >> 32));
-    mw32(h, sd + SD_CBL, SND_RING_BYTES);
+    mw32(h, sd + SD_CBL, SND_CHUNKS * SND_CHUNK_BYTES_S16);
     mw16(h, sd + SD_LVI, SND_CHUNKS - 1);
     mw16(h, sd + SD_FMT, HDA_FMT_48K_S16_STEREO);
     mw8(h, sd + SD_STS, SD_STS_ACK);
@@ -407,7 +407,10 @@ int main(int argc, char **argv) {
     // THE RING ONLY WHEN PLAYING. A read-only walk needs the command
     // rings and nothing else, and every byte of this is memory the card
     // can be pointed at -- so the size is what the run actually uses.
-    uint64_t want_dma = tone_secs ? HDA_RING_BYTES + SND_RING_BYTES : HDA_RING_BYTES;
+    // ITS OWN 16-bit tone buffer, the kernel ring's length in time: this
+    // plays nothing of the mixer's, so the s32 ring's format is not its.
+    uint64_t want_dma = tone_secs ? HDA_RING_BYTES + SND_CHUNKS * SND_CHUNK_BYTES_S16
+                                  : HDA_RING_BYTES;
     uint64_t dma_phys = 0;
     int64_t dma = sys_dev_dma_alloc(index, want_dma, &dma_phys);
     if (dma <= 0) {
@@ -520,8 +523,8 @@ int main(int argc, char **argv) {
             volatile struct bdl_entry *bdl =
                 (volatile struct bdl_entry *)(uintptr_t)(dma + 3072);
             for (int k = 0; k < SND_CHUNKS; k++) {
-                bdl[k].addr = dma_phys + 4096 + (uint64_t)k * SND_CHUNK_BYTES;
-                bdl[k].len = SND_CHUNK_BYTES;
+                bdl[k].addr = dma_phys + 4096 + (uint64_t)k * SND_CHUNK_BYTES_S16;
+                bdl[k].len = SND_CHUNK_BYTES_S16;
                 bdl[k].ioc = 1;
             }
             if (stream_start(&g_h, dma_phys) != 0) {

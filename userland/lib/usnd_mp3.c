@@ -254,7 +254,7 @@ struct mp3 {
     // as a local it overran the budget by 48 bytes and failed the build.
     float u[512];
 
-    int16_t out[2 * GRANULE * 2];   // two granules, interleaved, s16
+    int32_t out[2 * GRANULE * 2];   // two granules, interleaved, s32
     int out_frames, out_pos;
     int eof;
 };
@@ -612,14 +612,16 @@ static void imdct(struct mp3 *m, int ch, const struct granule *g, float *sb) {
 
 // --- 12. the polyphase synthesis filterbank ----------------------------
 
-static int16_t clip16(float v) {
-    int s = (int)(v * 32768.0f + (v >= 0 ? 0.5f : -0.5f));
-    if (s > 32767) return 32767;
-    if (s < -32768) return -32768;
-    return (int16_t)s;
+// Full scale onto s32. Compared in float BEFORE the cast: a float at or
+// past 2^31 converted to an integer is undefined, not clamped.
+static int32_t clip32(float v) {
+    float x = v * 2147483648.0f;
+    if (x >= 2147483647.0f) return INT32_MAX;
+    if (x <= -2147483648.0f) return INT32_MIN;
+    return (int32_t)(int64_t)(x + (x >= 0 ? 0.5f : -0.5f));
 }
 
-static void synth(struct mp3 *m, int ch, const float *sb, int16_t *out, int stride) {
+static void synth(struct mp3 *m, int ch, const float *sb, int32_t *out, int stride) {
     float *V = m->vbuf[ch];
     for (int slot = 0; slot < SSLIMIT; slot++) {
         const float *S = sb + slot * SBLIMIT;
@@ -643,7 +645,7 @@ static void synth(struct mp3 *m, int ch, const float *sb, int16_t *out, int stri
             float acc = 0.0f;
             for (int i = 0; i < 16; i++)
                 acc += u[j + 32 * i] * mp3_synth_window[j + 32 * i];
-            out[(slot * 32 + j) * stride] = clip16(acc);
+            out[(slot * 32 + j) * stride] = clip32(acc);
         }
     }
 }
@@ -901,7 +903,7 @@ static int fill(struct mp3 *m, int fd) {
     }
 }
 
-static long mp3_read(struct usnd_stream *s, int16_t *dst, long frames) {
+static long mp3_read(struct usnd_stream *s, int32_t *dst, long frames) {
     struct mp3 *m = s->priv;
     int nch = m->hdr.channels;
     long done = 0;
@@ -912,7 +914,7 @@ static long mp3_read(struct usnd_stream *s, int16_t *dst, long frames) {
         long avail = m->out_frames - m->out_pos;
         long take = (frames - done < avail) ? frames - done : avail;
         memcpy(dst + done * nch, m->out + (long)m->out_pos * nch,
-               (size_t)take * nch * sizeof(int16_t));
+               (size_t)take * nch * sizeof(int32_t));
         m->out_pos += (int)take;
         done += take;
     }

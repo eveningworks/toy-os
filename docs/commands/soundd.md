@@ -64,12 +64,13 @@ live ring a recycled pid creates behind it could never be adopted.
 ## What it deliberately does not do
 
 - **No resampling.** Every client speaks the one ABI format (48 kHz
-  s16le stereo); conversion is the library's job, in the client, where
-  `usnd` already does it.
-- **No per-application volume.** `system.volume` is the card's master
-  and is applied by the driver below this. A per-client gain is the
-  obvious next thing and is on `docs/roadmap.md`.
-- **No priority, ducking or routing.** A mix is a saturating sum.
+  stereo s32, full scale in the top bits); conversion is the library's
+  job, in the client, where `usnd` already does it.
+- **No master volume of its own.** `system.volume` is the card's
+  master and is applied by the driver below this; what `soundd` applies
+  is each application's own gain, from `/etc/sound.conf`.
+- **No priority, ducking or routing.** A mix is the sum of the clients
+  in 64 bits, clamped once.
 - **It does not resample or reorder for latency.** A client's audio
   reaches the card one chunk later than it would on the raw stream —
   about 43 ms.

@@ -1036,6 +1036,10 @@ run on, not by order.
 - [ ] Load the SoundFont off the caller's thread -- the first play of a 31 MB bank blocks the Player's UI
 - [ ] The SoundFont as a setting, rather than "any other `.sf2` outranks the built-in one"
 - [ ] RMID (`.rmi`), SF3 and DLS banks, GS/XG SysEx beyond a reset, linked SF2 modulators
+- [ ] Dither when a 16-bit card narrows the s32 stream -- it rounds today; TPDF dither is what foobar2000 and SoX add
+- [ ] Float WAV (`WAVE_FORMAT_IEEE_FLOAT`), refused by name now that the path is wide enough to carry it
+- [ ] An Ogg reader, for `.oga` FLAC and for Opus -- the codec table has no container layer
+- [ ] A proper resampler -- usnd interpolates linearly; windowed-sinc or polyphase, as speexdsp, soxr and PipeWire use
 
 ### ACPI + real power/timer
 

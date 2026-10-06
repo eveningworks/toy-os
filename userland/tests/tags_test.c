@@ -1,4 +1,4 @@
-// lib/utags.h: ID3v2 (2.2/2.3/2.4), ID3v1 and the MIDI track name --
+// lib/utags.h: ID3v2 (2.2/2.3/2.4), ID3v1, FLAC and the MIDI track name --
 // on tags built here byte by byte, then on the music the image ships.
 //
 // THE BUILT TAGS ARE THE POINT: each one exercises one rule (a UTF-16
@@ -132,6 +132,61 @@ int main(void) {
     memset(&t, 0, sizeof t);
     utest_check(utags_from_midi(mid, sizeof mid, &t) == UTAGS_TITLE, "MIDI: a track name is found");
     str_is(t.title, "Song", "...through running status");
+
+    // --- FLAC: STREAMINFO, Vorbis comments, a front-cover PICTURE ---------
+    {
+        static uint8_t fl[512];
+        size_t k = 0;
+        memcpy(fl, "fLaC", 4); k = 4;
+        // STREAMINFO: 44100 Hz, stereo, 16-bit, 441000 samples = 10 s.
+        fl[k++] = 0; fl[k++] = 0; fl[k++] = 0; fl[k++] = 34;
+        uint8_t si[34] = {0};
+        uint32_t rate = 44100;
+        si[10] = (uint8_t)(rate >> 12); si[11] = (uint8_t)(rate >> 4);
+        si[12] = (uint8_t)((rate & 15) << 4 | (1 << 1));       // 2 channels - 1
+        si[13] = (uint8_t)(15 << 4);                           // 16 bits - 1, high nibble
+        be32(si + 14, 441000);
+        memcpy(fl + k, si, 34); k += 34;
+        // VORBIS_COMMENT: little-endian lengths; a lower-case key, a
+        // UTF-8 artist outside ASCII, an unknown key skipped.
+        static const char *cm[] = { "title=Rain Study", "ARTIST=Bj\xc3\xb6rk", "GENRE=x", "Album=Field" };
+        size_t body = 4 + 4 + 4;
+        for (int i = 0; i < 4; i++) body += 4 + strlen(cm[i]);
+        fl[k++] = 4; fl[k++] = 0; fl[k++] = (uint8_t)(body >> 8); fl[k++] = (uint8_t)body;
+        fl[k++] = 4; fl[k++] = 0; fl[k++] = 0; fl[k++] = 0; memcpy(fl + k, "toyo", 4); k += 4;
+        fl[k++] = 4; fl[k++] = 0; fl[k++] = 0; fl[k++] = 0;
+        for (int i = 0; i < 4; i++) {
+            size_t L = strlen(cm[i]);
+            fl[k++] = (uint8_t)L; fl[k++] = 0; fl[k++] = 0; fl[k++] = 0;
+            memcpy(fl + k, cm[i], L); k += L;
+        }
+        // PICTURE, last block: a front cover of four bytes.
+        static const uint8_t pic_tail[] = { 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,4, 'J','P','E','G' };
+        size_t plen = 4 + 4 + 9 + 4 + 0 + sizeof pic_tail;
+        fl[k++] = 0x80 | 6; fl[k++] = 0; fl[k++] = 0; fl[k++] = (uint8_t)plen;
+        be32(fl + k, 3); k += 4;
+        be32(fl + k, 9); k += 4; memcpy(fl + k, "image/png", 9); k += 9;
+        be32(fl + k, 0); k += 4;
+        memcpy(fl + k, pic_tail, sizeof pic_tail); k += sizeof pic_tail;
+
+        memset(&t, 0, sizeof t);
+        int g = utags_from_flac(fl, k, &t, 1);
+        utest_check(g == (UTAGS_TITLE | UTAGS_ARTIST | UTAGS_ALBUM | UTAGS_ART | UTAGS_LENGTH),
+                    "FLAC: title, artist, album, picture and length all found");
+        str_is(t.title, "Rain Study", "FLAC: a lower-case key matches");
+        str_is(t.artist, "Bj\xf6rk", "...UTF-8 comes back as Latin-1");
+        str_is(t.album, "Field", "...and a mixed-case key");
+        utest_checkf(t.length_ms == 10000, "...the length from STREAMINFO, 10000 ms (got %u)",
+                     (unsigned)t.length_ms);
+        utest_check(t.art && t.art_len == 4 && !memcmp(t.art, "JPEG", 4),
+                    "...and the PICTURE's bytes, after its MIME and dimensions");
+        utags_free(&t);
+        // A comment whose length overruns the block is not read past.
+        fl[4 + 4 + 34 + 4 + 8 + 4] = 0xFF;
+        memset(&t, 0, sizeof t);
+        utags_from_flac(fl, k, &t, 0);
+        utest_check(!t.title[0], "FLAC: an overrunning comment is skipped, not read past");
+    }
 
     // --- the shipped music -------------------------------------------------
     got = utags_read("/usr/share/music/first-boot.mp3", &t, 0);

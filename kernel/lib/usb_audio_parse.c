@@ -213,8 +213,8 @@ int usb_audio_parse(const uint8_t *cfg, uint32_t total,
                 }
                 format_ok = rate_ok && cand_channels == SND_CHANNELS;
             }
-            // The sample widths the packet copy can write. 16-bit is a
-            // memcpy from the ring; 24 and 32 are a shift per sample.
+            // The sample widths the packet copy can write: 32-bit is a
+            // memcpy from the s32 ring, 16 and 24 are narrowed per sample.
             if (cand_subslot < 2 || cand_subslot > 4 ||
                 cand_bits > (uint8_t)(cand_subslot * 8))
                 format_ok = 0;
@@ -249,11 +249,10 @@ int usb_audio_parse(const uint8_t *cfg, uint32_t total,
 
             // A complete candidate: an alt setting with both the format
             // and an isochronous OUT endpoint we can actually program.
-            // Taken as soon as it is seen, so a device offering two
-            // usable widths binds the first -- 24-bit before 32-bit on
-            // the one this was written against, which is the narrower
-            // of the two and no worse at 16 bits of source.
-            if (format_ok && !(addr & 0x80) && mult == 1 && !out->ep) {
+            // THE DEEPEST WINS, so a 24-bit file reaches a 24/32-bit DAC
+            // whole; on a tie the first seen is kept.
+            if (format_ok && !(addr & 0x80) && mult == 1 &&
+                (!out->ep || cand_bits > out->bits)) {
                 out->ifnum    = (uint8_t)cur_if;
                 out->alt      = (uint8_t)cur_alt;
                 out->ep       = addr;

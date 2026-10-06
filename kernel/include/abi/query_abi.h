@@ -991,10 +991,13 @@ struct query_sound {
     char     driver[16];
     uint32_t active;      // 1 for the one the stream is on
     // SND_RATE_* and SND_DEPTH_* (abi/sound_abi.h) -- what the card
-    // SAYS, not what the stack uses, which is 48 kHz s16 stereo
+    // SAYS, not what the stack uses, which is 48 kHz s32 stereo
     // throughout. 0 means the driver does not report.
     uint32_t rates;
     uint32_t depths;
+    // The width the driver PLAYS at, its pick from `depths`: below 32,
+    // it rounds every sample of the s32 stream on the way out. 0: not said.
+    uint32_t bits;
 };
 
 // QUERY_MODULE: one record per loaded module (kernel/core/module.c).

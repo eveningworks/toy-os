@@ -17,6 +17,12 @@
 // and `soundd` writes it; a driver is told the ring's PHYSICAL address
 // and points its engine at it. That is what keeps a ring-3 driver's
 // exposure to one buffer on a machine with no IOMMU.
+//
+// THE RING IS s32 (abi/sound_abi.h). A card that reads 20/24/32-bit
+// samples in 32-bit containers plays it as it is; a 16-bit one says so
+// in `bits` and hands the host a `bounce` buffer inside its own DMA
+// grant, which the HOST keeps filled with the narrowed ring -- the
+// kernel core's struct snd_bounce, in this process.
 #ifndef _SND_DRIVER_H
 #define _SND_DRIVER_H
 
@@ -27,7 +33,7 @@
 // Bumped when anything below changes shape. The host refuses a plugin
 // that does not match rather than calling through a moved slot -- the
 // abi/toyabi.h rule, for the same reason.
-#define SND_DRIVER_ABI 2u
+#define SND_DRIVER_ABI 3u
 
 // The symbol every plugin exports, by this exact name.
 #define SND_DRIVER_SYMBOL "snd_driver"
@@ -57,6 +63,15 @@ struct snd_dev {
     // driver does not say", which lssound prints differently from
     // "nothing".
     uint32_t rates, depths;
+
+    // Also filled in by open(): the width the card will play at, and --
+    // for an engine that DMAs 16-bit samples, which cannot read the s32
+    // ring -- `bounce`: SND_CHUNKS * SND_CHUNK_BYTES_S16 bytes of the
+    // driver's own DMA memory, where its descriptors point instead. A
+    // driver that copies the ring itself (USB, per packet) leaves it NULL.
+    uint32_t bits;
+    int16_t *bounce;
+    uint64_t bounce_phys;
 
     void    *priv;                    // the driver's own state
 
@@ -107,15 +122,16 @@ struct snd_driver {
     void (*close)(struct snd_dev *dev);
 
     // Play the kernel's ring, which lives at `ring_phys` and is
-    // SND_CHUNKS chunks of SND_CHUNK_BYTES. The engine must raise an
-    // interrupt per chunk, because that is the host's only way to
-    // learn where the card has reached.
+    // SND_CHUNKS chunks of SND_CHUNK_BYTES -- or, at 16 bits, `bounce`,
+    // which the host has filled before calling this. The engine must
+    // raise an interrupt per chunk, because that is the host's only way
+    // to learn where the card has reached.
     int  (*start)(struct snd_dev *dev, uint64_t ring_phys);
     void (*stop)(struct snd_dev *dev);
 
     // An interrupt arrived. Acknowledge it at the chip and answer the
-    // BYTE OFFSET into the ring that the card has FINISHED, rounded
-    // down to a chunk -- or SND_IRQ_NOT_MINE if this device did not
+    // BYTE OFFSET into the RING (not the bounce buffer: chunk index times
+    // SND_CHUNK_BYTES) that the card has FINISHED, rounded down to a chunk -- or SND_IRQ_NOT_MINE if this device did not
     // raise it. Reporting a position the card has not reached has the
     // kernel zero a chunk still being played; every driver here counts
     // completions rather than trusting a position register, because a

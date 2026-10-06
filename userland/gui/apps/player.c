@@ -13,7 +13,7 @@
 // worker thread -- this calls usnd_play() and reads a position back.
 //
 // It is handed a directory or a file on the command line -- `Handles=`
-// in its .desktop entry points .wav, .mp3 and .mid here -- and
+// in its .desktop entry points .wav, .flac, .mp3 and .mid here -- and
 // defaults to /usr/share/music.
 #include <stdint.h>
 #include <string.h>

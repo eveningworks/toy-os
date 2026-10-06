@@ -131,20 +131,19 @@ static int wav_open(struct usnd_stream *s) {
     return 0;
 }
 
-// One sample, whatever its width, as s16. The wider formats are
-// TRUNCATED to their top 16 bits rather than dithered: a player is not
-// a mastering tool, and the alternative is arithmetic per sample for a
-// difference below the noise floor of the card this plays through.
-static int16_t sample_of(const uint8_t *b, int bits) {
+// One sample, whatever its width, as s32 with full scale in the top
+// bits -- every bit the file has, which is the point of a 24-bit WAV.
+static int32_t sample_of(const uint8_t *b, int bits) {
     switch (bits) {
-    case 8:  return (int16_t)(((int)b[0] - 128) * 256); // 8-bit WAV is UNSIGNED; * not <<, it goes negative
-    case 16: return (int16_t)((uint16_t)b[0] | ((uint16_t)b[1] << 8));
-    case 24: return (int16_t)((uint16_t)b[1] | ((uint16_t)b[2] << 8));
-    default: return (int16_t)((uint16_t)b[2] | ((uint16_t)b[3] << 8));
+    case 8:  return ((int32_t)b[0] - 128) * 16777216; // 8-bit WAV is UNSIGNED; * not <<, it goes negative
+    case 16: return (int32_t)(((uint32_t)b[0] << 16) | ((uint32_t)b[1] << 24));
+    case 24: return (int32_t)(((uint32_t)b[0] << 8) | ((uint32_t)b[1] << 16) | ((uint32_t)b[2] << 24));
+    default: return (int32_t)((uint32_t)b[0] | ((uint32_t)b[1] << 8) |
+                              ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24));
     }
 }
 
-static long wav_read(struct usnd_stream *s, int16_t *dst, long frames) {
+static long wav_read(struct usnd_stream *s, int32_t *dst, long frames) {
     struct wav *p = s->priv;
     if (p->cur >= p->frames) return 0;
 

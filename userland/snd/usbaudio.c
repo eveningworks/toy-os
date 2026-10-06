@@ -50,7 +50,7 @@ static struct {
     int      slot;
     struct usb_audio_stream s;
     uint16_t frames;      // the rate's share of ONE service interval
-    uint16_t ring_bytes;  // what that costs in the s16 ring
+    uint16_t ring_bytes;  // what that costs in the s32 ring
     uint16_t wire_bytes;  // ...and on the wire, which differ above 16 bits
     uint8_t  group;       // packets per completion
     uint8_t  packets;     // how many fit in the frame
@@ -109,18 +109,25 @@ static uint32_t ms_since_start(void) {
 
 // --- the format conversion, the kernel driver's shape ------------------
 
-static void write_sample(uint8_t *dst, int16_t v, uint8_t subslot) {
-    uint16_t u = (uint16_t)v;
-    if (subslot == 2) { dst[0] = (uint8_t)u; dst[1] = (uint8_t)(u >> 8); }
-    else if (subslot == 3) { dst[0] = 0; dst[1] = (uint8_t)u; dst[2] = (uint8_t)(u >> 8); }
-    else { dst[0] = 0; dst[1] = 0; dst[2] = (uint8_t)u; dst[3] = (uint8_t)(u >> 8); }
+// An s32 ring sample as the subslot holds it: the TOP bytes, rounded.
+static void write_sample(uint8_t *dst, int32_t v, uint8_t subslot) {
+    if (subslot == 2) {
+        uint16_t u = (uint16_t)snd_s32_to_s16(v);
+        dst[0] = (uint8_t)u; dst[1] = (uint8_t)(u >> 8);
+    } else if (subslot == 3) {
+        int64_t r = ((int64_t)v + 0x80) >> 8;
+        uint32_t u = (uint32_t)(r > 0x7FFFFF ? 0x7FFFFF : r);
+        dst[0] = (uint8_t)u; dst[1] = (uint8_t)(u >> 8); dst[2] = (uint8_t)(u >> 16);
+    } else {
+        memcpy(dst, &v, 4);
+    }
 }
 
 static void copy_one_packet(uint8_t slot) {
     uint8_t *dst = g.pkt + (uint32_t)slot * g.wire_bytes;
     uint32_t at = g.copy_pos;
 
-    if (g.s.subslot == 2) {
+    if (g.s.subslot == 4) {
         // THE RING WRAPS MID-PACKET on most laps -- a packet divides
         // neither the ring nor a chunk -- so this is two copies.
         uint32_t n = g.ring_bytes, first = SND_RING_BYTES - at;
@@ -130,15 +137,16 @@ static void copy_one_packet(uint8_t slot) {
         g.copy_pos = (at + n) % SND_RING_BYTES;
         return;
     }
-    // Sample at a time, because the widths differ. `at` is always even
-    // and the ring is a whole number of frames, so a sample never
-    // straddles the wrap and only the step has to check it.
+    // Sample at a time, because the widths differ. `at` is always a
+    // multiple of 4 and the ring is a whole number of frames, so a sample
+    // never straddles the wrap and only the step has to check it.
     uint32_t samples = (uint32_t)g.frames * SND_CHANNELS;
     for (uint32_t i = 0; i < samples; i++) {
-        int16_t v = (int16_t)((uint16_t)g.ring[at] | ((uint16_t)g.ring[at + 1] << 8));
+        int32_t v;
+        memcpy(&v, g.ring + at, 4);
         write_sample(dst, v, g.s.subslot);
         dst += g.s.subslot;
-        at += 2;
+        at += 4;
         if (at >= SND_RING_BYTES) at = 0;
     }
     g.copy_pos = at;
@@ -315,10 +323,10 @@ static int usbaudio_open(struct snd_dev *dev) {
 
         // THE SAME WALK THE KERNEL USES, compiled for this ring.
         if (!usb_audio_parse(cfg, total, &g.s, &rep)) {
-            // THE REFUSAL'S EVIDENCE. "no 48 kHz stereo s16 stream" says
+            // THE REFUSAL'S EVIDENCE. "no 48 kHz stereo PCM stream" says
             // nothing about what the device DOES offer, and the report is
             // filled either way for exactly this.
-            fprintf(stderr, "usbaudio: slot %d: no 48 kHz stereo s16 stream "
+            fprintf(stderr, "usbaudio: slot %d: no 48 kHz stereo PCM stream "
                             "(UAC %u.%u, %u alternate(s) seen)\n",
                     slot, rep.uac_major, rep.uac_minor, rep.alts_seen);
             for (int i = 0; i < rep.alt_count; i++)
@@ -355,7 +363,7 @@ static int usbaudio_open(struct snd_dev *dev) {
         return -1;
     }
     g.frames     = (uint16_t)frames;
-    g.ring_bytes = (uint16_t)(frames * SND_CHANNELS * 2);
+    g.ring_bytes = (uint16_t)(frames * SND_FRAME_BYTES);
     g.wire_bytes = (uint16_t)(frames * SND_CHANNELS * g.s.subslot);
     // PACKETS PER COMPLETION, AND A RING-3 DRIVER WANTS MORE OF THEM
     // THAN THE KERNEL DOES. The in-kernel driver refills from inside
@@ -482,6 +490,7 @@ static int usbaudio_open(struct snd_dev *dev) {
     dev->rates = SND_RATE_48000;
     dev->depths = g.s.subslot == 2 ? SND_DEPTH_16 :
                   g.s.subslot == 3 ? SND_DEPTH_24 : SND_DEPTH_32;
+    dev->bits = g.s.bits;          // narrowed per packet here; no bounce
     dev->pci = -1;                 // not a PCI device; see usbaudio_match
     dev->priv = &g;
     fprintf(stderr, "usbaudio: slot %d, %s, if %u alt %u ep 0x%x %u-bit, "

@@ -139,10 +139,12 @@ static void check_passthrough(void) {
 
     struct usnd_stream st;
     check("open 48k stereo", usnd_open(FIX, &st) == 0, usnd_last_error());
-    short got[8];
+    int32_t got[8];
     long n = usnd_read(&st, got, 4);
     eq("48k stereo frame count", n, 4);
-    check("48k stereo is byte-identical", memcmp(got, s, sizeof s) == 0,
+    int same = 1;
+    for (int i = 0; i < 8; i++) if (got[i] != (int32_t)s[i] * 65536) same = 0;
+    check("48k stereo is exact, each sample in the top 16 bits", same,
           "the fast path altered the samples");
     eq("stream length in device frames", (long)usnd_stream_frames(&st), 4);
     eq("a read past the end of the fast path", usnd_read(&st, got, 4), 0);
@@ -157,12 +159,12 @@ static void check_mono_upmix(void) {
 
     struct usnd_stream st;
     check("open 48k mono", usnd_open(FIX, &st) == 0, usnd_last_error());
-    short got[8];
+    int32_t got[8];
     long n = usnd_read(&st, got, 4);
     eq("mono frame count", n, 4);
     int ok = 1;
     for (int i = 0; i < 4; i++)
-        if (got[i * 2] != s[i] || got[i * 2 + 1] != s[i]) ok = 0;
+        if (got[i * 2] != (int32_t)s[i] * 65536 || got[i * 2 + 1] != (int32_t)s[i] * 65536) ok = 0;
     check("mono is duplicated to both channels", ok, "channels differ from the source");
     usnd_close(&st);
 }
@@ -176,11 +178,30 @@ static void check_8bit(void) {
 
     struct usnd_stream st;
     check("open 8-bit", usnd_open(FIX, &st) == 0, usnd_last_error());
-    short got[8];
+    int32_t got[8];
     eq("8-bit frame count", usnd_read(&st, got, 4), 4);
     eq("8-bit 128 is silence", got[0], 0);
-    check("8-bit 255 is positive", got[2] > 30000, "255 did not map near full scale");
-    check("8-bit 0 is negative", got[4] < -30000, "0 did not map near negative full scale");
+    check("8-bit 255 is positive", got[2] > 30000 * 65536, "255 did not map near full scale");
+    check("8-bit 0 is negative", got[4] < -30000 * 65536, "0 did not map near negative full scale");
+    usnd_close(&st);
+}
+
+// 24-BIT KEEPS ITS LOW BYTE -- the reason the path is s32. A version
+// that still cut every sample to 16 bits passes every check above.
+static void check_24bit(void) {
+    unsigned char s[12] = { 0x56, 0x34, 0x12,  0xAA, 0xCB, 0xED,     // +0x123456, -0x123456
+                            0x01, 0x00, 0x00,  0xFF, 0xFF, 0x7F };   // 1, +max
+    build_wav(1, 2, 48000, 24, s, sizeof s, 0, -1);
+    write_fixture(FIX);
+
+    struct usnd_stream st;
+    check("open 24-bit", usnd_open(FIX, &st) == 0, usnd_last_error());
+    int32_t got[4];
+    eq("24-bit frame count", usnd_read(&st, got, 2), 2);
+    eq("24-bit sample, all 24 bits, at the top", got[0], 0x12345600);
+    eq("a negative one too", got[1], -0x12345600);
+    eq("the least significant bit survives", got[2], 0x100);
+    eq("24-bit full scale", got[3], 0x7FFFFF00);
     usnd_close(&st);
 }
 
@@ -195,7 +216,7 @@ static void check_resample(void) {
     check("open 24k", usnd_open(FIX, &st) == 0, usnd_last_error());
     eq("24k reports double length", (long)usnd_stream_frames(&st), 64);
 
-    short got[256];
+    int32_t got[256];
     long total = 0;
     int rounds = 0;
     // BOUNDED. A read that never returns 0 is the failure mode this
@@ -229,15 +250,15 @@ static void check_seek(void) {
 
     struct usnd_stream st;
     check("open for seek", usnd_open(FIX, &st) == 0, usnd_last_error());
-    short whole[64];
+    int32_t whole[64];
     usnd_read(&st, whole, 32);
 
     check("seek is supported", usnd_seek(&st, 8) == 0, usnd_last_error());
-    short after[32];
+    int32_t after[32];
     long n = usnd_read(&st, after, 8);
     eq("frames after seek", n, 8);
     check("seek lands on the right samples",
-          memcmp(after, whole + 8 * 2, 8 * 2 * sizeof(short)) == 0,
+          memcmp(after, whole + 8 * 2, 8 * 2 * sizeof(int32_t)) == 0,
           "the samples after a seek are not the ones at that offset");
     usnd_close(&st);
 }
@@ -304,7 +325,7 @@ static void check_mp3(void) {
     long lo = (long)(clip.frames / 4), hi = (long)(clip.frames * 3 / 4);
     long crossings = 0, peak = 0;
     for (long i = lo + 1; i < hi; i++) {
-        int a = clip.pcm[(i - 1) * 2], b = clip.pcm[i * 2];
+        int a = clip.pcm[(i - 1) * 2] / 65536, b = clip.pcm[i * 2] / 65536;
         if ((a < 0) != (b < 0)) crossings++;
         if (b > peak) peak = b;
         if (-b > peak) peak = -b;
@@ -324,6 +345,62 @@ static void check_mp3(void) {
     usnd_clip_free(&clip);
 }
 
+// --- FLAC -------------------------------------------------------------
+//
+// Exactness against `flac -d` is tools/usnd_hostcheck.py's job; here the
+// codec runs in ring 3. ramp24.flac's samples are a FORMULA of their
+// index (tools/gen_music.py's ramp24()), so the check needs no reference
+// decoder: every 24-bit sample must come back whole, at the top of s32.
+static void check_flac(void) {
+    struct usnd_info in;
+    int rc = usnd_load_info("/tests/ramp24.flac", &in);
+    check("a FLAC is recognised", rc == 0, usnd_last_error());
+    if (rc != 0) return;
+    check("the codec names itself flac", strcmp(in.format, "flac") == 0, in.format);
+    eq("the FLAC's depth", in.fmt.bits, 24);
+    eq("its rate", in.fmt.rate, 48000);
+    eq("its length", (long)in.frames, 4800);
+
+    struct usnd_stream st;
+    check("open the 24-bit FLAC", usnd_open("/tests/ramp24.flac", &st) == 0, usnd_last_error());
+    static int32_t got[4800 * 2];
+    long n = 0, k;
+    while (n < 4800 && (k = usnd_read(&st, got + n * 2, 4800 - n)) > 0) n += k;
+    eq("every frame decoded", n, 4800);
+    long bad = -1;
+    for (long i = 0; i < n && bad < 0; i++) {
+        int32_t left = (int32_t)((i * 7919) % 0x1000000) - 0x800000;
+        if (got[i * 2] != left * 256 || got[i * 2 + 1] != (-left - 1) * 256) bad = i;
+    }
+    char detail[96];
+    snprintf(detail, sizeof detail, "first wrong frame %ld", bad);
+    check("every 24-bit sample exact, low byte and all", bad < 0, detail);
+
+    // A seek lands on the very frame the formula names.
+    check("FLAC seeks", usnd_seek(&st, 3333) == 0, usnd_last_error());
+    int32_t one[2];
+    eq("a frame after the seek", usnd_read(&st, one, 1), 1);
+    int32_t left = (int32_t)((3333L * 7919) % 0x1000000) - 0x800000;
+    check("the seek is exact", one[0] == left * 256, "landed on another frame");
+    usnd_close(&st);
+
+    // 44.1 kHz mono 16-bit, through the resampler and the upmix: the tone
+    // must still be 1 kHz with both channels filled.
+    struct usnd_clip clip;
+    rc = usnd_clip_load("/tests/sine1k.flac", &clip);
+    check("a 16-bit FLAC decodes to a clip", rc == 0, usnd_last_error());
+    if (rc != 0) return;
+    long lo = (long)(clip.frames / 4), hi = (long)(clip.frames * 3 / 4), crossings = 0, diff = 0;
+    for (long i = lo + 1; i < hi; i++) {
+        if ((clip.pcm[(i - 1) * 2] < 0) != (clip.pcm[i * 2] < 0)) crossings++;
+        if (clip.pcm[i * 2] != clip.pcm[i * 2 + 1]) diff++;
+    }
+    long hz = crossings * 48000 / (2 * (hi - lo - 1));
+    check("the FLAC tone is 1 kHz", hz > 990 && hz < 1010, "wrong frequency");
+    eq("its mono upmix filled both channels", diff, 0);
+    usnd_clip_free(&clip);
+}
+
 int main(void) {
     utest_begin("usnd_test", "the audio DECODE path, with no sound hardware involved", UTEST_QUIET);
 
@@ -333,6 +410,8 @@ int main(void) {
     check_passthrough();
     check_mono_upmix();
     check_8bit();
+    check_24bit();
+    check_flac();
     check_resample();
     check_seek();
     check_refusals();

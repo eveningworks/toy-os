@@ -70,8 +70,8 @@ TOOLS = [
     # --- host-side decoder oracles ----------------------------------
     # No guest at all: the same .c compiled with the host gcc, judged by
     # a decoder that shares no code with it.
-    ("usnd_host",   "usnd_hostcheck.py",       "the MP3 decoder against ffmpeg",     False,
-     ("host_audio", "needs gcc, lame and ffmpeg on PATH"),                                   False),
+    ("usnd_host",   "usnd_hostcheck.py",       "MP3 vs ffmpeg, FLAC exact vs flac -d", False,
+     ("host_audio_flac", "needs gcc, lame, ffmpeg and flac on PATH"),                       False),
     # The MIDI codec and SoundFont synth against FluidSynth, plus an ASan
     # fuzz of both parsers. On the built-in bank only: a fetched one is
     # the maintainer's to pass with --sf2.
@@ -467,6 +467,9 @@ def precondition_met(kind):
         # must not start requiring lame and ffmpeg on every checkout,
         # the same rule that keeps Docker out of preflight.
         return all(shutil.which(t) for t in ("gcc", "lame", "ffmpeg")), why
+    if key == "host_audio_flac":
+        # host_audio plus Xiph's `flac`, the FLAC half's oracle. A skip.
+        return all(shutil.which(t) for t in ("gcc", "lame", "ffmpeg", "flac")), why
     if key == "host_fluidsynth":
         # FluidSynth is the ORACLE: without it the check would run only
         # its fuzz half and still print a pass. A skip, like lame and

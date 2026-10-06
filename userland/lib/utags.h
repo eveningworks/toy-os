@@ -3,7 +3,8 @@
 
 // utags -- what a sound file says about itself: title, artist, album,
 // and an embedded picture. ID3v2 (2.2, 2.3, 2.4) and ID3v1 for MP3; the
-// sequence/track name for MIDI. WAV's LIST/INFO chunk is not read.
+// sequence/track name for MIDI; Vorbis comments, PICTURE and the length
+// for FLAC. WAV's LIST/INFO chunk is not read.
 //
 // **IT PARSES UNTRUSTED BYTES**, like ttf.h: every length is checked
 // against what is left, and a frame that does not fit, an unknown text
@@ -38,6 +39,9 @@ enum { UTAGS_TITLE = 1, UTAGS_ARTIST = 2, UTAGS_ALBUM = 4, UTAGS_ART = 8, UTAGS_
 int utags_from_id3v2(const uint8_t *buf, size_t len, struct utags *t, int want_art);
 // The 128-byte ID3v1 trailer -- only fills fields still empty.
 int utags_from_id3v1(const uint8_t *trailer128, struct utags *t);
+// A FLAC file's metadata blocks, from its "fLaC" marker. `want_art`
+// copies the PICTURE out.
+int utags_from_flac(const uint8_t *buf, size_t len, struct utags *t, int want_art);
 // A Standard MIDI File: the first track's sequence/track name (meta 03).
 int utags_from_midi(const uint8_t *buf, size_t len, struct utags *t);
 

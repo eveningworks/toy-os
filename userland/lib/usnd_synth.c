@@ -614,21 +614,26 @@ static void voice_run(struct usynth *s, struct voice *v, long n) {
     v->x1 = x1; v->x2 = x2; v->y1 = y1; v->y2 = y2;
 }
 
-// 24-bit mix to 16-bit output, with a soft knee above 0.75 full scale: a
-// dense passage bends rather than clipping into square waves.
-static int16_t to_s16(int32_t m) {
-    int32_t v = m >> 8;
-    if (v > 24575 || v < -24575) {
-        double x = v / 32767.0, a = x < 0 ? -x : x;
+// The 24-bit mix to s32 output (full scale in the top bits), with a soft
+// knee above 0.75 full scale: a dense passage bends rather than clipping
+// into square waves. The knee is in the mix's own 24 bits, so nothing is
+// rounded away before it.
+static int32_t to_s32(int32_t m) {
+    const int32_t top = 8388607;
+    int32_t v = m;
+    if (v > top * 3 / 4 || v < -(top * 3 / 4)) {
+        double x = v / (double)top, a = x < 0 ? -x : x;
         double over = (a - 0.75) / 0.25;
         double t = over > 3 ? 1 : over * (27 + over * over) / (27 + 9 * over * over);
         a = 0.75 + 0.25 * t;
-        v = (int32_t)((x < 0 ? -a : a) * 32767.0);
+        v = (int32_t)((x < 0 ? -a : a) * top);
     }
-    return (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+    if (v > top) v = top;
+    if (v < -top - 1) v = -top - 1;
+    return v * 256;
 }
 
-void usynth_render(struct usynth *s, int16_t *out, long frames) {
+void usynth_render(struct usynth *s, int32_t *out, long frames) {
     while (frames > 0) {
         if (s->left == 0) {
             for (int i = 0; i < USYNTH_VOICES; i++)
@@ -641,8 +646,8 @@ void usynth_render(struct usynth *s, int16_t *out, long frames) {
         for (int i = 0; i < USYNTH_VOICES; i++)
             if (s->v[i].active) voice_run(s, &s->v[i], n);
         for (long i = 0; i < n; i++) {
-            out[i * 2]     = to_s16(s->mix_l[i]);
-            out[i * 2 + 1] = to_s16(s->mix_r[i]);
+            out[i * 2]     = to_s32(s->mix_l[i]);
+            out[i * 2 + 1] = to_s32(s->mix_r[i]);
         }
         out += n * 2;
         frames -= n;

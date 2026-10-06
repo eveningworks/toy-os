@@ -56,6 +56,37 @@ static int  g_dev = -1;                 // the PCI index we hold
 static int  g_running;
 static int  g_verbose;
 static struct snd_dev g_card;
+
+// --- a 16-bit card's copy of the ring --------------------------------
+//
+// kernel/drivers/sound/sound.c's struct snd_bounce, here because the
+// card is driven here: each chunk narrowed SND_CONVERT_LEAD chunks before
+// the engine reaches it, walking from `g_next` so two periods reported at
+// once leave nothing behind.
+static const int32_t *g_ring;
+static uint32_t g_next;
+
+static void bounce_one(uint32_t chunk) {
+    const int32_t *src = g_ring + chunk * SND_CHUNK_FRAMES * SND_CHANNELS;
+    int16_t *dst = g_card.bounce + chunk * SND_CHUNK_FRAMES * SND_CHANNELS;
+    for (uint32_t i = 0; i < SND_CHUNK_FRAMES * SND_CHANNELS; i++)
+        dst[i] = snd_s32_to_s16(src[i]);
+}
+
+static void bounce_start(void) {
+    if (!g_ring) return;
+    for (uint32_t c = 0; c <= SND_CONVERT_LEAD; c++) bounce_one(c);
+    g_next = SND_CONVERT_LEAD + 1;
+}
+
+static void bounce_period(uint32_t hw_pos) {
+    if (!g_ring) return;
+    uint32_t want = (hw_pos / SND_CHUNK_BYTES + SND_CONVERT_LEAD + 1) % SND_CHUNKS;
+    for (int guard = 0; g_next != want && guard < SND_CHUNKS; guard++) {
+        bounce_one(g_next);
+        g_next = (g_next + 1) % SND_CHUNKS;
+    }
+}
 static const struct snd_driver *g_drv;
 
 // A POLITE KILL HANDS THE CARD BACK. A claim dropped by a DYING
@@ -312,6 +343,7 @@ int main(int argc, char **argv) {
                      g_drv->label ? g_drv->label : g_drv->name, sizeof m.label);
     m.rates = g_card.rates;
     m.depths = g_card.depths;
+    m.bits = g_card.bits ? g_card.bits : 32;
     m.page = (uint64_t)(uintptr_t)&g_sh->drv;
     // INTERRUPTS BEFORE REGISTRATION, and the sequence read before it:
     // from the moment the core knows about this driver it may post a
@@ -328,8 +360,21 @@ int main(int argc, char **argv) {
         return 1;
     }
     uint64_t ring_phys = m.ring_phys;
-    fprintf(stderr, "snddrv: %s serving pci %d as %s, priority %d\n",
-            g_drv->name, index, m.name, getpriority(PRIO_PROCESS, 0));
+    // A CARD THAT GAVE A BOUNCE BUFFER PLAYS A COPY THIS PROCESS KEEPS:
+    // the ring, read-only (SYS_SND_RING_MAP), narrowed into it. A driver
+    // that converts on its own way out (USB, per packet) gives none.
+    if (g_card.bounce) {
+        uint64_t addr = 0;
+        if (sys_snd_ring_map(&addr) < 0) {
+            fprintf(stderr, "snddrv: %s: the ring cannot be mapped for its 16-bit copy\n",
+                    g_drv->name);
+            release_all();
+            return 1;
+        }
+        g_ring = (const int32_t *)(uintptr_t)addr;
+    }
+    fprintf(stderr, "snddrv: %s serving pci %d as %s at %u-bit, priority %d\n",
+            g_drv->name, index, m.name, (unsigned)m.bits, getpriority(PRIO_PROCESS, 0));
 
     while (!g_quit) {
         uint32_t w = g_sh->wake;
@@ -351,6 +396,7 @@ int main(int argc, char **argv) {
                 // when a STOP and a START land between two wakeups (only
                 // the last op is visible) and from soundd's stall recovery.
                 if (g_running) { g_drv->stop(&g_card); g_running = 0; }
+                bounce_start();
                 if (g_drv->start(&g_card, ring_phys) == 0) g_running = 1;
                 else fprintf(stderr, "snddrv: %s failed to start the engine\n",
                              g_drv->name);
@@ -377,6 +423,7 @@ int main(int argc, char **argv) {
             int pos = g_drv->period(&g_card);
             if (pos != SND_IRQ_NOT_MINE) {
                 sys_snd_period((uint32_t)pos);
+                bounce_period((uint32_t)pos);
                 g_sh->drv.running = 1;
             }
         }

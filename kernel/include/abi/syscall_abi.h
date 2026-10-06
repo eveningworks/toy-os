@@ -2733,9 +2733,10 @@ struct dev_io_msg {
                                // as above.
 
 #define DEV_DMA_MAX_BYTES 131072 // A command ring, a descriptor list AND
-                                 // one audio ring (SND_RING_BYTES is 64
-                                 // KiB, and the rest is the CORB/RIRB
-                                 // page plus its buffer list). Still
+                                 // a 16-bit copy of the audio ring (64
+                                 // KiB at SND_CHUNK_BYTES_S16; the rest
+                                 // is the CORB/RIRB page plus its
+                                 // buffer list). Still
                                  // small deliberately: every byte is
                                  // memory a device can be pointed at,
                                  // so this is sized to what stage 5

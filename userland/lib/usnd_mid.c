@@ -383,7 +383,7 @@ static void apply(struct mid *m, const struct mev *ev) {
     else usynth_message(m->syn, ev->status, ev->d1, ev->d2);
 }
 
-static long mid_read(struct usnd_stream *s, int16_t *dst, long frames) {
+static long mid_read(struct usnd_stream *s, int32_t *dst, long frames) {
     struct mid *m = s->priv;
     long done = 0;
     while (done < frames && m->pos < m->total) {

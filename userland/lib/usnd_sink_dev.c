@@ -24,7 +24,7 @@
 #include "sound_abi.h"
 
 static volatile struct snd_ctl_page *g_ctl;
-static volatile int16_t *g_ring;
+static volatile int32_t *g_ring;
 static uint32_t g_wr;        // byte cursor into the ring
 static int g_open, g_running;
 
@@ -33,9 +33,9 @@ static int dev_open(void) {
     if (sys_snd_open() != 0) return -sys_errno();
 
     g_ctl = (volatile struct snd_ctl_page *)(uintptr_t)SND_MAP_VADDR;
-    g_ring = (volatile int16_t *)(uintptr_t)(SND_MAP_VADDR + 4096);
+    g_ring = (volatile int32_t *)(uintptr_t)(SND_MAP_VADDR + 4096);
     if (g_ctl->magic != SND_CTL_MAGIC || g_ctl->rate != USND_RATE ||
-        g_ctl->channels != USND_CHANNELS) {
+        g_ctl->channels != USND_CHANNELS || g_ctl->sample_bits != SND_SAMPLE_BITS) {
         sys_snd_ctl(SND_CTL_CLOSE);
         return -ENOTSUP;
     }
@@ -58,7 +58,7 @@ static long dev_space(void) {
     return (long)(writable_bytes() / SND_FRAME_BYTES);
 }
 
-static long dev_write(const int16_t *pcm, long frames) {
+static long dev_write(const int32_t *pcm, long frames) {
     if (!g_open) return 0;
 
     long room = dev_space();

@@ -81,6 +81,7 @@ int main(int argc, char **argv) {
         if (!verbose) continue;
         printf("             rates:  "); put_rates(q.rates);  printf("\n");
         printf("             depths: "); put_depths(q.depths); printf("\n");
+        if (q.bits) printf("             plays:  %u-bit\n", (unsigned)q.bits);
     }
     if (!n) {
         printf("no sound device\n");

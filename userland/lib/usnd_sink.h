@@ -26,11 +26,11 @@ struct usnd_sink {
     // retrying.
     int (*open)(void);
 
-    // Hand over up to `frames` frames of interleaved stereo s16 at
-    // USND_RATE. Returns the number ACCEPTED, which may be 0 when the
+    // Hand over up to `frames` frames of interleaved stereo s32 at
+    // USND_RATE -- the ring's own format (abi/sound_abi.h). Returns the number ACCEPTED, which may be 0 when the
     // sink is full -- that is not an error, it is back-pressure, and it
     // is what paces the worker thread. Never blocks.
-    long (*write)(const int16_t *pcm, long frames);
+    long (*write)(const int32_t *pcm, long frames);
 
     // How many frames the sink will take right now. The worker asks
     // before it decodes, so a full sink costs no decoding at all.

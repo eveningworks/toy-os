@@ -2,7 +2,7 @@
 // every codec's output passes through on its way to a sink.
 //
 // **A CODEC NEVER SEES THE DEVICE'S RATE.** It reports what its file
-// holds and yields s16 frames in it; everything below turns that into
+// holds and yields s32 frames in it; everything below turns that into
 // 48 kHz stereo. That split is why adding MP3 is a file and a row --
 // and it is where PulseAudio, PipeWire and CoreAudio all put resampling.
 #include <string.h>
@@ -21,10 +21,12 @@
 // Order is PROBE order, and WAV goes first because its magic is four
 // bytes at offset 0 while MP3's is a sync pattern that a stray 0xFF can
 // imitate -- the cheaper, stricter test should get the first look.
-// MIDI's `MThd` is as strict as WAV's `RIFF`, so it goes ahead of MP3 too.
+// MIDI's `MThd` and FLAC's `fLaC` are as strict as WAV's `RIFF`, so they
+// go ahead of MP3 too.
 static const struct usnd_codec *const g_codecs[] = {
     &usnd_codec_wav,
     &usnd_codec_mid,
+    &usnd_codec_flac,
     &usnd_codec_mp3,
 };
 #define CODEC_COUNT ((int)(sizeof g_codecs / sizeof g_codecs[0]))
@@ -113,7 +115,7 @@ int usnd_open(const char *path, struct usnd_stream *s) {
     if (rc != 0) return rc;
 
     s->src_cap = SRC_FRAMES;
-    s->src = malloc((size_t)s->src_cap * s->fmt.channels * sizeof(int16_t));
+    s->src = malloc((size_t)s->src_cap * s->fmt.channels * sizeof(int32_t));
     if (!s->src) {
         s->codec->close(s);
         sys_close(s->fd);
@@ -154,16 +156,16 @@ static int src_fill(struct usnd_stream *s) {
 // than panned: a single channel is centre by definition, and halving it
 // to "keep the power" would make every mono file quieter than the
 // stereo one beside it.
-static int src_next(struct usnd_stream *s, int16_t out[2]) {
+static int src_next(struct usnd_stream *s, int32_t out[2]) {
     if (!src_fill(s)) return 0;
-    const int16_t *f = s->src + s->src_pos * s->fmt.channels;
+    const int32_t *f = s->src + s->src_pos * s->fmt.channels;
     out[0] = f[0];
     out[1] = s->fmt.channels == 2 ? f[1] : f[0];
     s->src_pos++;
     return 1;
 }
 
-long usnd_read(struct usnd_stream *s, int16_t *dst, long frames) {
+long usnd_read(struct usnd_stream *s, int32_t *dst, long frames) {
     if (!s->codec || frames <= 0 || s->drained) return 0;
 
     // ALREADY THE DEVICE'S RATE: no resampler in the path at all, only
@@ -179,9 +181,9 @@ long usnd_read(struct usnd_stream *s, int16_t *dst, long frames) {
             if (take > frames - n) take = frames - n;
             if (s->fmt.channels == USND_CHANNELS) {
                 memcpy(dst + n * 2, s->src + s->src_pos * 2,
-                       (size_t)take * 2 * sizeof(int16_t));
+                       (size_t)take * 2 * sizeof(int32_t));
             } else {
-                const int16_t *src = s->src + s->src_pos;
+                const int32_t *src = s->src + s->src_pos;
                 for (long i = 0; i < take; i++)
                     dst[(n + i) * 2] = dst[(n + i) * 2 + 1] = src[i];
             }
@@ -216,10 +218,11 @@ long usnd_read(struct usnd_stream *s, int16_t *dst, long frames) {
         if (s->tail == 2) { s->drained = 1; break; }
 
         for (int c = 0; c < 2; c++) {
-            int32_t a = s->prev[c], b = s->cur[c];
-            // 64-bit because (b - a) * phase overflows 32 bits at full
-            // scale, and the wrap would be a loud one.
-            dst[n * 2 + c] = (int16_t)(a + (int32_t)(((int64_t)(b - a) * s->phase) >> 16));
+            int64_t a = s->prev[c], b = s->cur[c];
+            // 64-bit because b - a alone needs 33 bits at full scale and
+            // its product with the phase 49, and a wrap would be a loud
+            // one. The result lies between a and b, so it fits again.
+            dst[n * 2 + c] = (int32_t)(a + (((b - a) * (int64_t)s->phase) >> 16));
         }
         n++;
         s->out_pos++;
@@ -280,19 +283,19 @@ int usnd_seek(struct usnd_stream *s, uint64_t device_frame) {
 // a registry is a list of things every consumer of it will act on.
 
 struct memsrc {
-    const int16_t *data;
+    const int16_t *data;     // the caller's s16; widened on the way out
     uint64_t frames, pos;
     int channels;
 };
 
 static int mem_probe(const uint8_t *d, size_t n) { (void)d; (void)n; return 0; }
 
-static long mem_read(struct usnd_stream *s, int16_t *dst, long frames) {
+static long mem_read(struct usnd_stream *s, int32_t *dst, long frames) {
     struct memsrc *m = s->priv;
     if (m->pos >= m->frames) return 0;
     if ((uint64_t)frames > m->frames - m->pos) frames = (long)(m->frames - m->pos);
-    memcpy(dst, m->data + m->pos * (uint64_t)m->channels,
-           (size_t)frames * m->channels * sizeof(int16_t));
+    const int16_t *src = m->data + m->pos * (uint64_t)m->channels;
+    for (long i = 0; i < frames * m->channels; i++) dst[i] = (int32_t)src[i] * 65536;
     m->pos += (uint64_t)frames;
     return frames;
 }
@@ -320,7 +323,7 @@ int usnd_clip_drain(struct usnd_stream *s, struct usnd_clip *c) {
         usnd_fail(total ? "too long to load as a clip" : "clip has no samples");
         return total ? -ENOTSUP : -EINVAL;
     }
-    int16_t *pcm = malloc((size_t)total * USND_CHANNELS * sizeof(int16_t));
+    int32_t *pcm = malloc((size_t)total * USND_CHANNELS * sizeof(int32_t));
     if (!pcm) { usnd_fail("out of memory"); return -ENOMEM; }
 
     // Reads until the decoder stops rather than trusting the estimate:
@@ -360,7 +363,7 @@ int usnd_clip_from_pcm(const int16_t *data, uint64_t frames, uint32_t rate,
     s.frames = frames;
     s.step = (uint32_t)(((uint64_t)rate << 16) / USND_RATE);
     s.src_cap = SRC_FRAMES;
-    s.src = malloc((size_t)s.src_cap * channels * sizeof(int16_t));
+    s.src = malloc((size_t)s.src_cap * channels * sizeof(int32_t));
     struct memsrc *m = malloc(sizeof *m);
     if (!s.src || !m) {
         free(s.src); free(m);

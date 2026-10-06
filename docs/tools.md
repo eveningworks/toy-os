@@ -2210,8 +2210,23 @@ window without going through it will find its layout polls timing out.
   `--positive-control` builds the decoder with two Huffman tables
   swapped and REQUIRES every check to go red -- shaped to defeat the
   structural check on purpose, since swapping two codewords of equal
-  length leaves the code complete and prefix-free. Not in any gate: it
-  needs `lame` and `ffmpeg`.
+  length leaves the code complete and prefix-free. The MP3 comparison is
+  in s32 against ffmpeg's `s32le` since the sound path widened, and
+  agrees to ~1.3e-7.
+
+  **And `usnd_flac.c`, EXACTLY**: a lossless decoder has no error bound
+  to hide in, so every sample must equal Xiph's `flac -d` after the s32
+  output is shifted back to the file's depth. Fourteen encodes shaped by
+  what the format can do -- 8, 12, 16, 20, 24 and 32 bits (12 and 20
+  through WAVE_FORMAT_EXTENSIBLE, the only way `flac` takes them),
+  levels 0 to 8 with exhaustive search, blocks of 192 and 32768, ffmpeg's
+  encoder as well as Xiph's, wasted bits, a silence and a noise burst --
+  and `flac -a` was used to confirm the fixtures really hold CONSTANT,
+  VERBATIM, FIXED and LPC subframes and all four channel assignments.
+  Seeks are checked against the straight decode, with and without a seek
+  table. Its positive control drops the Rice zig-zag and every FLAC
+  check must go red. Not in any gate: it needs `lame`, `ffmpeg` and
+  `flac`.
 - **`midi_hostcheck.py`** -- the MIDI codec, the SoundFont parser and
   the synth (`userland/lib/usnd_mid.c`, `usnd_sf2.c`, `usnd_synth.c`)
   compiled with the host gcc, playing `first-boot.mid` and a GM tour
@@ -2294,8 +2309,12 @@ window without going through it will find its layout polls timing out.
   by. It also writes `first-boot.mid`, THE SAME SCORE as a Standard
   MIDI File -- format 1 with a conductor track, running status, a
   sustain pedal, pan and modulation, a pitch-bend scoop and a closing
-  ritardando, so the data alone exercises the MIDI codec. Needs `lame`
-  (not for `--midi-only`); nothing in the build runs it.
+  ritardando, so the data alone exercises the MIDI codec. With `flac`
+  on PATH it also writes `first-boot.flac` (the first 20 s at 24 bits,
+  Vorbis comments and a cover PICTURE), `data/tests/sine1k.flac`, and
+  `data/tests/ramp24.flac`, whose every sample is a formula of its index
+  so `/tests/usnd_test` checks exactness with no reference decoder.
+  Needs `lame` (not for `--midi-only`); nothing in the build runs it.
 - **`gen_cursors.py`** -- generates the shipped cursor themes into
   `data/cursors/`, which the Makefile's `seed` target stages onto the
   image. **Into `data/`, NOT `seed/sync/`** -- that tree is gitignored
@@ -3636,6 +3655,24 @@ window without going through it will find its layout polls timing out.
   BEFORE passing the G6 through -- once QEMU holds the device the host
   cannot open it for playback. Then `--record SECONDS` captures while
   the guest plays, and `--analyse WAV` re-reads a capture later.
+
+  **`--depth` is the 24-bit proof**, and the one measurement of the
+  s32 path no emulated card can make. A guest owning the G6 plays a
+  1187 Hz tone at -100.8 dBFS -- 0.3 of one 16-bit step, which a 16-bit
+  path rounds to EXACT SILENCE -- beside a calibration tone 20.8 dB
+  louder and the quiet tone's 16-bit twin. A Goertzel filter over 14 s
+  of 32-bit capture digs the tone out of the line-in's hiss; it must
+  stand 10 dB clear of the twin, and a -90.8 dBFS leg must land within
+  3 dB of the calibration's prediction (the chain is linear there).
+  How far the -100.8 tone falls from linear is REPORTED, not asserted:
+  it wandered from -4.9 to +5.4 dB over four runs while -90.8 stayed
+  within 1.2 dB -- that close to the noise one capture is not a level
+  measurement. The positive control (the USB driver narrowing to 16 bits
+  inside the 32-bit slot, its memcpy fast path off) sends the quiet tone
+  to -127 dBFS and reddens both assertions. **Not 1 kHz**: with the G6 attached the line-in carries lines
+  at the USB frame rate's harmonics, -94 dBFS at 1 kHz in digital
+  silence. The guest's usb-audio bind line is printed first, so the result
+  says which alternate setting it went through.
 
   **It SKIPS when the loop is open, and that is deliberate.** The cable
   is not normally connected; an absent cable and a silent guest are

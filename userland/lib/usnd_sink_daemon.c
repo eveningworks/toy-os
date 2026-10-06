@@ -23,7 +23,7 @@
 #include "proc_info.h" // struct proc_info -- this process's own name
 
 static volatile struct snd_ctl_page *g_ctl;
-static volatile int16_t *g_ring;
+static volatile int32_t *g_ring;
 static uint32_t g_wr;
 static int g_fd = -1;
 static char g_name[SHM_NAME_MAX];
@@ -90,10 +90,11 @@ static int daemon_open(void) {
     }
 
     g_ctl = (volatile struct snd_ctl_page *)p;
-    g_ring = (volatile int16_t *)((uintptr_t)p + 4096);
+    g_ring = (volatile int32_t *)((uintptr_t)p + 4096);
     g_ctl->rate = USND_RATE;
     g_ctl->channels = USND_CHANNELS;
     g_ctl->ring_bytes = SND_RING_BYTES;
+    g_ctl->sample_bits = SND_SAMPLE_BITS;
     g_ctl->hw_pos = 0;
     g_ctl->wr_pos = 0;
     g_ctl->running = 0;
@@ -117,7 +118,7 @@ static long daemon_space(void) {
     return (long)(writable_bytes() / SND_FRAME_BYTES);
 }
 
-static long daemon_write(const int16_t *pcm, long frames) {
+static long daemon_write(const int32_t *pcm, long frames) {
     if (!g_ctl) return 0;
     if (g_ctl->device_gone) return 0; // the daemon left; nothing reads this
 

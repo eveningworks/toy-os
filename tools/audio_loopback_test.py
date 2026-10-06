@@ -44,6 +44,17 @@ QEMU has the device the host cannot open it for playback.
     python3 tools/audio_loopback_test.py                  # selftest
     python3 tools/audio_loopback_test.py --record 10 -o cap.wav
     python3 tools/audio_loopback_test.py --analyse cap.wav
+    python3 tools/audio_loopback_test.py --depth          # 24-bit proof
+
+THE DEPTH CHECK (--depth) asks whether a 24-bit file reaches the DAC as
+24 bits, and it is built so that only a real 24-bit path can pass. The
+stimulus is a 1187 Hz tone at -100.8 dBFS: 0.3 of one 16-bit step, which
+ROUNDS TO EXACT SILENCE anywhere the chain is 16 bits wide. Three legs off
+one cable: the same tone 20.8 dB louder (-80 dBFS, which any path
+carries) calibrates the chain's gain; the quiet tone must then arrive
+20.8 dB below it; and the quiet tone rounded to 16 bits -- digital
+silence -- shows where the floor is. A narrowband filter over seconds of
+capture digs the tone out of the line-in's broadband hiss.
 """
 import argparse
 import math
@@ -307,6 +318,153 @@ def loop_probe(play, cap, tmp):
     return db(goertzel(sig[:int(1.2 * FS)], 1000.0)), got
 
 
+# --- the depth check ---------------------------------------------------------
+
+DEPTH_SECONDS = 20.0
+# NOT 1 kHz: the line-in capture carries interference lines at exactly
+# 1 kHz and its harmonics -- the USB frame rate -- with the G6 attached,
+# measured at -94 dBFS at 1 kHz in a capture of DIGITAL SILENCE, where the
+# floor either side is -125. A tone there measures the bus, not the DAC.
+DEPTH_FREQ = 1187.0
+DEPTH_QUIET_DBFS = 20 * math.log10(0.3 / 32768)          # -100.8
+DEPTH_CAL_DBFS = DEPTH_QUIET_DBFS + 20.8                  # -80.0
+
+
+def write_flac_tone(path, dbfs, bits, seconds, freq=DEPTH_FREQ):
+    """A stereo tone at `dbfs` as a `bits`-bit FLAC, rounded -- so the
+    16-bit twin of the quiet tone is all zeros, as a 16-bit path makes it."""
+    amp = 10 ** (dbfs / 20) * (1 << (bits - 1))
+    width = bits // 8
+    body = bytearray()
+    for i in range(int(seconds * FS)):
+        v = int(round(amp * math.sin(2 * math.pi * freq * i / FS)))
+        b = (v & ((1 << bits) - 1)).to_bytes(width, "little")
+        body += b + b
+    raw = path + ".raw"
+    open(raw, "wb").write(bytes(body))
+    r = subprocess.run(["flac", "-s", "-f", "--force-raw-format", "--endian=little",
+                        "--sign=signed", "--channels=2", f"--bps={bits}",
+                        f"--sample-rate={FS}", "-o", path, raw], capture_output=True)
+    os.unlink(raw)
+    return r.returncode == 0
+
+
+def record32(path, seconds, cap):
+    subprocess.run(["arecord", "-D", f"plughw:{cap},0", "-f", "S32_LE",
+                    "-r", str(FS), "-c", "2", "-d", str(int(seconds + 1)), path],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def read_wav32(path):
+    w = wave.open(path)
+    n, ch = w.getnframes(), w.getnchannels()
+    pcm = struct.unpack("<%di" % (n * ch), w.readframes(n))
+    return [pcm[i * ch] / 2147483648.0 for i in range(n)]
+
+
+def depth_leg(tag, guest_path, instance, cap):
+    """Play `guest_path` in the guest and return the DEPTH_FREQ level of
+    the steady middle of what came back, in dBFS."""
+    out = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"depth_{tag}.wav")
+    rec = subprocess.Popen(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, %r); import audio_loopback_test as a; "
+         "a.record32(%r, %f, %d)" % (HERE, out, DEPTH_SECONDS + 10, cap)])
+    time.sleep(2.5)
+    vm("--instance", str(instance), "exec", f"spawn /bin/aplay {guest_path}")
+    rec.wait()
+    sig = read_wav32(out)
+    # Seconds 6 to DEPTH_SECONDS: past the ADC start-up, the spawn and the
+    # first chunks, and short of the end.
+    mid = sig[6 * FS:int(DEPTH_SECONDS * FS)]
+    return db(goertzel(mid, DEPTH_FREQ))
+
+
+def depth(args):
+    from shutil import which
+    if not which("flac"):
+        print("SKIP: flac is not installed -- it encodes the stimulus")
+        return 0
+    cap = card_index(CAP_CARD)
+    play = card_index(PLAY_CARD)
+    if cap is None or play is None:
+        print(f"SKIP: need both {PLAY_CARD!r} and {CAP_CARD!r} on the host -- "
+              f"the G6 must be plugged in and NOT already passed through")
+        return 0
+    set_capture_gain(cap)
+    amixer(play, "sset", "Speaker", str(G6_UNITY))
+    lvl, _ = loop_probe(play, cap, os.environ.get("TMPDIR", "/tmp"))
+    print(f"loop probe: 1 kHz returned at {lvl:.2f} dBFS")
+    if lvl < LOOP_PRESENT_DBFS:
+        print("SKIP: the loop is OPEN -- patch the G6 headphone-out to line-in")
+        return 0
+
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    files = {"cal": (DEPTH_CAL_DBFS, 24), "near": (DEPTH_QUIET_DBFS + 10.0, 24),
+             "quiet": (DEPTH_QUIET_DBFS, 24), "quiet16": (DEPTH_QUIET_DBFS, 16)}
+    for tag, (dbfs, bits) in files.items():
+        if not write_flac_tone(os.path.join(tmp, f"depth_{tag}.flac"), dbfs, bits, DEPTH_SECONDS):
+            print("SKIP: flac failed to encode the stimulus")
+            return 0
+
+    inst = str(args.instance)
+    print("booting a guest with the G6 passed through ...")
+    vm("--instance", inst, "--usb-host", "041e:3256", "--usb", "xhci",
+       "--audio", "none", "start", timeout=400)
+    levels = {}
+    try:
+        # WHICH PATH, said first: the bind line names UAC1/UAC2 and the
+        # width the driver chose (CLAUDE.md: a USB audio result says which
+        # path it exercised, or it says nothing).
+        dm = vm("--instance", inst, "exec", "dmesg")
+        bind = [ln.strip() for ln in dm.splitlines() if "bound as usb-audio" in ln]
+        print("bind: " + (bind[-1] if bind else "(no usb-audio bind line)"))
+        for tag in files:
+            vm("--instance", inst, "put", os.path.join(tmp, f"depth_{tag}.flac"),
+               f"/tmp/depth_{tag}.flac")
+        for tag in files:
+            print(f"leg {tag} ...")
+            levels[tag] = depth_leg(tag, f"/tmp/depth_{tag}.flac", inst, cap)
+    finally:
+        vm("--instance", inst, "stop", timeout=120)
+
+    want = levels["cal"] - (DEPTH_CAL_DBFS - DEPTH_QUIET_DBFS)
+    near = levels["near"] - 10.0
+    print(f"\n  calibration -80.0 dBFS tone   came back at {levels['cal']:7.1f} dBFS")
+    print(f"  24-bit  -90.8 dBFS tone       came back at {levels['near']:7.1f} dBFS "
+          f"(the chain predicts {levels['cal'] - 10.8:.1f})")
+    print(f"  24-bit -100.8 dBFS tone       came back at {levels['quiet']:7.1f} dBFS "
+          f"(-80 predicts {want:.1f}, -90.8 predicts {near:.1f})")
+    print(f"  the same tone at 16 bits      came back at {levels['quiet16']:7.1f} dBFS "
+          f"(digital silence: the floor)")
+    # TWO QUESTIONS, ASKED APART. Whether the bits survive is the 24-bit
+    # tone standing clear of the floor its 16-bit twin leaves -- 16 bits
+    # round it to nothing, so any tone at all is the proof. Whether the
+    # ANALOG chain is linear that low is a different question: it is
+    # asserted at -90.8, where both widths carry the tone, and only
+    # REPORTED at -100.8, where the level wanders: -4.9 to +5.4 dB from
+    # linear over four runs on 2026-10-06, while -90.8 stayed within
+    # 1.2 dB -- this close to the line-in's noise one capture is not a
+    # level measurement, and the chain's own gain moved ~10 dB between
+    # runs (cause not established).
+    checks = [
+        ("the calibration tone is well above the floor",
+         levels["cal"] > levels["quiet16"] + 25),
+        ("the chain is linear at -90.8 dBFS (3 dB)",
+         abs(levels["near"] - (levels["cal"] - 10.8)) < 3.0),
+        ("the 24-bit -100.8 dBFS tone stands 10 dB clear of what 16 bits leaves",
+         levels["quiet"] > levels["quiet16"] + 10),
+    ]
+    print(f"\n  reported, not asserted: the -100.8 tone is {levels['quiet'] - near:+.1f} dB "
+          f"from where -90.8 predicts")
+    print()
+    for name, ok in checks:
+        print(f"  {'ok  ' if ok else 'FAIL'}  {name}")
+    npass = sum(1 for _, ok in checks if ok)
+    print(f"\naudio_loopback --depth: {npass}/{len(checks)} checks passed")
+    return 0 if npass == len(checks) else 1
+
+
 # --- the crackle A/B -------------------------------------------------------
 # WHY THIS IS A MODE AND NOT A SEPARATE TOOL: the finding it exists to
 # reproduce is a COMPARISON, and a number from one driver alone is what
@@ -430,16 +588,21 @@ def main():
     ap.add_argument("--crackle", action="store_true",
                     help="the A/B: the same MP3 through the in-kernel driver "
                          "and the ring-3 one, on one cable and one analyser")
+    ap.add_argument("--depth", action="store_true",
+                    help="the 24-bit proof: a tone below one 16-bit step, "
+                         "played in a guest, found on line in")
     ap.add_argument("--seconds", type=float, default=60.0,
                     help="length of the --crackle stimulus (default 60)")
     ap.add_argument("--instance", type=int, default=0,
-                    help="vm.py slot for --crackle (see CLAUDE.md on ports)")
+                    help="vm.py slot for --crackle/--depth (see CLAUDE.md on ports)")
     ap.add_argument("--quiet-analyse", action="store_true",
                     help="record without printing the analysis (internal)")
     args = ap.parse_args()
 
     if args.crackle:
         return crackle(args)
+    if args.depth:
+        return depth(args)
 
     tmp = os.environ.get("TMPDIR", "/tmp")
 

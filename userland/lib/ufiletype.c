@@ -24,6 +24,7 @@ static const struct { const char *ext, *name, *icon; } TYPES[] = {
     { "ppm",     "PPM image",       "file-image" },
     { "wav",     "WAV audio",       "file-audio" },
     { "mp3",     "MP3 audio",       "file-audio" },
+    { "flac",    "FLAC audio",      "file-audio" },
     { "mid",     "MIDI music",      "file-audio" },
     { "sf2",     "SoundFont",       "file-audio" },
     { "ttf",     "Font",            "file-font" },

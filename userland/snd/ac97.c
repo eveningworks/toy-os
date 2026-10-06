@@ -133,6 +133,12 @@ static int ac97_open(struct snd_dev *dev) {
     // manage would describe something nothing can ask for.
     dev->rates = SND_RATE_48000;
     dev->depths = SND_DEPTH_16;
+    // 16-BIT, so the engine plays the host's narrowed copy of the s32
+    // ring, in the DMA grant after the descriptor list's page.
+    dev->bits = 16;
+    dev->bounce = (int16_t *)((uint8_t *)dev->dma + 4096);
+    dev->bounce_phys = dev->dma_phys + 4096;
+    memset(dev->bounce, 0, SND_CHUNKS * SND_CHUNK_BYTES_S16);
     dev->priv = &g_st;
     return 0;
 }
@@ -143,7 +149,7 @@ static void ac97_close(struct snd_dev *dev) {
 }
 
 static int ac97_start(struct snd_dev *dev, uint64_t ring_phys) {
-    (void)dev;
+    (void)ring_phys;   // the engine reads dev->bounce, never the ring
     // Reset the box, then arm it. RR self-clears when the reset is done.
     wnabm8(PO_CR, CR_RR);
     int done = 0;
@@ -155,8 +161,8 @@ static int ac97_start(struct snd_dev *dev, uint64_t ring_phys) {
 
     // SAMPLES, NOT BYTES -- this chip counts 16-bit units.
     for (int k = 0; k < SND_CHUNKS; k++) {
-        g_st.bdl[k].addr = (uint32_t)(ring_phys + (uint64_t)k * SND_CHUNK_BYTES);
-        g_st.bdl[k].samples = SND_CHUNK_BYTES / 2;
+        g_st.bdl[k].addr = (uint32_t)(dev->bounce_phys + (uint64_t)k * SND_CHUNK_BYTES_S16);
+        g_st.bdl[k].samples = SND_CHUNK_BYTES_S16 / 2;
         g_st.bdl[k].flags = 0x8000; // IOC: one interrupt per chunk
     }
 
@@ -209,7 +215,7 @@ const struct snd_driver snd_driver = {
     .abi = SND_DRIVER_ABI,
     .name = "ac97",
     .label = "Intel AC'97 (ring 3)",
-    .dma_bytes = 4096,          // the descriptor list, one page
+    .dma_bytes = 4096 + SND_CHUNKS * SND_CHUNK_BYTES_S16,  // the list's page + a 16-bit copy
     .match = ac97_match,
     .open = ac97_open,
     .close = ac97_close,

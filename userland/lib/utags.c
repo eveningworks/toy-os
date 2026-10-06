@@ -3,6 +3,7 @@
 #include "lib/utags.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 
 #define ID3_MAX   (4u * 1024u * 1024u)   // a tag bigger than this is refused, art and all
@@ -253,6 +254,114 @@ int utags_from_midi(const uint8_t *b, size_t len, struct utags *t) {
     return 0;
 }
 
+// --- FLAC ------------------------------------------------------------------------
+//
+// Metadata BLOCKS after "fLaC": STREAMINFO for the length, VORBIS_COMMENT
+// for the text (little-endian lengths, KEY=value in UTF-8, keys in any
+// case), PICTURE for the art (big-endian, the front cover preferred as
+// for ID3).
+
+static uint32_t le32(const uint8_t *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static int key_is(const uint8_t *c, size_t n, const char *key) {
+    size_t k = strlen(key);
+    if (n <= k || c[k] != '=') return 0;
+    for (size_t i = 0; i < k; i++) {
+        uint8_t a = c[i];
+        if (a >= 'a' && a <= 'z') a = (uint8_t)(a - 32);
+        if (a != (uint8_t)key[i]) return 0;
+    }
+    return 1;
+}
+
+static int flac_comment(const uint8_t *b, size_t len, struct utags *t) {
+    if (len < 8) return 0;
+    size_t vlen = le32(b), i = 4;
+    if (vlen > len - i - 4) return 0;
+    i += vlen;
+    uint32_t count = le32(b + i);
+    i += 4;
+    int found = 0;
+    static const struct { const char *key; int bit; size_t off; } fields[] = {
+        { "TITLE",  UTAGS_TITLE,  offsetof(struct utags, title) },
+        { "ARTIST", UTAGS_ARTIST, offsetof(struct utags, artist) },
+        { "ALBUM",  UTAGS_ALBUM,  offsetof(struct utags, album) },
+    };
+    for (uint32_t c = 0; c < count && i + 4 <= len; c++) {
+        size_t n = le32(b + i);
+        i += 4;
+        if (n > len - i) return found;
+        for (size_t f = 0; f < sizeof fields / sizeof fields[0]; f++) {
+            char *dst = (char *)t + fields[f].off;
+            size_t k = strlen(fields[f].key) + 1;
+            if (!dst[0] && key_is(b + i, n, fields[f].key) &&
+                decode(dst, 3, b + i + k, n - k) && dst[0])
+                found |= fields[f].bit;
+        }
+        i += n;
+    }
+    return found;
+}
+
+static int flac_picture(const uint8_t *b, size_t len, struct utags *t, int *front) {
+    if (len < 32) return 0;
+    uint32_t type = be32(b);
+    size_t i = 4, n = be32(b + i);                        // MIME type
+    if (n > len - i - 4) return 0;
+    i += 4 + n;
+    if (i + 4 > len) return 0;
+    n = be32(b + i);                                     // description
+    if (n > len - i - 4) return 0;
+    i += 4 + n;
+    if (i + 20 > len) return 0;
+    i += 16;                                             // width, height, depth, colours
+    n = be32(b + i);
+    i += 4;
+    if (n > len - i || !n || (t->art && (*front || type != 3))) return 0;
+    uint8_t *copy = malloc(n);
+    if (!copy) return 0;
+    memcpy(copy, b + i, n);
+    free(t->art);
+    t->art = copy;
+    t->art_len = n;
+    *front = type == 3;
+    return UTAGS_ART;
+}
+
+static int flac_block(int type, const uint8_t *b, size_t len, struct utags *t,
+                      int want_art, int *front) {
+    if (type == 0 && len >= 18) {
+        uint32_t rate = (uint32_t)b[10] << 12 | (uint32_t)b[11] << 4 | (uint32_t)(b[12] >> 4);
+        uint64_t total = ((uint64_t)(b[13] & 15) << 32) | (uint64_t)be32(b + 14);
+        if (rate && total) {
+            t->length_ms = (uint32_t)(total * 1000 / rate);
+            return UTAGS_LENGTH;
+        }
+        return 0;
+    }
+    if (type == 4) return flac_comment(b, len, t);
+    if (type == 6 && want_art) return flac_picture(b, len, t, front);
+    return 0;
+}
+
+int utags_from_flac(const uint8_t *buf, size_t len, struct utags *t, int want_art) {
+    if (len < 4 || memcmp(buf, "fLaC", 4) != 0) return 0;
+    size_t i = 4;
+    int found = 0, front = 0, last = 0;
+    while (!last && i + 4 <= len) {
+        last = buf[i] >> 7;
+        int type = buf[i] & 0x7F;
+        size_t n = (size_t)buf[i + 1] << 16 | (size_t)buf[i + 2] << 8 | buf[i + 3];
+        i += 4;
+        if (n > len - i) break;
+        found |= flac_block(type, buf + i, n, t, want_art, &front);
+        i += n;
+    }
+    return found;
+}
+
 // --- the file -----------------------------------------------------------------
 
 int utags_read(const char *path, struct utags *t, int want_art) {
@@ -270,6 +379,26 @@ int utags_read(const char *path, struct utags *t, int want_art) {
                 if (fread(buf + 10, 1, tag - 10, fp) == tag - 10)
                     found |= utags_from_id3v2(buf, tag, t, want_art);
                 free(buf);
+            }
+        } else if (!memcmp(head, "fLaC", 4)) {
+            // Block by block, reading only what is wanted: a cover
+            // picture can be megabytes, and a tag-only read must not pay
+            // for it.
+            long at = 4;
+            int last = 0, front = 0;
+            for (int guard = 0; !last && guard < 128; guard++) {
+                uint8_t h[4];
+                if (fseek(fp, at, SEEK_SET) != 0 || fread(h, 1, 4, fp) != 4) break;
+                last = h[0] >> 7;
+                int type = h[0] & 0x7F;
+                size_t n = (size_t)h[1] << 16 | (size_t)h[2] << 8 | h[3];
+                at += 4 + (long)n;
+                if ((type == 0 || type == 4 || (type == 6 && want_art)) && n <= ID3_MAX) {
+                    uint8_t *b = malloc(n ? n : 1);
+                    if (!b) break;
+                    if (fread(b, 1, n, fp) == n) found |= flac_block(type, b, n, t, want_art, &front);
+                    free(b);
+                }
             }
         } else if (!memcmp(head, "MThd", 4)) {
             uint8_t *buf = malloc(MIDI_HEAD);

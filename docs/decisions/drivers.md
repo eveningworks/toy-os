@@ -1556,7 +1556,7 @@ a stream that is simply continuous. **This is the one part that is
 QEMU-tested and not hardware-tested**, and a real controller that
 insists on Frame IDs is where it would show.
 
-**The format is refused rather than negotiated.** `abi/sound_abi.h`
+**The format is refused rather than negotiated.** (The ring has been s32 since 2026-10-06 -- "The sound ring is s32, and a 16-bit card narrows in its driver" below.) `abi/sound_abi.h`
 fixes 48 kHz stereo s16, and QEMU's device offers exactly that -- but
 the driver checks rather than assuming, and leaves a device offering
 anything else unbound. Resampling already exists one layer up
@@ -1849,7 +1849,7 @@ the dense ones, and the integer one runs at 10.6x under TCG and 60x
 ## usnd: audio files are decoded and mixed in ring 3, behind a sink
 
 The kernel's contract stops at "one exclusive stream of 48 kHz stereo
-s16". Everything a person would call playing a file -- the formats, the
+s16". (The ring has been s32 since 2026-10-06 -- "The sound ring is s32, and a 16-bit card narrows in its driver" below.) Everything a person would call playing a file -- the formats, the
 rate conversion, several sounds at once -- is `userland/lib/usnd.h`, in
 the process that wants the sound. The argument is the one `uimg.h`
 already makes about images: ALSA's dmix is a library, PulseAudio,
@@ -2124,7 +2124,7 @@ deliberately: it is the difference between hearing the device and
 hearing it indefinitely, the first is what proves every other piece, and
 `docs/roadmap.md` carries the second.
 
-**Why the sample width is converted rather than negotiated.** The G6
+**Why the sample width is converted rather than negotiated.** (The ring has been s32 since 2026-10-06 -- "The sound ring is s32, and a 16-bit card narrows in its driver" below.) The G6
 offers 24-bit and 32-bit and no 16-bit at all, so "refuse anything that
 is not `sound_abi.h`'s format" would have refused it outright. Widening
 the ABI is a real project (rate and format negotiation through the ring,
@@ -3038,3 +3038,50 @@ layout, US-International). The maintainer chose one switch: 20 of the 21
 layouts have dead keys, English (US) none, and the per-layout form needed
 a setting per list entry for a distinction few want.
 
+
+## The sound ring is s32, and a 16-bit card narrows in its driver
+
+FLAC brought 24-bit files (2026-10-06), and a 24-bit file through a
+16-bit stack is a 16-bit file. The ABI, `usnd`, `soundd` and every
+driver now carry **s32 with full scale in the top bits** -- ALSA's
+`S32_LE` -- end to end: a codec yields it, the library resamples and
+mixes in it (64-bit accumulators), `soundd` sums its clients in 64 bits
+and clamps once, and the ring is s32 (`SND_CTL_MAGIC` "SND2",
+`sample_bits` in the control page, `SND_DRIVER_ABI` 3).
+
+**One format, converted at the edge, rather than negotiated per
+device.** PipeWire and the Windows audio engine both mix in one wide
+internal format and convert once, at the device; per-device negotiation
+would put two formats through `soundd`, both sinks and every client, and
+a stream that moves between cards mid-play (which this stack does) would
+have to change format under itself. The cost is twice the ring
+bandwidth, 384 KB/s, which is nothing. The kernel's no-floating-point
+rule is why the wide format is s32 and not float32.
+
+**The edge is the driver, and it is cheap where the card agrees.** HDA
+keeps 20/24/32-bit samples MSB-justified in a 32-bit container, so a
+codec reporting any of those DMAs the ring as it is; USB's 3- and 4-byte
+subslots take the top bytes per packet, as the s16 version already
+shifted them, and the deepest alternate setting now wins (the G6's
+32-bit one). AC97 and a 16-bit-only HDA codec -- QEMU's -- cannot read
+s32, so they DMA a 16-bit copy the core keeps SND_CONVERT_LEAD chunks
+ahead of the engine (`struct snd_bounce`; `snddrv` does the same for a
+ring-3 driver), the copy-ahead the USB driver always had. Narrowing
+ROUNDS (`snd_s32_to_s16`) rather than truncating: half an LSB of error
+rather than a whole one of bias; dither is not added.
+
+**A chunk is a length of time**: 512 frames, unchanged, so soundd's
+eight-chunk lead and every driver's copy-ahead mean what they meant;
+the ring doubled to 128 KiB to keep its 341 ms.
+
+**What stays 16-bit, deliberately:** `usnd_clip_from_pcm()` and
+`usnd_push()` take s16, because DOOM's sources are; `usnd_peek()` gives
+s16, because the Player's spectrum is tuned to it. Each converts at its
+own edge.
+
+**The proof is not a QEMU test.** Every emulated card here is 16-bit, so
+the suite only proves the narrowing. `audio_loopback_test.py --depth`
+plays a 24-bit tone at -100.8 dBFS -- under half a 16-bit step, which
+a 16-bit path rounds to exact silence -- through a guest owning the G6,
+and finds it on the line-in recording beside a calibration tone 20.8 dB
+louder.

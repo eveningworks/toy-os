@@ -199,12 +199,12 @@ def run(dbg, qmp, tmp, res):
 
     # --- 2. the listing is by PROBE, not by extension ------------------
     #
-    # The app now opens on /usr/share/music, so what it lists is MP3s and
-    # MIDI files -- and it lists them because usnd_probe() recognises the
+    # The app now opens on /usr/share/music, so what it lists is FLAC,
+    # MP3 and MIDI files -- and it lists them because usnd_probe() recognises the
     # bytes, not because anything matched an extension. That is the
     # property worth asserting: an extension filter would have needed
     # editing to show them at all.
-    want = len([f for f in os.listdir(HOST_MUSIC) if f.endswith((".mp3", ".mid"))])
+    want = len([f for f in os.listdir(HOST_MUSIC) if f.endswith((".flac", ".mp3", ".mid"))])
     res.check("the music directory has something in it (host side)", want > 0,
               f"data/usr/share/music holds {want} track(s)")
     res.check("the player lists it", lay.has("list"), "no list widget reported")
@@ -271,26 +271,37 @@ def run(dbg, qmp, tmp, res):
               or any("player:" in l for l in logs),
               f"log lines: {parsed[-3:]}")
     # ...and by FORMAT, since a decoder that refused the file would still
-    # have produced a log line above. The directory lists first-boot.mid
-    # ahead of first-boot.mp3 -- the same score twice -- so the first row
-    # is the MIDI codec (which describes a song WITHOUT loading its
-    # SoundFont) and Next is the MP3 decoder.
+    # have produced a log line above. The directory lists first-boot.flac,
+    # .mid and .mp3 in that order -- the same score three times -- so the
+    # first row is the FLAC decoder, Next the MIDI codec (which describes
+    # a song WITHOUT loading its SoundFont), and Next again the MP3.
     opened = [l for l in logs if "player: opened" in l]
-    res.check("...the first row identified as MIDI",
-              any(" -- midi, " in l and "first-boot.mid" in l for l in opened),
+    res.check("...the first row identified as FLAC",
+              any(" -- flac, " in l and "first-boot.flac" in l for l in opened),
               f"log lines: {opened[-3:]}")
+    # THE TITLE IS THE TAG'S: the FLAC's Vorbis comments and the MP3's
+    # ID3 name it; a player showing file names would say "first-boot".
+    now = [l for l in logs if "player: now " in l]
+    res.check("...and its title and artist come from the Vorbis comments",
+              any("player: now First Boot (excerpt) / toy-os" in l for l in now), f"{now[-2:]}")
     nx, ny, nw, nh = lay.screen_rect("transport.next")
     dbg.click(nx + nw // 2, ny + nh // 2)
     dbg.settle()
     logs = poll_logs(dbg)
     opened = [l for l in logs if "player: opened" in l]
-    res.check("...and Next identified the MP3",
+    res.check("...Next identified the MIDI",
+              any(" -- midi, " in l and "first-boot.mid" in l for l in opened),
+              f"log lines: {opened[-3:]}")
+    mark = len(logs)
+    dbg.click(nx + nw // 2, ny + nh // 2)
+    dbg.settle()
+    logs = poll_logs(dbg)
+    opened = [l for l in logs[mark:] if "player: opened" in l]
+    res.check("...and Next again the MP3",
               any(" -- mp3, " in l and "Layer III" in l for l in opened),
               f"log lines: {opened[-3:]}")
-    # THE TITLE IS THE TAG'S: the MP3's ID3 says "First Boot" by
-    # "toy-os"; a player showing file names would say "first-boot".
-    now = [l for l in logs if "player: now " in l]
-    res.check("...and its title and artist come from the ID3 tag",
+    now = [l for l in logs[mark:] if "player: now " in l]
+    res.check("...its title and artist from the ID3 tag",
               any("player: now First Boot / toy-os" in l for l in now), f"{now[-2:]}")
 
     # --- 6. repeat decides what Next does at the end --------------------
@@ -318,7 +329,7 @@ def run(dbg, qmp, tmp, res):
     since = poll_logs(dbg)[mark:]
     res.check("...and wraps to the first with it (L)",
               any("player: repeat on" in l for l in since)
-              and any("player: opened" in l and "first-boot.mid" in l for l in since),
+              and any("player: opened" in l and "first-boot.flac" in l for l in since),
               f"{[l for l in since if 'layout' not in l][-3:]}")
     dbg.key(ord("l"))                     # leave the preference as it was
     dbg.settle()

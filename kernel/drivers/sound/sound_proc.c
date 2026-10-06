@@ -161,6 +161,7 @@ int sys_snd_register(struct syscall_ctx *c) {
     g_drv.dev.set_volume = proc_volume;
     g_drv.dev.rates = m.rates;
     g_drv.dev.depths = m.depths;
+    g_drv.dev.bits = m.bits;
     g_drv.live = 1;
 
     if (!sound_register(&g_drv.dev, ring, ring_phys)) {
@@ -231,7 +232,7 @@ int sys_snd_period(struct syscall_ctx *c) {
             // REPORTING A PERIOD IS THE PROOF IT IS RUNNING, and the
             // only one the core can have: start() could merely ask. So
             // this is where `running` becomes true for an app watching
-            // it -- one chunk late, which at 48 kHz is 21 ms.
+            // it -- one chunk late, which at 48 kHz is 11 ms.
             sound_publish_running(&g_drv.dev, 1);
             sound_period_done(pos);
             ret = 0;

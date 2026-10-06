@@ -19,7 +19,7 @@
 // not built yet:
 //
 //   CODECS -- a `struct usnd_codec` row (probe/open/read/seek/close).
-//   WAV, MP3 and MIDI (rendered through a SoundFont), each a file and a
+//   WAV, FLAC, MP3 and MIDI (rendered through a SoundFont), each a file and a
 //   row. The registry shape display_driver, block_device and uimg_codec
 //   already use here.
 //
@@ -35,14 +35,21 @@
 //   only mixer there is.
 //
 // **A CODEC NEVER RESAMPLES.** It reports its file's native rate and
-// channel count and hands out s16 frames in it; the library converts
+// channel count and hands out s32 frames in it; the library converts
 // once, in one place. Every real system puts that stage in the
 // server or the HAL, never in the decoder.
+//
+// **SAMPLES ARE s32 WITH FULL SCALE IN THE TOP BITS** (ALSA's S32_LE):
+// a 16-bit file's sample is v << 16, a 24-bit one's v << 8. One format
+// from the decoder to the ring, so a 24-bit FLAC reaches a 24-bit DAC
+// whole; only a 16-bit DEVICE narrows, in its driver. The calls that
+// take or give 16-bit samples -- usnd_clip_from_pcm(), usnd_push(),
+// usnd_peek() -- say so, and convert at the edge.
 
-// What a sink takes and what usnd_read() hands back: 16-bit signed
-// stereo at 48 kHz. Deliberately equal to the kernel ABI's values but
-// spelled separately -- a daemon sink would negotiate its own, and a
-// codec must not learn the device's numbers.
+// What a sink takes and what usnd_read() hands back: s32 stereo at
+// 48 kHz. Deliberately equal to the kernel ABI's values but spelled
+// separately -- a daemon sink would negotiate its own, and a codec must
+// not learn the device's numbers.
 #define USND_RATE     48000
 #define USND_CHANNELS 2
 
@@ -81,9 +88,9 @@ struct usnd_codec {
     int (*open)(struct usnd_stream *s);
 
     // Up to `frames` frames in the file's OWN rate and channel count,
-    // interleaved s16. Returns the count, 0 at end of file, negative on
+    // interleaved s32, full scale in the top bits. Returns the count, 0 at end of file, negative on
     // error. Short reads are legal and are not the end.
-    long (*read)(struct usnd_stream *s, int16_t *dst, long frames);
+    long (*read)(struct usnd_stream *s, int32_t *dst, long frames);
 
     // Reposition to a frame in the file's own rate. -ENOTSUP is a fine
     // answer for a format that cannot.
@@ -114,11 +121,11 @@ struct usnd_stream {
     // `cur` are the two source frames being interpolated BETWEEN and
     // must survive across calls, or every refill would click at its
     // own boundary.
-    int16_t *src;               // native-format staging, malloc'd
+    int32_t *src;               // native-format staging, malloc'd
     long src_cap, src_len, src_pos;
     uint32_t step;              // source frames per output frame, 16.16
     uint32_t phase;
-    int16_t prev[2], cur[2];
+    int32_t prev[2], cur[2];
     int primed;
     int eof;        // the CODEC has no more frames
     // How far the interpolator has got through the LAST source frame:
@@ -141,10 +148,10 @@ int usnd_load_info(const char *path, struct usnd_info *out);
 // Open for reading. On success the caller owes a usnd_close().
 int usnd_open(const char *path, struct usnd_stream *s);
 
-// Up to `frames` frames in the DEVICE format -- 48 kHz stereo s16,
+// Up to `frames` frames in the DEVICE format -- 48 kHz stereo s32,
 // whatever the file was. Returns the count written, 0 at end of
 // stream, negative on error.
-long usnd_read(struct usnd_stream *s, int16_t *dst, long frames);
+long usnd_read(struct usnd_stream *s, int32_t *dst, long frames);
 
 // Seek, in DEVICE frames. Returns 0, or a negative errno (-ENOTSUP
 // from a codec that cannot seek).
@@ -159,6 +166,7 @@ void usnd_close(struct usnd_stream *s);
 extern const struct usnd_codec usnd_codec_wav;
 extern const struct usnd_codec usnd_codec_mp3;
 extern const struct usnd_codec usnd_codec_mid;   // renders through a SoundFont
+extern const struct usnd_codec usnd_codec_flac;  // lossless, every depth to 32 bits
 
 // --- playback ---------------------------------------------------------
 //
@@ -190,7 +198,7 @@ const char *usnd_sink_name(void); // "device", or a daemon's name later
 #define USND_CLIP_MAX_FRAMES (USND_RATE * 10)
 
 struct usnd_clip {
-    int16_t *pcm;       // frames * USND_CHANNELS samples
+    int32_t *pcm;       // frames * USND_CHANNELS samples, s32
     uint64_t frames;
 };
 
@@ -198,8 +206,8 @@ int  usnd_clip_load(const char *path, struct usnd_clip *c);
 void usnd_clip_free(struct usnd_clip *c);
 
 // A clip built from samples the caller already has, rather than from a
-// file. `data` is `frames` frames of interleaved s16 at `rate` and
-// `channels`, and is converted to the device format and COPIED -- the
+// file. `data` is `frames` frames of interleaved S16 at `rate` and
+// `channels` -- 16-bit because every caller's source is (a WAD lump) -- and is converted to the device format and COPIED -- the
 // caller's buffer is free immediately after.
 //
 // This exists because a sound is not always a file: Doom's effects are
@@ -262,7 +270,8 @@ void usnd_push_close(void);
 // rather than pushing blindly, because a full queue drops the excess.
 long usnd_push_space(void);
 
-// Queues up to `frames` frames of interleaved stereo s16 at USND_RATE.
+// Queues up to `frames` frames of interleaved stereo S16 at USND_RATE --
+// a synthesiser's output, widened as it is queued.
 // Returns the number ACCEPTED, which may be short. Never blocks.
 long usnd_push(const int16_t *pcm, long frames);
 
@@ -302,8 +311,8 @@ int  usnd_volume(void);
 // created and the daemon reads it once.
 void usnd_set_app_name(const char *name);
 
-// The `frames` frames (device format, interleaved stereo s16) the sink
-// is PLAYING now -- what a level meter or a spectrum draws. A snapshot
+// The `frames` frames (interleaved stereo, NARROWED to s16 -- what a
+// meter's arithmetic is scaled for) the sink is PLAYING now -- what a level meter or a spectrum draws. A snapshot
 // for display, not a recording: nothing guarantees it is contiguous
 // with the last call. Returns the frames copied, 0 while nothing plays.
 long usnd_peek(int16_t *dst, long frames);

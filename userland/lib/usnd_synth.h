@@ -26,9 +26,9 @@ void usynth_reset(struct usynth *s);
 // ignored by the one-byte messages).
 void usynth_message(struct usynth *s, uint8_t status, uint8_t d1, uint8_t d2);
 
-// Interleaved s16 stereo at the rate given to usynth_new(). Always
+// Interleaved s32 stereo (full scale in the top bits) at the rate given to usynth_new(). Always
 // produces `frames` frames; with nothing sounding they are zeroes.
-void usynth_render(struct usynth *s, int16_t *out, long frames);
+void usynth_render(struct usynth *s, int32_t *out, long frames);
 
 // Put the block grid where it would be at `frame` of continuous
 // playback -- after a seek, so what follows is sample-identical.

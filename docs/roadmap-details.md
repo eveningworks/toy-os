@@ -2711,6 +2711,41 @@ USB MIDI class driver is its own item) and a Doom whose music leaves
 its GPL OPL emulator would need; nothing needs it today, which is why
 the file player came first.
 
+### Dither when a 16-bit card narrows the s32 stream -- it rounds today; TPDF dither is what foobar2000 and SoX add
+
+Put on the roadmap 2026-10-06 (not scheduled). AC97, QEMU's HDA and any
+16-bit USB alternate round each s32 sample to 16 bits
+(`snd_s32_to_s16()`), which adds correlated quantisation error: a fade to
+silence ends in a faint buzz rather than hiss. Triangular (TPDF) dither
+of +/-1 LSB before the rounding decorrelates it. It belongs where the
+narrowing is -- the core's bounce, `snddrv`'s, the USB packet copy --
+and needs a cheap per-sample PRNG in each; `krandom` is not that.
+
+### Float WAV (`WAVE_FORMAT_IEEE_FLOAT`), refused by name now that the path is wide enough to carry it
+
+Put on the roadmap 2026-10-06 (not scheduled). `usnd_wav.c` refuses it
+with -ENOTSUP. Ring 3 has floating point, so this is a scale and a
+clamp into s32 per sample -- the MP3 codec's `clip32()` already does it.
+
+### An Ogg reader, for `.oga` FLAC and for Opus -- the codec table has no container layer
+
+Put on the roadmap 2026-10-06 (not scheduled). Every row in `usnd.c` is
+a container and a codec at once. Ogg wraps both FLAC (`.oga`) and
+Opus/Vorbis, so the shape is a page reader under the codecs that the
+FLAC frame decoder could sit on unchanged -- what libogg is to libFLAC.
+
+### A proper resampler -- usnd interpolates linearly; windowed-sinc or polyphase, as speexdsp, soxr and PipeWire use
+
+Put on the roadmap 2026-10-06 (not scheduled). `usnd.c` converts rates
+by linear interpolation over a 16.16 phase (`usnd.h`), which dulls the
+top octave and lets images fold back as aliasing. Every 44.1 kHz file
+goes through it while the card is fixed at 48 kHz; with a per-card rate
+that follows what plays, it is left converting the SECOND stream of a
+mix at another rate. A windowed-sinc or polyphase filter (speexdsp's
+quality levels, soxr, PipeWire's `resample.quality`) makes that clean;
+it belongs in the same place, so every codec and both sinks get it, and
+the bypass for an already-matching rate stays.
+
 ### Dynamic linking / shared libraries
 
 New milestone, lightly scoped, deliberately placed after Runtime + interop's
@@ -3249,6 +3284,24 @@ attaches to one pid through a small `ptrace`-shaped syscall set and
 speaks the same protocol over TCP or a serial port, so host GDB with the
 program's DWARF debugs it. This matters once `/bin/cc` builds programs
 on the machine.
+
+### A DEVICE SWITCH MID-STREAM LEAVES THE NEW CARD ALMOST NOTHING TO PLAY
+
+`python3 tools/usb_audio_test.py`, phase 4: `/tests/tone` plays two
+seconds, `config set audio_device ac97` lands 1.2 s in, and the AC97's
+wav recording should hold the rest. `activate()` restarts the new card
+at ring offset 0 (`hw_pos = 0`), so it first plays the chunks the old
+card already consumed -- zeroed, so silence -- and only reaches the
+unplayed audio after up to a ring (341 ms), by which time the app has
+finished and stopped the stream. Starting the new card at the old one's
+position is the obvious fix and not tried.
+
+### `umd_hostcheck.py` FINDS BOLD MARKERS SURVIVING IN `docs/commands/diskbench.md`
+
+`python3 tools/umd_hostcheck.py`: two FAIL lines on the page's "A
+progress line is <profile> <percent> <bytes-moved> ..." sentence. The
+same on 2f11440c (`predates.py --build ''`), so it predates the `<details>`
+work that touched `umd.c` next.
 
 ## Legend: the old milestone numbers
 
