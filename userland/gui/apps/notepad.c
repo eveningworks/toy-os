@@ -26,6 +26,7 @@
 #include "kpath.h"   // k_path_join/_dirname/_basename -- the kernel's, linked into ring 3
 #include "ui/ugfx.h"
 #include "ui/uui.h"
+#include "lib/urecent.h"
 #include "lib/uopen.h"
 #include "ui/uui_filedialog.h"
 #include "ui/uui_markdown.h"
@@ -398,7 +399,8 @@ static void recent_save(void);
 static void recent_sync_menu(void);
 
 static void recent_push(const char *path) {
-    if (g_conf.recent_max <= 0) return;
+    if (g_conf.recent_max <= 0) return;   // remembering nothing, here or system-wide
+    urecent_add(path, "Notepad");          // the system's Recent too (lib/urecent.h)
     // A path already listed MOVES to the top; only a new one adds a row
     // (counting it again showed a placeholder row as a recent file).
     int at = -1;

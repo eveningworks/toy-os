@@ -360,6 +360,7 @@ def icon_place_documents_tile(): return _tile((74, 134, 214), icon_place_documen
 def icon_place_music_tile():     return _tile((214, 92, 143), icon_place_music)
 def icon_place_pictures_tile():  return _tile((74, 163, 107), icon_place_pictures)
 def icon_place_trash_tile():     return _tile((104, 112, 125), icon_place_trash)
+def icon_place_recent_tile():    return _tile((214, 133, 54), icon_place_recent)
 
 
 # A FOLDER OF A KNOWN KIND is the plain folder's shape in the kind's
@@ -676,6 +677,16 @@ def icon_tb_mkdir():
     _folder_outline(d, 4, 12, 56, 42)
     d.rectangle([22, 34, 46, 40], fill=TB_INK)
     d.rectangle([31, 25, 37, 49], fill=TB_INK)
+    return im
+
+
+def icon_place_recent():
+    im, d = _place()
+    d.ellipse([6, 6, 58, 58], fill=PLACE_INK)
+    cut = (200, 215, 240, 255)
+    d.line([32, 32, 32, 15], fill=cut, width=5)
+    d.line([32, 32, 44, 40], fill=cut, width=5)
+    d.ellipse([28, 28, 36, 36], fill=cut)
     return im
 
 
@@ -1212,6 +1223,7 @@ ICONS = {
     "place-music": icon_place_music_tile,
     "place-pictures": icon_place_pictures_tile,
     "place-trash": icon_place_trash_tile,
+    "place-recent": icon_place_recent_tile,
     "tb-bin-restore": icon_tb_bin_restore,
     "tb-bin-empty": icon_tb_bin_empty,
     "tb-details": icon_tb_details,

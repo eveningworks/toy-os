@@ -3,6 +3,7 @@
 // was the design doc's "the day a second caller wants one".
 #include <stdlib.h>
 #include "lib/uopen.h"
+#include "lib/urecent.h"
 #include "lib/uconf.h"
 #include "etc_config.h"
 #include "rt/sys.h"
@@ -122,8 +123,15 @@ static int spawn_with(const char *exec, const char *path) {
 
 int uopen_spawn(const char *path) {
     char exec[UOPEN_PATH_MAX];
-    if (uopen_resolve(path, exec, sizeof exec))
-        return spawn_with(exec, path);
+    if (uopen_resolve(path, exec, sizeof exec)) {
+        int pid = spawn_with(exec, path);
+        if (pid >= 0) {   // a file opened for a person: Recent's (lib/urecent.h)
+            char app[URECENT_APP];
+            urecent_app_of_exec(exec, app, sizeof app);
+            urecent_add(path, app);
+        }
+        return pid;
+    }
     // A directory opens where directories live -- Explorer's rule.
     struct sys_dirent probe;
     if (sys_listdir(path, &probe, 1) >= 0)

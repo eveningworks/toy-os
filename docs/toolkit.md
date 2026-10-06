@@ -57,6 +57,7 @@
 | `upath.h` | PATH lookup for a ring-3 program that has to RUN another one. |
 | `upins.h` | PINNED FOLDERS: the folders a person added to Places, kept in /etc/places.conf one absolute path per line -- GTK's bookmarks file, Explorer's Quick access pins. |
 | `uprogress.h` | A one-line transfer meter, redrawn in place with `\r`. |
+| `urecent.h` | RECENT FILES: what was opened lately, by any app, and in which -- freedesktop's recently-used.xbel and Windows' Recent Items, as one plain-text list in /var/lib/recent. |
 | `uregion.h` | A REGION: a bounded list of disjoint rectangles, cut by subtraction -- what the compositor draws each window inside once the opaque windows above it are taken away (pixman's region32, which wlroots... |
 | `urename.h` | RENAMING MANY FILES AT ONCE: the new names a rule gives a set of names, and whether the set can be renamed as planned -- Dolphin's "Rename items", Thunar's Bulk Rename, PowerToys' PowerRename. |
 | `uresolv.h` | Turning a name into an address: DNS over UDP, in ring 3. |

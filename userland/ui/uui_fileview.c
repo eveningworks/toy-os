@@ -88,6 +88,7 @@ static int fv_entry_path(const struct uui_fileview *fv, const struct sys_dirent 
 
 static void ic_reveal(struct uui_fileview *fv); // icons mode, below
 static void fv_details_cols(struct uui_fileview *fv);
+static void fv_apply_groups(struct uui_fileview *fv);
 static void ic_clamp(struct uui_fileview *fv);   // ...and its range check
 
 int uui_fileview_row_count(const struct uui_fileview *fv) {
@@ -421,6 +422,10 @@ enum uui_fileview_sort uui_fileview_sort(const struct uui_fileview *fv, int *dir
 
 void uui_fileview_set_mode(struct uui_fileview *fv, enum uui_fileview_mode mode) {
     fv->mode = mode;
+    if (fv->src && fv->src->group) {
+        fv_apply_groups(fv);
+        uui_table_set_rows(&fv->table, uui_fileview_row_count(fv));
+    }
     if (mode == UUI_FILEVIEW_ICONS) {
         // The table keeps its columns and sort: the grid displays the
         // same order, and switching back finds the header as it was.
@@ -498,6 +503,27 @@ const struct uui_fileview_source *uui_fileview_source(const struct uui_fileview 
     return fv->src;
 }
 
+// A source's groups, in the table's row numbers (no ".." row in a
+// virtual folder, but asked through fv_entry all the same).
+static int fv_group_of(void *ctx, int row) {
+    const struct uui_fileview *fv = ctx;
+    const struct sys_dirent *e = fv_entry(fv, row);
+    return e && fv->src && fv->src->group ? fv->src->group(fv->src->ctx, (int)(e - fv->entries)) : 0;
+}
+
+static void fv_group_title(void *ctx, int g, char *out, int cap) {
+    const struct uui_fileview *fv = ctx;
+    out[0] = '\0';
+    if (fv->src && fv->src->group_title) fv->src->group_title(fv->src->ctx, g, out, cap);
+}
+
+// Groups in the details view only: the icon grid walks the table's
+// view rows, and a caption there would be a blank tile.
+static void fv_apply_groups(struct uui_fileview *fv) {
+    int on = fv->src && fv->src->group && fv->mode == UUI_FILEVIEW_DETAILS;
+    uui_table_set_groups(&fv->table, on ? fv_group_of : 0, on ? fv_group_title : 0);
+}
+
 // The details columns for the current listing: a source's, or the four.
 static void fv_details_cols(struct uui_fileview *fv) {
     if (fv->src) {
@@ -560,7 +586,11 @@ int uui_fileview_reload(struct uui_fileview *fv) {
     if (fv->src != was) {
         if (fv->mode == UUI_FILEVIEW_DETAILS) fv_details_cols(fv);
         int ncols = fv->src ? fv->src->ncols : 4;
-        if (fv->table.sort_col >= ncols) uui_table_set_sort(&fv->table, FV_COL_NAME, 1);
+        if (fv->table.sort_col >= ncols || (was && was->sort_dir))
+            uui_table_set_sort(&fv->table, FV_COL_NAME, 1);
+        if (fv->src && fv->src->sort_dir)
+            uui_table_set_sort(&fv->table, fv->src->sort_col, fv->src->sort_dir);
+        fv_apply_groups(fv);
     }
     fv->has_up = !fv->src && fv->navigable && !fv_at_root(fv);
 

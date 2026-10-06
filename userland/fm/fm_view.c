@@ -259,6 +259,9 @@ void log_layout(void) {
         uapp_logf_layout("files: layout pane %d %d %d %d %d\n", i, x, y, w, h);
         uapp_logf_layout("files: layout dir %d %s\n", i, uui_fileview_dir(&g_pane[i]));
         uapp_logf_layout("files: layout rows %d %d\n", i, uui_fileview_row_count(&g_pane[i]));
+        // Caption rows (Recent's day bands): the table's view rows past its app rows.
+        uapp_logf_layout("files: layout captions %d %d\n", i,
+                         uui_table_view_count(&g_pane[i].table) - uui_fileview_row_count(&g_pane[i]));
         // THE SCROLL OFFSET, because a test that cannot see it cannot
         // tell "the view stayed put" from "the view moved and came
         // back". Both modes: icons scroll by PIXEL, details by table

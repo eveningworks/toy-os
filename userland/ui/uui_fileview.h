@@ -115,6 +115,14 @@ struct uui_fileview_source {
     // Where Up (Backspace) goes from `dir`: 1 with it in `out`, 0 for
     // nowhere. NULL: Up does nothing in this folder.
     int (*up)(void *ctx, const char *dir, char *out, int cap);
+    // Rows in bands under captions, numbered by the source (0..
+    // UUI_TABLE_MAX_GROUPS-1, shown in that order) -- Recent's Today and
+    // Yesterday. Details view only. NULL: no groups.
+    int (*group)(void *ctx, int index);
+    void (*group_title)(void *ctx, int group, char *out, int cap);
+    // The sort on arriving, as uui_table_set_sort() takes it; 0/0 keeps
+    // the view's. Leaving such a folder goes back to Name, ascending.
+    int sort_col, sort_dir;
 };
 typedef const struct uui_fileview_source *(*uui_fileview_resolve_fn)(void *ctx, const char *dir);
 

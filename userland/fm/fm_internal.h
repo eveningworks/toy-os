@@ -110,6 +110,7 @@ enum {
     CMD_PIN, CMD_UNPIN,                          // lib/upins.h, Places
     CMD_EXTRACT_ALL, CMD_EXTRACT_SEL,            // fm_zip.c; CMD_EXTRACT the worker's op
     CMD_EXTRACT,
+    CMD_RECENT_FOLDER, CMD_RECENT_FORGET, CMD_RECENT_CLEAR,   // fm_recent.c
 };
 
 // The Recycle Bin's folder, as uui_fileview and the breadcrumb see it --
@@ -117,6 +118,7 @@ enum {
 #define FM_BIN "trash:/"
 #define FM_SEARCH "search:"
 #define FM_ZIP "zip:"
+#define FM_RECENT "recent:/"
 
 // The dialog's answers. ONE widget serves both questions the app asks
 // (a conflict, a delete), so `g_dialog_kind` says which one is up and
@@ -383,6 +385,14 @@ int  zip_default_dest(const char *archive, char *out, int cap);
 // `then` 1 goes there when it is done, 2 opens the one file extracted.
 void do_extract(int all, const char *dest, int then);
 void open_path(const char *path);   // files.c: by its type, through lib/uopen
+
+// --- Recent (fm_recent.c) ---------------------------------------------------
+const struct uui_fileview_source *recent_source(void);   // recent:/
+int  in_recent(const struct uui_fileview *fv);
+int  recent_item_flags(int code, unsigned *out);
+void recent_forget(void);
+void recent_clear(void);
+void recent_open_folder(void);
 
 // --- the Recycle Bin (fm_trash.c) -------------------------------------------
 const struct uui_fileview_source *bin_source(void);   // trash:/

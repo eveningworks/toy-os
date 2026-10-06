@@ -38,6 +38,7 @@ static const char *real_dir(int pane) {
 
 static void label_of(const char *dir, char *out, int cap) {
     if (!strcmp(dir, FM_BIN)) snprintf(out, (size_t)cap, "Recycle Bin");
+    else if (!strcmp(dir, FM_RECENT)) snprintf(out, (size_t)cap, "Recent");
     else if (search_scope(dir)) snprintf(out, (size_t)cap, "Search results");
     else if (!strncmp(dir, FM_ZIP, sizeof FM_ZIP - 1)) snprintf(out, (size_t)cap, "%s", k_path_basename(dir));
     else if (dir[0] == '/' && !dir[1]) snprintf(out, (size_t)cap, "System");

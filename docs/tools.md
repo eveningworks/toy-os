@@ -3013,6 +3013,19 @@ window without going through it will find its layout polls timing out.
   control renames straight to the new names, skipping the temporary
   pass: the rename check reddens.
 
+- **`recent_gui_test.py`** -- Recent (`lib/urecent.h`, `fm_recent.c`):
+  `open` on a .txt and a .jpg records both in /var/lib/recent under the
+  desktop entries' names (Notepad, Image Viewer); Places has the row;
+  `recent:/` lists newest first in two day bands (the layout's
+  `captions` count, from a line three days old); Delete takes a row off
+  the list and leaves the file; Open folder selects the file in its
+  folder; Clear list empties it. **The three-day-old line is written on
+  the host and `vm.py put` BEFORE the test takes the console** -- the
+  guest's echo cannot write the tab the format needs. Its positive
+  controls: every row in one band reddens the bands check, and Delete
+  left as Delete reddens the forget check (a confirm dialog comes up and
+  the row stays).
+
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window
   (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
   driven through Notepad, Image Viewer and Audio Player. 17 checks: the

@@ -585,6 +585,11 @@ void uapp_track_child(struct uapp *a, int pid);
 int uapp_set_tabs(struct uapp *a, const char *const *labels, int n, int active);
 int uapp_set_title(struct uapp *a, const char *title);
 
+// The name a person knows this app by: the Name= of the desktop entry
+// its app_id names (/usr/wm/applications/<app_id>.desktop), else its
+// first title -- what "Opened in" says in Recent (lib/urecent.h).
+void uapp_display_name(const struct uapp *a, char *out, int cap);
+
 // Name the WIN_CURSOR_* for this window's content area. THE ESCAPE
 // HATCH: a widget declares its own shape (uui_widget_ops.cursor) and
 // the toolkit sets it for you. This is for surfaces that are not

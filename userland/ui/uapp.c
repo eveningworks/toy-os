@@ -20,6 +20,7 @@
 #include <stdarg.h>
 #include "ui/utheme.h"
 #include "ui/uui_caret.h"
+#include "lib/uappentry.h" // uapp_display_name()
 #include "lib/uclip.h"   // clip_poll() -- the clipboard is shared memory now
 #include <locale.h>
 #include <time.h>       // tzset()
@@ -1461,6 +1462,17 @@ void uapp_set_widgets(struct uapp *a, struct uui_item *items, int count) {
 
 int uapp_fullscreen(const struct uapp *a) { return a ? a->fullscreen : 0; }
 int uapp_scanout(const struct uapp *a)    { return a ? a->lease_on : 0; }
+
+void uapp_display_name(const struct uapp *a, char *out, int cap) {
+    struct uappentry e;
+    char path[96];
+    const char *id = a ? a->desc->app_id : 0;
+    if (id && snprintf(path, sizeof path, "/usr/wm/applications/%s.desktop", id) < (int)sizeof path &&
+        uappentry_read(path, &e) && e.name[0])
+        strlcpy(out, e.name, (size_t)cap);
+    else
+        strlcpy(out, a && a->desc->title ? a->desc->title : "", (size_t)cap);
+}
 
 int uapp_set_tabs(struct uapp *a, const char *const *labels, int n, int active) {
     if (n < 0) n = 0;

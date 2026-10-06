@@ -4945,8 +4945,9 @@ cannot help with either.
 
 ## A VIRTUAL FOLDER IS A `uui_fileview` SOURCE, RESOLVED FROM ITS NAME ON EVERY RELOAD
 
-A listing that is not a directory -- the Recycle Bin (`trash:/`), and
-the planned search results, archive insides and Recent -- is a
+A listing that is not a directory -- the Recycle Bin (`trash:/`),
+search results (`search:<dir>`), an archive's inside (`zip:<file>`) and
+Recent (`recent:/`) -- is a
 `struct uui_fileview_source` (KDE's KIO worker, a Windows shell
 folder): the caller's rows, its own details columns (the name first),
 and each entry's REAL path. The view's `dir` is the folder's name, and
@@ -4960,7 +4961,12 @@ open, copy, Properties, thumbnails and the details pane must never join
 filter is skipped, so an entry's index is the position the source wrote
 it at, valid for its `path`/`cell`/`compare` until the next reload; no
 "..", no drag out, no drop in, and activating a folder reports
-`on_open` instead of descending. **A watcher polls what the source is
+`on_open` instead of descending unless the source `descends` (an
+archive's folders are themselves names it resolves; `up` says where
+Backspace goes). **A source may band its rows** (`group`/`group_title`,
+details view only -- the icon grid has no caption tile) **and name the
+sort it opens with** (`sort_col`/`sort_dir`; leaving goes back to Name),
+which is how Recent is newest first under Today and Yesterday. **A watcher polls what the source is
 built from** (`fm_watch_path()`), since `SYS_FS_GENERATION_OF("trash:/")`
 is an error, and an error compared with itself never reports a change.
 

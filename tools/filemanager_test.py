@@ -123,6 +123,7 @@ class Layout:
         self.pane = {}
         self.dir = {}
         self.rows = {}
+        self.captions = {}    # pane -> group caption rows (Recent's day bands)
         self.scroll = {}      # pane -> (icon grid row, details table row)
         self.marked = (0, 0)
         self.dim = (0, 0)     # per-pane dimmed rows -- a staged cut
@@ -192,6 +193,8 @@ class Layout:
             self.dir[int(p[1])] = p[2]
         elif p[0] == "rows" and len(p) >= 3:
             self.rows[int(p[1])] = int(p[2])
+        elif p[0] == "captions" and len(p) >= 3:
+            self.captions[int(p[1])] = int(p[2])
         elif p[0] == "scroll" and len(p) >= 4:
             self.scroll[int(p[1])] = (int(p[2]), int(p[3]))
         elif p[0] == "active" and len(p) >= 2:
@@ -1648,9 +1651,9 @@ def run(dbg, qmp, tmp, res):
     # widgets' buffers, which used to be refused as though it were
     # missing. Its own root, so no listing of the fixture changes.
     longp = "/fmlong/a-folder-name-of-some-length/and-another-one-below-it/leaf"
-    dbg.send(f"sh mkdir /fmlong")
-    dbg.send(f"sh mkdir /fmlong/a-folder-name-of-some-length")
-    dbg.send(f"sh mkdir /fmlong/a-folder-name-of-some-length/and-another-one-below-it")
+    dbg.send("sh mkdir /fmlong")
+    dbg.send("sh mkdir /fmlong/a-folder-name-of-some-length")
+    dbg.send("sh mkdir /fmlong/a-folder-name-of-some-length/and-another-one-below-it")
     dbg.send(f"sh mkdir {longp}")
     lay = goto(longp) or lay
     res.check(f"a {len(longp)}-byte path opens (the bound was 64)",

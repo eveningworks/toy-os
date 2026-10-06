@@ -31,6 +31,7 @@
 #include <strings.h>  // strncasecmp -- the search filter
 #include <stdlib.h>   // atoi -- the saved divider positions
 #include "kpath.h"
+#include "lib/urecent.h"
 #include "lib/uconf.h"
 #include "lib/human.h"
 #include "lib/udate.h"
@@ -272,6 +273,19 @@ static const struct uui_toolbar_item bin_toolbar_items[] = {
     { "tb-pane",    "Show the details pane", CMD_VIEW_DPANE, "Details", UUI_TB_END, 0, TINT_NAV },
 };
 
+// ...and in Recent: the rows are files opened lately, so the verbs are
+// about the LIST -- nothing here deletes or renames a file.
+static const struct uui_toolbar_item recent_toolbar_items[] = {
+    { "tb-open",      "Go to the folder it is in", CMD_RECENT_FOLDER, "Open folder", 0, 0, TINT_NAV },
+    UUI_TOOLBAR_SEP,
+    { "tb-close",     "Take it off this list (Del)", CMD_RECENT_FORGET, "Remove from list", 0, 0, TINT_RED },
+    { "tb-close-all", "Forget every file here", CMD_RECENT_CLEAR, "Clear list", 0, 0, TINT_RED },
+    UUI_TOOLBAR_SEP,
+    { "tb-sort",    0,                  CMD_MENU_SORT,  "Sort", UUI_TB_MENU, 0, TINT_TEAL },
+    { "tb-view",    0,                  CMD_MENU_VIEW,  "View", UUI_TB_MENU, 0, TINT_ORANGE },
+    { "tb-pane",    "Show the details pane", CMD_VIEW_DPANE, "Details", UUI_TB_END, 0, TINT_NAV },
+};
+
 // ...and inside an archive: read-only, so the verbs are Extract.
 static const struct uui_toolbar_item zip_toolbar_items[] = {
     { "tb-new",  "Extract everything beside the archive", CMD_EXTRACT_ALL, "Extract all", 0, 0, TINT_GREEN },
@@ -315,6 +329,16 @@ static const struct uui_menu_item ctx_items[] = {
 };
 
 // ...and inside the Recycle Bin: what a deleted item can have done to it.
+static const struct uui_menu_item recent_ctx_items[] = {
+    UUI_MENU("Open",             CMD_OPEN,          "Enter"),
+    UUI_MENU("Open folder",      CMD_RECENT_FOLDER, 0),
+    UUI_MENU_SEP,
+    UUI_MENU("Copy",             CMD_CLIP_COPY,     "Ctrl+C"),
+    UUI_MENU("Remove from list", CMD_RECENT_FORGET, "Del"),
+    UUI_MENU_SEP,
+    UUI_MENU("Properties",       CMD_PROPERTIES,    0),
+};
+
 static const struct uui_menu_item bin_ctx_items[] = {
     UUI_MENU("Restore",            CMD_RESTORE,        0),
     UUI_MENU_SEP,
@@ -324,11 +348,12 @@ static const struct uui_menu_item bin_ctx_items[] = {
     UUI_MENU("Properties",         CMD_PROPERTIES,     0),
 };
 
-// PLACES: the named folders, the Recycle Bin, the folders pinned to
+// PLACES: Recent, the named folders, the Recycle Bin, the folders pinned to
 // Places (lib/upins.h), then every mounted volume. Rebuilt when a pin is
 // made or taken away, with the tree that shows them.
 static void places_build(void) {
     uui_places_init(&g_places);
+    uui_places_add(&g_places, "Recent",    "place-recent",    FM_RECENT);
     uui_places_add(&g_places, "Home",      "place-home",      "/home");
     uui_places_add(&g_places, "Desktop",   "place-desktop",   "/home/desktop");
     uui_places_add(&g_places, "Documents", "place-documents", "/usr/share/doc");
@@ -387,6 +412,11 @@ static int build_ctx_items(void) {
             g_ctx_built[n++] = bin_ctx_items[i];
         return n;
     }
+    if (in_recent(active())) {
+        for (int i = 0; i < (int)(sizeof recent_ctx_items / sizeof recent_ctx_items[0]); i++)
+            g_ctx_built[n++] = recent_ctx_items[i];
+        return n;
+    }
     for (int i = 0; i < (int)(sizeof ctx_items / sizeof ctx_items[0]); i++) {
         if (ctx_items[i].code == CMD_EDIT && !can_edit) continue;
         if (ctx_items[i].code == CMD_OPEN_TAB && !uui_fileview_selected_is_dir(active())) continue;
@@ -417,6 +447,7 @@ static unsigned menu_item_flags(int code) {
     if (bin_item_flags(code, &bin)) return bin;   // the Recycle Bin's own rules
     if (search_item_flags(code, &bin)) return bin;   // ...and a search's
     if (zip_item_flags(code, &bin)) return bin;      // ...and an archive's
+    if (recent_item_flags(code, &bin)) return bin;   // ...and Recent's
     if (code == CMD_UNDO || code == CMD_REDO)
         return undo_can(code == CMD_REDO) ? 0 : UUI_MI_DISABLED;
     switch (code) {
@@ -641,10 +672,12 @@ int search_strip_shown(void) {
     return g_query[g_active][0] || in_search(active());
 }
 
-// A pane's virtual folders: the Recycle Bin, and a search's results.
+// A pane's virtual folders: the Recycle Bin, Recent, a search's results
+// and the inside of an archive.
 static const struct uui_fileview_source *resolve_virtual(void *ctx, const char *dir) {
     (void)ctx;
     if (strcmp(dir, FM_BIN) == 0) return bin_source();
+    if (strcmp(dir, FM_RECENT) == 0) return recent_source();
     if (search_scope(dir)) return search_source();
     if (!strncmp(dir, FM_ZIP, sizeof FM_ZIP - 1)) return zip_source();
     return 0;
@@ -691,11 +724,14 @@ void path_sync(void) {
     sizes_follow(dir, 0);
     tabs_sync(g_app);
     const struct uui_toolbar_item *want = in_bin(active()) ? bin_toolbar_items
+                                        : in_recent(active()) ? recent_toolbar_items
                                         : in_zip(active()) ? zip_toolbar_items : toolbar_items;
     if (g_toolbar.items != want) {
         g_toolbar.items = want;
         g_toolbar.count = want == bin_toolbar_items
                         ? (int)(sizeof bin_toolbar_items / sizeof bin_toolbar_items[0])
+                        : want == recent_toolbar_items
+                        ? (int)(sizeof recent_toolbar_items / sizeof recent_toolbar_items[0])
                         : want == zip_toolbar_items
                         ? (int)(sizeof zip_toolbar_items / sizeof zip_toolbar_items[0])
                         : (int)(sizeof toolbar_items / sizeof toolbar_items[0]);
@@ -713,7 +749,7 @@ void path_sync(void) {
         uui_textbox_set_text(&g_search, g_query[g_active]);
     const char *sc = search_scope(dir);
     g_scope_seg.selected = !sc ? 0 : !strcmp(sc, "/") ? 2 : 1;
-    const char *base = in_bin(active()) ? "Recycle Bin"
+    const char *base = in_bin(active()) ? "Recycle Bin" : in_recent(active()) ? "Recent"
                      : (dir[0] == '/' && !dir[1]) ? "System" : k_path_basename(dir);
     snprintf(g_search_hint, sizeof g_search_hint, "Search %s", base);
 }
@@ -759,7 +795,8 @@ static void path_navigate(const char *typed) {
     strlcpy(was, uui_fileview_dir(active()), sizeof was);
     static char scratch[KPATH_SCRATCH_FOR(PATH_MAX_LEN)];
     struct kpath_scratch sc = { scratch, sizeof scratch };
-    if (strcmp(typed, FM_BIN) == 0) strlcpy(path, typed, sizeof path);   // not a relative path
+    if (!strcmp(typed, FM_BIN) || !strcmp(typed, FM_RECENT))
+        strlcpy(path, typed, sizeof path);   // not a relative path
     else if (!k_path_resolve(was, typed, path, sizeof path, &sc)) { set_note("path too long"); return; }
     if (!fm_goto(g_active, path)) {
         uui_fileview_set_dir(active(), was);   // see addr_end_edit on why not fm_goto
@@ -828,13 +865,16 @@ static void set_view(int code) {
 void do_command(struct uapp *a, int code) {
     // A command the bin greys is refused here too: a key reaches this
     // without asking menu_item_flags().
-    if ((in_bin(active()) || in_search(active()) || in_zip(active())) &&
+    if ((in_bin(active()) || in_search(active()) || in_zip(active()) || in_recent(active())) &&
         (menu_item_flags(code) & UUI_MI_DISABLED) && code != CMD_UP) {
         set_note(in_bin(active()) ? "not in the Recycle Bin"
                  : in_zip(active()) ? "an archive is read-only -- extract it first"
+                 : in_recent(active()) ? "not in Recent -- open the folder first"
                  : "not in search results");
         return;
     }
+    // In Recent, Delete takes the row off the list, never the file.
+    if (in_recent(active()) && code == CMD_DELETE) code = CMD_RECENT_FORGET;
     // Inside an archive, Copy to the other pane EXTRACTS there.
     if (in_zip(active()) && code == CMD_COPY) {
         do_extract(0, uui_fileview_dir(other()), 0);
@@ -860,6 +900,9 @@ void do_command(struct uapp *a, int code) {
     case CMD_RESTORE:        bin_restore(0); break;
     case CMD_RESTORE_ALL:    bin_restore(1); break;
     case CMD_EMPTY_BIN:      do_empty_bin(); break;
+    case CMD_RECENT_FOLDER:  recent_open_folder(); break;
+    case CMD_RECENT_FORGET:  recent_forget(); break;
+    case CMD_RECENT_CLEAR:   recent_clear(); break;
     case CMD_UNDO:           do_undo(0); break;
     case CMD_VIEW_SIZES:     sizes_set(!g_sizes_on); break;
     case CMD_PIN:            pin_selected(1); break;
@@ -1515,7 +1558,7 @@ static int on_tick(struct uapp *a) {
 void open_path(const char *path);
 
 static void on_pane_open(void *ctx, const char *path) {
-    if (in_search(&g_pane[(int)(intptr_t)ctx])) {   // a folder among results: go there
+    if (in_search(&g_pane[(int)(intptr_t)ctx]) || in_recent(&g_pane[(int)(intptr_t)ctx])) {   // a folder: go there
         struct sys_stat st;
         if (sys_stat(path, &st) == 0 && st.is_dir) { fm_goto((int)(intptr_t)ctx, path); return; }
     }
@@ -1561,6 +1604,12 @@ void open_path(const char *path) {
     } else {
         snprintf(g_stat_note, sizeof g_stat_note, "opened %s", k_path_basename(path));
         ulogf("files: open %s -- %s\n", path, exec);
+        // Recent's, but not an archive member's /tmp copy.
+        if (strncmp(path, "/tmp/zip-open/", 14) != 0) {
+            char app[URECENT_APP];
+            urecent_app_of_exec(exec, app, sizeof app);
+            urecent_add(path, app);
+        }
     }
 }
 
@@ -1836,6 +1885,7 @@ int main(int argc, char **argv) {
     g_nav.compact = 0;
     uui_pathbar_init(&g_path, "System", "drive");
     uui_pathbar_set_scheme(&g_path, FM_BIN, "Recycle Bin", "place-trash");
+    uui_pathbar_set_scheme(&g_path, FM_RECENT, "Recent", "place-recent");
     uui_pathbar_set_scheme(&g_path, "search:/", "Search results", "tb-find");
     uui_pathbar_set_scheme(&g_path, "zip:/", "Archive", "file-app");
     uui_segmented_init(&g_scope_seg, g_scope_names, 3, 0);

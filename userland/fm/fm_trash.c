@@ -112,6 +112,7 @@ int bin_item_flags(int code, unsigned *out) {
 // empty there touches.
 const char *fm_watch_path(const char *dir) {
     if (strcmp(dir, FM_BIN) == 0) return "/home/.Trash/info";
+    if (strcmp(dir, FM_RECENT) == 0) return "/var/lib";   // urecent renames its file in
     // An archive's view changes when the archive does.
     static char archive[PATH_MAX_LEN];
     const char *inner;

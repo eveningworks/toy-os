@@ -88,6 +88,7 @@ struct uui_filedialog {
 
     enum uui_filedialog_mode mode;
     struct uapp_window *win;
+    char app[48];   // the owner's name, for Recent (lib/urecent.h)
 
     // --- the content ------------------------------------------------
     struct sys_dirent entries[UUI_FILEDIALOG_ENTRIES];

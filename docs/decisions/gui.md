@@ -10671,3 +10671,29 @@ rename, and a failure in the first pass puts everything back. The set
 is ONE undo step (one `UFU_RENAME` op in `lib/ufileundo.h`). Not built:
 regular expressions (lib/uregex exists, but a bulk rename by regex is a
 rare need and a confusing field), dates or metadata in the pattern.
+
+## Recent is one list every app shares, written where files are opened
+
+**Picked 2026-10-06** (artboard H). freedesktop's recently-used.xbel
+and Windows' Recent Items both keep ONE per-user list of what was
+opened, with the app it opened in; KDE shows it as `recentlyused:/`.
+toy-os keeps it in `/var/lib/recent` (`lib/urecent.h`), plain text
+rather than XBEL. **It is written where files are opened for a person,
+not by each app**: `uopen_spawn()` (a double click, `open`, the
+desktop), the File Manager's own open, and the shared file dialog on
+Open and Save -- Windows' shell and common dialog are its recording
+points for the same reason -- plus Notepad, whose own Recent menu
+already marked every open (and whose "remember nothing" setting is
+honoured system-wide). An app that reads a file it was handed on its
+command line does not record it again. The app's name is its desktop
+entry's Name=, found from the program (`uopen`) or the window's app_id
+(the dialog, `uapp_display_name()`). **Every read and rewrite holds a
+lock file**: a double click records the file and Notepad records it
+again as it opens, and a rename does not replace a file on toy-os, so
+between the old list's unlink and the new one's rename an unlocked
+reader saw no list and wrote back only its own line (seen in testing).
+In the File Manager it is the `recent:/` source, banded Today /
+Yesterday / Earlier this week / Earlier, newest first; Delete there
+takes a row off the list and never touches the file, as Explorer's
+does. Files that no longer exist are hidden, not dropped -- an unplugged
+disk comes back.

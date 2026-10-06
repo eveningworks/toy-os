@@ -10,6 +10,7 @@
 #include "ui/utheme.h"
 #include "ui/uui_widget.h"
 #include "ui/uui_route.h"   // UUI_REASON_*
+#include "lib/urecent.h"   // a file chosen is Recent's
 
 // Widget ids, which are also the toolbar/button codes. One space: the
 // window has one on_widget and one switch.
@@ -122,6 +123,8 @@ static void finish(struct uui_filedialog *fd, const char *path) {
     // CLOSED FIRST, so the callback may open another chooser -- and so
     // the owner is unblocked before it is asked to do anything.
     uui_filedialog_close_window(fd);
+    // A file opened or saved is Recent's, as Windows' common dialog does.
+    if (path && fd->mode != UUI_FILEDIALOG_FOLDER) urecent_add(copy, fd->app);
     if (done) done(ctx, path ? copy : 0);
 }
 
@@ -350,6 +353,7 @@ struct uapp_window *uui_filedialog_open(struct uapp *a, struct uui_filedialog *f
     fd->on_done = on_done;
     fd->ctx = ctx;
     fd->mode = opts->mode;
+    uapp_display_name(a, fd->app, sizeof fd->app);
 
     const char *deflt = opts->mode == UUI_FILEDIALOG_SAVE   ? "Save File"
                       : opts->mode == UUI_FILEDIALOG_FOLDER ? "Choose Folder"
