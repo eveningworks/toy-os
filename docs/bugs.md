@@ -35,6 +35,7 @@ the symptoms is not a diagnosis.
 it has exonerated one this session and convicted another.
 
 
+- [ ] **`damage_sweep.py --positive-control` FAILS: the sweep reports no violation against the injected damage miss (`gui damage shrink 4`), so a clean sweep currently proves nothing.** Measured 2026-10-06: fails at HEAD (7a469215) under KVM and under TCG, and at eee76745 (before that day's File Manager work) under KVM -- PRE-EXISTING. Cause not established: whether the shrink no longer reaches the drag's frames or the verifier stopped comparing is not known. Repro: `vm.py start`, then `damage_sweep.py --positive-control`
 - [ ] **A DEVICE SWITCH MID-STREAM LEAVES THE NEW CARD ALMOST NOTHING TO PLAY.** `usb_audio_test.py`'s "the stream CONTINUES on the newly chosen card" fails 4 runs in 4 on 2f11440c (0.00 s of tone on the AC97) and 3 in 4 on the s32 ring (0.05-0.15 s; one 0.25 s pass), measured 2026-10-06. Likely the restart at ring offset 0 replaying up to 341 ms of consumed silence before the unplayed audio, against an app that stops soon after -- not established.
 - [ ] **`umd_hostcheck.py` FINDS BOLD MARKERS SURVIVING IN `docs/commands/diskbench.md`.** Two lines, "A progress line is <profile> <percent> ...", on 2f11440c and after (measured with `predates.py`, 2026-10-06). Cause not established; the `<...>` placeholders inside the bold are the likely trigger.
 

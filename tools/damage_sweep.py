@@ -225,6 +225,31 @@ def run_sequence(sw, inject=False):
         gx, gy = w["x"] + w["w"] - 4, w["y"] + w["h"] - 4
         sw.step(f"resize-shrink {title}", f"gui drag {gx} {gy} {gx - 110} {gy - 70}")
 
+    # TITLE-BAR TABS (the File Manager's, WIN_REQ_TABS): the compositor
+    # draws them, so their hover, a selection, a new tab and a closed one
+    # are all chrome changes no client damage covers. Rects come from
+    # `gui windows --json`, re-read after every step.
+    sw.step("open File Manager", "sh spawn /bin/wm/apps/files /usr/share")
+    fm = sw.by_title("File Manager")
+    if not fm:
+        sw.skipped.append("File Manager did not open: tabs not swept")
+    else:
+        sw.step("new tab", "gui key 0x14")
+        fm = sw.by_title("File Manager")
+        for k, t in enumerate(fm.get("tabs", [])):
+            # `gui warp`, the REAL pointer: `gui move` lasts one WM pass,
+            # so a hover made with it is gone before a frame shows it.
+            sw.step(f"hover tab {k}", f"gui warp {t['x'] + t['w'] // 3} {t['y'] + t['h'] // 2}")
+            c = t["close"]
+            sw.step(f"hover tab {k} close", f"gui warp {c['x'] + c['size'] // 2} {c['y'] + c['size'] // 2}")
+        t0 = sw.by_title("File Manager")["tabs"][0]
+        sw.step("select tab 0", f"gui click {t0['x'] + t0['w'] // 3} {t0['y'] + t0['h'] // 2}")
+        n = sw.by_title("File Manager")["new_tab"]
+        sw.step("new tab via +", f"gui click {n['x'] + n['size'] // 2} {n['y'] + n['size'] // 2}")
+        c = sw.by_title("File Manager")["tabs"][-1]["close"]
+        sw.step("close a tab", f"gui click {c['x'] + c['size'] // 2} {c['y'] + c['size'] // 2}")
+        sw.step("hover off the bar", "gui warp 600 500")
+
     # Close from the top of the z-order down: each close hands focus to
     # the window underneath, whose title bar changes without moving.
     while True:
