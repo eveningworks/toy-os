@@ -3105,7 +3105,11 @@ window without going through it will find its layout polls timing out.
   sends nothing off the machine. Restores `system.ntp`,
   `system.ntp_server`, `system.timezone` and the clock. A dialog
   publishes no widget map, so its controls come from its
-  `settings.clock: layout` lines. In `gui_regress.py`.
+  `settings.clock: layout` lines. It also checks
+  `desktop.clock_seconds`: on, the taskbar clock's pixels change within
+  a second; off, they hold still for 2.5 s (tried twice, for a minute
+  rolling over) -- the control that ignores the setting reddens that
+  half. In `gui_regress.py`.
 - **`volume_test.py`** -- the taskbar's volume flyout: the slider, mute,
   the wheel and the output-device list. **The slider's real assertion is
   `config get volume`, not the popup's own reading**: the write is

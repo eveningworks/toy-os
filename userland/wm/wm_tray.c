@@ -154,7 +154,12 @@ int tray_register(const char *initial_text) {
 void tray_set_text(int tray_id, const char *text) {
     if (tray_id < 0 || tray_id >= TRAY_MAX_ITEMS) return;
     if (!tray_items[tray_id].active) return;
+    // The same text is no frame: the clock sets itself every second, and
+    // without seconds it changes once a minute.
+    char was[TRAY_TEXT_MAX];
+    k_strlcpy(was, tray_items[tray_id].text, sizeof was);
     tray_copy_text(tray_items[tray_id].text, text);
+    if (k_strcmp(was, tray_items[tray_id].text) == 0) return;
     tray_damage();
 }
 
@@ -187,6 +192,20 @@ void wm_locale_sync(void) {
     setlocale(LC_ALL, "");
 }
 
+// desktop.clock_seconds, re-read only when some setting has changed --
+// this runs every second.
+static int clock_seconds(void) {
+    static uint32_t seen;
+    static int on = 1;
+    uint32_t gen = wm_setting_generation();
+    if (gen != seen) {
+        seen = gen;
+        char v[SETTING_ABI_VALUE_MAX];
+        on = !(usetting_get("desktop.clock_seconds", v, sizeof v) && k_strcmp(v, "off") == 0);
+    }
+    return on;
+}
+
 void tray_update_clock(void) {
     if (clock_tray_id < 0) return;
     wm_locale_sync();
@@ -194,7 +213,7 @@ void tray_update_clock(void) {
     sys_gettime(&t);   // UTC; udate_format() localises
     udate_format(clock_date, sizeof clock_date, &t, UDATE_DATE);
     char buf[TRAY_TEXT_MAX];
-    udate_format(buf, sizeof buf, &t, UDATE_TIME | UDATE_SECONDS);
+    udate_format(buf, sizeof buf, &t, UDATE_TIME | (clock_seconds() ? UDATE_SECONDS : 0));
     tray_set_text(clock_tray_id, buf);
     // The calendar's clock card ticks with this one.
     if (calendar_open) calendar_damage();

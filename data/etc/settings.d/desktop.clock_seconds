@@ -1,0 +1,10 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Show seconds
+Category=Desktop
+Group=Tray
+Default=on
+Choices=off,on
+Description=Show seconds in the taskbar clock
+Choice.off=Off
+Choice.on=On

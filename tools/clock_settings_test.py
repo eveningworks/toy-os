@@ -145,13 +145,15 @@ def main():
     print("Date & time: Change..., time -s, and the NTP lock")
 
     saved = {k: last_line(sh(dbg, f"config get {k}"))
-             for k in ("system.ntp", "system.ntp_server", "system.timezone")}
+             for k in ("system.ntp", "system.ntp_server", "system.timezone",
+                       "desktop.clock_seconds")}
     sh(dbg, "config set system.ntp off")
     sh(dbg, "config set system.timezone helsinki")
     dbg.settle(); time.sleep(0.5)
     start_utc = utc(dbg)
     try:
         run(dbg, start_utc)
+        clock_seconds(dbg, qmp)
     finally:
         for k, v in saved.items():
             if v:
@@ -223,6 +225,40 @@ def run(dbg, start_utc):
         time.sleep(1.0)
         check("...and Change... opens nothing", DIALOG not in titles(dbg), f"{titles(dbg)}")
     sh(dbg, "config set system.ntp off")
+
+
+def clock_changes(dbg, qmp, window_s):
+    """Whether the taskbar clock's pixels change within `window_s`. The
+    tray's other items are static, so its box from `tray_x` rightwards is
+    the clock as far as a change is concerned."""
+    from PIL import Image
+    tb = dbg.taskbar()
+    sw = dbg.state()["screen"]["w"]
+    box = (tb["tray_x"], tb["y"], sw, tb["y"] + tb["h"])
+    path = "/tmp/clock_seconds_%d.png"
+    qmp.screenshot(path % 0, stable=False)
+    first = Image.open(path % 0).convert("RGB").crop(box).tobytes()
+    end = time.time() + window_s
+    while time.time() < end:
+        time.sleep(0.25)
+        qmp.screenshot(path % 1, stable=False)
+        if Image.open(path % 1).convert("RGB").crop(box).tobytes() != first:
+            return True
+    return False
+
+
+def clock_seconds(dbg, qmp):
+    """desktop.clock_seconds: on, the clock changes every second; off, it
+    holds still for longer than a second. A minute rolling over inside the
+    'off' window changes it too, so that half is tried twice."""
+    sh(dbg, "config set desktop.clock_seconds on")
+    dbg.settle(); time.sleep(1.2)
+    check("with seconds ON the taskbar clock changes within a second",
+          clock_changes(dbg, qmp, 1.6))
+    sh(dbg, "config set desktop.clock_seconds off")
+    dbg.settle(); time.sleep(1.2)
+    still = not clock_changes(dbg, qmp, 2.5) or not clock_changes(dbg, qmp, 2.5)
+    check("with seconds OFF it holds still for longer than a second", still)
 
 
 def offset_seconds(dbg):
