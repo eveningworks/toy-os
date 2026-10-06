@@ -263,6 +263,18 @@ int sys_open(struct syscall_ctx *c) {
     return 0;
 }
 
+static void count_entry(void *ctx, const char *name, uint32_t size, int is_dir) {
+    (void)name; (void)size; (void)is_dir;
+    (*(int *)ctx)++;
+}
+
+static int dir_has_entries(const char *path) {
+    if (!fs_is_dir(path)) return 0;
+    int n = 0;
+    fs_list(path, count_entry, &n);
+    return n > 0;
+}
+
 int sys_unlink(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     char *name = kpath_get();
@@ -278,10 +290,12 @@ int sys_unlink(struct syscall_ctx *c) {
         klog_write("syscall: unlink() rejected -- no such file\n");
         c->regs[14] = (uint64_t)(int64_t)-ENOENT;
     } else if (!fs_delete(name)) {
-        // Exists and still refused: a non-empty directory is the usual
-        // cause, and fs_delete() does not say which it was.
-        klog_write(KLOG_ERR "syscall: unlink() failed\n");
-        c->regs[14] = (uint64_t)(int64_t)(fs_readonly(name) ? -EROFS : -EIO);
+        // Exists and still refused, and fs_delete() does not say why:
+        // asked here, on the failure path only, so a delete that works
+        // pays for no directory walk.
+        int e = fs_readonly(name) ? -EROFS : dir_has_entries(name) ? -ENOTEMPTY : -EIO;
+        if (e == -EIO) klog_write(KLOG_ERR "syscall: unlink() failed\n");
+        c->regs[14] = (uint64_t)(int64_t)e;
     } else {
         c->regs[14] = 0;
     }

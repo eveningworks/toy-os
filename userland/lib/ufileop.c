@@ -207,7 +207,12 @@ static int remove_tree(struct ufileop *s, const struct ufileop_policy *p,
         char dir[UFILEOP_PATH_MAX];
         strlcpy(dir, s->qsrc[read], sizeof dir);
 
-        for (int page = 0; !s->cancelled; page += SYS_LISTDIR_MAX) {
+        // THE OFFSET ADVANCES ONLY PAST WHAT A PASS KEPT -- directories
+        // and failed unlinks. Every file this pass deleted shifted the
+        // rest of the listing down, so stepping a whole page would skip
+        // the next page's worth of names (and the final unlink of the
+        // still-full directory would then fail).
+        for (int page = 0; !s->cancelled; ) {
             int n = sys_listdir_at(dir, s->entries, SYS_LISTDIR_MAX, page);
             if (n < 0) { report(s, p, dir, sys_errno()); break; }
             if (n == 0) break;
@@ -220,8 +225,9 @@ static int remove_tree(struct ufileop *s, const struct ufileop_policy *p,
                 }
                 if (s->entries[i].is_dir) {
                     queue_push(s, p, path, "");
+                    page++;
                 } else {
-                    if (sys_unlink(path) != 0) report(s, p, path, sys_errno());
+                    if (sys_unlink(path) != 0) { report(s, p, path, sys_errno()); page++; }
                     if (!progress(s, p, path, 1, 1)) return 1;
                 }
             }

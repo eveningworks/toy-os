@@ -30,6 +30,10 @@ Six properties, each with a failure the others would not catch:
 5. **`rm -r` empties the tree AND removes the directories**, deepest
    first -- a walk that unlinked in discovery order would leave every
    directory behind, since a non-empty one cannot be unlinked.
+5b. **A directory of more than one listing page goes in ONE pass** --
+   the walk deletes while it pages, so the offset may only step past
+   what a pass kept.
+5c. **A non-empty directory says `directory not empty`**, not EIO.
 6. **The two refusals still say what they refuse.** Copying a directory
    into itself never terminates, and the message is the only thing that
    tells a person which mistake they made.
@@ -129,6 +133,23 @@ def main():
     res.check("rm -r removes the files AND the directories under them",
               "moved" not in listing(f"{ROOT}/a", inst),
               f"a={listing(f'{ROOT}/a', inst)}")
+
+    # 5b. a directory of MORE than one listing page (SYS_LISTDIR_MAX,
+    #     256): the walk deletes while it pages, so an offset stepped by
+    #     a whole page skipped the next page's names and the run failed
+    #     with the directory still there.
+    sh(f"mkdir {ROOT}/big")
+    sh(f"mkfiles {ROOT}/big 600 0")
+    out = " ".join(sh(f"rm -r {ROOT}/big"))
+    res.check("rm -r empties a directory of more than one listing page in ONE pass",
+              "big" not in listing(ROOT, inst), f"rm said {out[:90]!r}, root={listing(ROOT, inst)}")
+
+    # 5c. a non-empty directory says WHY it cannot be removed
+    sh(f"mkdir {ROOT}/full")
+    sh(f"cp /etc/timezones {ROOT}/full/x.txt")
+    out = " ".join(sh(f"rm {ROOT}/full"))
+    res.check("unlinking a non-empty directory says 'directory not empty', not EIO",
+              "not empty" in out, repr(out[:90]))
 
     # 6. the two refusals still name themselves
     into = " ".join(sh(f"cp -r {ROOT}/a {ROOT}/a/sub"))

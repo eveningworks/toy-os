@@ -125,6 +125,7 @@ static const struct { int code; const char *msg; } g_errmsg[] = {
     { EROFS,  "read-only file system" },
     { ENOTDIR, "not a directory" },
     { EISDIR, "is a directory" },
+    { ENOTEMPTY, "directory not empty" },
     { ERANGE, "out of range" },
     { ENAMETOOLONG, "path too long" },
     { ENOTSUP, "not a single value" },
