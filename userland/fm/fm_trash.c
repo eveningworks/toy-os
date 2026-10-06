@@ -111,7 +111,12 @@ int bin_item_flags(int code, unsigned *out) {
 // the system volume's bin's info folder, which every put, restore and
 // empty there touches.
 const char *fm_watch_path(const char *dir) {
-    return strcmp(dir, FM_BIN) == 0 ? "/home/.Trash/info" : dir;
+    if (strcmp(dir, FM_BIN) == 0) return "/home/.Trash/info";
+    // An archive's view changes when the archive does.
+    static char archive[PATH_MAX_LEN];
+    const char *inner;
+    if (zip_split(dir, archive, sizeof archive, &inner)) return archive;
+    return dir;
 }
 
 // The item a path inside a bin names; -1 for none.

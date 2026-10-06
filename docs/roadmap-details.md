@@ -1775,7 +1775,10 @@ piles on `uui_canvas`, and card faces generated the way the icons are
 
 ### An archive viewer that browses and extracts .zip and .tar over the existing inflate -- no compressing
 
-Put on the roadmap 2026-09-28 (not scheduled). Ark's shape: a listing,
+Put on the roadmap 2026-09-28 (not scheduled). **The .zip half is DONE
+(2026-10-06)**, as the File Manager's `zip:` virtual folder (`fm_zip.c`,
+`uzip_list()`), Explorer's compressed folders rather than a separate app;
+.tar is still to do, and would be the same kind of source. Ark's shape: a listing,
 then Extract to a chosen directory. Stored and deflated zip entries
 decompress with `userland/lib/uinflate.c`; writing an archive needs a
 compressor, which does not exist, and is a separate item if wanted.

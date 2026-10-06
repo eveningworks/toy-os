@@ -650,7 +650,11 @@ int uui_fileview_up(struct uui_fileview *fv) {
     snprintf(was, sizeof was, "%s", leaving ? leaving : "");
 
     char parent[UUI_FILEVIEW_PATH_MAX];
-    if (!k_path_dirname(fv->dir, parent, sizeof parent)) return 0;
+    if (fv->src) {   // a virtual folder says where its Up goes, if anywhere
+        if (!fv->src->up || !fv->src->up(fv->src->ctx, fv->dir, parent, sizeof parent)) return 0;
+    } else if (!k_path_dirname(fv->dir, parent, sizeof parent)) {
+        return 0;
+    }
     if (!uui_fileview_set_dir(fv, parent)) return 0;
     if (was[0]) uui_fileview_select_name(fv, was);
     return 1;
@@ -732,6 +736,11 @@ int uui_fileview_activate(struct uui_fileview *fv) {
     const struct sys_dirent *e = fv_entry(fv, row);
     if (!e) return 0;
 
+    if (e->is_dir && fv->src && fv->src->descends) {
+        char next[UUI_FILEVIEW_PATH_MAX];
+        if (!fv_entry_path(fv, e, next, sizeof next)) return 0;
+        return uui_fileview_set_dir(fv, next);
+    }
     if (e->is_dir && !fv->src) {
         if (!fv->navigable) return 0;
         char next[UUI_FILEVIEW_PATH_MAX];

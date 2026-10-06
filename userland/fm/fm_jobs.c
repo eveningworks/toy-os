@@ -10,6 +10,7 @@
 #include "lib/ufileop.h"
 #include "lib/utrash.h"
 #include "lib/ufileundo.h"
+#include "lib/uzip.h"
 #include "ui/uui_dialog.h"
 #include <pthread.h>
 #include "lib/uclip.h"
@@ -46,6 +47,11 @@ static int g_job_failures;
 // move or copy, an item's place in the bin, "" when nothing was done or
 // the step could not be safely undone. What the undo journal records.
 static char g_job_result[JOB_MAX][PATH_MAX_LEN];
+// What to do once an extraction is done: 1 go to the folder, 2 open the
+// one file (opening a member of an archive extracts it to /tmp first,
+// Explorer's way).
+static int g_extract_then;
+static char g_extract_open[PATH_MAX_LEN];
 // An Undo or Redo running as a job: the journal entry and the direction.
 static struct ufu_op *g_job_undo;
 static int g_job_redo;
@@ -352,6 +358,82 @@ static int worker_conflict(void *ctx, const char *src, const char *dst,
     return d;
 }
 
+// --- extraction (the inside of a .zip, fm_zip.c) --------------------------
+
+// Every folder of `path` that is not there yet. 0, or -errno.
+static int mkdirs(const char *path) {
+    char p[PATH_MAX_LEN];
+    strlcpy(p, path, sizeof p);
+    for (char *s = p + 1; ; s++) {
+        if (*s == '/' || !*s) {
+            char c = *s;
+            *s = '\0';
+            struct sys_stat st;
+            if (sys_stat(p, &st) != 0 && sys_mkdir(p) != 0) return -sys_errno();
+            *s = c;
+            if (!c) break;
+        }
+    }
+    return 0;
+}
+
+struct xjob { const char *archive, *prefix, *dest; size_t plen, cut; };
+
+static int x_progress(void *ctx, unsigned long done, unsigned long total) {
+    (void)ctx;
+    pthread_mutex_lock(&g_lock);
+    g_cur_done = done;
+    g_cur_size = total;
+    pthread_mutex_unlock(&g_lock);
+    return g_cancel;   // non-zero stops
+}
+
+// One member, if it is the item or under it: written under `dest` by its
+// name from the item's PARENT on, so the item keeps its own name.
+static int x_member(void *ctx, const char *name, unsigned long size, unsigned long packed,
+                    unsigned d, unsigned t) {
+    (void)size; (void)packed; (void)d; (void)t;
+    struct xjob *x = ctx;
+    if (g_cancel) return 1;
+    if (x->plen && strcmp(name, x->prefix) &&
+        (strncmp(name, x->prefix, x->plen) || name[x->plen] != '/')) return 0;
+    char out[PATH_MAX_LEN], err[96];
+    if (snprintf(out, sizeof out, "%s/%s", x->dest, name + x->cut) >= (int)sizeof out) {
+        worker_error(0, name, ENAMETOOLONG);
+        return 0;
+    }
+    size_t l = strlen(out);
+    if (l && out[l - 1] == '/') {             // a folder's own record
+        out[l - 1] = '\0';
+        if (mkdirs(out)) worker_error(0, out, EIO);
+        return 0;
+    }
+    char parent[PATH_MAX_LEN];
+    if (k_path_dirname(out, parent, sizeof parent)) mkdirs(parent);
+    pthread_mutex_lock(&g_lock);
+    strlcpy(g_cur_name, k_path_basename(out), sizeof g_cur_name);
+    pthread_mutex_unlock(&g_lock);
+    int rc = uzip_extract(x->archive, name, out, x_progress, 0, err, sizeof err);
+    if (rc) {
+        worker_error(0, name, -rc);
+        ulogf("files: extract %s: %s\n", name, err);
+    }
+    return 0;
+}
+
+static void extract_one(const char *item, const char *dest) {
+    char archive[PATH_MAX_LEN], err[96];
+    const char *inner;
+    if (!zip_split(item, archive, sizeof archive, &inner)) { worker_error(0, item, EINVAL); return; }
+    struct xjob x = { archive, inner, dest, strlen(inner), 0 };
+    const char *slash = strrchr(inner, '/');
+    x.cut = slash ? (size_t)(slash - inner) + 1 : 0;   // the item's parent, cut off
+    if (uzip_list(archive, x_member, &x, err, sizeof err) < 0) {
+        worker_error(0, archive, EINVAL);
+        ulogf("files: extract %s: %s\n", archive, err);
+    }
+}
+
 static void *worker_main(void *arg) {
     (void)arg;
     struct ufileop_policy policy = {
@@ -404,6 +486,9 @@ static void *worker_main(void *arg) {
             else utrash_item_path(&it, g_job_result[i], PATH_MAX_LEN);
             break;
         }
+        case CMD_EXTRACT:
+            extract_one(g_job_path[i], g_job_dest);
+            break;
         case CMD_UNDO: {
             int e = ufileundo_apply(g_job_undo, i, g_job_redo, &g_engine, &policy);
             if (e) worker_error(0, g_job_path[i], -e);
@@ -490,6 +575,19 @@ int poll_job(void) {
 void fm_job_finished(void) {
     snprintf(g_stat_note, sizeof g_stat_note, "%s %s", g_job_what,
               g_cancel ? "cancelled" : (g_job_failures ? "FAILED" : "done"));
+    if (g_job_op == CMD_EXTRACT && !g_cancel && !g_job_failures) {
+        int then = g_extract_then;
+        g_extract_then = 0;
+        if (then == 1) {
+            char dest[PATH_MAX_LEN];
+            strlcpy(dest, g_job_dest, sizeof dest);
+            g_job_count = g_job_at = 0;
+            fm_goto(g_active, dest);
+        } else if (then == 2) {
+            g_job_count = g_job_at = 0;
+            open_path(g_extract_open);
+        }
+    }
     if (!g_cancel) {
         if (g_job_op == CMD_UNDO) undo_applied(g_job_redo, g_job_failures);
         else undo_record_job(g_job_op, g_job_what, g_job_path, g_job_result,
@@ -498,6 +596,30 @@ void fm_job_finished(void) {
     g_job_count = g_job_at = 0;
     reload_panes();
     refresh_status();
+}
+
+void do_extract(int all, const char *dest, int then) {
+    struct uui_fileview *fv = active();
+    if (!in_zip(fv)) return;
+    if (mkdirs(dest)) { set_note("could not make the folder to extract into"); return; }
+    if (all) {
+        char archive[PATH_MAX_LEN];
+        const char *inner;
+        if (g_job_count > 0) { set_note("busy"); return; }
+        if (!zip_split(uui_fileview_dir(fv), archive, sizeof archive, &inner)) return;
+        g_job_at = g_job_failures = 0;
+        g_job_op = CMD_EXTRACT;
+        strlcpy(g_job_what, "Extract", sizeof g_job_what);
+        strlcpy(g_job_dest, dest, sizeof g_job_dest);
+        snprintf(g_job_path[0], PATH_MAX_LEN, "%s%s", FM_ZIP, archive);
+        g_job_isdir[0] = 1;
+        g_job_count = 1;
+    } else if (!queue_from(CMD_EXTRACT, "Extract", fv, dest)) {
+        return;
+    }
+    g_extract_then = then;
+    if (then == 2) k_path_join(dest, k_path_basename(g_job_path[0]), g_extract_open, sizeof g_extract_open);
+    start_job();
 }
 
 // Undo or Redo as a job: the steps run on the worker, a long move with

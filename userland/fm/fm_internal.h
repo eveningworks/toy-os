@@ -108,12 +108,15 @@ enum {
     CMD_VIEW_SIZES,          // View > Folder sizes (fm_sizes.c)
     CMD_OPEN_TAB, CMD_NEW_TAB, CMD_CLOSE_TAB,   // fm_tabs.c
     CMD_PIN, CMD_UNPIN,                          // lib/upins.h, Places
+    CMD_EXTRACT_ALL, CMD_EXTRACT_SEL,            // fm_zip.c; CMD_EXTRACT the worker's op
+    CMD_EXTRACT,
 };
 
 // The Recycle Bin's folder, as uui_fileview and the breadcrumb see it --
 // KIO's trash:/. A search's results are "search:" + the folder searched.
 #define FM_BIN "trash:/"
 #define FM_SEARCH "search:"
+#define FM_ZIP "zip:"
 
 // The dialog's answers. ONE widget serves both questions the app asks
 // (a conflict, a delete), so `g_dialog_kind` says which one is up and
@@ -366,6 +369,18 @@ int  search_item_flags(int code, unsigned *out);
 int  search_strip_shown(void);                 // files.c: the Look in strip is up
 extern struct uui_segmented g_scope_seg;
 extern struct uui_button g_search_stop;
+
+// --- the inside of a .zip (fm_zip.c) ----------------------------------------
+const struct uui_fileview_source *zip_source(void);
+int  in_zip(const struct uui_fileview *fv);
+int  is_zip_name(const char *path);
+int  zip_split(const char *dir, char *archive, int acap, const char **inner);
+int  zip_item_flags(int code, unsigned *out);
+int  zip_default_dest(const char *archive, char *out, int cap);
+// Extract: the selection (or everything, `all`) into `dest`, a job;
+// `then` 1 goes there when it is done, 2 opens the one file extracted.
+void do_extract(int all, const char *dest, int then);
+void open_path(const char *path);   // files.c: by its type, through lib/uopen
 
 // --- the Recycle Bin (fm_trash.c) -------------------------------------------
 const struct uui_fileview_source *bin_source(void);   // trash:/

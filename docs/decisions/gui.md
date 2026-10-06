@@ -10634,3 +10634,22 @@ folder that is not there today (an unplugged disk) stays in the file and
 is skipped when listed, rather than being dropped by the first app that
 cannot see it. At most 8.
 
+## A .zip opens as a folder in the File Manager, read-only, with Extract
+
+**Picked 2026-10-06** (artboard F), covering the .zip half of the
+archive-viewer roadmap item. Explorer's compressed folders and KDE's
+`zip:/` worker, not a separate Ark: an archive is the `zip:<archive>[/
+<folder>]` virtual folder (`fm_zip.c`, the "virtual folder is a source"
+convention), so the breadcrumb, tabs, Back and sorting work unchanged.
+**The folders of a level are DERIVED from the member names below it**,
+since an archive need not store folder records at all. It is READ-ONLY:
+nothing is renamed, deleted, cut or pasted inside -- what is wanted
+comes out with Extract all / Extract selected (beside the archive in a
+folder named for it, Explorer's and Ark's default, and the pane goes
+there), Copy to the other pane extracts there, and opening a member
+extracts it to /tmp/zip-open and opens that copy, as Explorer does. A
+source may now say where Up goes (`up`) and that its folders open in
+place (`descends`) -- from the archive's top, Up is the folder it is in.
+No compressing: there is no deflate encoder, and writing archives is a
+separate item if wanted.
+

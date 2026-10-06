@@ -92,7 +92,8 @@ typedef const struct uimg *(*uui_fileview_thumb_fn)(void *ctx, const char *dir,
 // filters), so entry `index` is exactly the position `list` wrote it at
 // and stays valid for `path`, `cell` and `compare` until the next
 // reload. There is no "..", no drag out, no drop in, and activating a
-// folder reports `on_open` with its real path instead of descending.
+// folder reports `on_open` with its real path -- unless the source
+// `descends`, and then its path is the next folder to show.
 struct uui_table_column;
 struct uui_fileview_source {
     // Fill `out` (at most `cap`) for `dir`; the count, or -errno.
@@ -108,6 +109,12 @@ struct uui_fileview_source {
     void (*cell)(void *ctx, int index, int col, char *out, int cap);
     int (*compare)(void *ctx, int index_a, int index_b, int col);
     void *ctx;
+    // 1: a folder row OPENS -- set_dir() to its `path`, itself a name
+    // the resolver answers (the inside of an archive). 0: on_open.
+    int descends;
+    // Where Up (Backspace) goes from `dir`: 1 with it in `out`, 0 for
+    // nowhere. NULL: Up does nothing in this folder.
+    int (*up)(void *ctx, const char *dir, char *out, int cap);
 };
 typedef const struct uui_fileview_source *(*uui_fileview_resolve_fn)(void *ctx, const char *dir);
 

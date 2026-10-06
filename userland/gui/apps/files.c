@@ -272,6 +272,16 @@ static const struct uui_toolbar_item bin_toolbar_items[] = {
     { "tb-pane",    "Show the details pane", CMD_VIEW_DPANE, "Details", UUI_TB_END, 0, TINT_NAV },
 };
 
+// ...and inside an archive: read-only, so the verbs are Extract.
+static const struct uui_toolbar_item zip_toolbar_items[] = {
+    { "tb-new",  "Extract everything beside the archive", CMD_EXTRACT_ALL, "Extract all", 0, 0, TINT_GREEN },
+    { "tb-copy", "Extract what is selected",              CMD_EXTRACT_SEL, "Extract selected", 0, 0, TINT_GREEN },
+    UUI_TOOLBAR_SEP,
+    { "tb-sort",    0,                  CMD_MENU_SORT,  "Sort", UUI_TB_MENU, 0, TINT_TEAL },
+    { "tb-view",    0,                  CMD_MENU_VIEW,  "View", UUI_TB_MENU, 0, TINT_ORANGE },
+    { "tb-pane",    "Show the details pane", CMD_VIEW_DPANE, "Details", UUI_TB_END, 0, TINT_NAV },
+};
+
 // The status bar's view switch, at its right end, as in Explorer.
 static const struct uui_toolbar_item viewbar_items[] = {
     { "tb-details", "Details", CMD_VIEW_DETAILS, 0, 0, 0, TINT_NAV },
@@ -406,6 +416,7 @@ static unsigned menu_item_flags(int code) {
     unsigned bin;
     if (bin_item_flags(code, &bin)) return bin;   // the Recycle Bin's own rules
     if (search_item_flags(code, &bin)) return bin;   // ...and a search's
+    if (zip_item_flags(code, &bin)) return bin;      // ...and an archive's
     if (code == CMD_UNDO || code == CMD_REDO)
         return undo_can(code == CMD_REDO) ? 0 : UUI_MI_DISABLED;
     switch (code) {
@@ -635,6 +646,7 @@ static const struct uui_fileview_source *resolve_virtual(void *ctx, const char *
     (void)ctx;
     if (strcmp(dir, FM_BIN) == 0) return bin_source();
     if (search_scope(dir)) return search_source();
+    if (!strncmp(dir, FM_ZIP, sizeof FM_ZIP - 1)) return zip_source();
     return 0;
 }
 
@@ -678,11 +690,14 @@ void path_sync(void) {
     const char *dir = uui_fileview_dir(active());
     sizes_follow(dir, 0);
     tabs_sync(g_app);
-    const struct uui_toolbar_item *want = in_bin(active()) ? bin_toolbar_items : toolbar_items;
+    const struct uui_toolbar_item *want = in_bin(active()) ? bin_toolbar_items
+                                        : in_zip(active()) ? zip_toolbar_items : toolbar_items;
     if (g_toolbar.items != want) {
         g_toolbar.items = want;
         g_toolbar.count = want == bin_toolbar_items
                         ? (int)(sizeof bin_toolbar_items / sizeof bin_toolbar_items[0])
+                        : want == zip_toolbar_items
+                        ? (int)(sizeof zip_toolbar_items / sizeof zip_toolbar_items[0])
                         : (int)(sizeof toolbar_items / sizeof toolbar_items[0]);
         g_toolbar.hot = g_toolbar.armed = -1;
     }
@@ -811,6 +826,20 @@ static void set_view(int code) {
 }
 
 void do_command(struct uapp *a, int code) {
+    // A command the bin greys is refused here too: a key reaches this
+    // without asking menu_item_flags().
+    if ((in_bin(active()) || in_search(active()) || in_zip(active())) &&
+        (menu_item_flags(code) & UUI_MI_DISABLED) && code != CMD_UP) {
+        set_note(in_bin(active()) ? "not in the Recycle Bin"
+                 : in_zip(active()) ? "an archive is read-only -- extract it first"
+                 : "not in search results");
+        return;
+    }
+    // Inside an archive, Copy to the other pane EXTRACTS there.
+    if (in_zip(active()) && code == CMD_COPY) {
+        do_extract(0, uui_fileview_dir(other()), 0);
+        return;
+    }
     // dispatch-ok: THE SET IS THE APP'S OWN MENUS and nothing else can
     // extend it -- every branch is one entry of the CMD_* enum in
     // fm_internal.h, which exists so the menu bar, the toolbar, the
@@ -823,13 +852,6 @@ void do_command(struct uapp *a, int code) {
     // the uapp and the locals this one already has, which is more code
     // saying less. It crossed 20 branches when Back and Forward were
     // added on 2026-09-19.
-    // A command the bin greys is refused here too: a key reaches this
-    // without asking menu_item_flags().
-    if ((in_bin(active()) || in_search(active())) && (menu_item_flags(code) & UUI_MI_DISABLED) &&
-        code != CMD_UP) {
-        set_note(in_bin(active()) ? "not in the Recycle Bin" : "not in search results");
-        return;
-    }
     switch (code) {
     case CMD_COPY:   do_copy(); break;
     case CMD_MOVE:   do_move(); break;
@@ -841,6 +863,15 @@ void do_command(struct uapp *a, int code) {
     case CMD_UNDO:           do_undo(0); break;
     case CMD_VIEW_SIZES:     sizes_set(!g_sizes_on); break;
     case CMD_PIN:            pin_selected(1); break;
+    case CMD_EXTRACT_ALL:
+    case CMD_EXTRACT_SEL: {
+        char archive[PATH_MAX_LEN], dest[PATH_MAX_LEN];
+        const char *inner;
+        if (zip_split(uui_fileview_dir(active()), archive, sizeof archive, &inner) &&
+            zip_default_dest(archive, dest, sizeof dest))
+            do_extract(code == CMD_EXTRACT_ALL, dest, 1);
+        break;
+    }
     case CMD_UNPIN:          pin_selected(0); break;
     case CMD_NEW_TAB:        tab_new(a, uui_fileview_dir(active())[0] == '/' ? uui_fileview_dir(active()) : "/home"); break;
     case CMD_CLOSE_TAB:      tab_close(a, tab_current()); break;
@@ -1478,6 +1509,8 @@ static int on_tick(struct uapp *a) {
 // override outranks the .desktop declarations, and /bin/open speaks
 // the same one, so a double click here and `open x.txt` at a prompt
 // cannot disagree.
+void open_path(const char *path);
+
 static void on_pane_open(void *ctx, const char *path) {
     if (in_search(&g_pane[(int)(intptr_t)ctx])) {   // a folder among results: go there
         struct sys_stat st;
@@ -1488,6 +1521,23 @@ static void on_pane_open(void *ctx, const char *path) {
                  k_path_basename(path));
         return;
     }
+    // A FILE INSIDE AN ARCHIVE is extracted to /tmp first and that copy
+    // opened -- Explorer's way; an app cannot read "zip:...".
+    if (in_zip(&g_pane[(int)(intptr_t)ctx])) {
+        do_extract(0, "/tmp/zip-open", 2);
+        return;
+    }
+    // AN ARCHIVE OPENS AS A FOLDER, Explorer's compressed folders.
+    if (is_zip_name(path)) {
+        char dir[PATH_MAX_LEN + 8];
+        snprintf(dir, sizeof dir, "%s%s", FM_ZIP, path);
+        fm_goto((int)(intptr_t)ctx, dir);
+        return;
+    }
+    open_path(path);
+}
+
+void open_path(const char *path) {
     char exec[PATH_MAX_LEN];
     if (!uopen_resolve(path, exec, sizeof exec)) {
         // Said out loud rather than doing nothing: a double click that
@@ -1784,6 +1834,7 @@ int main(int argc, char **argv) {
     uui_pathbar_init(&g_path, "System", "drive");
     uui_pathbar_set_scheme(&g_path, FM_BIN, "Recycle Bin", "place-trash");
     uui_pathbar_set_scheme(&g_path, "search:/", "Search results", "tb-find");
+    uui_pathbar_set_scheme(&g_path, "zip:/", "Archive", "file-app");
     uui_segmented_init(&g_scope_seg, g_scope_names, 3, 0);
     uui_button_init(&g_search_stop, 0, 0, 0, 0, "Stop", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_SEARCH_STOP);
     uui_textbox_init(&g_search, "");

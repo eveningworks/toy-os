@@ -34,4 +34,14 @@ typedef int (*uzip_progress)(void *ctx, unsigned long done, unsigned long total)
 int uzip_extract(const char *zip_path, const char *name, const char *out_path,
                  uzip_progress progress, void *ctx, char *err, int errcap);
 
+// Every member of the archive, in the central directory's order: its
+// full name ('/'-separated; a folder's ends in '/'), its size, its size
+// in the archive, and its MS-DOS date and time as stored. Return non-zero
+// to stop. A name of UZIP_NAME_MAX bytes or more is skipped. 0, or a
+// negative errno as uzip_extract() gives.
+#define UZIP_NAME_MAX 256
+typedef int (*uzip_entry_fn)(void *ctx, const char *name, unsigned long size,
+                             unsigned long packed, unsigned dos_date, unsigned dos_time);
+int uzip_list(const char *zip_path, uzip_entry_fn fn, void *ctx, char *err, int errcap);
+
 #endif

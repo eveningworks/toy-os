@@ -39,9 +39,13 @@ struct member {
     uint32_t crc, csize, usize, local;
 };
 
-// Finds `name` in the central directory. 0, or a negative errno.
-static int find_member(int fd, unsigned long fsize, const char *name, struct member *m,
-                       char *err, int cap) {
+// Walks the central directory, calling `fn` with each record (its
+// fixed part at `rec`, its name at `name`/`nlen`) until it returns
+// non-zero, which is passed back. 0 when every record was walked, or a
+// negative errno for an archive this cannot read.
+typedef int (*cdir_fn)(void *ctx, const unsigned char *rec, const char *name, unsigned nlen);
+
+static int walk_cdir(int fd, unsigned long fsize, cdir_fn fn, void *ctx, char *err, int cap) {
     unsigned long tail = fsize < EOCD_SEARCH ? fsize : EOCD_SEARCH;
     if (tail < EOCD_LEN) return failf(err, cap, -EINVAL, "not a zip archive (too short)");
     unsigned char *t = malloc(tail);
@@ -73,9 +77,8 @@ static int find_member(int fd, unsigned long fsize, const char *name, struct mem
         free(cd);
         return failf(err, cap, -EIO, "could not read the archive's directory");
     }
-    size_t nlen = strlen(name);
     uint32_t p = 0;
-    int rc = failf(err, cap, -ENOENT, "the archive has no %s", name);
+    int rc = 0;
     for (unsigned e = 0; e < entries; e++) {
         if (p + CDIR_LEN > cd_size || ub_le32(cd + p) != CDIR_SIG) {
             rc = failf(err, cap, -EINVAL, "the archive's directory is damaged");
@@ -86,20 +89,58 @@ static int find_member(int fd, unsigned long fsize, const char *name, struct mem
             rc = failf(err, cap, -EINVAL, "the archive's directory is damaged");
             break;
         }
-        if (fl == nlen && !memcmp(cd + p + CDIR_LEN, name, nlen)) {
-            m->flags = ub_le16(cd + p + 8);
-            m->method = ub_le16(cd + p + 10);
-            m->crc = ub_le32(cd + p + 16);
-            m->csize = ub_le32(cd + p + 20);
-            m->usize = ub_le32(cd + p + 24);
-            m->local = ub_le32(cd + p + 42);
-            rc = 0;
-            break;
-        }
+        rc = fn(ctx, cd + p, (const char *)cd + p + CDIR_LEN, fl);
+        if (rc) break;
         p += CDIR_LEN + fl + xl + cl;
     }
     free(cd);
     return rc;
+}
+
+struct find { const char *name; size_t nlen; struct member *m; };
+
+static int find_one(void *ctx, const unsigned char *rec, const char *name, unsigned nlen) {
+    struct find *f = ctx;
+    if (nlen != f->nlen || memcmp(name, f->name, nlen)) return 0;
+    f->m->flags = ub_le16(rec + 8);
+    f->m->method = ub_le16(rec + 10);
+    f->m->crc = ub_le32(rec + 16);
+    f->m->csize = ub_le32(rec + 20);
+    f->m->usize = ub_le32(rec + 24);
+    f->m->local = ub_le32(rec + 42);
+    return 1;
+}
+
+// Finds `name` in the central directory. 0, or a negative errno.
+static int find_member(int fd, unsigned long fsize, const char *name, struct member *m,
+                       char *err, int cap) {
+    struct find f = { name, strlen(name), m };
+    int rc = walk_cdir(fd, fsize, find_one, &f, err, cap);
+    if (rc == 1) return 0;
+    if (rc == 0) return failf(err, cap, -ENOENT, "the archive has no %s", name);
+    return rc;
+}
+
+struct list { uzip_entry_fn fn; void *ctx; };
+
+static int list_one(void *ctx, const unsigned char *rec, const char *name, unsigned nlen) {
+    struct list *l = ctx;
+    char n[UZIP_NAME_MAX];
+    if (nlen >= sizeof n) return 0;   // a name past the bound is skipped, not cut
+    memcpy(n, name, nlen);
+    n[nlen] = '\0';
+    return l->fn(l->ctx, n, ub_le32(rec + 24), ub_le32(rec + 20), ub_le16(rec + 14), ub_le16(rec + 12));
+}
+
+int uzip_list(const char *zip_path, uzip_entry_fn fn, void *ctx, char *err, int errcap) {
+    int fd = open(zip_path, O_RDONLY);
+    if (fd < 0) return failf(err, errcap, -errno, "%s: cannot open", zip_path);
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return failf(err, errcap, -EIO, "%s: cannot stat", zip_path); }
+    struct list l = { fn, ctx };
+    int rc = walk_cdir(fd, (unsigned long)st.st_size, list_one, &l, err, errcap);
+    close(fd);
+    return rc < 0 ? rc : 0;
 }
 
 struct out {

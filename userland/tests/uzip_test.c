@@ -59,6 +59,16 @@ static long read_file(const char *path, char *buf, size_t cap) {
     return n;
 }
 
+static int listed, list_ok = 1;
+static int list_one(void *ctx, const char *name, unsigned long size, unsigned long packed,
+                    unsigned d, unsigned t) {
+    (void)ctx; (void)d; (void)t;
+    if (listed == 0) list_ok &= !strcmp(name, "hello.txt") && size == 15 && packed == 15;
+    if (listed == 1) list_ok &= !strcmp(name, "dir/lorem.txt") && size == 1807 && packed == 74;
+    listed++;
+    return 0;
+}
+
 static int progress_calls;
 static int count(void *ctx, unsigned long done, unsigned long total) {
     (void)ctx; (void)done; (void)total;
@@ -90,6 +100,13 @@ int main(void) {
                    !memcmp(buf + 1800, "toy-os\n", 7);
     utest_check_detail(rc == 0 && lorem_ok, "a DEFLATED member inflates to its 1807 bytes", err);
     utest_check(progress_calls > 0, "...and progress is reported");
+
+    // THE LISTING: both members, in the directory's order, with the sizes
+    // Python's writer recorded -- including the deflated one's packed size.
+    listed = 0;
+    rc = uzip_list(zip, list_one, 0, err, sizeof err);
+    utest_checkf(rc == 0 && listed == 2 && list_ok,
+                 "the listing names both members with their sizes (%d listed)", listed);
 
     rc = uzip_extract(zip, "nope.txt", out, 0, 0, err, sizeof err);
     utest_check_detail(rc == -ENOENT, "a member that is not there is -ENOENT", err);

@@ -2993,6 +2993,16 @@ window without going through it will find its layout polls timing out.
   lookup by path finds the standard place first. Its positive control
   stops the app listing pins: the row check reddens.
 
+- **`zip_gui_test.py`** -- a `.zip` as a folder (`fm_zip.c` over
+  `lib/uzip.h`). The archive is written by Python's `zipfile` on the
+  host and put on the guest with `vm.py put` **BEFORE the test takes the
+  debug console**: put talks over the same socket, and with the test
+  holding it the file never arrived and nothing said so. Checks the
+  derived folders, opening a folder in place, Up to the archive's own
+  folder, Extract all against the sizes zipfile wrote, and opening a
+  member through /tmp/zip-open. Its positive control stops extraction
+  making parent folders: the Extract all check reddens.
+
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window
   (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
   driven through Notepad, Image Viewer and Audio Player. 17 checks: the
