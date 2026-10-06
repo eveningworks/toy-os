@@ -101,6 +101,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`sum`](sum.md)
 - [`sync`](sync.md)
 - [`touch`](touch.md)
+- [`trash`](trash.md)
 - [`truncate`](truncate.md)
 - [`write`](write.md)
 

@@ -74,6 +74,7 @@
 | `utest.h` | The harness every self-checking /tests program reports through: a banner, one line per check, and ONE epilogue line in the shape tools/usertest_run.py knows by default -- |
 | `uthumb.h` | uthumb -- thumbnails: a LOOKUP on the draw path, a decode on a WORKER THREAD, and a copy on disk (/var/cache/thumbnails) that outlives the process. |
 | `utmppath.h` | A SCRATCH PATH IN ONE EXPRESSION, for ring 3. |
+| `utrash.h` | THE RECYCLE BIN: a delete that can be taken back, on the freedesktop Trash specification's layout so a Linux desktop reading the same disk sees the same bin. |
 | `utween.h` | An integer that moves from one value to another over a fixed time, eased -- the one interpolator the desktop has, shared by the toolkit (a scroll that glides) and the window manager (an effect that... |
 | `uwmchan.h` | TWP over a channel: a client's request reaching the compositor DIRECTLY instead of through the kernel. |
 | `uzip.h` | Reading ONE member out of a .zip archive into a file -- PKWARE's APPNOTE, the subset every archiver writes: stored (method 0) and deflated (method 8) members, no encryption, no zip64. |

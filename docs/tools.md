@@ -5536,6 +5536,15 @@ runs first**: a `doom1.wad` with one
   deepest-first unlink ordering: reverse it and `rm -r` leaves every
   directory behind, which is the one check that reddens.
 
+- **`trash_test.py`** -- the Recycle Bin (`lib/utrash`) through
+  `/bin/trash`, the same library the File Manager's and the desktop's
+  Delete use: put, the numbered name a second same-named item gets,
+  the freedesktop `.trashinfo` (a `+` must be `%2B` in `Path=`), restore
+  with the content checked by size, a restore onto a taken name refused,
+  a folder round trip, no bin on a RAM volume, and `empty`. Its positive
+  control is the percent-encoding: let `+` through and the info-file
+  check reddens.
+
 - **`private_tmp.py`** -- a private `TMPDIR` per test tool, deleted
   when the tool returns: systemd's `PrivateTmp=`, for a runner.
   `gui_regress.py` and `ondemand_sweep.py` run every tool inside one.

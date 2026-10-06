@@ -214,6 +214,8 @@ TOOLS = [
     # ATTACHES (it drives `vm.py exec`), so wants_vm -- without a guest
     # every check read an empty answer and 5 of 7 "failed".
     ("fileop",      "fileop_test.py",          "lib/ufileop through cp/mv/rm",       True,  None,                   True),
+    # ATTACHES like fileop_test; works under /tt and empties the bin.
+    ("trash",       "trash_test.py",           "lib/utrash through /bin/trash",      True,  None,                   True),
     # ATTACHES to a running guest: it only types at the debug console and
     # compares against digests it computes on the host.
     ("sum",         "sum_test.py",             "/bin/sum and /lib/libhash.so",       False, None,                   True),
