@@ -107,6 +107,7 @@ enum {
     CMD_UNDO, CMD_REDO, CMD_TOAST,
     CMD_VIEW_SIZES,          // View > Folder sizes (fm_sizes.c)
     CMD_OPEN_TAB, CMD_NEW_TAB, CMD_CLOSE_TAB,   // fm_tabs.c
+    CMD_PIN, CMD_UNPIN,                          // lib/upins.h, Places
 };
 
 // The Recycle Bin's folder, as uui_fileview and the breadcrumb see it --

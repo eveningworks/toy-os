@@ -10623,3 +10623,14 @@ and restored when chosen; the panes themselves are shared, so a tab
 costs paths, not listings. Closing the last tab closes the window, as
 in Explorer and every browser.
 
+## Pinned folders are one file both the File Manager and the file dialog read
+
+**Picked 2026-10-06** (artboard D). A folder's context menu pins it to
+Places; the File Manager's side column lists the pins under their own
+**Pinned** heading, between the named places and This computer, and the
+shared file dialog lists them too -- `lib/upins.h` over
+`/etc/places.conf`, one path per line, GTK's bookmarks file. A pin to a
+folder that is not there today (an unplugged disk) stays in the file and
+is skipped when listed, rather than being dropped by the first app that
+cannot see it. At most 8.
+

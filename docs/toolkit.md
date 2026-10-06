@@ -55,6 +55,7 @@
 | `uopen.h` | uopen -- which program opens this file? |
 | `upager.h` | The pager: show a block of text one screenful at a time, on whichever of fd 0 and fd 1 is a terminal. |
 | `upath.h` | PATH lookup for a ring-3 program that has to RUN another one. |
+| `upins.h` | PINNED FOLDERS: the folders a person added to Places, kept in /etc/places.conf one absolute path per line -- GTK's bookmarks file, Explorer's Quick access pins. |
 | `uprogress.h` | A one-line transfer meter, redrawn in place with `\r`. |
 | `uregion.h` | A REGION: a bounded list of disjoint rectangles, cut by subtraction -- what the compositor draws each window inside once the opaque windows above it are taken away (pixman's region32, which wlroots... |
 | `uresolv.h` | Turning a name into an address: DNS over UDP, in ring 3. |

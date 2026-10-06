@@ -36,6 +36,8 @@
 #include "lib/udate.h"
 #include "lib/uopen.h"
 #include "lib/uclip.h"
+#include "lib/upins.h"
+#include <errno.h>
 #include "ui/uui.h"
 #include "ui/utheme.h"
 #include "ui/uui_dialog.h"
@@ -284,6 +286,8 @@ static const struct uui_toolbar_item viewbar_items[] = {
 static const struct uui_menu_item ctx_items[] = {
     UUI_MENU("Open",        CMD_OPEN,     "Enter"),
     UUI_MENU("Open in new tab", CMD_OPEN_TAB, 0),   // dropped for anything but a folder
+    UUI_MENU("Pin to Places",     CMD_PIN,   0),     // a folder not yet pinned
+    UUI_MENU("Unpin from Places", CMD_UNPIN, 0),     // ...and one that is
     UUI_MENU("Edit in Notepad", CMD_EDIT, 0),   // dropped for anything but a text file
     UUI_MENU_SEP,
     UUI_MENU("Cut",         CMD_CLIP_CUT,   "Ctrl+X"),
@@ -309,6 +313,33 @@ static const struct uui_menu_item bin_ctx_items[] = {
     UUI_MENU_SEP,
     UUI_MENU("Properties",         CMD_PROPERTIES,     0),
 };
+
+// PLACES: the named folders, the Recycle Bin, the folders pinned to
+// Places (lib/upins.h), then every mounted volume. Rebuilt when a pin is
+// made or taken away, with the tree that shows them.
+static void places_build(void) {
+    uui_places_init(&g_places);
+    uui_places_add(&g_places, "Home",      "place-home",      "/home");
+    uui_places_add(&g_places, "Desktop",   "place-desktop",   "/home/desktop");
+    uui_places_add(&g_places, "Documents", "place-documents", "/usr/share/doc");
+    uui_places_add(&g_places, "Music",     "place-music",     "/usr/share/music");
+    uui_places_add(&g_places, "Pictures",  "place-pictures",  "/usr/share/wallpapers");
+    uui_places_add(&g_places, "Recycle Bin", "place-trash",   FM_BIN);
+    uui_places_add_pins(&g_places);
+    uui_places_refresh(&g_places);
+}
+
+static void pin_selected(int pin) {
+    char path[PATH_MAX_LEN];
+    if (!uui_fileview_selected_is_dir(active()) ||
+        !uui_fileview_selected_path(active(), path, sizeof path)) { set_note("select a folder"); return; }
+    int e = pin ? upins_add(path) : upins_remove(path);
+    if (e == -ENOSPC) set_note("Places holds 8 pins -- unpin one first");
+    else if (e && e != -EEXIST && e != -ENOENT) set_note(pin ? "could not pin it" : "could not unpin it");
+    else snprintf(g_stat_note, sizeof g_stat_note, pin ? "pinned %s" : "unpinned %s", k_path_basename(path));
+    places_build();
+    tree_rebuild();
+}
 
 // The context menu as OPENED: ctx_items minus the rows that do not
 // apply to what was clicked. "Edit in Notepad" is absent -- not greyed
@@ -338,6 +369,8 @@ static int build_ctx_items(void) {
     if (uui_fileview_selected_path(active(), path, sizeof path) &&
         !uui_fileview_selected_is_dir(active()))
         can_edit = looks_like_text(path);
+    int is_dir = uui_fileview_selected_is_dir(active());
+    int pinned = is_dir && uui_fileview_selected_path(active(), path, sizeof path) && upins_has(path);
     int n = 0;
     if (in_bin(active())) {
         for (int i = 0; i < (int)(sizeof bin_ctx_items / sizeof bin_ctx_items[0]); i++)
@@ -347,6 +380,8 @@ static int build_ctx_items(void) {
     for (int i = 0; i < (int)(sizeof ctx_items / sizeof ctx_items[0]); i++) {
         if (ctx_items[i].code == CMD_EDIT && !can_edit) continue;
         if (ctx_items[i].code == CMD_OPEN_TAB && !uui_fileview_selected_is_dir(active())) continue;
+        if (ctx_items[i].code == CMD_PIN && (!is_dir || pinned)) continue;
+        if (ctx_items[i].code == CMD_UNPIN && (!is_dir || !pinned)) continue;
         g_ctx_built[n++] = ctx_items[i];
     }
     return n;
@@ -805,6 +840,8 @@ void do_command(struct uapp *a, int code) {
     case CMD_EMPTY_BIN:      do_empty_bin(); break;
     case CMD_UNDO:           do_undo(0); break;
     case CMD_VIEW_SIZES:     sizes_set(!g_sizes_on); break;
+    case CMD_PIN:            pin_selected(1); break;
+    case CMD_UNPIN:          pin_selected(0); break;
     case CMD_NEW_TAB:        tab_new(a, uui_fileview_dir(active())[0] == '/' ? uui_fileview_dir(active()) : "/home"); break;
     case CMD_CLOSE_TAB:      tab_close(a, tab_current()); break;
     case CMD_OPEN_TAB: {
@@ -1753,14 +1790,7 @@ int main(int argc, char **argv) {
     g_search.placeholder = g_search_hint;
     // The places are the file chooser's (ui/uui_filedialog.c) -- one
     // idea of where Documents is.
-    uui_places_init(&g_places);
-    uui_places_add(&g_places, "Home",      "place-home",      "/home");
-    uui_places_add(&g_places, "Desktop",   "place-desktop",   "/home/desktop");
-    uui_places_add(&g_places, "Documents", "place-documents", "/usr/share/doc");
-    uui_places_add(&g_places, "Music",     "place-music",     "/usr/share/music");
-    uui_places_add(&g_places, "Pictures",  "place-pictures",  "/usr/share/wallpapers");
-    uui_places_add(&g_places, "Recycle Bin", "place-trash",   FM_BIN);
-    uui_places_refresh(&g_places);
+    places_build();
     uui_button_init(&g_dp_open, 0, 0, 0, 0, "Open", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_DP_OPEN);
     uui_button_init(&g_dp_props, 0, 0, 0, 0, "Properties", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_DP_PROPS);
     // NO ITEMS: a context menu has no bar strip, so Left/Right have no

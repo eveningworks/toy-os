@@ -141,6 +141,7 @@ TOOLS = [
     ("searchgui",  "search_gui_test.py", "search: typing filters, Enter walks subfolders, results open in place"),
     ("sizesgui",   "sizes_gui_test.py",  "folder sizes: each folder counted, subfolders included"),
     ("tabsgui",    "tabs_gui_test.py",   "title-bar tabs: new, label, switch, own history, close, last closes window"),
+    ("pinsgui",    "pins_gui_test.py",   "Pin to Places: the file, the Pinned row, going there, Unpin"),
     ("forcequit", "forcequit_test.py", "not-responding detection and force quit"),
     ("dialog", "dialog_test.py", "the confirm dialog, by pixel value"),
     ("leave", "leave_test.py", "the Leave page: Restart/Shut down/Exit to shell, apps asked to close, Restart into"),

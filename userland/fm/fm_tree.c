@@ -125,6 +125,11 @@ static int tree_build_head(void) {
     int n = 0;
     for (int i = 0; i < g_places.count && n < TREE_MAX - 1; i++) {
         const struct uui_place *r = &g_places.row[i];
+        if (g_places.pinned && i == g_places.places - g_places.pinned) {
+            g_tree_path[n][0] = '\0';
+            g_tree_nodes[n] = (struct uui_tree_node){ .label = "Pinned", .kind = UUI_TREE_HEADER };
+            n++;
+        }
         if (i == g_places.places) {
             g_tree_path[n][0] = '\0';
             g_tree_nodes[n] = (struct uui_tree_node){ .label = "This computer",

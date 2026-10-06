@@ -67,6 +67,7 @@ static void build_places(struct uui_filedialog *fd) {
     add_place(fd, "Music",     "place-music",     "/usr/share/music");
     add_place(fd, "Pictures",  "place-pictures",  "/usr/share/wallpapers");
     add_place(fd, "Scratch",   "folder",          "/var/tmp");
+    uui_places_add_pins(&fd->places);   // the File Manager's pins, here too
     uui_places_refresh(&fd->places);
 }
 

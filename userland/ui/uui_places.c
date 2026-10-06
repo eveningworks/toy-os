@@ -9,6 +9,8 @@
 #include "lib/human.h"
 #include "rt/sys.h"
 #include "query_abi.h"
+#include "lib/upins.h"
+#include "kpath.h"
 #include "keyboard.h"
 #include <string.h>
 #include <stdio.h>
@@ -89,6 +91,18 @@ void uui_places_add(struct uui_places *p, const char *label, const char *icon,
     r->icon = icon;
     strlcpy(r->path, path, sizeof r->path);
     p->places = p->count;
+}
+
+void uui_places_add_pins(struct uui_places *p) {
+    static char pins[UPINS_MAX][UPINS_PATH];
+    int n = upins_load(pins, UPINS_MAX);
+    p->pinned = 0;
+    for (int i = 0; i < n; i++) {
+        const char *base = k_path_basename(pins[i]);
+        int before = p->count;
+        uui_places_add(p, base[0] ? base : pins[i], "folder", pins[i]);
+        if (p->count > before) p->pinned++;
+    }
 }
 
 static void device_name(const char *point, char *out, int cap) {

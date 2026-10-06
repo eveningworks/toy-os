@@ -2986,6 +2986,13 @@ window without going through it will find its layout polls timing out.
   a history shared between tabs would stay put. Its positive control
   stops a tab from restoring its history: that check reddens.
 
+- **`pins_gui_test.py`** -- Pin to Places (`lib/upins.h`) through the
+  File Manager's context menu, read back from `/etc/places.conf` with
+  `cat` and from the side column's rows by PATH. **The target is
+  `/usr/share/sounds`, not `doc`**: Documents IS `/usr/share/doc`, so a
+  lookup by path finds the standard place first. Its positive control
+  stops the app listing pins: the row check reddens.
+
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window
   (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
   driven through Notepad, Image Viewer and Audio Player. 17 checks: the

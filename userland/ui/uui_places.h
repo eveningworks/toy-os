@@ -20,7 +20,7 @@
 // Like the path bar it navigates nothing: a click parks the row's path
 // for uui_places_take(), and the app goes there.
 
-#define UUI_PLACES_MAX       16
+#define UUI_PLACES_MAX       24
 #define UUI_PLACES_PATH_MAX  256
 #define UUI_PLACES_LABEL_MAX 24
 
@@ -38,6 +38,7 @@ struct uui_places {
     struct uui_place row[UUI_PLACES_MAX];
     int count;
     int places;                   // how many of `row` are places; devices follow
+    int pinned;                   // the LAST this many places are pins (lib/upins.h)
     int selected;                 // row, or -1: the one whose path is where you are
     int hot, armed;               // OWNED
     char taken[UUI_PLACES_PATH_MAX];
@@ -48,6 +49,9 @@ struct uui_places {
 };
 
 void uui_places_init(struct uui_places *p);
+// The folders pinned to Places (lib/upins.h), after the named ones: call
+// once the app's own places are added, before uui_places_refresh().
+void uui_places_add_pins(struct uui_places *p);
 // A named folder. Call before uui_places_refresh(), which appends the
 // devices after the places.
 void uui_places_add(struct uui_places *p, const char *label, const char *icon,
