@@ -663,7 +663,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~A JPEG encoder~~ DONE 2026-09-16 -- baseline 4:2:0, Annex K tables, checked against libjpeg's own loss
 - [x] ~~EXIF orientation~~ DONE 2026-09-16 -- applied in the decoder, as every viewer does
 - [ ] A wallpaper picker in System Settings, rather than only Image Viewer's Desktop menu
-- [ ] Dropdown lists sized to the room they have -- `uui_dropdown` shows six rows and scrolls, where Qt (so Breeze) shows 10 and Windows 11 about 20
+- [ ] Dropdown lists sized to the room they have -- `uui_dropdown` scrolls past six rows; Qt shows 10, Windows 11 about 20
 - [x] ~~Desktop icon repositioning/dragging~~ done
 - [x] ~~Desktop icons are a letter in a tile~~ DONE 2026-08-23 -- real artwork, composited, on the desktop, the Start menu and the taskbar
 - [ ] Per-size icon art (freedesktop's `16x16/`, `48x48/`), if one 64px master ever looks mushy at menu-row size
