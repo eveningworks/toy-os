@@ -39,7 +39,8 @@ def run(dbg, qmp, res):
         return fm.listing(dbg, path)
 
     def binned():
-        return [ln.split()[0] for ln in sh("trash list").splitlines()
+        # The name column is 24 wide and a name may hold a space.
+        return [ln[:24].strip() for ln in sh("trash list").splitlines()
                 if ln.strip() and "empty" not in ln and "exit" not in ln
                 and not ln.startswith(("sh", "trash"))]
 

@@ -316,6 +316,16 @@ int utrash_forget_path(const char *files_path) {
     return utrash_forget(&it);
 }
 
+int utrash_restore_to(const char *files_path, const char *dest) {
+    char parent[UTRASH_PATH];
+    struct sys_stat st;
+    if (sys_stat(dest, &st) == 0) return -EEXIST;
+    if (!k_path_dirname(dest, parent, sizeof parent) || sys_stat(parent, &st) != 0 || !st.is_dir)
+        return -ENOENT;
+    if (sys_rename(files_path, dest) != 0) return -sys_errno();
+    return utrash_forget_path(files_path);
+}
+
 int utrash_forget(const struct utrash_item *it) {
     char ip[UTRASH_PATH + 80];
     if (!info_path(it->bin, it->name, ip, sizeof ip)) return -ENAMETOOLONG;

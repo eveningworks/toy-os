@@ -40,6 +40,7 @@
 | `ufileinfo.h` | ufileinfo -- the facts about one path, gathered once: what Properties and the File Manager's details pane show (ui/uui_fileinfo.h draws them). |
 | `ufileop.h` | ufileop -- copying, moving and deleting files and trees, once. |
 | `ufiletype.h` | WHAT KIND OF FILE A NAME IS, in words and as an icon -- the File Manager's Type column, its details pane and Properties all ask, and three private tables would drift into three answers. |
+| `ufileundo.h` | AN UNDO JOURNAL FOR FILE OPERATIONS: what a move, copy, rename, new item or delete-to-the-bin did, and how to take it back -- Explorer's Ctrl+Z/Ctrl+Y over file operations, Dolphin's KIO undo manager. |
 | `uhistory.h` | Command history for a ring-3 line editor. |
 | `uhwids.h` | Names for hardware ids, from the pci.ids / usb.ids databases -- the files a Linux distribution ships as hwdata, refreshed by /bin/hwdata. |
 | `uimg.h` | uimg -- decoding an image file into pixels, in RING 3. |

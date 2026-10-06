@@ -110,6 +110,8 @@ struct uui_statusbar g_status;
 // the status bar is chrome that never does anything, and Explorer's
 // stop button appears with the progress it stops.
 struct uui_button g_cancel_btn;
+struct uui_button g_toast_btn;   // over the undo toast's action slot (fm_view.c)
+struct uui_button g_toast_x;     // ...and over its dismiss slot
 
 // A secondary press ARMS; the release OPENS. Not a preference: the
 // router delivers a release for every button, so a menu opened on the
@@ -196,6 +198,9 @@ static const struct uui_menu_item view_items[] = {
 
 // "See more": what Explorer puts behind its "..." -- the rarer verbs.
 static const struct uui_menu_item more_items[] = {
+    UUI_MENU("Undo",               CMD_UNDO,       "Ctrl+Z"),
+    UUI_MENU("Redo",               CMD_REDO,       "Ctrl+Y"),
+    UUI_MENU_SEP,
     UUI_MENU("Select all",         CMD_SELECT_ALL, "Ctrl+A"),
     UUI_MENU("Refresh",            CMD_REFRESH,    "Ctrl+R"),
     UUI_MENU_SEP,
@@ -359,6 +364,8 @@ static enum uui_fileview_sort sort_key_of(int code) {
 static unsigned menu_item_flags(int code) {
     unsigned bin;
     if (bin_item_flags(code, &bin)) return bin;   // the Recycle Bin's own rules
+    if (code == CMD_UNDO || code == CMD_REDO)
+        return undo_can(code == CMD_REDO) ? 0 : UUI_MI_DISABLED;
     switch (code) {
     case CMD_UP: {
         const char *d = uui_fileview_dir(&g_pane[g_active]);
@@ -430,6 +437,8 @@ struct uui_item g_widgets[] = {
     { .ops = &uui_splitter_ops, .widget = &g_tree_split, .id = ID_TREE_SPLIT, .name = "treesplit" },
     { .ops = &uui_splitter_ops, .widget = &g_pane_split, .id = ID_PANE_SPLIT, .name = "panesplit" },
     { .ops = &uui_button_ops, .widget = &g_cancel_btn, .id = ID_CANCEL, .hidden = 1 },
+    { .ops = &uui_button_ops, .widget = &g_toast_btn, .id = ID_TOAST, .hidden = 1 },
+    { .ops = &uui_button_ops, .widget = &g_toast_x, .id = ID_TOAST_X, .hidden = 1 },
     { .ops = &uui_textbox_ops, .widget = &g_addr[0], .id = ID_ADDR_L, .name = "addr0" },
     { .ops = &uui_textbox_ops, .widget = &g_addr[1], .id = ID_ADDR_R, .name = "addr1" },
     // LAST, so it is hit-tested FIRST: input order is the reverse of
@@ -723,6 +732,8 @@ void do_command(struct uapp *a, int code) {
     case CMD_RESTORE:        bin_restore(0); break;
     case CMD_RESTORE_ALL:    bin_restore(1); break;
     case CMD_EMPTY_BIN:      do_empty_bin(); break;
+    case CMD_UNDO:           do_undo(0); break;
+    case CMD_REDO:           do_undo(1); break;
     case CMD_MKDIR:
         if (g_opt.rename_dialog) open_prompt(CMD_MKDIR, "New folder", "New folder");
         else create_and_rename(CMD_MKDIR);
@@ -1020,6 +1031,14 @@ static void on_action(struct uapp *a, int code) {
     if (g_modal != MODAL_NONE) return;
     if (code == ID_DP_OPEN)  do_command(a, CMD_OPEN);
     if (code == ID_DP_PROPS) do_command(a, CMD_PROPERTIES);
+    if (code == ID_TOAST_X) {
+        undo_toast_hide();
+        uapp_redraw(a);
+    }
+    if (code == ID_TOAST) {
+        undo_toast_action();
+        uapp_redraw(a);
+    }
     if (code == ID_CANCEL) {
         fm_job_cancel();
         set_note("cancelling");
@@ -1227,6 +1246,8 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     if (key == 0x03) { do_command(a, CMD_CLIP_COPY);  return; } // Ctrl-C
     if (key == 0x18) { do_command(a, CMD_CLIP_CUT);   return; } // Ctrl-X
     if (key == 0x16) { do_command(a, CMD_CLIP_PASTE); return; } // Ctrl-V
+    if (key == 0x1A) { do_command(a, CMD_UNDO); return; }       // Ctrl-Z
+    if (key == 0x19) { do_command(a, CMD_REDO); return; }       // Ctrl-Y
 
     // MOVING A DIVIDER FROM THE KEYBOARD. GtkPaned focuses its handle
     // and takes the arrows from there; this app cannot, because Tab is
@@ -1286,6 +1307,7 @@ static int on_tick(struct uapp *a) {
     if (uui_toolbar_tick(&g_nav)) changed = 1;
     if (uui_toolbar_tick(&g_viewbar)) changed = 1;
     if (thumb_tick()) changed = 1;
+    if (undo_toast_tick()) changed = 1;
 
     // Not under a rubber band: a reload clears the marks the band is
     // mid-way through choosing (the desktop's desktop_drag_active() rule).
@@ -1347,6 +1369,7 @@ static void on_pane_open(void *ctx, const char *path) {
 // which the WIDGET does not know about.
 static void on_pane_dir(void *ctx, const char *dir) {
     int i = (int)(intptr_t)ctx;
+    undo_toast_hide();   // it was about the folder being left
     // A NEW FOLDER ENDS A SEARCH, Explorer's rule: the query was about
     // the folder you left. Re-listed without the filter.
     if (g_query[i][0]) {
@@ -1606,6 +1629,11 @@ int main(int argc, char **argv) {
     g_toolbar.item_flags = menu_item_flags; // ONE state source -- see uui_toolbar.h
     uui_button_init(&g_cancel_btn, 0, 0, 0, 0, "Cancel",
                      UTHEME_BUTTON_BG, UTHEME_TEXT, ID_CANCEL);
+    // On the toast's light card: the accent button, and a flat dismiss
+    // in the card's own colour, so only its hover shows a face.
+    uui_button_init(&g_toast_btn, 0, 0, 0, 0, "Undo", UTHEME_ACCENT, UTHEME_WHITE, ID_TOAST);
+    g_toast_btn.outlined = 1;
+    uui_button_init(&g_toast_x, 0, 0, 0, 0, "\xd7", uui_popup_bg(), UTHEME_TEXT, ID_TOAST_X);
     uui_statusbar_init(&g_status);
     g_status.panes[0].text = g_stat_dir;      // "118 items"
     g_status.panes[0].chars = 14;

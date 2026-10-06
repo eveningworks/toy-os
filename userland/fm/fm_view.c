@@ -7,6 +7,8 @@
 #include "ui/utheme.h"
 #include "ui/ulog.h"
 #include "lib/human.h"
+#include "ui/uui_toast.h"
+#include "ui/uui_anim.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -208,6 +210,25 @@ void layout_all(int cw, int ch) {
         // plus a few pixels either side.
         g_pane[i].table.row_h = ugfx_char_h() + 8;
     }
+
+    // THE UNDO TOAST, over the active pane's foot, and its button over the
+    // action slot -- only once the pill has risen, so the button never
+    // sits still under a moving pill.
+    {
+        const struct uui_table *t = &active()->table;
+        int ax, ay, aw, ah;
+        int risen = uui_anim_now_ns() >= g_toast.t0_ns + (unsigned long long)g_toast.in_ms * 1000000ull;
+        int show = risen && uui_toast_action_rect(&g_toast, t->x, t->y, t->w, t->h, &ax, &ay, &aw, &ah);
+        widget_by_id(ID_TOAST)->hidden = !show;
+        if (show) {
+            g_toast_btn.label = g_toast.action;
+            uui_button_set_geometry(&g_toast_btn, ax, ay, aw, ah);
+        }
+        int show_x = risen && uui_toast_close_rect(&g_toast, t->x, t->y, t->w, t->h,
+                                                    &ax, &ay, &aw, &ah);
+        widget_by_id(ID_TOAST_X)->hidden = !show_x;
+        if (show_x) uui_button_set_geometry(&g_toast_x, ax, ay, aw, ah);
+    }
 }
 
 // docs/gui-guidelines.md: a GUI test asks the app where things are
@@ -371,6 +392,15 @@ void log_layout(void) {
     // ...and WHICH BUTTON a Return would commit. A test that counts
     // arrow presses is measuring its own keystroke delivery, not the
     // dialog (four sent, three arrived, and "Rename" read as broken).
+    {
+        const struct uui_table *t = &active()->table;
+        int tx, ty, tw, th;
+        if (uui_toast_rect(&g_toast, t->x, t->y, t->w, t->h, &tx, &ty, &tw, &th))
+            uapp_logf_layout("files: layout toast %d %d %d %d %d %d %d %d %d %s\n", tx, ty, tw, th,
+                              widget_by_id(ID_TOAST)->hidden ? 0 : 1,
+                              g_toast_btn.x, g_toast_btn.y, g_toast_btn.w, g_toast_btn.h,
+                              g_toast.action[0] ? g_toast.action : "-");
+    }
     uapp_logf_layout("files: layout dialog %d %d\n",
                       uui_dialog_is_open(&g_dialog), g_dialog.hot);
     if (uui_menubar_popup_rect(&g_ctx, 0, &x, &y, &w, &h))
@@ -394,9 +424,14 @@ void on_draw(struct uapp *a, struct uapp_draw *d) {
 }
 
 void on_draw_over(struct uapp *a, struct uapp_draw *d) {
-    (void)a; (void)d;
-    // Nothing: the prompts are uui_dialog now, drawn by the router, and
-    // anything drawn here would sit on top of an open menu.
+    (void)a;
+    // Only the undo toast, and NOT while a menu or a dialog is up:
+    // anything drawn here sits on top of the router's overlays.
+    if (!g_toast.shown || uui_menubar_is_open(&g_ctx) || uui_dialog_is_open(&g_dialog)) return;
+    const struct uui_table *t = &active()->table;
+    uui_toast_draw(d->surface, &g_toast, t->x, t->y, t->w, t->h, uui_anim_now_ns());
+    if (!widget_by_id(ID_TOAST)->hidden) uui_button_draw_one(d->surface, &g_toast_btn);
+    if (!widget_by_id(ID_TOAST_X)->hidden) uui_button_draw_one(d->surface, &g_toast_x);
 }
 
 // Which VISIBLE pane holds this point, or -1. The pane's RECT, so a

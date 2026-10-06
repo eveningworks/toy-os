@@ -73,6 +73,8 @@
 #define ID_VIEWBAR 17   // the status bar's view switch
 #define ID_DP_OPEN  18  // the details pane's buttons
 #define ID_DP_PROPS 19
+#define ID_TOAST    20  // the undo toast's button
+#define ID_TOAST_X  21  // ...and its dismiss
 
 // The commands, shared by the menu bar, the toolbar, the context menu
 // and the function keys -- one code per act, so those four cannot
@@ -98,6 +100,8 @@ enum {
     CMD_DELETE_FOREVER, CMD_RESTORE, CMD_RESTORE_ALL, CMD_EMPTY_BIN,
     // The worker's own operations, never a user's command.
     CMD_TRASH, CMD_PURGE,
+    // Undo and Redo (fm_undo.c): commands, and CMD_UNDO the worker's op.
+    CMD_UNDO, CMD_REDO, CMD_TOAST,
 };
 
 // The Recycle Bin's folder, as uui_fileview and the breadcrumb see it --
@@ -159,6 +163,7 @@ extern struct uui_dialog g_dialog;
 extern struct uui_toolbar g_toolbar;
 extern struct uui_statusbar g_status;
 extern struct uui_button g_cancel_btn;
+extern struct uui_button g_toast_btn, g_toast_x;
 
 // THE ADDRESS BARS. Each pane's path strip is a text field: read-only
 // looking until it is clicked (or Ctrl+L), then edited in place, Enter
@@ -307,6 +312,20 @@ void do_delete(int forever); // asks (or not, per Options); commit_delete() acts
 void delete_picture(void);   // the delete card's picture, again (a thumbnail landed)
 void commit_delete(void);
 void do_empty_bin(void);  // asks, then purges every bin
+
+// --- Undo and Redo (fm_undo.c) -----------------------------------------------
+struct ufu_op;
+extern struct uui_toast g_toast;
+void undo_record_job(int op, const char *what, char (*paths)[PATH_MAX_LEN],
+                     char (*results)[PATH_MAX_LEN], int n, const char *dest);
+void undo_record(int kind, const char *a, const char *b);   // UFU_RENAME / UFU_CREATE
+void undo_applied(int redo, int failures);
+int  undo_can(int redo);
+void do_undo(int redo);
+void undo_toast_hide(void);
+int  undo_toast_tick(void);        // 1 when it timed out and the window should repaint
+void undo_toast_action(void);      // its button
+void fm_job_undo(struct ufu_op *op, int redo);
 
 // --- the Recycle Bin (fm_trash.c) -------------------------------------------
 void bin_init(struct uui_fileview *fv);      // the trash:/ resolver, per pane

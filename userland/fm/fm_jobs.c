@@ -9,6 +9,7 @@
 #include "lib/human.h"
 #include "lib/ufileop.h"
 #include "lib/utrash.h"
+#include "lib/ufileundo.h"
 #include "ui/uui_dialog.h"
 #include <pthread.h>
 #include "lib/uclip.h"
@@ -41,6 +42,13 @@ int g_job_count, g_job_at;
 static int g_job_op;
 static char g_job_dest[PATH_MAX_LEN];
 static int g_job_failures;
+// WHERE EACH ITEM ENDED UP, written by the worker: the final path of a
+// move or copy, an item's place in the bin, "" when nothing was done or
+// the step could not be safely undone. What the undo journal records.
+static char g_job_result[JOB_MAX][PATH_MAX_LEN];
+// An Undo or Redo running as a job: the journal entry and the direction.
+static struct ufu_op *g_job_undo;
+static int g_job_redo;
 
 // --- jobs -------------------------------------------------------------
 //
@@ -109,7 +117,7 @@ void do_drop_extern(const char *dest, int copy) {
     // Dropped on the Recycle Bin: deleted, the way a drop on Explorer's
     // bin is -- copy or not.
     if (strcmp(dest, FM_BIN) == 0) {
-        if (queue_from_paths(CMD_TRASH, "Recycle", &c, "")) start_job();
+        if (queue_from_paths(CMD_TRASH, "Delete", &c, "")) start_job();
         return;
     }
     if (!queue_from_paths(copy ? CMD_COPY : CMD_MOVE, copy ? "Copy" : "Move", &c, dest))
@@ -128,7 +136,7 @@ void do_drop_extern(const char *dest, int copy) {
 
 void do_drop(struct uui_fileview *src, const char *dest, int copy) {
     if (strcmp(dest, FM_BIN) == 0) {
-        if (queue_from(CMD_TRASH, "Recycle", src, "")) start_job();
+        if (queue_from(CMD_TRASH, "Delete", src, "")) start_job();
         return;
     }
     if (!queue_from(copy ? CMD_COPY : CMD_MOVE, copy ? "Copy" : "Move", src, dest))
@@ -280,6 +288,7 @@ static int g_cur_index;
 // answers -- see fm_conflict_answer().
 static volatile int g_conflict_pending;
 static volatile int g_conflict_answer = -1;
+static int g_item_first;   // the FIRST conflict answer this item drew, -1 for none
 static char g_conflict_src[PATH_MAX_LEN], g_conflict_dst[PATH_MAX_LEN];
 static char g_conflict_rename[PATH_MAX_LEN];
 
@@ -334,6 +343,7 @@ static int worker_conflict(void *ctx, const char *src, const char *dst,
 
     pthread_mutex_lock(&g_lock);
     int d = g_conflict_answer;
+    if (g_item_first < 0) g_item_first = d;
     if (d == UFILEOP_RENAME) strlcpy(rename_out, g_conflict_rename, (size_t)cap);
     g_conflict_pending = 0;
     pthread_mutex_unlock(&g_lock);
@@ -358,18 +368,44 @@ static void *worker_main(void *arg) {
         g_cur_done = g_cur_size = 0;
         pthread_mutex_unlock(&g_lock);
 
+        g_job_result[i][0] = '\0';
+        g_item_first = -1;
         switch (g_job_op) {
         case CMD_COPY:
-            ufileop_copy(g_job_path[i], g_job_dest, &g_engine, &policy);
+        case CMD_MOVE: {
+            // A DESTINATION THAT ALREADY EXISTED is a merge or an
+            // overwrite, and undoing one would recycle what was there
+            // before -- so it is not recorded unless the first answer
+            // renamed this item to a fresh name.
+            char dest[PATH_MAX_LEN];
+            struct sys_stat st;
+            int ok = ufileop_resolve_dest(g_job_path[i], g_job_dest, dest, sizeof dest);
+            int existed = ok && sys_stat(dest, &st) == 0;
+            int r = g_job_op == CMD_COPY
+                  ? ufileop_copy(g_job_path[i], g_job_dest, &g_engine, &policy)
+                  : ufileop_move(g_job_path[i], g_job_dest, &g_engine, &policy);
+            if (r != UFILEOP_OK || !ok) break;
+            if (!existed) {
+                strlcpy(g_job_result[i], dest, PATH_MAX_LEN);
+            } else if (g_item_first == UFILEOP_RENAME) {
+                char dir[PATH_MAX_LEN];
+                if (k_path_dirname(dest, dir, sizeof dir))
+                    k_path_join(dir, g_conflict_rename, g_job_result[i], PATH_MAX_LEN);
+            }
             break;
-        case CMD_MOVE:
-            ufileop_move(g_job_path[i], g_job_dest, &g_engine, &policy);
-            break;
+        }
         case CMD_DELETE:
             ufileop_remove(g_job_path[i], 1, &g_engine, &policy);
             break;
         case CMD_TRASH: {
-            int e = utrash_put(g_job_path[i], 0);
+            struct utrash_item it;
+            int e = utrash_put(g_job_path[i], &it);
+            if (e) worker_error(0, g_job_path[i], -e);
+            else utrash_item_path(&it, g_job_result[i], PATH_MAX_LEN);
+            break;
+        }
+        case CMD_UNDO: {
+            int e = ufileundo_apply(g_job_undo, i, g_job_redo, &g_engine, &policy);
             if (e) worker_error(0, g_job_path[i], -e);
             break;
         }
@@ -454,9 +490,33 @@ int poll_job(void) {
 void fm_job_finished(void) {
     snprintf(g_stat_note, sizeof g_stat_note, "%s %s", g_job_what,
               g_cancel ? "cancelled" : (g_job_failures ? "FAILED" : "done"));
+    if (!g_cancel) {
+        if (g_job_op == CMD_UNDO) undo_applied(g_job_redo, g_job_failures);
+        else undo_record_job(g_job_op, g_job_what, g_job_path, g_job_result,
+                             g_job_count, g_job_dest);
+    }
     g_job_count = g_job_at = 0;
     reload_panes();
     refresh_status();
+}
+
+// Undo or Redo as a job: the steps run on the worker, a long move with
+// progress like any other.
+void fm_job_undo(struct ufu_op *op, int redo) {
+    if (g_job_count > 0) { set_note("busy"); return; }
+    g_job_at = g_job_failures = 0;
+    g_job_op = CMD_UNDO;
+    g_job_undo = op;
+    g_job_redo = redo;
+    strlcpy(g_job_what, redo ? "Redo" : "Undo", sizeof g_job_what);
+    g_job_dest[0] = '\0';
+    g_job_count = op->count < JOB_MAX ? op->count : JOB_MAX;
+    for (int i = 0; i < g_job_count; i++) {
+        const struct ufu_step *s = &op->step[i];
+        strlcpy(g_job_path[i], s->b[0] ? s->b : s->a, PATH_MAX_LEN);
+        g_job_isdir[i] = 0;
+    }
+    start_job();
 }
 
 // How many files an operation would act on, and what to call them.
@@ -642,7 +702,7 @@ void do_empty_bin(void) {
 void commit_delete(void) {
     switch (g_del_mode) {
     case DEL_TRASH:
-        if (queue_from(CMD_TRASH, "Recycle", active(), "")) start_job();
+        if (queue_from(CMD_TRASH, "Delete", active(), "")) start_job();
         break;
     case DEL_FOREVER:
         if (queue_from(CMD_DELETE, "Delete", active(), "")) start_job();
@@ -678,6 +738,7 @@ void commit_mkdir(const char *name) {
         snprintf(g_stat_note, sizeof g_stat_note, "could not create %s", name);
     } else {
         set_note("created");
+        undo_record(UFU_CREATE, 0, path);
         reload_pane(active());
         uui_fileview_select_name(active(), name);
     }
@@ -705,6 +766,7 @@ void commit_newfile(const char *name) {
     }
     fclose(f);
     set_note("created");
+    undo_record(UFU_CREATE, 0, path);
     reload_pane(active());
     uui_fileview_select_name(active(), name);
     refresh_status();
@@ -728,6 +790,7 @@ void commit_rename_named(const char *from_name, const char *name) {
         snprintf(g_stat_note, sizeof g_stat_note, "could not rename to %s", name);
     } else {
         set_note("renamed");
+        if (strcmp(from, to)) undo_record(UFU_RENAME, from, to);
         reload_pane(active());
         uui_fileview_select_name(active(), name);
     }

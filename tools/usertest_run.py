@@ -200,6 +200,10 @@ TESTS = [
     # end: never short, operands summed, junk refused. SPAWNED, since it
     # spawns /bin/sleep and waits for it.
     ("duration_test", None, None, None),
+    # lib/ufileundo.h on real files under /home: each kind undone and
+    # redone, a new record dropping the redo, a refused step failing
+    # alone. SPAWNED: the copy and move engine is ufileop's.
+    ("ufileundo_test", None, None, None),
     # /bin/head, tail and wc on pipes, against a hand-worked fixture.
     # SPAWNED: it spawns them and waits.
     ("textcmd_test", None, None, None),

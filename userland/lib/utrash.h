@@ -72,5 +72,8 @@ int utrash_forget(const struct utrash_item *it);
 // The same, from the item's path inside the bin ("<bin>/files/NAME") --
 // what a caller deleting a list of paths has. -EINVAL for any other path.
 int utrash_forget_path(const char *files_path);
+// Put the item at `files_path` (inside a bin) at `dest` -- Undo's and
+// Redo's restore, which know both ends. Refused like utrash_restore().
+int utrash_restore_to(const char *files_path, const char *dest);
 
 #endif

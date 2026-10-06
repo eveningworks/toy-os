@@ -10504,3 +10504,38 @@ would teach every caller what a bin looks like on disk. The same source
 hook is what search results, the inside of a .zip, Recent and folder
 sizes are planned on.
 
+## Undo is a journal of file operations, and the way back from making something is the Recycle Bin
+
+**Decided 2026-10-06, by the maintainer, from choices**: many levels
+with Redo (Explorer's Ctrl+Z/Ctrl+Y over file operations), and the
+journal a shared library, `lib/ufileundo.h`, with an action slot added
+to `uui_toast` for the "Moved 3 items ... [Undo]" note. **Its look is the
+CARD** (`UUI_TOAST_CARD`, picked from mockups after the first build): a
+menu's light surface and hairline at the pane's bottom-right corner, the
+operation's icon, an accent Undo and a dismiss -- a Windows 11
+notification. The dark centred pill it started as did not belong on
+light chrome, and its round end clipped the button's corners; the pill
+stays the default for a game board (Mines). A toast goes away after a
+few seconds, checked on the tick the app already runs, so a still
+window stays still.
+
+**Undoing something that MADE a file -- a copy, a new folder -- moves it
+to the Recycle Bin, never deletes it for good**, as Explorer does: Undo
+is pressed in a hurry, and a wrong one must itself be recoverable. Redo
+takes it back out of the bin, which is why each step remembers where in
+the bin its item went.
+
+**A step whose destination already existed is not recorded.** A copy or
+move onto an existing folder merges into it, and undoing that by
+recycling the destination would take the user's earlier files with it;
+Explorer's own undo is unreliable exactly there. Only a fresh
+destination, or one the first conflict answer RENAMED, is journalled.
+A step that cannot be reversed when Undo comes -- its source gone,
+something now holding its old name -- fails alone and is reported; the
+other steps still run, and the cursor moves.
+
+Undo and Redo run as JOBS on the File Manager's worker, like the
+operation they reverse: undoing a cross-volume move is a copy, with
+progress and Cancel. Permanent deletes are not journalled -- nothing is
+left to take back.
+

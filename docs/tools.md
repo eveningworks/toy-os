@@ -2951,6 +2951,15 @@ window without going through it will find its layout polls timing out.
   routes both Deletes back to a permanent remove: the four "into the
   bin" checks redden.
 
+- **`undo_gui_test.py`** -- the File Manager's Undo and Redo
+  (`lib/ufileundo.h`): Delete with confirmation off, the toast's Undo
+  button (found from the `files: layout toast` line, which carries the
+  button's rect and label), Ctrl+Y and Ctrl+Z, a rename and a new folder
+  undone -- the folder into the bin, not for good. Read back with `ls`
+  and `/bin/trash list`. Its positive control makes Undo a no-op: four
+  checks redden. In-place rename selects the STEM, so the test types
+  "cherry", not "cherry.txt".
+
 - **`filedialog_test.py`** -- the shared file chooser as an OWNED window
   (`WIN_REQ_DIALOG`, `ui/uui_filedialog.h`, `uapp_window_open()`),
   driven through Notepad, Image Viewer and Audio Player. 17 checks: the
