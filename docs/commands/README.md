@@ -241,6 +241,10 @@ a command), and the `gui3`/`nano` aliases.
 - [`modunload`](modunload.md)
 - [`update`](update.md)
 
+### System configuration
+
+- [`sndfmt`](sndfmt.md)
+
 ### Text processing
 
 - [`grep`](grep.md)

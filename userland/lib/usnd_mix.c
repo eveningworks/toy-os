@@ -40,8 +40,9 @@
 #define GAIN_UNITY 256
 
 struct voice {
-    const int32_t *pcm;     // caller-owned clip samples, device format
+    const int32_t *pcm;     // caller-owned clip samples, at USND_RATE
     uint64_t frames, pos;
+    uint32_t frac;          // the converter's phase into `pos`, 16.16
     int gain_l, gain_r;
     // Bumped every time the slot is handed out. A handle carries it, so
     // a caller holding one for a sound that has since finished cannot
@@ -58,6 +59,11 @@ static int g_volume = 100;
 
 static struct voice g_voices[USND_VOICES];
 
+// THE RATE THE SINK AGREED, what every pass is mixed at -- 0 until it
+// has answered. The streaming voice is read at it directly; clips and
+// the pushed source are at USND_RATE and converted (add_converted()).
+static uint32_t g_rate;
+
 static struct usnd_stream g_st;
 static int g_st_open, g_st_paused, g_st_done;
 
@@ -68,6 +74,7 @@ static int32_t *g_push;     // widened from the producer's s16 as it is queued
 static long g_push_head, g_push_tail;
 static int g_push_on;
 static int g_push_gain = 256;
+static uint32_t g_push_frac;
 
 // .bss, not stack: the ring-3 frame budget is 2 KiB and these are 20.
 // 64-bit, because one full-scale s32 voice already fills 32.
@@ -105,6 +112,39 @@ static void add_voice(const int32_t *src, long frames, int gain_l, int gain_r) {
     }
 }
 
+// A USND_RATE source mixed into a pass at g_rate: linear interpolation
+// over a 16.16 phase, as usnd_read() does for a file. `at(i)` is the
+// i-th frame from the source's current position, `avail` how many there
+// are. Returns the whole source frames consumed; `*frac` keeps the rest.
+static long add_converted(const int32_t *(*at)(const void *ctx, uint64_t i), const void *ctx,
+                          uint64_t avail, uint32_t *frac, long frames, int gain_l, int gain_r) {
+    uint32_t step = (uint32_t)(((uint64_t)USND_RATE << 16) / g_rate);
+    uint64_t pos = 0;
+    uint32_t ph = *frac;
+    for (long f = 0; f < frames && pos < avail; f++) {
+        const int32_t *a = at(ctx, pos), *b = pos + 1 < avail ? at(ctx, pos + 1) : a;
+        for (int c = 0; c < 2; c++) {
+            int64_t v = a[c] + ((((int64_t)b[c] - a[c]) * ph) >> 16);
+            g_acc[f * 2 + c] += (v * (c ? gain_r : gain_l)) >> 8;
+        }
+        ph += step;
+        pos += ph >> 16;
+        ph &= 0xFFFF;
+    }
+    *frac = ph;
+    return (long)pos;
+}
+
+static const int32_t *clip_at(const void *ctx, uint64_t i) {
+    const struct voice *vo = ctx;
+    return vo->pcm + (vo->pos + i) * USND_CHANNELS;
+}
+
+static const int32_t *push_at(const void *ctx, uint64_t i) {
+    (void)ctx;
+    return g_push + ((g_push_tail + (long)i) % USND_PUSH_FRAMES) * USND_CHANNELS;
+}
+
 // Sums every active voice into `g_out`. Always produces `frames` frames;
 // with nothing playing they are zeroes.
 static void mix(long frames) {
@@ -119,6 +159,12 @@ static void mix(long frames) {
     for (int v = 0; v < USND_VOICES; v++) {
         struct voice *vo = &g_voices[v];
         if (!vo->active) continue;
+        if (g_rate != USND_RATE) {
+            vo->pos += (uint64_t)add_converted(clip_at, vo, vo->frames - vo->pos, &vo->frac,
+                                               frames, vo->gain_l, vo->gain_r);
+            if (vo->pos >= vo->frames) vo->active = 0;
+            continue;
+        }
         long n = frames;
         if ((uint64_t)n > vo->frames - vo->pos) n = (long)(vo->frames - vo->pos);
         add_voice(vo->pcm + vo->pos * USND_CHANNELS, n, vo->gain_l, vo->gain_r);
@@ -129,7 +175,12 @@ static void mix(long frames) {
     // The pushed source. An UNDERRUN IS SILENCE, not a stall: a
     // synthesiser that fell behind should leave a gap and carry on,
     // never make the mixer wait on it.
-    if (g_push_on && g_push) {
+    if (g_push_on && g_push && g_rate != USND_RATE) {
+        long avail = g_push_head - g_push_tail;
+        if (avail > 0)
+            g_push_tail += add_converted(push_at, 0, (uint64_t)avail, &g_push_frac, frames,
+                                         g_push_gain, g_push_gain);
+    } else if (g_push_on && g_push) {
         long want = frames;
         while (want > 0) {
             long avail = g_push_head - g_push_tail;
@@ -176,7 +227,17 @@ static void *worker_main(void *arg) {
     (void)arg;
     while (!g_quit) {
         pthread_mutex_lock(&g_lock);
-        if (!voices_active()) {
+        // THE RATE, every pass: the streaming voice asks for its file's,
+        // and nothing playing asks for nothing (0) -- the sink then keeps
+        // the card where it is, so a click never switches it.
+        uint32_t want = (g_st_open && !g_st_done) ? g_st.fmt.rate : 0;
+        uint32_t r = g_sink->rate(want);
+        if (r) g_rate = r;
+        if (r && g_st_open) usnd_stream_set_rate(&g_st, r);
+        if (!r) {
+            // UNDECIDED: write nothing, so what is queued plays out at
+            // the old rate and a switch happens over a drained ring.
+        } else if (!voices_active()) {
             // Let the tail play, THEN pin -- flushing while audio is
             // still queued cuts the end off every sound.
             if (g_sink->pending() <= IDLE_PENDING) g_sink->flush();
@@ -320,6 +381,7 @@ usnd_voice_t usnd_voice_play(const struct usnd_clip *c, int gain_l, int gain_r) 
         vo->pcm = c->pcm;
         vo->frames = c->frames;
         vo->pos = 0;
+        vo->frac = 0;
         vo->gain_l = clamp_gain(gain_l);
         vo->gain_r = clamp_gain(gain_r);
         vo->gen = (vo->gen + 1) & 0x7FFFFFu;
@@ -371,6 +433,7 @@ int usnd_push_open(void) {
     pthread_mutex_lock(&g_lock);
     g_push = buf;
     g_push_head = g_push_tail = 0;
+    g_push_frac = 0;
     g_push_on = 1;
     pthread_mutex_unlock(&g_lock);
     return 0;
@@ -469,9 +532,13 @@ uint64_t usnd_position(void) {
     pthread_mutex_lock(&g_lock);
     uint64_t decoded = g_st.out_pos;
     uint64_t queued = g_ready ? (uint64_t)g_sink->pending() : 0;
+    uint32_t rate = g_st.out_rate ? g_st.out_rate : USND_RATE;
     pthread_mutex_unlock(&g_lock);
-    // What has been HEARD, not what has been decoded.
-    return decoded > queued ? decoded - queued : 0;
+    // What has been HEARD, not what has been decoded -- both at the
+    // card's rate, and handed back in USND_RATE frames like every other
+    // position here.
+    uint64_t heard = decoded > queued ? decoded - queued : 0;
+    return heard * USND_RATE / rate;
 }
 
 // Blocks until what is queued has been played. usnd_shutdown() stops

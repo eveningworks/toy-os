@@ -90,13 +90,14 @@ enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST,
        ID_ASK, ID_FOOTER, ID_SI_COPY, ID_SI_DEVMGR, ID_SI_DEBUG, ID_CLOCK_CHANGE,
        ID_SU_DEFAULT, ID_SU_TIMEOUT, ID_SU_NEXT, ID_SU_OPEN,
        ID_KB_LIST, ID_KB_ADD, ID_KB_REMOVE, ID_KB_UP, ID_KB_DOWN, ID_KB_TRY,
+       ID_SNDFMT = 60,          // .. + UUI_SNDFORMAT_IDS, Sound > Output's Format
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
 
 // The focus ring: FOCUS_LEAD entries before the page's controls (search,
 // sidebar), and room after them for Test, Settings..., Change..., the
 // advanced toggle and the footer's two buttons.
 #define FOCUS_LEAD 2
-#define FOCUS_MAX  (FOCUS_LEAD + PAGE_MAX + 6)
+#define FOCUS_MAX  (FOCUS_LEAD + PAGE_MAX + 6 + 16)   // 16: the Format panel's
 
 #define NODE_SYSINFO       1
 #define NODE_STARTUP       2
@@ -318,6 +319,15 @@ int  kbd_on_widget(struct uapp *a, int id);
 int  kbd_on_action(struct uapp *a, int code);
 int  kbd_tick(void);
 void kbd_shutdown(void);
+
+// set_sound.c -- Sound > Output's Format card (ui/uui_sndformat.h)
+extern int g_snd_page;
+void snd_init(void);
+void snd_page_opened(void);
+int  snd_emit_after(struct uui_item *out, int n, int i,
+                    struct uui_focusable *focus, int *nfocus);
+int  snd_on_widget(struct uapp *a, int id);
+int  snd_tick(void);
 
 // set_clock.c -- Time & Locale's live clock, Change... and preview
 extern int g_clock_page, g_region_page;

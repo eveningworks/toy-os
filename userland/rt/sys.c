@@ -941,6 +941,9 @@ int sys_set_color(int fg, int bg) {
 
 int sys_snd_open(void) { return (int)err(syscall0(SYS_SND_OPEN)); }
 int sys_snd_ctl(int op) { return (int)err(syscall1(SYS_SND_CTL, (uint64_t)(int64_t)op)); }
+int sys_snd_format(uint32_t rate, uint32_t bits) {
+    return (int)err(syscall3(SYS_SND_CTL, SND_CTL_FORMAT, rate, bits));
+}
 
 int sys_pipe(int fds[2]) {
     return (int)err(syscall1(SYS_PIPE, (uint64_t)(uintptr_t)fds));

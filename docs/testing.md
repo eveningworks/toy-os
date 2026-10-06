@@ -215,6 +215,16 @@ the feature under test wholly broken.
 
 ## What the emulator does and does not model
 
+**USB PASSTHROUGH BREAKS ISOCHRONOUS OUT PACKETS WHOSE LENGTH VARIES --
+UNDER KVM AS WELL AS TCG.** 44.1 kHz at high speed is 5 or 6 frames a
+microframe; through a guest owning the G6 (`vm.py --usb-host 041e:3256`)
+the tone came back with a phase jump in 364 of 398 5 ms windows under
+TCG and in 398 of 398 under `--kvm`, while the SAME build on the ASUS
+and Linux on the host gave 0 (2026-10-06). 48 kHz -- 6 frames every
+time -- is clean through the guest either way (0 of 398), so it is not
+the guest's speed. A USB audio rate that does not divide the interval
+is judged on bare metal: `audio_loopback_test.py --rate --host <ip>`.
+
 **`make run KVM=1` is not a straight speedup, and throughput numbers from
 the two modes are not comparable.** Measured on the same disk image,
 same host, `stress 150`: TCG 22.8 MB/s write / 29.2 MB/s read, KVM

@@ -49,6 +49,11 @@
 static struct {
     int      slot;
     struct usb_audio_stream s;
+    // THE FORMAT, set by the host before each start: an entry of
+    // `s.formats` and a rate. `clock_rates` is a UAC2 clock's GET RANGE.
+    int      fmt;
+    uint32_t us, clock_rates;
+    uint16_t mps;         // the endpoint as configured: its biggest alternate's
     uint16_t frames;      // the rate's share of ONE service interval
     uint16_t ring_bytes;  // what that costs in the s32 ring
     uint16_t wire_bytes;  // ...and on the wire, which differ above 16 bits
@@ -123,11 +128,13 @@ static void write_sample(uint8_t *dst, int32_t v, uint8_t subslot) {
     }
 }
 
+static uint8_t subslot(void) { return g.s.formats[g.fmt].subslot; }
+
 static void copy_one_packet(uint8_t slot) {
     uint8_t *dst = g.pkt + (uint32_t)slot * g.wire_bytes;
     uint32_t at = g.copy_pos;
 
-    if (g.s.subslot == 4) {
+    if (subslot() == 4) {
         // THE RING WRAPS MID-PACKET on most laps -- a packet divides
         // neither the ring nor a chunk -- so this is two copies.
         uint32_t n = g.ring_bytes, first = SND_RING_BYTES - at;
@@ -144,8 +151,8 @@ static void copy_one_packet(uint8_t slot) {
     for (uint32_t i = 0; i < samples; i++) {
         int32_t v;
         memcpy(&v, g.ring + at, 4);
-        write_sample(dst, v, g.s.subslot);
-        dst += g.s.subslot;
+        write_sample(dst, v, subslot());
+        dst += subslot();
         at += 4;
         if (at >= SND_RING_BYTES) at = 0;
     }
@@ -199,16 +206,141 @@ static uint8_t clock_entity(void) {
 
 // THE RATE IS NOT IN A UAC2 DESCRIPTOR -- it lives in a clock entity and
 // is SET, which is why this writes to the device rather than reading it.
-static int set_clock_rate(void) {
-    if (!g.s.uac2 || !g.s.clock_id) return 0;
+// A UAC1 alternate listing several rates is set on its ENDPOINT, as
+// kernel/drivers/sound/sound_usb.c does.
+static int set_clock_rate(uint32_t hz) {
+    if (!g.s.uac2) {
+        if (!g.s.formats[g.fmt].rate_ctl) return 0;
+        uint8_t s[8] = { 0x22, AUDIO_REQ_SET_CUR, 0, 0x01, g.s.ep, 0, 3, 0 };
+        return sys_usb_control(g.slot, s, &hz, 3, 0);
+    }
+    if (!g.s.clock_id) return 0;
     uint8_t id = clock_entity();
-    uint32_t hz = SND_RATE;
     uint8_t s[8] = { TYPE_OUT_CLASS_IF, UAC2_REQ_CUR, 0, CS_SAM_FREQ,
                      g.s.ac_ifnum, id, 4, 0 };
     int r = sys_usb_control(g.slot, s, &hz, 4, 0);
     if (r >= 0)
-        fprintf(stderr, "usbaudio: clock %u set to %u Hz\n", id, (unsigned)SND_RATE);
+        fprintf(stderr, "usbaudio: clock %u set to %u Hz\n", id, (unsigned)hz);
     return r;
+}
+
+// UAC2: what the clock runs at, as SND_RATE_* bits; 48 kHz alone when
+// it will not say.
+static uint32_t read_clock_rates(void) {
+    static uint8_t buf[2 + 12 * 16];
+    uint8_t id = clock_entity();
+    uint8_t s[8] = { TYPE_IN_CLASS_IF, UAC2_REQ_RANGE, 0, CS_SAM_FREQ,
+                     g.s.ac_ifnum, id, (uint8_t)(sizeof buf & 0xFF), (uint8_t)(sizeof buf >> 8) };
+    int n = sys_usb_control(g.slot, s, buf, sizeof buf, 1);
+    uint32_t m = n > 0 ? usb_audio_range_rates(buf, (uint32_t)n) : 0;
+    return m ? m : SND_RATE_48000;
+}
+
+// ONLY RATES WITH A WHOLE NUMBER OF FRAMES PER PACKET: a group is posted
+// in one call at one length (SYS_USB_ISOCH_POST), so 44.1 kHz's 44-and-
+// 45 packets are the in-kernel driver's. docs/roadmap.md has the rest.
+static uint32_t whole_rates(uint32_t mask) {
+    uint32_t out = 0;
+    for (int i = 0; i < SND_RATE_COUNT; i++)
+        if ((mask & (1u << i)) && (uint64_t)snd_rate_hz(i) * g.us % 1000000u == 0)
+            out |= 1u << i;
+    return out;
+}
+
+// The packet geometry for one rate at the current format.
+static int plan(uint32_t rate) {
+    uint32_t frames = (uint32_t)((uint64_t)rate * g.us / 1000000u);
+    if (!frames) return -1;
+    g.frames     = (uint16_t)frames;
+    g.ring_bytes = (uint16_t)(frames * SND_FRAME_BYTES);
+    g.wire_bytes = (uint16_t)(frames * SND_CHANNELS * subslot());
+    // PACKETS PER COMPLETION, AND A RING-3 DRIVER WANTS MORE OF THEM
+    // THAN THE KERNEL DOES. The in-kernel driver refills from inside
+    // the interrupt handler, so one completion per millisecond costs it
+    // nothing; here each one is a process wakeup plus a syscall, and at
+    // 1000 a second that was MEASURED at 37% of the rate the endpoint
+    // needs. Grouping ~4 ms per wakeup cuts the wakeups fourfold and
+    // costs latency nobody can hear.
+    uint32_t per_ms = g.us >= 1000 ? 1 : 1000 / g.us;
+    uint32_t fits = PKT_BYTES / g.wire_bytes;
+    // MEASURED, not chosen: 4 ms per wakeup sustained 94% of the
+    // endpoint's rate, where 1 ms (the in-kernel driver's shape) gave
+    // 90% and 6 and 8 ms collapsed below 10%.
+    uint32_t group = per_ms * 4;
+    if (group > fits / 3) group = fits / 3;
+    if (group < per_ms) group = per_ms;
+    g.group = (uint8_t)(group ? group : 1);
+
+    // **FIVE GROUPS -- 20 ms OF TOLERANCE, AND TOLERANCE IS THE WHOLE
+    // PROBLEM.** This driver is not slow, it is LATE: it competes for
+    // the CPU with whatever is decoding, where the in-kernel driver
+    // refills inside the interrupt handler and never waits. So the one
+    // thing that matters is how long a buffer covers a missed turn.
+    //
+    // THIS WAS THREE GROUPS, AND IT WAS WRONG BECAUSE OF THE METRIC
+    // THAT CHOSE IT. Tuned by packets/s, deeper looked catastrophic
+    // ("192 outstanding collapsed to 393 packets/s"). Judged by the
+    // AUDIO -- recording the DAC's own analogue output and counting
+    // discontinuities, tools/audio_loopback_test.py --crackle -- it is
+    // the opposite, and not subtly:
+    //
+    //     96 packets (12 ms)   33.1 clicks/s   20 s played in 23.6 s
+    //    144 packets (18 ms)    0.9 clicks/s   20 s played in 20.0 s
+    //    160 packets (20 ms)    0.3 clicks/s   20 s played in 20.0 s
+    //    192 packets (24 ms)    0.3 clicks/s   20 s played in 20.3 s
+    //
+    // 0.3/s IS THE FLOOR OF THE USB PATH, NOT OF THE MEASUREMENT, and
+    // the difference was worth chasing. The in-kernel USB driver scores
+    // the same on the same file, so five groups is not "better", it is
+    // level with the kernel. What is NOT responsible for that residue:
+    // the source file (clean -- no clipping, largest sample step 0.17),
+    // the MP3 decoder (`usnd_hostcheck.py` matches ffmpeg to 1/32768),
+    // the 44.1->48 resampler (a pre-resampled 48 kHz copy sounds
+    // identical), and the decoder's CPU cost (a plain 48 kHz WAV sounds
+    // identical too). Nor is it the chain above the driver: the same
+    // WAV captured DIGITALLY off the emulated AC97 is spotless -- zero
+    // zero-runs, zero discontinuities, largest step 311 LSB over 30 s.
+    // So the residue lives in the isochronous path both USB drivers
+    // share and AC97 does not -- and EVERY NUMBER ABOVE WAS TAKEN ON
+    // THE HIGH-SPEED/UAC2 BINDING, which is the one that misbehaves.
+    // The same driver on the bare-metal ASUS, where the G6 binds UAC1
+    // at FULL speed, plays cleanly and repeatedly. That is a different
+    // code path, not the same one without an emulator: UAC2 negotiates
+    // its rate through a Clock Source entity and runs this conversion
+    // at 8000 packets/s where UAC1 runs it at 1000. On real hardware at
+    // high speed nearly all of that crackle goes away, so most of it is
+    // the EMULATOR's; the residue is in docs/bugs.md. The silent SECOND
+    // playback was stale completions -- see usbaudio_start().
+    //
+    // The stretch is the same fact twice: an isochronous endpoint
+    // consumes a packet every 125 us whether or not one arrived, so a
+    // 16% shortfall in posting is a 16% longer stream.
+    //
+    // THE WAKEUP RATE IS NOT WHAT MATTERS, measured the same way: with
+    // this depth pinned, IOC every 8, 16 and 32 give 34.9, 35.0 and
+    // 35.1 clicks/s -- indistinguishable. An earlier sweep seemed to
+    // show tighter IOC hurting, but `want` was a multiple of `group`
+    // then, so shrinking the group shrank the BUFFER with it, and the
+    // buffer is all it measured.
+    //
+    // THE DEPTH IS A TIME, AND THAT IS WHY IT TRANSFERS. `group` is
+    // per_ms * 4, so a group is 4 ms on any device and five of them is
+    // 20 ms whatever the packet size -- 160 packets of 125 us on the
+    // G6, 20 of 1 ms on an ASUS DAC (0b05:19a8, UAC1, ep 0x7). Tuned
+    // in PACKETS it would have had to be re-found per device; the
+    // second device was clean first try (2026-09-22, by ear: one
+    // dropout in 78 s, then a second playback with none).
+    //
+    // THE CEILING IS THE TRANSFER RING, NOT THE BUFFER. xHCI's ring
+    // here is 256 TRBs with one reserved for the Link and one
+    // descriptor per TRB, so the packets OUTSTANDING must stay well
+    // under that or a refill overwrites entries the controller has not
+    // consumed. 160 leaves 95 TRBs of slack; do not raise it without
+    // re-reading that limit, and `g.packets` is a uint8_t besides.
+    uint32_t want = g.group * 5;
+    if (want > fits) want = fits - (fits % g.group);
+    g.packets = (uint8_t)(want ? want : g.group);
+    return 0;
 }
 
 // --- picking one device out of several ---------------------------------
@@ -349,110 +481,28 @@ static int usbaudio_open(struct snd_dev *dev) {
     if (pick < 0) return -1;
 
     device_names(dev, &info[pick]);
+    snprintf(dev->device_id, sizeof dev->device_id, "usb:%u:%04x:%04x",
+             (unsigned)info[pick].port, (unsigned)info[pick].vendor_id,
+             (unsigned)info[pick].product_id);
 
-    // One service interval's share, in three units -- confusing them is
-    // silent. `frames` is NOT the endpoint's wMaxPacketSize, which is a
-    // ceiling a device may set far above the rate.
-    uint32_t us = g.s.interval > 1 ? (1u << (g.s.interval - 1)) * 125u : 125u;
-    if (!g.s.uac2) us = 1000u;      // UAC1 bInterval is in frames
-    uint32_t frames = (SND_RATE / 1000) * us / 1000;
-    if (!frames) {
+    // The service interval, then the default: 48 kHz at the deepest
+    // alternate that plays it.
+    g.us = g.s.interval > 1 ? (1u << (g.s.interval - 1)) * 125u : 125u;
+    if (!g.s.uac2) g.us = 1000u;      // UAC1 bInterval is in frames
+    for (int f = 0; f < g.s.nformats; f++)
+        if (g.s.formats[f].alt == g.s.alt) g.fmt = f;
+    g.mps = g.s.mps;
+    for (int f = 0; f < g.s.nformats; f++)
+        if (g.s.formats[f].mps > g.mps) g.mps = g.s.formats[f].mps;
+    if (plan(SND_RATE) < 0) {
         fprintf(stderr, "usbaudio: %u Hz does not divide a %u us interval\n",
-                (unsigned)SND_RATE, (unsigned)us);
+                (unsigned)SND_RATE, (unsigned)g.us);
         sys_usb_release(g.slot, USB_RELEASE_REBIND);
         return -1;
     }
-    g.frames     = (uint16_t)frames;
-    g.ring_bytes = (uint16_t)(frames * SND_FRAME_BYTES);
-    g.wire_bytes = (uint16_t)(frames * SND_CHANNELS * g.s.subslot);
-    // PACKETS PER COMPLETION, AND A RING-3 DRIVER WANTS MORE OF THEM
-    // THAN THE KERNEL DOES. The in-kernel driver refills from inside
-    // the interrupt handler, so one completion per millisecond costs it
-    // nothing; here each one is a process wakeup plus a syscall, and at
-    // 1000 a second that was MEASURED at 37% of the rate the endpoint
-    // needs. Grouping ~4 ms per wakeup cuts the wakeups fourfold and
-    // costs latency nobody can hear.
-    uint32_t per_ms = us >= 1000 ? 1 : 1000 / us;
-    uint32_t fits = PKT_BYTES / g.wire_bytes;
-    // MEASURED, not chosen: 4 ms per wakeup sustained 94% of the
-    // endpoint's rate, where 1 ms (the in-kernel driver's shape) gave
-    // 90% and 6 and 8 ms collapsed below 10%.
-    uint32_t group = per_ms * 4;
-    if (group > fits / 3) group = fits / 3;
-    if (group < per_ms) group = per_ms;
-    g.group = (uint8_t)(group ? group : 1);
+    if (g.s.uac2) g.clock_rates = read_clock_rates();
 
-    // **FIVE GROUPS -- 20 ms OF TOLERANCE, AND TOLERANCE IS THE WHOLE
-    // PROBLEM.** This driver is not slow, it is LATE: it competes for
-    // the CPU with whatever is decoding, where the in-kernel driver
-    // refills inside the interrupt handler and never waits. So the one
-    // thing that matters is how long a buffer covers a missed turn.
-    //
-    // THIS WAS THREE GROUPS, AND IT WAS WRONG BECAUSE OF THE METRIC
-    // THAT CHOSE IT. Tuned by packets/s, deeper looked catastrophic
-    // ("192 outstanding collapsed to 393 packets/s"). Judged by the
-    // AUDIO -- recording the DAC's own analogue output and counting
-    // discontinuities, tools/audio_loopback_test.py --crackle -- it is
-    // the opposite, and not subtly:
-    //
-    //     96 packets (12 ms)   33.1 clicks/s   20 s played in 23.6 s
-    //    144 packets (18 ms)    0.9 clicks/s   20 s played in 20.0 s
-    //    160 packets (20 ms)    0.3 clicks/s   20 s played in 20.0 s
-    //    192 packets (24 ms)    0.3 clicks/s   20 s played in 20.3 s
-    //
-    // 0.3/s IS THE FLOOR OF THE USB PATH, NOT OF THE MEASUREMENT, and
-    // the difference was worth chasing. The in-kernel USB driver scores
-    // the same on the same file, so five groups is not "better", it is
-    // level with the kernel. What is NOT responsible for that residue:
-    // the source file (clean -- no clipping, largest sample step 0.17),
-    // the MP3 decoder (`usnd_hostcheck.py` matches ffmpeg to 1/32768),
-    // the 44.1->48 resampler (a pre-resampled 48 kHz copy sounds
-    // identical), and the decoder's CPU cost (a plain 48 kHz WAV sounds
-    // identical too). Nor is it the chain above the driver: the same
-    // WAV captured DIGITALLY off the emulated AC97 is spotless -- zero
-    // zero-runs, zero discontinuities, largest step 311 LSB over 30 s.
-    // So the residue lives in the isochronous path both USB drivers
-    // share and AC97 does not -- and EVERY NUMBER ABOVE WAS TAKEN ON
-    // THE HIGH-SPEED/UAC2 BINDING, which is the one that misbehaves.
-    // The same driver on the bare-metal ASUS, where the G6 binds UAC1
-    // at FULL speed, plays cleanly and repeatedly. That is a different
-    // code path, not the same one without an emulator: UAC2 negotiates
-    // its rate through a Clock Source entity and runs this conversion
-    // at 8000 packets/s where UAC1 runs it at 1000. On real hardware at
-    // high speed nearly all of that crackle goes away, so most of it is
-    // the EMULATOR's; the residue is in docs/bugs.md. The silent SECOND
-    // playback was stale completions -- see usbaudio_start().
-    //
-    // The stretch is the same fact twice: an isochronous endpoint
-    // consumes a packet every 125 us whether or not one arrived, so a
-    // 16% shortfall in posting is a 16% longer stream.
-    //
-    // THE WAKEUP RATE IS NOT WHAT MATTERS, measured the same way: with
-    // this depth pinned, IOC every 8, 16 and 32 give 34.9, 35.0 and
-    // 35.1 clicks/s -- indistinguishable. An earlier sweep seemed to
-    // show tighter IOC hurting, but `want` was a multiple of `group`
-    // then, so shrinking the group shrank the BUFFER with it, and the
-    // buffer is all it measured.
-    //
-    // THE DEPTH IS A TIME, AND THAT IS WHY IT TRANSFERS. `group` is
-    // per_ms * 4, so a group is 4 ms on any device and five of them is
-    // 20 ms whatever the packet size -- 160 packets of 125 us on the
-    // G6, 20 of 1 ms on an ASUS DAC (0b05:19a8, UAC1, ep 0x7). Tuned
-    // in PACKETS it would have had to be re-found per device; the
-    // second device was clean first try (2026-09-22, by ear: one
-    // dropout in 78 s, then a second playback with none).
-    //
-    // THE CEILING IS THE TRANSFER RING, NOT THE BUFFER. xHCI's ring
-    // here is 256 TRBs with one reserved for the Link and one
-    // descriptor per TRB, so the packets OUTSTANDING must stay well
-    // under that or a refill overwrites entries the controller has not
-    // consumed. 160 leaves 95 TRBs of slack; do not raise it without
-    // re-reading that limit, and `g.packets` is a uint8_t besides.
-    uint32_t want = g.group * 5;
-    if (want > fits) want = fits - (fits % g.group);
-    g.packets = (uint8_t)(want ? want : g.group);
-
-    if (set_clock_rate() < 0) {
+    if (set_clock_rate(SND_RATE) < 0) {
         // THE REFUSAL'S EVIDENCE, as for the parse above: which entity
         // was asked is not enough to act on, because the interesting
         // case is a SELECTOR being asked for a rate only a Source can
@@ -476,7 +526,7 @@ static int usbaudio_open(struct snd_dev *dev) {
     memset(&im, 0, sizeof im);
     im.slot = (uint32_t)g.slot;
     im.ep = g.s.ep;
-    im.mps = g.s.mps;
+    im.mps = g.mps;
     im.interval = g.s.interval;
     im.dma_bytes = PKT_BYTES;
     if (sys_usb_isoch_open(&im) != 0) {
@@ -487,16 +537,18 @@ static int usbaudio_open(struct snd_dev *dev) {
     g.pkt = (uint8_t *)(uintptr_t)im.addr;
     memset(g.pkt, 0, PKT_BYTES);
 
-    dev->rates = SND_RATE_48000;
-    dev->depths = g.s.subslot == 2 ? SND_DEPTH_16 :
-                  g.s.subslot == 3 ? SND_DEPTH_24 : SND_DEPTH_32;
+    for (int f = 0; f < g.s.nformats; f++) {
+        dev->rates  |= whole_rates(g.s.uac2 ? g.clock_rates : g.s.formats[f].rates);
+        dev->depths |= snd_depth_mask(g.s.formats[f].bits);
+    }
     dev->bits = g.s.bits;          // narrowed per packet here; no bounce
+    dev->rate = SND_RATE;
     dev->pci = -1;                 // not a PCI device; see usbaudio_match
     dev->priv = &g;
     fprintf(stderr, "usbaudio: slot %d, %s, if %u alt %u ep 0x%x %u-bit, "
                     "%u frame(s) every %u us, %u packets, IOC every %u\n",
             g.slot, g.s.uac2 ? "UAC2" : "UAC1", g.s.ifnum, g.s.alt, g.s.ep,
-            (unsigned)g.s.subslot * 8, (unsigned)g.frames, (unsigned)us,
+            (unsigned)g.s.subslot * 8, (unsigned)g.frames, (unsigned)g.us,
             (unsigned)g.packets, (unsigned)g.group);
     return 0;
 }
@@ -511,8 +563,22 @@ static void usbaudio_close(struct snd_dev *dev) {
 }
 
 static int usbaudio_start(struct snd_dev *dev, uint64_t ring_phys) {
-    (void)dev; (void)ring_phys;   // we READ the ring, we do not point at it
+    (void)ring_phys;   // we READ the ring, we do not point at it
     if (!g.pkt) return -1;
+
+    // THE FORMAT THE HOST SET: an alternate for the width, the rate on
+    // the clock or endpoint, and packets sized for both.
+    int f = usb_audio_pick_format(&g.s, g.clock_rates, dev->rate, dev->bits, g.us);
+    if (f < 0) {
+        fprintf(stderr, "usbaudio: no alternate plays %u Hz at %u bits\n",
+                (unsigned)dev->rate, (unsigned)dev->bits);
+        return -1;
+    }
+    g.fmt = f;
+    if (plan(dev->rate) < 0) return -1;
+    if (g.s.uac2 && set_clock_rate(dev->rate) < 0) return -1;
+    if (set_interface(g.s.ifnum, g.s.formats[f].alt) < 0) return -1;
+    if (!g.s.uac2 && set_clock_rate(dev->rate) < 0) return -1;
 
     // THE RING IS MAPPED HERE, NOT AT open(), and the ordering is the
     // reason: only the REGISTERED driver may ask for it, and the host

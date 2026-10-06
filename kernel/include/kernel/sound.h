@@ -34,6 +34,12 @@ struct sound_device {
     // forget to say so.
     const char *driver;
 
+    // THE DEVICE IT IS, as userland/lib/udevice.c spells one --
+    // "pci:00:1b.0", "usb:2:041e:3256" -- so Device Manager can show a
+    // card's format beside the device it plays through (sysfs's card ->
+    // device link). NULL when the driver cannot say.
+    const char *device_id;
+
     // Start/stop the engine over the ring `sound_register()` supplied.
     // start() begins at the ring's first chunk.
     //
@@ -57,13 +63,21 @@ struct sound_device {
     // spells them in. 0 from a driver that does not report, which is
     // not the same as "nothing".
     //
-    // The RATE masks decide nothing (the stack is compiled around
-    // SND_RATE). The DEPTH a driver plays at is its own choice from
-    // what the card offers -- the ring is always s32 -- and `bits` says
-    // which it took, for lssound and the log.
+    // The core checks SND_CTL_FORMAT against them. `bits` and `rate`
+    // are what the card plays at now -- the ring is always s32 -- for
+    // lssound and the log; a `rate` of 0 means SND_RATE.
     uint32_t rates;
     uint32_t depths;
     uint32_t bits;
+    uint32_t rate;
+
+    // Choose the format the NEXT start() plays at: `rate` from `rates`,
+    // `bits` from `depths` or 0 for the deepest -- both checked by the
+    // core first, and only ever while the engine is stopped. The driver
+    // records them (updating `rate` and `bits`) and programs the card in
+    // start(), which every driver here already re-programs from
+    // scratch. Optional: NULL plays SND_RATE at the width it chose.
+    int (*set_format)(const struct sound_device *dev, uint32_t rate, uint32_t bits);
 };
 
 // --- a driver whose card cannot read the s32 ring directly -------------
@@ -94,15 +108,11 @@ void sound_bounce_period(struct snd_bounce *b, uint32_t hw_pos);
 // returns. See docs/decisions.md.
 int sound_register(const struct sound_device *dev, void *ring, uint64_t ring_phys);
 
-// A rate in Hz, or a depth in bits, as one of abi/sound_abi.h's mask
-// bits -- 0 for anything not in the list, never the nearest.
 // A device reporting whether its engine is actually running, for a
 // driver whose start() could only ASK -- see sound_proc.c. Ignored
 // unless `dev` is the active device.
 void sound_publish_running(const struct sound_device *dev, int running);
 
-uint32_t snd_rate_mask(uint32_t hz);
-uint32_t snd_depth_mask(uint32_t bits);
 
 // The device is GONE -- a USB card unplugged. If it was the active
 // one, the stream stops and `device_gone` is published to whoever holds

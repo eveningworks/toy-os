@@ -3050,7 +3050,8 @@ and clamps once, and the ring is s32 (`SND_CTL_MAGIC` "SND2",
 `sample_bits` in the control page, `SND_DRIVER_ABI` 3).
 
 **One format, converted at the edge, rather than negotiated per
-device.** PipeWire and the Windows audio engine both mix in one wide
+device.** (The sample FORMAT; the RATE has been the card's since the
+same day -- "A card's rate follows what plays" below.) PipeWire and the Windows audio engine both mix in one wide
 internal format and convert once, at the device; per-device negotiation
 would put two formats through `soundd`, both sinks and every client, and
 a stream that moves between cards mid-play (which this stack does) would
@@ -3085,3 +3086,72 @@ plays a 24-bit tone at -100.8 dBFS -- under half a 16-bit step, which
 a 16-bit path rounds to exact silence -- through a guest owning the G6,
 and finds it on the line-in recording beside a calibration tone 20.8 dB
 louder.
+
+## A card's rate follows what plays, decided by soundd and converted in the client
+
+Until 2026-10-06 the ring was 48 kHz, fixed, and every 44.1 kHz file --
+most music -- went through usnd's linear resampler on its way to a card
+that could play it as it was. Now each card has a format of its own
+(`/etc/sound-cards.conf`, one `[<card>]` section, edited with `sndfmt`,
+System Settings' Sound > Output or Device Manager): a fixed rate, or
+**match** -- the default -- which takes the card to the rate of what
+plays, from the rates the person allows (44.1 and 48 kHz unless told
+otherwise), and a width, the deepest unless one is chosen.
+
+**PipeWire's shape, not Windows'.** Windows and macOS run a device at one
+format the user picks and resample everything else; PipeWire runs at
+`default.clock.rate` and, with `allowed-rates`, switches the graph to a
+stream's rate when nothing else is playing. That second behaviour is the
+one that lets a FLAC reach the DAC untouched, and fixed rates stay
+available for whoever wants Windows' model.
+
+**The card changes rate only when nothing else is on it.** A rate switch
+stops and restarts the engine, which is a gap; doing it under another
+program's sound would cut it. So `soundd` answers a client's request
+(`src_rate` in its ring's control page) with the card's current rate
+whenever anyone else is playing, and switches only for a client playing
+alone -- and then only once the audio already mixed for the card has
+played, which is a few passes because the asking client writes nothing
+until it is answered (`rate` reads 0 while it asks). A sound with no rate
+of its own -- a click, a game's effects -- asks for nothing and leaves the
+card where it is. The mix is therefore always at one rate, and the
+client that disagrees with it resamples: the conversion is in the
+CLIENT (usnd), as it always was, never in the daemon or the kernel.
+
+**The kernel only checks.** `SND_CTL_FORMAT` (rate, width; only while
+stopped) is refused unless the card lists both -- never rounded -- and
+the driver records them and programs the card at the next start, which
+every driver here already re-programs from scratch: HDA's format word
+(a 44.1/48 kHz base times a multiplier over a divisor), AC97's front DAC
+rate under Variable Rate Audio (each rate written and READ BACK at probe,
+since a codec rounds what it cannot do), and on USB the UAC2 clock (its
+rates from GET RANGE, the result read back) or a UAC1 endpoint's
+sampling frequency control, with the width as an alternate setting. With
+no daemon the playing program's own sink applies the same rule
+(`usndfmt_pick_rate()`, one function both share).
+
+**44.1 kHz on USB is fractional packets.** 44.1 frames a millisecond, or
+5.5125 a high-speed microframe, so packets carry 44/45 (5/6) frames from
+an accumulator, as every UAC host does; the in-kernel driver posts each
+at its own length. The ring-3 driver posts a group at one length per
+syscall, so it offers only rates with a whole number of frames per
+packet (48/96/192 kHz) until that syscall takes lengths.
+
+**The library's reference rate stays 48 kHz.** Clips, `usnd_push()` and
+every position and duration in usnd's API are in 48 kHz frames, so DOOM
+and the Player did not change; the mixer converts clips and pushed audio
+to the card's rate when it differs, and reads the streaming voice at the
+card's rate directly -- which is what makes a 44.1 kHz file at a 44.1 kHz
+card untouched.
+
+**Proved by pitch, on a recorder.** `audio_rate_test.py` plays a 44.1 kHz
+1 kHz tone on QEMU's HDA and AC97 and measures the WAV capture by
+interpolated zero crossings: exactly 1000.00 Hz and 1500 ms whether the
+card switched or was held at 48 kHz, and a positive control (the 44.1
+kHz format word replaced by 48 kHz's) records 1088.4 Hz.
+`audio_loopback_test.py --rate --host` does it on BARE METAL with the G6
+(1187.01 Hz, no phase jumps) -- not through a guest: QEMU's USB
+passthrough breaks isochronous packets whose length varies, under KVM
+(398 phase jumps in 398 5 ms windows) as under TCG (364), against 0 on
+the ASUS and 0 from Linux on the host (docs/testing.md).
+

@@ -73,14 +73,17 @@ static void bounce_one(uint32_t chunk) {
         dst[i] = snd_s32_to_s16(src[i]);
 }
 
+// Only while the card plays 16 bits: a deeper width reads the ring.
+static int bouncing(void) { return g_ring && g_card.bits == 16; }
+
 static void bounce_start(void) {
-    if (!g_ring) return;
+    if (!bouncing()) return;
     for (uint32_t c = 0; c <= SND_CONVERT_LEAD; c++) bounce_one(c);
     g_next = SND_CONVERT_LEAD + 1;
 }
 
 static void bounce_period(uint32_t hw_pos) {
-    if (!g_ring) return;
+    if (!bouncing()) return;
     uint32_t want = (hw_pos / SND_CHUNK_BYTES + SND_CONVERT_LEAD + 1) % SND_CHUNKS;
     for (int guard = 0; g_next != want && guard < SND_CHUNKS; guard++) {
         bounce_one(g_next);
@@ -341,6 +344,10 @@ int main(int argc, char **argv) {
     else snprintf(m.name, sizeof m.name, "%s-ring3", g_drv->name);
     strlcpy(m.label, g_card.label[0] ? g_card.label :
                      g_drv->label ? g_drv->label : g_drv->name, sizeof m.label);
+    if (!g_card.device_id[0] && index >= 0)
+        snprintf(g_card.device_id, sizeof g_card.device_id, "pci:%02x:%02x.%x",
+                 g_card.info.bus, g_card.info.device, g_card.info.function);
+    strlcpy(m.device_id, g_card.device_id, sizeof m.device_id);
     m.rates = g_card.rates;
     m.depths = g_card.depths;
     m.bits = g_card.bits ? g_card.bits : 32;
@@ -396,6 +403,10 @@ int main(int argc, char **argv) {
                 // when a STOP and a START land between two wakeups (only
                 // the last op is visible) and from soundd's stall recovery.
                 if (g_running) { g_drv->stop(&g_card); g_running = 0; }
+                // The format first: what the copy is narrowed for and
+                // what start() programs.
+                g_card.rate = g_sh->drv.rate ? g_sh->drv.rate : SND_RATE;
+                if (g_sh->drv.bits) g_card.bits = g_sh->drv.bits;
                 bounce_start();
                 if (g_drv->start(&g_card, ring_phys) == 0) g_running = 1;
                 else fprintf(stderr, "snddrv: %s failed to start the engine\n",

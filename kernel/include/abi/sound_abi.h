@@ -22,13 +22,19 @@
 // and `hw_pos + SND_RING_BYTES` (all the way around), and never touch
 // the control page except to read it.
 
-// **32-BIT SIGNED LITTLE-ENDIAN STEREO AT 48 kHz, FULL SCALE IN THE TOP
-// BITS** -- ALSA's S32_LE. One format for every device, PipeWire's and
-// the Windows audio engine's shape: whatever the card is, the ring is
-// this, and the DRIVER converts at the edge. A 24-bit sample is the top
-// three bytes (what HDA's 32-bit container and USB's 3-byte subslot
-// want), a 16-bit device takes the top two, rounded
-// (snd_s32_to_s16() below). Rate negotiation is still not in the ABI.
+// **32-BIT SIGNED LITTLE-ENDIAN STEREO, FULL SCALE IN THE TOP BITS** --
+// ALSA's S32_LE. One sample format for every device, PipeWire's and the
+// Windows audio engine's shape: whatever the card is, the ring is this,
+// and the DRIVER converts at the edge. A 24-bit sample is the top three
+// bytes (what HDA's 32-bit container and USB's 3-byte subslot want), a
+// 16-bit device takes the top two, rounded (snd_s32_to_s16() below).
+//
+// THE RATE IS THE STREAM'S, chosen while it is stopped: SND_CTL_FORMAT
+// asks for a rate (and the card's width), the control page's `rate` says
+// what the ring is now, and a stream opens at SND_RATE until somebody
+// asks. One rate per card at a time -- a mix of two streams at
+// different rates is resampled by its CLIENT to the card's
+// (userland/lib/usnd.c), never in here.
 // --- WHAT A CARD CAN DO, as opposed to what this stack asks of it ----
 //
 // SND_RATE and SND_CHANNELS below are what the shared ring IS -- one
@@ -36,11 +42,10 @@
 // different thing: what the HARDWARE reports it could do, read from
 // the card and reported unchanged.
 //
-// THEY DRIVE NOTHING YET, deliberately. Knowing what the cards support
-// is the fact that decides whether a per-device format is worth
-// building, and this project reads the fact before acting on it -- the
-// EDID readout took the same shape. A mask of 0 means the driver does
-// not report; it does not mean "nothing".
+// They are what SND_CTL_FORMAT is checked against: a rate or a width
+// outside them is refused, never rounded to the nearest. A mask of 0
+// means the driver does not report, and such a card takes only
+// SND_RATE at the width it chose itself.
 //
 // A COMMON ENCODING, not the hardware's. HDA has its own bit layout
 // (PARAM_PCM_SUPPORT), AC97 its own notion of variable rate, USB audio
@@ -64,8 +69,32 @@
 #define SND_DEPTH_20  (1u << 2)
 #define SND_DEPTH_24  (1u << 3)
 #define SND_DEPTH_32  (1u << 4)
+#define SND_RATE_COUNT 11
 
-#define SND_RATE        48000
+// A rate in Hz as its mask bit, a mask bit as its rate, and a depth in
+// bits as its bit -- 0 for anything not in the lists, never the nearest:
+// a card offering 64 kHz is not offering 48. Here rather than in the
+// sound core because both rings translate (the USB descriptor walk is
+// compiled into each).
+static inline uint32_t snd_rate_hz(int bit) {
+    static const uint32_t hz[SND_RATE_COUNT] = {
+        8000, 11025, 16000, 22050, 32000, 44100, 48000, 88200, 96000, 176400, 192000,
+    };
+    return bit >= 0 && bit < SND_RATE_COUNT ? hz[bit] : 0;
+}
+
+static inline uint32_t snd_rate_mask(uint32_t hz) {
+    for (int i = 0; i < SND_RATE_COUNT; i++)
+        if (snd_rate_hz(i) == hz) return 1u << i;
+    return 0;
+}
+
+static inline uint32_t snd_depth_mask(uint32_t bits) {
+    return bits == 8 ? SND_DEPTH_8 : bits == 16 ? SND_DEPTH_16 : bits == 20 ? SND_DEPTH_20 :
+           bits == 24 ? SND_DEPTH_24 : bits == 32 ? SND_DEPTH_32 : 0;
+}
+
+#define SND_RATE        48000   // what a stream opens at
 #define SND_CHANNELS    2
 #define SND_SAMPLE_BITS 32
 #define SND_FRAME_BYTES 8 // 2 channels x 32-bit
@@ -104,10 +133,10 @@ static inline int16_t snd_s32_to_s16(int32_t v) {
 // app computes addresses instead of being told them.
 #define SND_MAP_VADDR 0x8F00000000ULL
 
-// "SND2": the s32 ring. A reader built against "SND1"'s s16 ring finds
-// a different magic and refuses, rather than playing every sample as
-// two half-volume ones.
-#define SND_CTL_MAGIC 0x534e4432 // "SND2"
+// "SND3": the s32 ring at a rate the page names. A reader built against
+// "SND2"'s fixed 48 kHz would play a 44.1 kHz ring sharp, so it finds a
+// different magic and refuses ("SND1" was s16).
+#define SND_CTL_MAGIC 0x534e4433 // "SND3"
 
 // A client's application name, and deliberately PROC_NAME_MAX
 // (abi/proc_info.h) rather than a size of this ABI's own: it is filled
@@ -117,7 +146,11 @@ static inline int16_t snd_s32_to_s16(int32_t v) {
 
 struct snd_ctl_page {
     uint32_t magic;      // SND_CTL_MAGIC -- an app can sanity-check the map
-    uint32_t rate;       // SND_RATE
+    // The ring's rate NOW, in Hz. The kernel's stream: SND_RATE at open,
+    // then whatever SND_CTL_FORMAT set. A DAEMON CLIENT RING: written by
+    // the DAEMON -- 0 while the client is asking for one (`src_rate`),
+    // and the client writes no samples until it is not 0.
+    uint32_t rate;
     uint32_t channels;   // SND_CHANNELS
     uint32_t ring_bytes; // SND_RING_BYTES
     uint32_t sample_bits; // SND_SAMPLE_BITS -- checked, never chosen
@@ -157,6 +190,12 @@ struct snd_ctl_page {
     // Written by the client BEFORE `magic`, so the daemon never reads a
     // half-filled one; empty is legal and mixes at full gain.
     char app[SND_APP_MAX];
+    // THE RATE A CLIENT'S CONTENT IS AT, its request to the daemon: a
+    // card set to follow what plays may switch to it, and otherwise the
+    // client resamples to `rate`. 0: no preference. A DAEMON CLIENT
+    // RING only.
+    uint32_t src_rate;
+    uint32_t reserved;
 };
 
 // --- the sound daemon's client rings ---------------------------------
@@ -250,6 +289,12 @@ struct snd_driver_page {
     // never came up, rather than silence with everything looking fine.
     uint32_t running;
     uint32_t reserved;
+    // THE FORMAT TO START AT, written by the kernel before every
+    // SND_REQ_START: a rate from the driver's `rates` and a width from
+    // its `depths`, both already checked. Read at START, as a ring-0
+    // driver applies its own at start().
+    uint32_t rate;
+    uint32_t bits;
 };
 
 // What SYS_SND_REGISTER is handed. `ring_phys` comes back in it: the
@@ -265,6 +310,7 @@ struct snd_register_msg {
     uint32_t rates, depths;             // SND_RATE_*/SND_DEPTH_*
     uint32_t bits;                      // the width it plays the ring at
     uint32_t reserved;
+    char     device_id[24];             // "pci:00:1b.0" -- query_sound's
     uint64_t page;                      // the driver's snd_driver_page
     uint64_t ring_phys;                 // OUT: where the ring is
 };
@@ -285,5 +331,18 @@ struct snd_register_msg {
 #define SND_CTL_START 1 // begin playback from the ring's start
 #define SND_CTL_STOP  2 // stop the engine; the ring stays mapped
 #define SND_CTL_CLOSE 3 // stop, unmap, release the (exclusive) stream
+// Choose the format the next START plays at: RSI = rate in Hz, RDX =
+// the card's width in bits, 0 for the deepest it offers. Only while
+// stopped (-EBUSY); a rate or width the card does not report is
+// -EINVAL. On success the control page's `rate` is the new rate.
+#define SND_CTL_FORMAT 4
+
+// Each card's chosen format, one `[<card>]` section per card keyed by
+// its stable name (what `audio_device` persists): `rate` is `match`
+// (follow what plays) or a rate in Hz, `allowed` the rates `match` may
+// switch to, `bits` `auto` (the deepest) or a width. A file of its own,
+// not keys in SND_CONFIG_FILE, whose every key is an application's gain.
+// soundd applies it; lib/usndfmt.h reads and writes it.
+#define SND_CARDS_FILE "/etc/sound-cards.conf"
 
 #endif

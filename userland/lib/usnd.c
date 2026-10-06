@@ -87,10 +87,20 @@ static int open_stream(const char *path, struct usnd_stream *s, int info_only) {
         usnd_fail("sample rate is out of range");
         return -ENOTSUP;
     }
-    // Source frames per output frame, 16.16. Exactly 1.0 for a 48 kHz
-    // file, which usnd_read() then takes as its copy-only fast path.
+    // Source frames per output frame, 16.16. Exactly 1.0 for a file at
+    // the output rate, which usnd_read() then takes as its copy-only
+    // fast path.
+    s->out_rate = USND_RATE;
     s->step = (uint32_t)(((uint64_t)s->fmt.rate << 16) / USND_RATE);
     return 0;
+}
+
+void usnd_stream_set_rate(struct usnd_stream *s, uint32_t rate) {
+    if (!rate || rate == s->out_rate) return;
+    uint32_t old = s->out_rate ? s->out_rate : USND_RATE;
+    s->out_pos = s->out_pos * rate / old;
+    s->out_rate = rate;
+    s->step = (uint32_t)(((uint64_t)s->fmt.rate << 16) / rate);
 }
 
 int usnd_load_info(const char *path, struct usnd_info *out) {
@@ -256,6 +266,7 @@ int usnd_seek(struct usnd_stream *s, uint64_t device_frame) {
     if (!s->codec->seek) { usnd_fail("this format cannot seek"); return -ENOTSUP; }
 
     uint64_t file_frame = device_frame * s->fmt.rate / USND_RATE;
+    uint32_t r = s->out_rate ? s->out_rate : USND_RATE;
     int rc = s->codec->seek(s, file_frame);
     if (rc != 0) return rc;
 
@@ -265,7 +276,7 @@ int usnd_seek(struct usnd_stream *s, uint64_t device_frame) {
     s->tail = 0;
     s->drained = 0;
     s->phase = 0;
-    s->out_pos = device_frame;
+    s->out_pos = device_frame * r / USND_RATE;
     return 0;
 }
 

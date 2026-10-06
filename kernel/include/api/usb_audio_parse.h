@@ -74,6 +74,22 @@
 // carries NO endpoint by design (it is the "idle, no bandwidth"
 // setting), so the endpoint below only exists after a SET_INTERFACE to
 // this alternate.
+// ONE ALTERNATE SETTING THIS STACK CAN PLAY: stereo PCM, a subslot the
+// packet copy writes, an isochronous OUT endpoint of one transaction.
+// A card's depths are its formats' `bits`; switching depth is switching
+// alternate setting, at start.
+#define USB_AUDIO_MAX_FORMATS 4
+struct usb_audio_format {
+    uint8_t  alt, ep, interval, subslot, bits;
+    uint16_t mps;
+    // SND_RATE_* the alternate lists -- UAC1 only. A UAC2 alternate
+    // states none: its rates are the clock's (usb_audio_range_rates()).
+    uint32_t rates;
+    // UAC1: it lists more than one rate, so the endpoint's sampling
+    // frequency control has to be SET to pick one.
+    uint8_t  rate_ctl;
+};
+
 struct usb_audio_stream {
     uint8_t  ifnum;
     uint8_t  alt;
@@ -110,6 +126,11 @@ struct usb_audio_stream {
     uint8_t  clock_is_selector;
     uint8_t  clock_pin_count;
     uint8_t  clock_pins[USB_AUDIO_MAX_CLOCK_PINS];
+
+    // Every playable alternate on the chosen interface and endpoint, in
+    // descriptor order; the fields above are the default among them.
+    uint8_t  nformats;
+    struct usb_audio_format formats[USB_AUDIO_MAX_FORMATS];
 };
 
 // One AudioStreaming alternate setting the walk saw, whether or not it
@@ -150,6 +171,29 @@ struct usb_audio_report {
 int usb_audio_parse(const uint8_t *cfg, uint32_t total,
                     struct usb_audio_stream *out,
                     struct usb_audio_report *rep);
+
+// A UAC2 GET RANGE answer for a clock's sampling frequency --
+// wNumSubRanges, then (dMIN, dMAX, dRES) per subrange, little-endian --
+// as SND_RATE_* bits: every listed rate some subrange reaches. A short
+// or malformed answer yields what it fully holds.
+uint32_t usb_audio_range_rates(const uint8_t *buf, uint32_t len);
+
+// Which format plays `rate` at `bits` (0: the deepest that can), given
+// the clock's rates on UAC2, and a service interval of `us` -- the
+// busiest packet must fit the alternate's wMaxPacketSize. -1 for none.
+int usb_audio_pick_format(const struct usb_audio_stream *s, uint32_t clock_rates,
+                          uint32_t rate, uint32_t bits, uint32_t us);
+
+// THE FRAMES IN EACH PACKET. 44.1 kHz is 44.1 frames a millisecond, so
+// packets carry 44 or 45 and an accumulator keeps the total exact --
+// what Linux's snd-usb-audio and every UAC host do. Start with zero.
+struct usb_audio_pace {
+    uint32_t rate, us;
+    uint32_t acc;          // millionths of a frame carried over
+};
+uint32_t usb_audio_pace_next(struct usb_audio_pace *p);
+// The most frames any one packet can carry at that rate and interval.
+uint32_t usb_audio_pace_max(uint32_t rate, uint32_t us);
 
 
 #endif // API_USB_AUDIO_PARSE_H

@@ -27,6 +27,7 @@
 #include "timer.h"
 #include "string.h"
 #include "kfmt.h"
+#include "errno.h"
 #include "klog.h"
 #include "ktest.h"
 #include <stdint.h>
@@ -39,6 +40,10 @@ DRIVER_DECLARE("ac97", "sound", "Intel AC'97 audio codec");
 #define NAM_RESET      0x00
 #define NAM_MASTER_VOL 0x02
 #define NAM_PCM_VOL    0x18
+#define NAM_EXT_ID     0x28 // bit 0: the codec has Variable Rate Audio
+#define NAM_EXT_CTL    0x2A // bit 0: VRA on
+#define NAM_DAC_RATE   0x2C // the front DAC's rate in Hz, VRA only
+#define EXT_VRA        0x0001
 
 // NABM: the PCM OUT box, and the two globals.
 #define PO_BDBAR 0x10 // dword: BDL physical address
@@ -88,8 +93,13 @@ static void ac97_irq(uint64_t *regs) {
     outw(g_nabm + PO_SR, sr & SR_ACK); // RW1C: only the bits seen
 }
 
+static uint32_t g_rate = SND_RATE;
+static int g_vra;
+static char g_devid[24];
+
 static int ac97_start(const struct sound_device *dev) {
     (void)dev;   // one AC'97 per machine
+    if (g_vra) outw(g_nam + NAM_DAC_RATE, (uint16_t)g_rate);
     // Reset the box, then arm it. RR self-clears when the reset is done.
     // A SPIN COUNT, not a tick deadline: this runs from SND_CTL_START,
     // a syscall, where interrupts are off and coarse_ticks() stands still.
@@ -136,20 +146,49 @@ static void ac97_set_volume(const struct sound_device *dev, int pct) {
     outw(g_nam + NAM_MASTER_VOL, (uint16_t)((att << 8) | att));
 }
 
-static const struct sound_device ac97_dev = {
+// Recorded, then written to the DAC in start(): the rate register is
+// only honoured with VRA on, and the probe already proved it is.
+static int ac97_format(const struct sound_device *dev, uint32_t rate, uint32_t bits);
+
+static struct sound_device ac97_dev = {
     .name = "ac97",
     .driver = "ac97",
-    // THE DRIVER'S SET, NOT THE CODEC'S CEILING. AC97 baseline is 48
-    // kHz 16-bit, and a codec with Variable Rate Audio can do more --
-    // but VRA is not programmed here, so reporting what the hardware
-    // might manage would describe something nothing can ask for.
+    // 48 kHz 16-bit is every AC97's baseline; the probe adds the rates
+    // a Variable Rate Audio codec reads back exactly.
     .rates = SND_RATE_48000,
     .depths = SND_DEPTH_16,
     .bits = 16,
+    .rate = SND_RATE,
     .start = ac97_start,
     .stop = ac97_stop,
     .set_volume = ac97_set_volume,
+    .set_format = ac97_format,
 };
+
+static int ac97_format(const struct sound_device *dev, uint32_t rate, uint32_t bits) {
+    (void)dev;
+    if (bits && bits != 16) return -EINVAL;
+    if (rate != SND_RATE && !g_vra) return -EINVAL;
+    g_rate = rate;
+    ac97_dev.rate = rate;
+    return 0;
+}
+
+// VRA: on, then each standard rate written and READ BACK -- a codec
+// rounds what it cannot do (AC97 2.3, 5.8.3), and a rate it rounded is
+// one it does not offer. Back at 48 kHz afterwards, the baseline.
+static void ac97_probe_vra(void) {
+    if (!(inw(g_nam + NAM_EXT_ID) & EXT_VRA)) return;
+    outw(g_nam + NAM_EXT_CTL, inw(g_nam + NAM_EXT_CTL) | EXT_VRA);
+    if (!(inw(g_nam + NAM_EXT_CTL) & EXT_VRA)) return;
+    static const uint16_t try[] = { 8000, 11025, 16000, 22050, 32000, 44100 };
+    for (unsigned i = 0; i < sizeof try / sizeof try[0]; i++) {
+        outw(g_nam + NAM_DAC_RATE, try[i]);
+        if (inw(g_nam + NAM_DAC_RATE) == try[i]) ac97_dev.rates |= snd_rate_mask(try[i]);
+    }
+    outw(g_nam + NAM_DAC_RATE, SND_RATE);
+    g_vra = 1;
+}
 
 static const struct pci_match ac97_matches[] = { PCI_MATCH_CLASS(0x04, 0x01, PCI_ANY) };
 
@@ -165,6 +204,8 @@ static void ac97_probe(const struct pci_device *dev) {
         klog_write("ac97: unexpected memory BARs -- not driving it\n");
         return;
     }
+    k_snprintf(g_devid, sizeof g_devid, "pci:%02x:%02x.%x", dev->bus, dev->device, dev->function);
+    ac97_dev.device_id = g_devid;
     g_nam  = (uint16_t)pci_bar_addr(g_pci->bar[0]);
     g_nabm = (uint16_t)pci_bar_addr(g_pci->bar[1]);
 
@@ -180,6 +221,7 @@ static void ac97_probe(const struct pci_device *dev) {
     }
     outw(g_nam + NAM_RESET, 1); // any write resets the mixer to defaults
     ac97_set_volume(&ac97_dev, 100);
+    ac97_probe_vra();
 
     uint64_t ring_phys = 0;
     void *ring = sound_ring_alloc(&ring_phys);

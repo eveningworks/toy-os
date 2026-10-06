@@ -5,13 +5,10 @@
 // about the SETTING. This answers "what is this", which is a question
 // about the hardware, and is where a capability belongs.
 //
-// WHAT THE CARD SAYS IS NOT WHAT THE STACK USES. Every rate and depth
-// here is read off the device and reported unchanged; the shared ring
-// is 48 kHz 16-bit stereo throughout (abi/sound_abi.h), and nothing
-// yet asks a card for anything else. These are the facts that would
-// have to exist before that could change -- printed now so the
-// question is answered by a measurement rather than a guess, which is
-// the shape the EDID readout took before the modesetting work.
+// WHAT THE CARD SAYS, AND WHAT IT PLAYS NOW. The rates and depths are
+// read off the device unchanged -- they are what a format may be chosen
+// from (`sndfmt`, lib/usndfmt.h) -- and `plays:` is the width and rate
+// the card runs at this moment.
 #include <stdio.h>
 #include <string.h>
 #include "rt/sys.h"
@@ -81,7 +78,12 @@ int main(int argc, char **argv) {
         if (!verbose) continue;
         printf("             rates:  "); put_rates(q.rates);  printf("\n");
         printf("             depths: "); put_depths(q.depths); printf("\n");
-        if (q.bits) printf("             plays:  %u-bit\n", (unsigned)q.bits);
+        if (q.bits) {
+            uint32_t r = q.rate ? q.rate : SND_RATE;
+            if (r % 1000) printf("             plays:  %u-bit, %u.%u kHz\n", (unsigned)q.bits,
+                                 (unsigned)(r / 1000), (unsigned)(r % 1000 / 100));
+            else printf("             plays:  %u-bit, %u kHz\n", (unsigned)q.bits, (unsigned)(r / 1000));
+        }
     }
     if (!n) {
         printf("no sound device\n");

@@ -918,6 +918,9 @@ int sys_pipe(int fds[2]);
 // hardware); ctl takes a SND_CTL_* op. Both 0 or -1 with sys_errno().
 int sys_snd_open(void);
 int sys_snd_ctl(int op);
+// SND_CTL_FORMAT: the rate and the card's width (0 = its deepest) the
+// next start plays at, while stopped. 0 or -1 with sys_errno().
+int sys_snd_format(uint32_t rate, uint32_t bits);
 
 // Runs `path` as a new process. `args` is whitespace-separated
 // (NULL for none). `stdout_fd` is a pipe WRITE end from sys_pipe() to

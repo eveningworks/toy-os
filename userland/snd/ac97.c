@@ -31,6 +31,10 @@
 // NAM (mixer) registers.
 #define NAM_MASTER_VOL 0x02
 #define NAM_PCM_VOL    0x18
+#define NAM_EXT_ID     0x28 // bit 0: the codec has Variable Rate Audio
+#define NAM_EXT_CTL    0x2A // bit 0: VRA on
+#define NAM_DAC_RATE   0x2C // the front DAC's rate in Hz, VRA only
+#define EXT_VRA        0x0001
 
 // NABM: the PCM OUT box, and the two globals.
 #define PO_BDBAR 0x10 // dword: BDL physical address
@@ -64,6 +68,7 @@ static struct {
     struct bdl_entry *bdl;
     uint64_t bdl_phys;
     int running;
+    int vra;
 } g_st;
 
 // Every register access is a syscall.
@@ -92,6 +97,28 @@ static inline void wnabm8(uint32_t o, uint8_t v)   { sys_dev_io_write(g_st.pci, 
 static inline void wnabm16(uint32_t o, uint16_t v) { sys_dev_io_write(g_st.pci, BAR_NABM, o, 2, v); }
 static inline void wnabm32(uint32_t o, uint32_t v) { sys_dev_io_write(g_st.pci, BAR_NABM, o, 4, v); }
 static inline void wnam16(uint32_t o, uint16_t v)  { sys_dev_io_write(g_st.pci, BAR_NAM, o, 2, v); }
+static inline uint16_t nam16(uint32_t o) { return (uint16_t)rd(BAR_NAM, o, 2); }
+
+// VRA, as kernel/drivers/sound/ac97.c probes it: on, then each standard
+// rate written and READ BACK -- a codec rounds a rate it cannot do, and
+// a rounded one is not on offer. Back at 48 kHz afterwards.
+static uint32_t probe_vra(void) {
+    uint32_t rates = SND_RATE_48000;
+    if (!(nam16(NAM_EXT_ID) & EXT_VRA)) return rates;
+    wnam16(NAM_EXT_CTL, nam16(NAM_EXT_CTL) | EXT_VRA);
+    if (!(nam16(NAM_EXT_CTL) & EXT_VRA)) return rates;
+    static const struct { uint16_t hz; uint32_t bit; } T[] = {
+        { 8000, SND_RATE_8000 }, { 11025, SND_RATE_11025 }, { 16000, SND_RATE_16000 },
+        { 22050, SND_RATE_22050 }, { 32000, SND_RATE_32000 }, { 44100, SND_RATE_44100 },
+    };
+    for (unsigned i = 0; i < sizeof T / sizeof T[0]; i++) {
+        wnam16(NAM_DAC_RATE, T[i].hz);
+        if (nam16(NAM_DAC_RATE) == T[i].hz) rates |= T[i].bit;
+    }
+    wnam16(NAM_DAC_RATE, SND_RATE);
+    g_st.vra = 1;
+    return rates;
+}
 
 static int ac97_match(const struct pci_device *d) {
     return d->class_code == AC97_CLASS && d->subclass == AC97_SUBCLASS;
@@ -127,12 +154,11 @@ static int ac97_open(struct snd_dev *dev) {
     }
     if (g_io_errors) return -1;   // "ready" would have been a refused read
 
-    // THE DRIVER'S SET, NOT THE CODEC'S CEILING. AC97 baseline is 48
-    // kHz 16-bit; a codec with Variable Rate Audio can do more, but VRA
-    // is not programmed here, so reporting what the hardware might
-    // manage would describe something nothing can ask for.
-    dev->rates = SND_RATE_48000;
+    // 48 kHz 16-bit is every AC97's baseline; a Variable Rate Audio
+    // codec adds the rates it reads back exactly.
+    dev->rates = probe_vra();
     dev->depths = SND_DEPTH_16;
+    dev->rate = SND_RATE;
     // 16-BIT, so the engine plays the host's narrowed copy of the s32
     // ring, in the DMA grant after the descriptor list's page.
     dev->bits = 16;
@@ -150,6 +176,8 @@ static void ac97_close(struct snd_dev *dev) {
 
 static int ac97_start(struct snd_dev *dev, uint64_t ring_phys) {
     (void)ring_phys;   // the engine reads dev->bounce, never the ring
+    if (dev->bits != 16 || (dev->rate != SND_RATE && !g_st.vra)) return -1;
+    if (g_st.vra) wnam16(NAM_DAC_RATE, (uint16_t)dev->rate);
     // Reset the box, then arm it. RR self-clears when the reset is done.
     wnabm8(PO_CR, CR_RR);
     int done = 0;

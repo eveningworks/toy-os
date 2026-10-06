@@ -68,9 +68,10 @@ def layout(dbg):
         m = re.search(r"devmgr: layout (ask\.button|view\.slot) (\d+) (-?\d+) (-?\d+) (\d+) (\d+)", line)
         if m:
             _lay[f"{m.group(1)}{m.group(2)}"] = tuple(int(v) for v in m.groups()[2:])
-        m = re.search(r"devmgr: selected (\S+) view (\w+)", line)
+        m = re.search(r"devmgr: selected (\S+) view (\w+)(?: format (\d))?", line)
         if m:
             _lay["selected"], _lay["view"] = m.group(1), m.group(2)
+            _lay["format"] = int(m.group(3) or 0)   # a sound card's Format panel shown
     return _lay
 
 

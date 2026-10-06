@@ -84,13 +84,27 @@
 #define SD_STS_ACK  0x1C // BCIS | FIFOE | DESE
 #define SD_STS_BCIS 0x04
 
-// 48 kHz base, 2 channels -- SND_RATE/SND_CHANNELS as the codec spells
-// them -- at a sample width, bits 6:4: 001 = 16, 010 = 20, 011 = 24,
-// 100 = 32. 20/24/32 sit MSB-justified in a 32-bit container, so the
-// s32 ring is what the engine reads for any of them.
+// THE STREAM FORMAT WORD, one spelling shared by the stream descriptor
+// and the converter. The rate is a BASE times a multiplier over a
+// divisor -- bit 14 the base (0 = 48 kHz, 1 = 44.1), bits 13:11 the
+// multiplier less one, 10:8 the divisor less one -- so 96 kHz is 48 x 2
+// and 22.05 kHz is 44.1 / 2. Bits 6:4 the width: 001 = 16, 010 = 20,
+// 011 = 24, 100 = 32, the wider three MSB-justified in a 32-bit
+// container, so the s32 ring is what the engine reads for any of them.
+// Bits 3:0 the channels less one. 0 for a rate the word cannot say.
 #define HDA_FMT_48K_S16_STEREO 0x0011
-#define HDA_FMT_48K_STEREO(bits) \
-    (0x0001 | ((bits) == 32 ? 0x40 : (bits) == 24 ? 0x30 : (bits) == 20 ? 0x20 : 0x10))
+static inline uint16_t hda_fmt(uint32_t rate, int bits) {
+    static const struct { uint32_t hz; uint16_t rate; } R[] = {
+        { 8000,   0x0500 }, { 11025,  0x4300 }, { 16000,  0x0200 },
+        { 22050,  0x4100 }, { 32000,  0x0a00 }, { 44100,  0x4000 },
+        { 48000,  0x0000 }, { 88200,  0x4800 }, { 96000,  0x0800 },
+        { 176400, 0x5800 }, { 192000, 0x1800 },
+    };
+    uint16_t w = bits == 32 ? 0x40 : bits == 24 ? 0x30 : bits == 20 ? 0x20 : 0x10;
+    for (unsigned i = 0; i < sizeof R / sizeof R[0]; i++)
+        if (R[i].hz == rate) return (uint16_t)(R[i].rate | w | 0x0001);
+    return 0;
+}
 #define HDA_STREAM_TAG 1
 
 // The CORB is 256 4-byte verbs and the RIRB 256 8-byte responses, so a

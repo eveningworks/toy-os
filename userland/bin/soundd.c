@@ -18,9 +18,13 @@
 // exactly while this process does, which is how a client knows to use
 // the daemon sink at all rather than the kernel's stream.
 //
-// WHAT IT DOES NOT DO: no resampling (every client speaks the one ABI
-// format), no per-client volume yet, and no priority between clients --
-// a mix is a plain saturating sum. `system.volume` is still the card's
+// WHAT IT DOES NOT DO: no resampling and no priority between clients --
+// a mix is a plain saturating sum of rings already at the card's rate.
+// THE RATE IS DECIDED HERE AND RESAMPLED IN THE CLIENT: each asks with
+// the rate of what it plays (`src_rate`), this answers with the one to
+// write at (`rate`), per the card's setting (lib/usndfmt.h) -- a card
+// following what plays switches only for a client playing ALONE, and
+// only once its audio has drained. `system.volume` is still the card's
 // master and is applied by the driver, below this.
 //
 // IT BLOCKS ON TIME, NEVER ON ITS CLIENTS, which is what lets a
@@ -33,6 +37,7 @@
 #include <stdlib.h>   // atoi -- the pid out of the ring's name
 #include <sys/stat.h>
 #include "lib/uconf.h"   // /etc in ring 3, over the shared parser
+#include "lib/usndfmt.h" // each card's rate policy and width
 #include "rt/sys.h"
 #include "sound_abi.h"
 #include "syscall_abi.h"
@@ -48,6 +53,7 @@ struct client {
     int      pid;               // parsed out of `name`, for the roster
     int      fd;
     int      gain;              // 0..100 from /etc/sound.conf; 100 by default
+    unsigned long long answered; // when its rate was last answered, in ms
     volatile struct snd_ctl_page *ctl;
     volatile int32_t *ring;   // s32, abi/sound_abi.h
 };
@@ -106,6 +112,13 @@ static uint32_t g_prev_lead; // the unstarted ring's fill, one pass ago
 
 static int g_open;                       // is the stream ours right now?
 
+// THE RATE THE CARD IS TO RUN AT: applied by stream_open(), and what a
+// client is answered while the card is released. `g_silent_tail` counts
+// the chunks mixed with no client in them since the last that had one,
+// so "has the audio drained" is `lead` against it (pending_switch()).
+static uint32_t g_target = SND_RATE;
+static uint32_t g_silent_tail;
+
 // PER STREAM, said once at release: the longest wait between two of our
 // passes, and how many chunks a playing client had left empty. A long
 // gap is THIS daemon starved (the driver plays the zeroed ring: a clean
@@ -117,6 +130,33 @@ static unsigned long long g_idle_since;  // when the last client stopped
 
 static unsigned long long now_ms(void) { return sys_monotonic_ns() / 1000000ull; }
 
+// The active card: its name (the setting's key), what it takes and the
+// rate it runs at. Asked when a rate is decided, which is rare.
+static int active_card(struct query_sound *out) {
+    struct query_sound q;
+    QUERY_FOREACH(QUERY_SOUND, q, qi)
+        if (q.active) { *out = q; return 1; }
+    return 0;
+}
+
+// Sets the stopped card to `rate` at its configured width; says so,
+// once per change, since a test and a person both want to see it.
+static void card_format(uint32_t rate) {
+    struct query_sound q;
+    if (!active_card(&q)) return;
+    struct usndfmt f;
+    usndfmt_load(q.name, &f);
+    uint32_t bits = usndfmt_pick_bits(&f, q.depths);
+    if (sys_snd_format(rate, bits) != 0) {
+        fprintf(stderr, "soundd: %s refused %u Hz at %u bits\n", q.name,
+                (unsigned)rate, (unsigned)bits);
+        return;
+    }
+    if (rate != q.rate || (bits && bits != q.bits))
+        fprintf(stderr, "soundd: %s now at %u Hz%s\n", q.name, (unsigned)rate,
+                bits ? "" : ", its deepest width");
+}
+
 // Take the stream and map it. The addresses are fixed, so reopening
 // lands where the pointers already are.
 static int stream_open(void) {
@@ -125,6 +165,7 @@ static int stream_open(void) {
     g_hw = (volatile struct snd_ctl_page *)(uintptr_t)SND_MAP_VADDR;
     g_hwring = (volatile int32_t *)(uintptr_t)(SND_MAP_VADDR + 4096);
     if (g_hw->magic != SND_CTL_MAGIC) { sys_snd_ctl(SND_CTL_CLOSE); return 0; }
+    card_format(g_target);
     g_wr = 0;
     g_running = 0;
     g_prev_lead = 0;
@@ -235,7 +276,7 @@ static void adopt(const char *name) {
     // The magic is written LAST by the client, so an unset one means
     // "not ready yet" rather than "broken" -- unmap and look again next
     // pass. Anything else is a ring this build cannot mix.
-    if (ctl->magic != SND_CTL_MAGIC || ctl->rate != SND_RATE ||
+    if (ctl->magic != SND_CTL_MAGIC ||
         ctl->channels != SND_CHANNELS || ctl->ring_bytes != SND_RING_BYTES ||
         ctl->sample_bits != SND_SAMPLE_BITS) {
         sys_munmap(p, SND_CLIENT_BYTES);
@@ -441,9 +482,77 @@ static void mix_chunk(uint32_t dst) {
         c->ctl->hw_pos = (src + SND_CHUNK_BYTES) % SND_RING_BYTES;
         voices++;
     }
-    (void)voices;
+    g_silent_tail = voices ? 0 : g_silent_tail + 1;
     for (unsigned k = 0; k < CHUNK_SAMPLES; k++) out[k] = clamp32(acc[k]);
     memcpy((void *)((uintptr_t)g_hwring + dst), out, SND_CHUNK_BYTES);
+}
+
+// --- the rate ------------------------------------------------------------
+//
+// A CLIENT ASKS BY CLEARING `rate` (abi/sound_abi.h) and writes nothing
+// until it is answered. The answer is the card's rate whenever anyone
+// else is playing; a client playing ALONE may move the card, per its
+// setting, once the audio already mixed for the card has played -- the
+// client has stopped writing, so that is a matter of passes.
+
+// Is anybody but `me` being mixed at the card's rate -- or about to be:
+// a client answered in the last second has not necessarily written yet,
+// and two asking at once must not each be told they are alone.
+static int others_playing(const struct client *me) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        const struct client *c = &g_cl[i];
+        if (c == me || !c->ctl || !c->ctl->rate) continue;
+        if (c->ctl->running || now_ms() - c->answered < 1000) return 1;
+    }
+    return 0;
+}
+
+// Has everything mixed with a client in it reached the card? `lead` is
+// what is written ahead of the hardware; the silent tail of it is ours.
+static int mixed_audio_played(void) {
+    uint32_t lead = (g_wr + SND_RING_BYTES - g_hw->hw_pos) % SND_RING_BYTES;
+    return lead <= (g_silent_tail + 1) * SND_CHUNK_BYTES;
+}
+
+static void answer_rates(void) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        struct client *c = &g_cl[i];
+        if (!c->ctl) continue;
+        uint32_t now = g_open ? g_hw->rate : g_target;
+        // THE CARD MOVED UNDERNEATH -- another device took the stream
+        // and could not keep its rate -- so every answer is restated.
+        if (c->ctl->rate && c->ctl->rate != now && g_open) { c->ctl->rate = now; c->answered = now_ms(); continue; }
+        if (c->ctl->rate) continue;
+
+        uint32_t want = c->ctl->src_rate;
+        struct query_sound q;
+        uint32_t target = now;
+        if (active_card(&q)) {
+            struct usndfmt f;
+            usndfmt_load(q.name, &f);
+            // No preference keeps the card where it is under `match`: a
+            // click is not a reason to switch. A fixed rate always holds.
+            if (want || !f.match || !(q.rates & snd_rate_mask(now)))
+                target = usndfmt_pick_rate(&f, q.rates, want);
+        }
+        if (target == now || others_playing(c)) { c->ctl->rate = now; c->answered = now_ms(); continue; }
+        if (!g_open) { g_target = target; c->ctl->rate = target; c->answered = now_ms(); continue; }
+
+        // ALONE AND WANTING A SWITCH: once its own ring is empty and the
+        // card has played what was mixed from it. Until then the client
+        // stays unanswered, and so writes nothing.
+        uint32_t queued = (c->ctl->wr_pos + SND_RING_BYTES - c->ctl->hw_pos) % SND_RING_BYTES;
+        if (c->ctl->running && (queued || !mixed_audio_played())) continue;
+        if (g_running) sys_snd_ctl(SND_CTL_STOP);
+        g_running = 0;
+        card_format(target);
+        g_target = g_hw->rate;
+        g_wr = 0;              // START plays from the ring's first chunk
+        g_prev_lead = 0;
+        g_silent_tail = 0;
+        c->ctl->rate = g_hw->rate;
+        c->answered = now_ms();
+    }
 }
 
 int main(void) {
@@ -481,6 +590,7 @@ int main(void) {
     for (;;) {
         rescan();
         gains_poll(0);
+        answer_rates();
         publish_roster();
 
         int playing = anyone_playing();

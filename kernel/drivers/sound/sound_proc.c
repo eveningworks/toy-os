@@ -49,6 +49,7 @@ static struct {
     uint64_t page_phys;   // the driver's snd_driver_page, by FRAME
     char     name[SND_DRV_NAME_MAX];
     char     label[SND_DRV_LABEL_MAX];
+    char     devid[24];
     struct sound_device dev;
     int      live;
 } g_drv;
@@ -77,6 +78,10 @@ static int proc_start(const struct sound_device *dev) {
     (void)dev;   // one ring-3 driver per process, and g_drv is it
     volatile struct snd_driver_page *p = page();
     if (!p) return -1;
+    // The format rides with the request: a ring-3 driver applies it at
+    // START, as a ring-0 one does in start().
+    p->rate = g_drv.dev.rate ? g_drv.dev.rate : SND_RATE;
+    p->bits = g_drv.dev.bits;
     post(SND_REQ_START, 0);
     // ASKED, NOT DONE. Returning 0 says the request is with the driver.
     // SND_CTL_START still publishes `running` at once on that 0, so an
@@ -99,6 +104,20 @@ static void proc_stop(const struct sound_device *dev) {
 static void proc_volume(const struct sound_device *dev, int pct) {
     (void)dev;
     post(SND_REQ_VOLUME, (uint32_t)(pct < 0 ? 0 : pct > 100 ? 100 : pct));
+}
+
+// Recorded for the next START; the core has checked both against the
+// masks the driver registered. Its own width stands when it reported no
+// depths to choose from.
+static int proc_format(const struct sound_device *dev, uint32_t rate, uint32_t bits) {
+    (void)dev;
+    uint32_t d = g_drv.dev.depths;
+    if (!bits)
+        bits = (d & SND_DEPTH_32) ? 32 : (d & SND_DEPTH_24) ? 24 : (d & SND_DEPTH_20) ? 20 :
+               (d & SND_DEPTH_16) ? 16 : g_drv.dev.bits;
+    g_drv.dev.rate = rate;
+    g_drv.dev.bits = bits;
+    return 0;
 }
 
 int sound_proc_registered(void) { return g_drv.live; }
@@ -156,9 +175,14 @@ int sys_snd_register(struct syscall_ctx *c) {
     g_drv.dev.name = g_drv.name;
     g_drv.dev.label = g_drv.label;
     g_drv.dev.driver = "ring3";
+    m.device_id[sizeof m.device_id - 1] = '\0';
+    k_strlcpy(g_drv.devid, m.device_id, sizeof g_drv.devid);
+    g_drv.dev.device_id = g_drv.devid;
     g_drv.dev.start = proc_start;
     g_drv.dev.stop = proc_stop;
     g_drv.dev.set_volume = proc_volume;
+    g_drv.dev.set_format = proc_format;
+    g_drv.dev.rate = SND_RATE;
     g_drv.dev.rates = m.rates;
     g_drv.dev.depths = m.depths;
     g_drv.dev.bits = m.bits;

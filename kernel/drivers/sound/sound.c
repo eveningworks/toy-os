@@ -50,6 +50,24 @@ static const struct sound_device *active(void) {
     return g_active >= 0 ? g_devs[g_active] : 0;
 }
 
+static uint32_t dev_rate(const struct sound_device *d) {
+    return d && d->rate ? d->rate : SND_RATE;
+}
+
+// SND_CTL_FORMAT's check and its one call into the driver. Refused
+// rather than rounded: a card that does not list 96 kHz is not asked for
+// it, and a driver with no set_format takes only what it already plays.
+static int format_set(const struct sound_device *dev, uint32_t rate, uint32_t bits) {
+    if (!snd_rate_mask(rate) || (bits && !snd_depth_mask(bits))) return -EINVAL;
+    if (!dev->set_format)
+        return rate == dev_rate(dev) && (!bits || bits == dev->bits) ? 0 : -EINVAL;
+    if (dev->rates && !(dev->rates & snd_rate_mask(rate))) return -EINVAL;
+    if (bits && dev->depths && !(dev->depths & snd_depth_mask(bits))) return -EINVAL;
+    int r = dev->set_format(dev, rate, bits);
+    if (r == 0 && g_ctl) g_ctl->rate = dev_rate(dev);
+    return r;
+}
+
 static int pref_is_auto(void) {
     return g_pref[0] == 0 || k_strcmp(g_pref, "auto") == 0;
 }
@@ -83,6 +101,11 @@ static void activate(int idx) {
     if (old) old->stop(old);
     g_active = idx;
     const struct sound_device *dev = active();
+    // THE RING KEEPS ITS RATE when the new card takes it, and when that
+    // card cannot, the page says what it plays instead -- soundd reads
+    // `rate` on every pass and has its clients resample to it.
+    if (dev && g_ctl && format_set(dev, g_ctl->rate, 0) != 0)
+        g_ctl->rate = dev_rate(dev);
     // The volume follows the stream, not the card: a switch that reset
     // it to whatever the new hardware powered up with would be a
     // surprise nobody asked for.
@@ -110,7 +133,7 @@ void *sound_ring_alloc(uint64_t *out_phys) {
         g_ctl = (struct snd_ctl_page *)g_map;
         g_ring = g_map + 4096;
         g_ctl->magic = SND_CTL_MAGIC;
-        g_ctl->rate = SND_RATE;
+        g_ctl->rate = dev_rate(active());
         g_ctl->channels = SND_CHANNELS;
         g_ctl->ring_bytes = SND_RING_BYTES;
         g_ctl->sample_bits = SND_SAMPLE_BITS;
@@ -141,9 +164,10 @@ int sound_register(const struct sound_device *dev, void *ring, uint64_t ring_phy
     // plug did not, so the tray's device list showed devices that were
     // no longer attached (api/setting.h).
     setting_choices_changed();
-    klog_printf("sound: %s registered (48kHz stereo, s32 ring of %u KiB, card at %u-bit)\n",
+    klog_printf("sound: %s registered (s32 stereo ring of %u KiB, card at %u-bit %u Hz%s)\n",
                 dev->name, (unsigned)(SND_RING_BYTES / 1024),
-                (unsigned)(dev->bits ? dev->bits : 16));
+                (unsigned)(dev->bits ? dev->bits : 16), (unsigned)dev_rate(dev),
+                dev->set_format ? ", format settable" : "");
 
     // A plug does not steal the stream: the newcomer is only switched
     // to when it is the one somebody CHOSE, and never while a process
@@ -353,6 +377,7 @@ int sys_snd_open(struct syscall_ctx *c) {
         }
     }
     g_owner_pml4 = c->pml4;
+    g_ctl->rate = dev_rate(active());
     g_ctl->hw_pos = 0;
     g_ctl->running = 0;
     g_ctl->device_gone = 0;
@@ -387,6 +412,13 @@ int sys_snd_ctl(struct syscall_ctx *c) {
     case SND_CTL_CLOSE:
         snd_stop_and_release();
         c->regs[14] = 0;
+        return 0;
+    case SND_CTL_FORMAT:
+        if (g_ctl->running) {
+            c->regs[14] = (uint64_t)(int64_t)-EBUSY;
+            return 0;
+        }
+        c->regs[14] = (uint64_t)(int64_t)format_set(dev, (uint32_t)c->a1, (uint32_t)c->a2);
         return 0;
     default:
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
@@ -551,39 +583,41 @@ KTEST("sound", "losing the active device publishes device_gone") {
     sound_select(saved_pref);
 }
 
-// --- a rate or a depth as one of abi/sound_abi.h's bits --------------
-//
-// Shared because two drivers translate from a NUMBER rather than from
-// a bitmap: USB audio reads a rate out of each descriptor, and anything
-// else reporting a fixed set says it the same way. An unlisted value
-// answers 0 rather than the nearest -- a card offering 64 kHz is not
-// offering 48.
-uint32_t snd_rate_mask(uint32_t hz) {
-    switch (hz) {
-    case 8000:   return SND_RATE_8000;
-    case 11025:  return SND_RATE_11025;
-    case 16000:  return SND_RATE_16000;
-    case 22050:  return SND_RATE_22050;
-    case 32000:  return SND_RATE_32000;
-    case 44100:  return SND_RATE_44100;
-    case 48000:  return SND_RATE_48000;
-    case 88200:  return SND_RATE_88200;
-    case 96000:  return SND_RATE_96000;
-    case 176400: return SND_RATE_176400;
-    case 192000: return SND_RATE_192000;
-    default:     return 0;
-    }
+// --- KTESTs: the format, with a fake device -----------------------------
+
+static uint32_t g_kt_rate, g_kt_bits;
+static int ktest_fmt(const struct sound_device *d, uint32_t rate, uint32_t bits) {
+    (void)d;
+    g_kt_rate = rate;
+    g_kt_bits = bits;
+    return 0;
 }
 
-uint32_t snd_depth_mask(uint32_t bits) {
-    switch (bits) {
-    case 8:  return SND_DEPTH_8;
-    case 16: return SND_DEPTH_16;
-    case 20: return SND_DEPTH_20;
-    case 24: return SND_DEPTH_24;
-    case 32: return SND_DEPTH_32;
-    default: return 0;
-    }
+KTEST("sound", "a format outside what the card reports is refused, never rounded") {
+    struct sound_device d = {
+        .name = "ktest-f", .start = ktest_snd_start, .stop = ktest_snd_stop,
+        .rates = SND_RATE_44100 | SND_RATE_48000, .depths = SND_DEPTH_16 | SND_DEPTH_24,
+        .set_format = ktest_fmt,
+    };
+    // format_set() publishes into the live control page, so it is put
+    // back -- and not run under a stream someone holds.
+    if (g_owner_pml4) { KTEST_SKIP("a process holds the stream"); return; }
+    uint32_t saved = g_ctl ? g_ctl->rate : 0;
+    g_kt_rate = g_kt_bits = 0;
+    KTEST_ASSERT_EQ(format_set(&d, 44100, 24), 0);
+    KTEST_ASSERT_EQ(g_kt_rate, 44100u);
+    KTEST_ASSERT_EQ(g_kt_bits, 24u);
+    KTEST_ASSERT_EQ(format_set(&d, 44100, 0), 0);          // 0: the driver's deepest
+    KTEST_ASSERT_EQ(format_set(&d, 96000, 0), -EINVAL);    // the card does not list it
+    KTEST_ASSERT_EQ(format_set(&d, 44100, 32), -EINVAL);
+    KTEST_ASSERT_EQ(format_set(&d, 44000, 0), -EINVAL);    // not a rate at all
+    // A driver with no set_format takes only what it already plays.
+    struct sound_device fixed = { .name = "ktest-g", .start = ktest_snd_start,
+                                  .stop = ktest_snd_stop, .bits = 16 };
+    KTEST_ASSERT_EQ(format_set(&fixed, SND_RATE, 0), 0);
+    KTEST_ASSERT_EQ(format_set(&fixed, SND_RATE, 16), 0);
+    KTEST_ASSERT_EQ(format_set(&fixed, 44100, 0), -EINVAL);
+    if (g_ctl) g_ctl->rate = saved;
 }
 
 // --- QUERY_SOUND ------------------------------------------------------
@@ -606,6 +640,8 @@ static int sound_q_fill(int index, void *out) {
     q->rates = d->rates;
     q->depths = d->depths;
     q->bits = d->bits;
+    q->rate = dev_rate(d);
+    k_strlcpy(q->device_id, d->device_id ? d->device_id : "", sizeof q->device_id);
     return 1;
 }
 

@@ -68,6 +68,7 @@
 | `usnd_sf2.h` | A SoundFont 2 bank, parsed and FLATTENED. |
 | `usnd_sink.h` | Where mixed samples go. |
 | `usnd_synth.h` | A General MIDI synthesiser over a SoundFont bank: sixteen channels of MIDI state and a pool of sample-playing voices. |
+| `usndfmt.h` | usndfmt -- each sound card's chosen output format: its rate policy and its width, kept in SND_CARDS_FILE (abi/sound_abi.h) as one `[<card>]` section per card, keyed by the card's stable name. |
 | `usolid.h` | A textured solid -- a cube, a pyramid or a ball -- that folds up out of one flat face, tumbles, and bounces around a screen. |
 | `utags.h` | utags -- what a sound file says about itself: title, artist, album, and an embedded picture. |
 | `utest.h` | The harness every self-checking /tests program reports through: a banner, one line per check, and ONE epilogue line in the shape tools/usertest_run.py knows by default -- |
@@ -139,6 +140,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_setting_row.h` | ONE SETTING AS A CARD: its name and a line or two of description on the left, its control on the right -- or, for a control too wide to sit beside the text (a radio list, a long field), under it. |
 | `uui_sidebar.h` | A NAVIGATION SIDEBAR: bold section headings with selectable items under them. |
 | `uui_slider.h` | A slider with DISCRETE STOPS -- one per option, not a continuous range. |
+| `uui_sndformat.h` | uui_sndformat -- one sound card's output FORMAT as a panel: a Sample rate list (Match what plays, then each rate the card takes), the rates Match may switch to as checkboxes, a Bit depth list (Auto... |
 | `uui_spinbox.h` | A NUMBER YOU CAN TYPE OR STEP: a text field with up/down steppers, bounded by min/max and moved by `step`. |
 | `uui_splitter.h` | A DRAGGABLE DIVIDER between two things that share a run of space -- Qt's QSplitter, GTK's GtkPaned, Explorer's navigation-pane divider. |
 | `uui_stackbar.h` | A STACKED BAR WITH A LEGEND: how one whole splits into parts, each a coloured segment and a legend row (swatch, label, value). |

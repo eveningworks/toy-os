@@ -46,6 +46,7 @@
 #include "barrier.h"
 #include "string.h"
 #include "kfmt.h"
+#include "errno.h"
 #include "klog.h"
 #include "ktest.h"
 #include "driver.h"
@@ -107,18 +108,23 @@ struct hda_ctrl {
     uint32_t diag;     // kernel.hda_tone: completions left; the handler
                        // leaves the ring alone and stops the stream at 0
 
-    // The width the card plays at, the deepest its DACs share: 20, 24
-    // or 32 straight off the s32 ring, else 16 from a narrowed copy the
-    // core keeps ahead (`bounce`, its own DMA frames).
+    // The format the card plays at: a rate and a width its DACs share,
+    // the deepest unless SND_CTL_FORMAT chose. 20, 24 or 32 bits read
+    // the s32 ring straight; 16 reads a narrowed copy the core keeps
+    // ahead (`bounce`, pointing at `bounce_mem` only while 16 is the
+    // width -- the frames are kept whenever the codec offers 16).
     int      bits;
+    uint32_t rate;
     uint16_t fmt;
     uint32_t chunk_bytes;      // one BDL entry at that width
     uint64_t ring_phys, bounce_phys;
+    int16_t *bounce_mem;
     struct snd_bounce bounce;
 
     struct sound_device dev;
     char name[SOUND_NAME_MAX];
     char label[40];
+    char devid[24];
     int registered;
 };
 
@@ -454,6 +460,32 @@ static void hda_irq(uint64_t *regs) {
 // ONE SET, because the op carries its device now. This was a
 // trampoline PAIR generated per controller -- the only way to tell two
 // cards apart when the ops took no argument.
+static int deepest(uint32_t depths) {
+    return (depths & SND_DEPTH_32) ? 32 : (depths & SND_DEPTH_24) ? 24 :
+           (depths & SND_DEPTH_20) ? 20 : 16;
+}
+
+// Recorded here, programmed by stream_start(): the stream descriptor
+// and both converters take `fmt` there on every start.
+static void apply_format(struct hda_ctrl *h, uint32_t rate, int bits) {
+    h->rate = rate;
+    h->bits = bits;
+    h->fmt = hda_fmt(rate, bits);
+    h->chunk_bytes = bits == 16 ? SND_CHUNK_BYTES_S16 : SND_CHUNK_BYTES;
+    h->bounce.buf = bits == 16 ? h->bounce_mem : 0;
+    h->dev.bits = (uint32_t)bits;
+    h->dev.rate = rate;
+    bdl_fill(h);
+}
+
+static int hda_dev_format(const struct sound_device *d, uint32_t rate, uint32_t bits) {
+    struct hda_ctrl *h = d->priv;
+    int b = bits ? (int)bits : deepest(h->dev.depths);
+    if (!hda_fmt(rate, b) || (b == 16 && !h->bounce_mem)) return -EINVAL;
+    apply_format(h, rate, b);
+    return 0;
+}
+
 static int  hda_dev_start(const struct sound_device *d)  { return stream_start(d->priv); }
 static void hda_dev_stop(const struct sound_device *d)   { stream_stop(d->priv); }
 static void hda_dev_volume(const struct sound_device *d, int pct) { set_volume(d->priv, pct); }
@@ -490,7 +522,7 @@ static void ctrl_quiesce(struct hda_ctrl *h) {
     if (h->bounce_phys)
         pmm_free_contiguous(h->bounce_phys, SND_CHUNKS * SND_CHUNK_BYTES_S16 / 4096);
     h->dma_phys = h->bounce_phys = 0;
-    h->bounce.buf = 0;
+    h->bounce.buf = h->bounce_mem = 0;
     h->mmio = 0;
 }
 
@@ -599,16 +631,18 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
 
     // THE WIDTH: the deepest both DACs report (a headphone DAC is
     // usually the speaker's twin, but nothing promises it).
+    // What SND_CTL_FORMAT may ask for is what BOTH DACs take, since a
+    // jack switch moves the stream between them.
     hda_codec_pcm_support(&h->codec, h->codec.spk.dac, &h->dev.rates, &h->dev.depths);
-    uint32_t depths = h->dev.depths;
     if (h->codec.have_hp) {
-        uint32_t hp_depths = 0;
-        hda_codec_pcm_support(&h->codec, h->codec.hp.dac, 0, &hp_depths);
-        depths &= hp_depths;
+        uint32_t hp_rates = 0, hp_depths = 0;
+        hda_codec_pcm_support(&h->codec, h->codec.hp.dac, &hp_rates, &hp_depths);
+        h->dev.rates &= hp_rates;
+        h->dev.depths &= hp_depths;
     }
-    h->bits = (depths & SND_DEPTH_32) ? 32 : (depths & SND_DEPTH_24) ? 24 :
-              (depths & SND_DEPTH_20) ? 20 : 16;
-    h->fmt = HDA_FMT_48K_STEREO(h->bits);
+    h->bits = deepest(h->dev.depths);
+    h->rate = SND_RATE;
+    h->fmt = hda_fmt(h->rate, h->bits);
     h->chunk_bytes = h->bits == 16 ? SND_CHUNK_BYTES_S16 : SND_CHUNK_BYTES;
 
     hda_codec_route_output(&h->codec, &h->codec.spk, h->fmt, HDA_STREAM_TAG);
@@ -639,14 +673,14 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     void *ring = sound_ring_alloc(&ring_phys);
     if (!ring) { ctrl_teardown(h, "no contiguous frames for the ring"); return; }
     h->ring_phys = ring_phys;
-    if (h->bits == 16) {
+    if (h->bits == 16 || (h->dev.depths & SND_DEPTH_16)) {
         h->bounce_phys = pmm_alloc_contiguous(SND_CHUNKS * SND_CHUNK_BYTES_S16 / 4096,
                                               PMM_ZONE_DMA32);
         if (!h->bounce_phys) { ctrl_teardown(h, "no contiguous frames for the 16-bit copy"); return; }
-        h->bounce.buf = (int16_t *)(uintptr_t)h->bounce_phys;
-        k_memset(h->bounce.buf, 0, SND_CHUNKS * SND_CHUNK_BYTES_S16);
+        h->bounce_mem = (int16_t *)(uintptr_t)h->bounce_phys;
+        k_memset(h->bounce_mem, 0, SND_CHUNKS * SND_CHUNK_BYTES_S16);
     }
-    bdl_fill(h);
+    apply_format(h, h->rate, h->bits);
 
     // Interrupts: a vector if the machine has one, else the pin. The
     // handler exists before either is armed; registration is last.
@@ -664,15 +698,17 @@ static void ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index)
     }
     mw32(h, HDA_INTCTL, INTCTL_GIE | INTCTL_CIE); // jack events from here on
 
-    h->dev.bits = (uint32_t)h->bits;
     k_snprintf(h->label, sizeof h->label, "%s HD Audio", vendor_name(h->codec.vendor));
     h->dev.name = h->name;
     h->dev.label = h->label;
     h->dev.driver = "hda";
+    k_snprintf(h->devid, sizeof h->devid, "pci:%02x:%02x.%x", d->bus, d->device, d->function);
+    h->dev.device_id = h->devid;
     h->dev.priv = h;
     h->dev.start = hda_dev_start;
     h->dev.stop = hda_dev_stop;
     h->dev.set_volume = hda_dev_volume;
+    h->dev.set_format = hda_dev_format;
     if (!sound_register(&h->dev, ring, ring_phys)) return;
     h->registered = 1;
     klog_printf("%s: %02x:%02x.%u codec %04x:%04x spk pin %#x dac %#x%s%#x %s\n",
@@ -698,7 +734,7 @@ static void diag_tone(struct hda_ctrl *h, int32_t *ring) {
         else ring[2 * i] = ring[2 * i + 1] = v << 16;
     }
     set_volume(h, 50);
-    h->diag = 3 * SND_RATE / SND_CHUNK_FRAMES; // ~3 s of chunks
+    h->diag = 3 * h->rate / SND_CHUNK_FRAMES; // ~3 s of chunks
     if (stream_start(h) != 0) h->diag = 0;
 }
 
@@ -806,3 +842,13 @@ KTEST("hda", "a volume change lands in the route's amplifier") {
     KTEST_ASSERT_EQ(amp & 0x7F, h->codec.spk.vol_offset);
 }
 PCI_DRIVER_REMOVABLE("hda", hda_matches, hda_probe, hda_remove);
+
+KTEST("hda", "the format word spells each rate as base, multiplier and divisor") {
+    KTEST_ASSERT_EQ(hda_fmt(48000, 16), 0x0011);
+    KTEST_ASSERT_EQ(hda_fmt(44100, 24), 0x4031);
+    KTEST_ASSERT_EQ(hda_fmt(96000, 32), 0x0841);
+    KTEST_ASSERT_EQ(hda_fmt(192000, 16), 0x1811);
+    KTEST_ASSERT_EQ(hda_fmt(22050, 16), 0x4111);
+    KTEST_ASSERT_EQ(hda_fmt(32000, 16), 0x0a11);      // 48 x 2 / 3
+    KTEST_ASSERT_EQ(hda_fmt(12345, 16), 0);           // not a rate it can say
+}

@@ -38,6 +38,7 @@ static int on_tick(struct uapp *a) {
     if (g_show_sysinfo && sysinfo_tick()) return 1;
     int clock = clock_tick();   // the live clock's second moved
     clock |= kbd_tick();        // Try it took or left focus
+    clock |= snd_tick();        // the card's rate moved under "Playing now"
     if (registry_generation() == g_generation && !g_stale) return clock;
     if (page_dirty() || uui_dialog_is_open(&g_ask) ||
         (g_opts_win && uapp_window_is_open(g_opts_win))) {
@@ -257,6 +258,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
         return;
     }
     if (kbd_on_widget(a, id)) { uapp_redraw(a); return; }
+    if (snd_on_widget(a, id)) { uapp_redraw(a); return; }
 
     switch (id) {
     case ID_SIDE_SPLIT:
@@ -650,6 +652,7 @@ int main(int argc, char **argv) {
     sysinfo_init();
     clock_init();
     kbd_init();
+    snd_init();
     startup_init();
 
     // Apply is the PRIMARY action, so it wears the accent.

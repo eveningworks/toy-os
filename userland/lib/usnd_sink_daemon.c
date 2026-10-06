@@ -30,6 +30,7 @@ static char g_name[SHM_NAME_MAX];
 // An explicit name beats the process's own, for a program that plays on
 // something else's behalf. Empty until usnd_set_app_name() is called.
 static char g_app[SND_APP_MAX];
+static uint32_t g_asked;     // the src_rate last put to the daemon
 
 // This process's own name, which is the stable half of an identity a
 // per-application volume can be remembered by -- the ring is `snd.<pid>`
@@ -91,7 +92,11 @@ static int daemon_open(void) {
 
     g_ctl = (volatile struct snd_ctl_page *)p;
     g_ring = (volatile int32_t *)((uintptr_t)p + 4096);
-    g_ctl->rate = USND_RATE;
+    // ASKING from the start: the daemon answers `rate` before anything
+    // is written (abi/sound_abi.h).
+    g_ctl->rate = 0;
+    g_ctl->src_rate = 0;
+    g_asked = 0;
     g_ctl->channels = USND_CHANNELS;
     g_ctl->ring_bytes = SND_RING_BYTES;
     g_ctl->sample_bits = SND_SAMPLE_BITS;
@@ -106,6 +111,19 @@ static int daemon_open(void) {
     g_ctl->magic = SND_CTL_MAGIC;
     g_wr = 0;
     return 0;
+}
+
+// A new `want` is a new question: `src_rate` first, then `rate` cleared,
+// which is the daemon's cue -- and while it is 0 this client writes
+// nothing, so a card switch happens over a drained ring.
+static uint32_t daemon_rate(uint32_t want) {
+    if (!g_ctl) return 0;
+    if (want != g_asked) {
+        g_asked = want;
+        g_ctl->src_rate = want;
+        g_ctl->rate = 0;
+    }
+    return g_ctl->rate;
 }
 
 static uint32_t writable_bytes(void) {
@@ -173,6 +191,7 @@ static void daemon_close(void) {
 const struct usnd_sink usnd_sink_daemon = {
     .name  = "daemon",
     .open  = daemon_open,
+    .rate  = daemon_rate,
     .write = daemon_write,
     .space = daemon_space,
     .pending = daemon_pending,

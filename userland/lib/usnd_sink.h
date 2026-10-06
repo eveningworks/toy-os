@@ -26,8 +26,16 @@ struct usnd_sink {
     // retrying.
     int (*open)(void);
 
-    // Hand over up to `frames` frames of interleaved stereo s32 at
-    // USND_RATE -- the ring's own format (abi/sound_abi.h). Returns the number ACCEPTED, which may be 0 when the
+    // THE RATE TO WRITE AT. `want` is the content's own rate (0: no
+    // preference) -- a card set to follow what plays may switch to it.
+    // The answer is the rate the sink plays; 0 means it is not decided
+    // yet (a daemon answering, or the card draining before a switch),
+    // and the caller writes NOTHING until it is not 0 -- what is queued
+    // then plays out at the old rate, which is what makes a switch clean.
+    uint32_t (*rate)(uint32_t want);
+
+    // Hand over up to `frames` frames of interleaved stereo s32 at the
+    // rate above -- the ring's own format (abi/sound_abi.h). Returns the number ACCEPTED, which may be 0 when the
     // sink is full -- that is not an error, it is back-pressure, and it
     // is what paces the worker thread. Never blocks.
     long (*write)(const int32_t *pcm, long frames);

@@ -34,6 +34,7 @@
 #include "ui/uui_focus.h"
 #include "ui/uui_route.h"   // UUI_REASON_*
 #include "lib/udevice.h"
+#include "ui/uui_sndformat.h"
 
 #define ID_MENU    1
 #define ID_VIEW    2
@@ -44,6 +45,7 @@
 #define ID_KEEP    7
 #define ID_STATUS  8
 #define ID_ASK     9
+#define ID_SNDFMT  32   // .. + UUI_SNDFORMAT_IDS: a sound device's Format
 
 enum {
     CMD_REFRESH = 1, CMD_EXIT, CMD_BY_TYPE, CMD_BY_CONN, CMD_EXPAND, CMD_COLLAPSE,
@@ -74,6 +76,14 @@ static struct uui_button g_toggle, g_refresh;
 static struct uui_checkbox g_keep;
 static struct uui_statusbar g_status;
 static struct uui_dialog g_ask;
+
+// A SOUND DEVICE'S FORMAT, under its properties: the card whose
+// `device_id` is the selected device's id (QUERY_SOUND), shown with the
+// panel System Settings uses. `g_fmt_card` is the card loaded, so a
+// re-selection of the same device does not reset what is open.
+static struct uui_sndformat g_fmt;
+static char g_fmt_card[16];
+static int g_fmt_y, g_fmt_h; // the panel's place in the pane; 0 = no room
 
 static char g_st_count[32], g_st_problem[32], g_st_note[96];
 static char g_ask_line[2][112];
@@ -111,6 +121,7 @@ static struct uui_item g_widgets[] = {
     { .ops = &uui_segmented_ops, .widget = &g_view,    .id = ID_VIEW,    .name = "view" },
     { .ops = &uui_tree_ops,      .widget = &g_tree,    .id = ID_TREE,    .name = "tree" },
     { .ops = &uui_splitter_ops,  .widget = &g_split,   .id = ID_SPLIT,   .name = "split" },
+    { .ops = &uui_layout_ops,    .widget = &g_fmt.col, .name = "sndfmt", .hidden = 1 },
     { .ops = &uui_checkbox_ops,  .widget = &g_keep,    .id = ID_KEEP,    .name = "keep" },
     { .ops = &uui_button_ops,    .widget = &g_refresh, .id = ID_REFRESH, .name = "refresh" },
     { .ops = &uui_button_ops,    .widget = &g_toggle,  .id = ID_TOGGLE,  .name = "toggle" },
@@ -118,14 +129,43 @@ static struct uui_item g_widgets[] = {
     { .ops = &uui_dialog_ops,    .widget = &g_ask,     .id = ID_ASK,     .name = "ask" },
 };
 
-static struct uui_focusable g_focusables[] = {
-    { &g_tree,    &uui_tree_ops },
-    { &g_view,    &uui_segmented_ops },
-    { &g_keep,    &uui_checkbox_ops },
-    { &g_refresh, &uui_button_ops },
-    { &g_toggle,  &uui_button_ops },
-};
+// The ring is REBUILT when the selection changes: the Format panel's
+// controls sit between the tree and the buttons only while it is shown.
+static struct uui_focusable g_focusables[5 + UUI_SNDFORMAT_IDS];
 static struct uui_focus g_focus;
+
+static struct uui_item *fmt_item(void) {
+    for (unsigned i = 0; i < sizeof g_widgets / sizeof g_widgets[0]; i++)
+        if (g_widgets[i].widget == &g_fmt.col) return &g_widgets[i];
+    return 0;
+}
+
+static void build_focus(void) {
+    int n = 0;
+    g_focusables[n++] = (struct uui_focusable){ &g_tree, &uui_tree_ops };
+    g_focusables[n++] = (struct uui_focusable){ &g_view, &uui_segmented_ops };
+    if (!fmt_item()->hidden)
+        n += uui_sndformat_focusables(&g_fmt, g_focusables + n, UUI_SNDFORMAT_IDS);
+    g_focusables[n++] = (struct uui_focusable){ &g_keep, &uui_checkbox_ops };
+    g_focusables[n++] = (struct uui_focusable){ &g_refresh, &uui_button_ops };
+    g_focusables[n++] = (struct uui_focusable){ &g_toggle, &uui_button_ops };
+    int cur = g_focus.current;
+    uui_focus_init(&g_focus, g_focusables, n);
+    g_focus.current = cur < n ? cur : -1;
+}
+
+// Is the selected device a sound card? Then its Format is shown.
+static void update_format(const struct udevice *d) {
+    struct query_sound q;
+    int found = 0;
+    if (d) QUERY_FOREACH(QUERY_SOUND, q, qi)
+        if (!strcmp(q.device_id, d->id)) { found = 1; break; }
+    if (found && strcmp(g_fmt_card, q.name) != 0) {
+        uui_sndformat_load(&g_fmt, &q);
+        strlcpy(g_fmt_card, q.name, sizeof g_fmt_card);
+    }
+    if (!found) g_fmt_card[0] = 0;   // draw_pane() shows or hides the panel
+}
 
 // --- the tree ------------------------------------------------------------
 
@@ -246,6 +286,7 @@ static void update_controls(void) {
     g_toggle.disabled = !can;
     g_keep.disabled = !can;
     g_keep.checked = d ? d->persisted : 0;
+    update_format(d);
 
     int problems = 0, off = 0;
     for (int i = 0; i < g_n; i++) { problems += g_dev[i].problem; off += g_dev[i].disabled; }
@@ -403,7 +444,28 @@ static void driver_info(const char *name, char *file, int fcap) {
         if (!strcmp(q.name, name)) { strlcpy(file, q.file, (size_t)fcap); return; }
 }
 
+static void draw_pane_text(struct ugfx_surface *s);
+
+// The pane, then the Format panel under its text when a sound card is
+// selected -- placed here, since where the text ends is only known once
+// it is drawn, and the toolkit draws the panel's controls after this.
 static void draw_pane(struct ugfx_surface *s) {
+    g_fmt_y = 0;
+    draw_pane_text(s);
+    struct uui_item *it = fmt_item();
+    int pad = utheme_pad();
+    // SHOWN ONLY WHERE IT FITS above the buttons: a short window drops
+    // the panel rather than drawing it over them, and gets it back when
+    // it grows -- the focus ring following either way.
+    int fits = g_fmt_card[0] && g_fmt_y;
+    if (it->hidden == fits) { it->hidden = !fits; build_focus(); }
+    // A top-level layout takes the window-edge margin; this one sits in
+    // the pane's own, so it is placed that far out to line up.
+    int m = uui_layout_margin(&g_fmt.col);
+    if (fits) uui_layout_run(&g_fmt.col, g_px + 2 * pad - m, g_fmt_y, g_pw - 4 * pad + 2 * m, g_fmt_h);
+}
+
+static void draw_pane_text(struct ugfx_surface *s) {
     const struct utheme *t = utheme_current();
     int pad = utheme_pad(), ch = ugfx_char_h();
     ugfx_fill_rect(s, g_px, g_py, g_pw, g_ph, t->panel_bg);
@@ -448,6 +510,21 @@ static void draw_pane(struct ugfx_surface *s) {
     ugfx_draw_string_clipped(s, x + 2 * pad + 2 * r, y + (bh - ch) / 2, w - 3 * pad - 2 * r, st,
                              t->text, t->field_bg);
     y += bh + pad;
+
+    // THE FORMAT FIRST, for a sound card: it is the one thing on this
+    // pane a person changes, and the details below are cut before it is
+    // when the window is short (Windows gives it a tab of its own).
+    if (g_fmt_card[0]) {
+        int w, h;
+        uui_layout_natural_size(&g_fmt.col, &w, &h);
+        int heading = ch + pad;    // section()'s own advance
+        if (y + heading + h <= g_py + g_ph - utheme_control_h() - 2 * pad) {
+            section(s, &y, "Format");
+            g_fmt_y = y;
+            g_fmt_h = h;
+            y += h - uui_layout_margin(&g_fmt.col);   // its bottom margin is the gap
+        }
+    }
 
     char buf[176], file[64];
     section(s, &y, "Device");
@@ -501,8 +578,8 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     draw_pane(d->surface);
     uapp_log_layout(a, "devmgr");
     const struct udevice *sel = selected();
-    uapp_logf_layout("devmgr: selected %s view %s\n", sel ? sel->id : "-",
-                     g_by_conn ? "connection" : "type");
+    uapp_logf_layout("devmgr: selected %s view %s format %d\n", sel ? sel->id : "-",
+                     g_by_conn ? "connection" : "type", !fmt_item()->hidden);
 }
 
 // --- commands and input -------------------------------------------------
@@ -541,6 +618,17 @@ static void on_action(struct uapp *a, int code) {
 }
 
 static void on_widget(struct uapp *a, int id, int reason) {
+    if (id >= ID_SNDFMT && id < ID_SNDFMT + UUI_SNDFORMAT_IDS) {
+        if ((reason == UUI_REASON_RELEASE || reason == UUI_REASON_KEY) &&
+            uui_sndformat_on_widget(&g_fmt, id)) {
+            uapp_logf_layout("devmgr: sndfmt %s match %d fixed %u allowed %#x bits %u\n",
+                             g_fmt.card, g_fmt.f.match, (unsigned)g_fmt.f.fixed,
+                             (unsigned)g_fmt.f.allowed, (unsigned)g_fmt.f.bits);
+            build_focus();
+        }
+        uapp_redraw(a);
+        return;
+    }
     switch (id) {
     case ID_MENU: {
         int code = uui_menubar_take_code(&g_menu);   // parked in the widget
@@ -643,7 +731,8 @@ int main(void) {
     g_status.panes[2].chars = 0;
     g_status.count = 3;
 
-    uui_focus_init(&g_focus, g_focusables, (int)(sizeof g_focusables / sizeof g_focusables[0]));
+    uui_sndformat_init(&g_fmt, ID_SNDFMT);
+    build_focus();
 
     struct uapp_desc desc = {
         .title        = "Device Manager",

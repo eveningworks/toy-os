@@ -22,11 +22,14 @@
 #include "lib/usnd_sink.h"
 #include "rt/sys.h"
 #include "sound_abi.h"
+#include "query_abi.h"
+#include "lib/usndfmt.h"
 
 static volatile struct snd_ctl_page *g_ctl;
 static volatile int32_t *g_ring;
 static uint32_t g_wr;        // byte cursor into the ring
 static int g_open, g_running;
+static uint32_t g_want = ~0u, g_agreed;   // dev_rate()'s last question and answer
 
 static int dev_open(void) {
     if (g_open) return -EBUSY;
@@ -34,7 +37,7 @@ static int dev_open(void) {
 
     g_ctl = (volatile struct snd_ctl_page *)(uintptr_t)SND_MAP_VADDR;
     g_ring = (volatile int32_t *)(uintptr_t)(SND_MAP_VADDR + 4096);
-    if (g_ctl->magic != SND_CTL_MAGIC || g_ctl->rate != USND_RATE ||
+    if (g_ctl->magic != SND_CTL_MAGIC ||
         g_ctl->channels != USND_CHANNELS || g_ctl->sample_bits != SND_SAMPLE_BITS) {
         sys_snd_ctl(SND_CTL_CLOSE);
         return -ENOTSUP;
@@ -42,7 +45,44 @@ static int dev_open(void) {
     g_wr = 0;
     g_open = 1;
     g_running = 0;
+    g_want = ~0u;
     return 0;
+}
+
+// WITH NO DAEMON THIS PROCESS DECIDES, by the card's own setting and
+// lib/usndfmt.h's one rule -- soundd's decision, made here. A switch
+// waits for what is queued to play out (the caller writes nothing while
+// this answers 0), then stops the engine and sets the format; the next
+// write starts it again.
+static uint32_t dev_rate(uint32_t want) {
+    if (!g_open) return 0;
+    // ASKED ONCE PER QUESTION: the worker calls this every pass, and the
+    // answer only changes with `want` or under the card.
+    if (want == g_want && g_agreed == g_ctl->rate) return g_agreed;
+    struct query_sound q;
+    char card[sizeof q.name] = "";
+    uint32_t rates = 0, depths = 0;
+    QUERY_FOREACH(QUERY_SOUND, q, qi)
+        if (q.active) { strlcpy(card, q.name, sizeof card); rates = q.rates; depths = q.depths; }
+    struct usndfmt f;
+    usndfmt_load(card, &f);
+    // NO PREFERENCE KEEPS THE CARD WHERE IT IS under `match` -- a sound
+    // effect is not a reason to switch -- while a fixed rate always holds.
+    uint32_t r = (!want && f.match && (rates & snd_rate_mask(g_ctl->rate)))
+                 ? g_ctl->rate : usndfmt_pick_rate(&f, rates, want);
+    if (r == g_ctl->rate) { g_want = want; g_agreed = r; return r; }
+    if (g_running && g_ctl->running) {
+        uint32_t used = (g_wr + SND_RING_BYTES - g_ctl->hw_pos) % SND_RING_BYTES;
+        if (used > SND_CHUNK_BYTES) return 0;   // still playing the old rate
+        sys_snd_ctl(SND_CTL_STOP);
+    }
+    g_running = 0;
+    g_wr = 0;
+    if (sys_snd_format(r, usndfmt_pick_bits(&f, depths)) != 0)
+        sys_snd_format(g_ctl->rate, 0);     // the card's width back, at its rate
+    g_want = want;
+    g_agreed = g_ctl->rate;
+    return g_agreed;
 }
 
 // Bytes between the write cursor and one chunk behind the hardware.
@@ -121,6 +161,7 @@ static void dev_close(void) {
 const struct usnd_sink usnd_sink_device = {
     .name  = "device",
     .open  = dev_open,
+    .rate  = dev_rate,
     .write = dev_write,
     .space = dev_space,
     .pending = dev_pending,

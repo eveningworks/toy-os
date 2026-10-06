@@ -63,9 +63,22 @@ live ring a recycled pid creates behind it could never be adopted.
 
 ## What it deliberately does not do
 
-- **No resampling.** Every client speaks the one ABI format (48 kHz
-  stereo s32, full scale in the top bits); conversion is the library's
-  job, in the client, where `usnd` already does it.
+- **No resampling.** Every client writes stereo s32 at the rate this
+  answers it with; conversion is the library's job, in the client,
+  where `usnd` already does it.
+
+## The card's rate
+
+**It decides it, from the card's setting** ([`sndfmt`](sndfmt.md),
+`/etc/sound-cards.conf`). A client asks with the rate of what it plays
+(`src_rate` in its ring's control page) and writes nothing until
+answered (`rate`). Under **match** -- the default -- a client playing
+ALONE moves the card to its rate when that is allowed, once the audio
+already mixed for the card has played; anyone else playing keeps the
+card where it is, and the newcomer resamples. A client with no rate of
+its own (a click, a game's effects) leaves the card alone. A fixed rate
+always holds. Each move is said in the log: `soundd: hda1 now at 44100
+Hz, its deepest width`.
 - **No master volume of its own.** `system.volume` is the card's
   master and is applied by the driver below this; what `soundd` applies
   is each application's own gain, from `/etc/sound.conf`.

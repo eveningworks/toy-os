@@ -14,6 +14,8 @@
 // data chunk that lies about its length, a float WAV.
 #include "rt/sys.h"
 #include "lib/usnd.h"
+#include "lib/usndfmt.h"
+#include "sound_abi.h"
 #include "lib/usnd_internal.h"
 #include <stdio.h>
 #include <string.h>
@@ -401,6 +403,62 @@ static void check_flac(void) {
     usnd_clip_free(&clip);
 }
 
+// THE OUTPUT RATE IS THE CARD'S: a file at it is not resampled at all
+// (every sample exact), and at twice it every source frame lands on an
+// even output frame, untouched, with the interpolated one between.
+static void check_out_rate(void) {
+    struct usnd_stream st;
+    if (usnd_open("/tests/ramp24.flac", &st) != 0) { check("open for rates", 0, usnd_last_error()); return; }
+    usnd_stream_set_rate(&st, 96000);
+    static int32_t got[9600 * 2];
+    long n = 0, k;
+    while (n < 9600 && (k = usnd_read(&st, got + n * 2, 9600 - n)) > 0) n += k;
+    check("at 96 kHz a 48 kHz file is twice the frames", n >= 9599 && n <= 9600, "count off");
+    long bad = -1;
+    for (long i = 0; i < 4800 && bad < 0; i++) {
+        int32_t left = (int32_t)((i * 7919) % 0x1000000) - 0x800000;
+        if (got[i * 4] != left * 256) bad = i;
+    }
+    char d[64];
+    snprintf(d, sizeof d, "first wrong source frame %ld", bad);
+    check("...each source frame kept exactly on an even one", bad < 0, d);
+    usnd_close(&st);
+
+    if (usnd_open("/tests/sine1k.flac", &st) != 0) { check("open the 44.1 kHz FLAC", 0, usnd_last_error()); return; }
+    usnd_stream_set_rate(&st, 44100);
+    static int32_t buf[4096 * 2];
+    long total = 0;
+    while ((k = usnd_read(&st, buf, 4096)) > 0) total += k;
+    eq("at the file's own 44.1 kHz, exactly its frames", total, 66150);
+    eq("...and its length is still told in 48 kHz frames", (long)usnd_stream_frames(&st), 72000);
+    usnd_close(&st);
+}
+
+// The one rule soundd and the device sink share (lib/usndfmt.h).
+static void check_policy(void) {
+    struct usndfmt f = { .match = 1, .fixed = 48000,
+                         .allowed = SND_RATE_44100 | SND_RATE_48000, .bits = 0 };
+    uint32_t card = SND_RATE_44100 | SND_RATE_48000 | SND_RATE_96000;
+    eq("match takes an allowed file rate", usndfmt_pick_rate(&f, card, 44100), 44100);
+    eq("...not one outside the allowed list", usndfmt_pick_rate(&f, card, 96000), 48000);
+    eq("...nor one the card lacks", usndfmt_pick_rate(&f, SND_RATE_48000, 44100), 48000);
+    eq("no preference is 48 kHz", usndfmt_pick_rate(&f, card, 0), 48000);
+    f.allowed = SND_RATE_44100;
+    eq("48 kHz not allowed: the lowest that is", usndfmt_pick_rate(&f, card, 0), 44100);
+    f.match = 0;
+    f.fixed = 96000;
+    eq("a fixed rate holds whatever plays", usndfmt_pick_rate(&f, card, 44100), 96000);
+    f.fixed = 192000;
+    eq("...unless the card cannot", usndfmt_pick_rate(&f, card, 44100), 48000);
+    eq("a card that does not say takes SND_RATE", usndfmt_pick_rate(&f, 0, 44100), 48000);
+    f.bits = 24;
+    eq("a width the card has is asked for", usndfmt_pick_bits(&f, SND_DEPTH_16 | SND_DEPTH_24), 24);
+    eq("...and one it lacks is the deepest", usndfmt_pick_bits(&f, SND_DEPTH_16), 0);
+    char b[16];
+    check("22.05 kHz is named whole", strcmp(usndfmt_rate_label(22050, b, sizeof b), "22.05 kHz") == 0, b);
+    check("11.025 kHz too", strcmp(usndfmt_rate_label(11025, b, sizeof b), "11.025 kHz") == 0, b);
+}
+
 int main(void) {
     utest_begin("usnd_test", "the audio DECODE path, with no sound hardware involved", UTEST_QUIET);
 
@@ -412,6 +470,8 @@ int main(void) {
     check_8bit();
     check_24bit();
     check_flac();
+    check_out_rate();
+    check_policy();
     check_resample();
     check_seek();
     check_refusals();

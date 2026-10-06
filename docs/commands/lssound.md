@@ -35,17 +35,18 @@ the stream is on.
 * hda0       QEMU HD Audio            hda
              rates:  16 22.05 32 44.1 48 88.2 96 kHz
              depths: 16-bit
-             plays:  16-bit
+             plays:  16-bit, 48 kHz
 ```
 
-**WHAT A CARD SAYS IS NOT WHAT THIS STACK USES.** The shared ring is 48
-kHz, 32-bit, stereo everywhere (`SND_RATE`, `SND_SAMPLE_BITS` and
-`SND_CHANNELS` in `abi/sound_abi.h`), and `usnd` resamples every file to
-it. The rates are read off the hardware and reported unchanged; the
-DEPTH is the one place the card's answer is used -- its driver plays at
-the deepest width it offers, and `plays:` says which (QEMU's HDA codec
-offers only 16, so the driver rounds the 32-bit stream down; a laptop's
-codec usually plays 24).
+**What a card says, and what it plays now.** The rates and depths are
+read off the hardware unchanged, and they are what a card's format may be
+chosen from ([`sndfmt`](sndfmt.md), or the Format card in System
+Settings). `plays:` is the width and rate the card runs at this moment:
+the width its setting asks for (the deepest it offers by default), and
+the rate the last sound settled on -- which follows what plays unless the
+card is set to a fixed one. Below 32 bits the driver rounds every sample
+of the 32-bit stream on the way out (QEMU's HDA codec offers only 16; a
+laptop's codec usually plays 24).
 
 **Why it exists at all.** There was no way to *list* the sound devices.
 The only view was the `audio_device` setting's choice list, which
@@ -65,23 +66,25 @@ group otherwise. That is the real hardware answer, and it differs
 between machines — QEMU's controller offers seven rates, a laptop's
 codec its own set.
 
-**`ac97`** reports 48 kHz 16-bit, which is **the driver's set, not the
-codec's ceiling**. An AC97 codec with Variable Rate Audio can do more,
-but VRA is not programmed here, so reporting what the hardware might
-manage would describe something nothing can ask for.
+**`ac97`** reports 16-bit at 48 kHz, plus -- on a codec with Variable
+Rate Audio -- each standard rate the codec reads back exactly when it is
+written: a codec rounds a rate it cannot do, and a rounded one is not on
+offer.
 
-**`usb-audio`** reports every alternate setting its descriptor walk
-saw, including the ones the driver cannot use — the same list the
-refusal line in `dmesg` prints when a device offers no 48 kHz stereo
-stream it can write.
+**`usb-audio`** reports the widths of the alternate settings it can
+play, and their rates: the rates each UAC1 alternate lists, or what a
+UAC2 device's clock answers when asked for its range. The ring-3 driver
+(`snddrv --usb-id`) offers only the rates with a whole number of frames
+per packet -- 48, 96 and 192 kHz, not 44.1.
 
-**`bits`** is the width the driver PLAYS at, which is its choice from
-that list: the deepest HDA format the codec offers, the deepest USB
-alternate setting. The stream above it is always 32-bit, so a 16-bit
-card here means the driver rounds every sample to 16 bits on the way out.
+**`plays:`** is the width the driver plays at -- the deepest HDA format,
+the deepest USB alternate, unless the card's setting chose another --
+and the rate. The stream above it is always 32-bit, so a 16-bit card
+here means the driver rounds every sample to 16 bits on the way out.
 
 ## See also
 
-[`aplay`](aplay.md) to play a file, [`lscodec`](lscodec.md) for an HD
-Audio codec's own graph, and System Settings' Sound page to choose
-which device is active.
+[`aplay`](aplay.md) to play a file, [`sndfmt`](sndfmt.md) to choose a
+card's format, [`lscodec`](lscodec.md) for an HD Audio codec's own
+graph, and System Settings' Sound page to choose which device is
+active.

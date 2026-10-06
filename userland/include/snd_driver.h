@@ -33,7 +33,7 @@
 // Bumped when anything below changes shape. The host refuses a plugin
 // that does not match rather than calling through a moved slot -- the
 // abi/toyabi.h rule, for the same reason.
-#define SND_DRIVER_ABI 3u
+#define SND_DRIVER_ABI 4u
 
 // The symbol every plugin exports, by this exact name.
 #define SND_DRIVER_SYMBOL "snd_driver"
@@ -64,12 +64,19 @@ struct snd_dev {
     // "nothing".
     uint32_t rates, depths;
 
-    // Also filled in by open(): the width the card will play at, and --
-    // for an engine that DMAs 16-bit samples, which cannot read the s32
-    // ring -- `bounce`: SND_CHUNKS * SND_CHUNK_BYTES_S16 bytes of the
-    // driver's own DMA memory, where its descriptors point instead. A
-    // driver that copies the ring itself (USB, per packet) leaves it NULL.
+    // Also filled in by open(): the width the card plays at by default,
+    // and -- for an engine that can DMA 16-bit samples, which cannot read
+    // the s32 ring -- `bounce`: SND_CHUNKS * SND_CHUNK_BYTES_S16 bytes of
+    // the driver's own DMA memory, where its descriptors point while 16
+    // is the width. A driver that copies the ring itself (USB, per
+    // packet) leaves it NULL.
+    //
+    // THE FORMAT IS THE HOST'S BEFORE EVERY start(): `rate` and `bits`
+    // are overwritten from the kernel's request (a rate from `rates`, a
+    // width from `depths`), and start() programs the card for them --
+    // the host keeps `bounce` filled only while `bits` is 16.
     uint32_t bits;
+    uint32_t rate;
     int16_t *bounce;
     uint64_t bounce_phys;
 
@@ -89,6 +96,9 @@ struct snd_dev {
     // plugin that drives exactly one chip.
     char     name[SND_DRV_NAME_MAX];
     char     label[SND_DRV_LABEL_MAX];
+    // The bus device, as userland/lib/udevice.c spells it. The host fills
+    // it for a PCI card; a driver that found its own device sets it.
+    char     device_id[24];
 };
 
 // A driver answers this after an interrupt.

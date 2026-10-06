@@ -991,13 +991,19 @@ struct query_sound {
     char     driver[16];
     uint32_t active;      // 1 for the one the stream is on
     // SND_RATE_* and SND_DEPTH_* (abi/sound_abi.h) -- what the card
-    // SAYS, not what the stack uses, which is 48 kHz s32 stereo
-    // throughout. 0 means the driver does not report.
+    // SAYS it takes, and what SND_CTL_FORMAT is checked against. 0 means
+    // the driver does not report.
     uint32_t rates;
     uint32_t depths;
     // The width the driver PLAYS at, its pick from `depths`: below 32,
     // it rounds every sample of the s32 stream on the way out. 0: not said.
     uint32_t bits;
+    // The rate it plays at, in Hz: the last format set, SND_RATE until
+    // then.
+    uint32_t rate;
+    // The bus device it is, as userland/lib/udevice.c names devices
+    // ("pci:00:1b.0", "usb:2:041e:3256"); "" when its driver does not say.
+    char     device_id[24];
 };
 
 // QUERY_MODULE: one record per loaded module (kernel/core/module.c).

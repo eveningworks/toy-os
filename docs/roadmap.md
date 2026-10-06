@@ -1040,6 +1040,7 @@ run on, not by order.
 - [ ] Float WAV (`WAVE_FORMAT_IEEE_FLOAT`), refused by name now that the path is wide enough to carry it
 - [ ] An Ogg reader, for `.oga` FLAC and for Opus -- the codec table has no container layer
 - [ ] A proper resampler -- usnd interpolates linearly; windowed-sinc or polyphase, as speexdsp, soxr and PipeWire use
+- [ ] 44.1 kHz through the ring-3 USB driver -- `SYS_USB_ISOCH_POST` posts a group at one length, and 44.1 needs 5- and 6-frame packets
 
 ### ACPI + real power/timer
 

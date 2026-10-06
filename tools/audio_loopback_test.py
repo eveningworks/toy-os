@@ -45,6 +45,14 @@ QEMU has the device the host cannot open it for playback.
     python3 tools/audio_loopback_test.py --record 10 -o cap.wav
     python3 tools/audio_loopback_test.py --analyse cap.wav
     python3 tools/audio_loopback_test.py --depth          # 24-bit proof
+    python3 tools/audio_loopback_test.py --rate --host <asus-ip>   # 44.1 kHz, bare metal
+
+THE RATE CHECK (--rate --host IP) plays a 1187 Hz tone written at 44.1
+kHz on a BARE-METAL machine with the G6 plugged into it (QEMU's
+passthrough cannot carry it -- see rate()), once with the card following
+the file to 44.1 kHz and once held at 48 kHz. Both must come back at
+1187 Hz with no phase jumps: the line-in records at 48 kHz, so a wrong
+rate is 1087 Hz, and a broken packet stream is a jump in every window.
 
 THE DEPTH CHECK (--depth) asks whether a 24-bit file reaches the DAC as
 24 bits, and it is built so that only a real 24-bit path can pass. The
@@ -330,21 +338,21 @@ DEPTH_QUIET_DBFS = 20 * math.log10(0.3 / 32768)          # -100.8
 DEPTH_CAL_DBFS = DEPTH_QUIET_DBFS + 20.8                  # -80.0
 
 
-def write_flac_tone(path, dbfs, bits, seconds, freq=DEPTH_FREQ):
+def write_flac_tone(path, dbfs, bits, seconds, freq=DEPTH_FREQ, rate=FS):
     """A stereo tone at `dbfs` as a `bits`-bit FLAC, rounded -- so the
     16-bit twin of the quiet tone is all zeros, as a 16-bit path makes it."""
     amp = 10 ** (dbfs / 20) * (1 << (bits - 1))
     width = bits // 8
     body = bytearray()
-    for i in range(int(seconds * FS)):
-        v = int(round(amp * math.sin(2 * math.pi * freq * i / FS)))
+    for i in range(int(seconds * rate)):
+        v = int(round(amp * math.sin(2 * math.pi * freq * i / rate)))
         b = (v & ((1 << bits) - 1)).to_bytes(width, "little")
         body += b + b
     raw = path + ".raw"
     open(raw, "wb").write(bytes(body))
     r = subprocess.run(["flac", "-s", "-f", "--force-raw-format", "--endian=little",
                         "--sign=signed", "--channels=2", f"--bps={bits}",
-                        f"--sample-rate={FS}", "-o", path, raw], capture_output=True)
+                        f"--sample-rate={rate}", "-o", path, raw], capture_output=True)
     os.unlink(raw)
     return r.returncode == 0
 
@@ -462,6 +470,127 @@ def depth(args):
         print(f"  {'ok  ' if ok else 'FAIL'}  {name}")
     npass = sum(1 for _, ok in checks if ok)
     print(f"\naudio_loopback --depth: {npass}/{len(checks)} checks passed")
+    return 0 if npass == len(checks) else 1
+
+
+# --- the rate check ---------------------------------------------------------
+#
+# BARE METAL ONLY, and that is a finding, not a preference: QEMU's USB
+# passthrough breaks isochronous OUT packets whose length VARIES, and
+# 44.1 kHz at high speed is 5 or 6 frames a microframe. Through a guest
+# a phase jump in 364 of 398 5 ms windows under TCG, 398 under KVM; the
+# same build on the ASUS, and Linux on the host, 0 (2026-10-06). 48 kHz
+# is 6 every time and clean in a guest, so it is not the guest's speed.
+
+RATE_SECONDS = 8.0
+
+
+def phase_jumps(sig, freq=DEPTH_FREQ, window=240):
+    """How many 5 ms windows the tone's phase jumps by more than 0.3 rad
+    across -- a click, a dropped or repeated packet. A clean tone: 0."""
+    import cmath
+    ph = []
+    for i in range(0, len(sig) - window, window):
+        z = sum(v * cmath.exp(-2j * math.pi * freq * (i + k) / FS)
+                for k, v in enumerate(sig[i:i + window]))
+        ph.append(cmath.phase(z))
+    d = [((ph[i] - ph[i - 1] + math.pi) % (2 * math.pi)) - math.pi for i in range(1, len(ph))]
+    return sum(1 for x in d if abs(x) > 0.3), len(d)
+
+
+def remote(host, *args, timeout=200):
+    return subprocess.run([sys.executable, os.path.join(HERE, "remote.py"), "--host", host,
+                           "--timeout", str(timeout - 20), *args],
+                          capture_output=True, text=True, timeout=timeout).stdout
+
+
+def rate_leg(tag, guest_path, host, cap):
+    """Play `guest_path` on the machine; (Hz, jumps, windows) of what came
+    back, from two steady seconds of the capture."""
+    out = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"rate_{tag}.wav")
+    rec = subprocess.Popen(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, %r); import audio_loopback_test as a; "
+         "a.record32(%r, %f, %d)" % (HERE, out, RATE_SECONDS + 4, cap)])
+    time.sleep(2.0)
+    remote(host, "exec", f"spawn /bin/aplay {guest_path}")
+    rec.wait()
+    sig = read_wav32(out)[4 * FS:8 * FS]
+    n, total = phase_jumps(sig[:2 * FS])
+    return estimate_freq(sig), n, total
+
+
+def rate(args):
+    from shutil import which
+    if not args.host:
+        print("SKIP: --rate needs --host <ip> -- QEMU's passthrough breaks 44.1 kHz "
+              "on USB (see the comment above rate())")
+        return 0
+    if not which("flac"):
+        print("SKIP: flac is not installed -- it encodes the stimulus")
+        return 0
+    cap = card_index(CAP_CARD)
+    if cap is None:
+        print(f"SKIP: no capture card named {CAP_CARD!r} on this host")
+        return 0
+    set_capture_gain(cap)
+    tmp = os.environ.get("TMPDIR", "/tmp")
+    if not write_flac_tone(os.path.join(tmp, "rate_44100.flac"), -20.0, 24, RATE_SECONDS,
+                           rate=44100):
+        print("SKIP: flac failed to encode the stimulus")
+        return 0
+    h = args.host
+    card = [w for ln in remote(h, "exec", "lssound").splitlines() for w in ln.split()
+            if w.startswith("usb-")]
+    if not card:
+        print(f"SKIP: no USB sound card on {h} -- plug the G6 in there")
+        return 0
+    bind = [ln.strip() for ln in remote(h, "exec", "dmesg").splitlines()
+            if "bound as usb-audio" in ln]
+    print("bind: " + (bind[-1] if bind else "(no usb-audio bind line)"))
+    if bind and "UAC1" in bind[-1]:
+        print("SKIP: the G6 bound UAC1 at full speed, which offers 48 kHz only -- "
+              "replug it (a reboot does not reach high speed)")
+        return 0
+    was = remote(h, "exec", "config get audio_device").strip().splitlines()[-1]
+    remote(h, "exec", f"config set audio_device {card[0]}")
+    got = {}
+    try:
+        # NEVER THE MACHINE'S OWN SPEAKERS: the card must be the output.
+        active = [ln for ln in remote(h, "exec", "lssound").splitlines() if ln.startswith("*")]
+        if not active or card[0] not in active[0]:
+            print(f"SKIP: {card[0]} did not become the output -- not playing")
+            return 0
+        remote(h, "put", os.path.join(tmp, "rate_44100.flac"), "/tmp/rate_44100.flac")
+        remote(h, "exec", "sndfmt -r match -a 44100,48000 -b auto")
+        print("leg 44.1 kHz, the card following it ...")
+        got["match"] = rate_leg("match", "/tmp/rate_44100.flac", h, cap)
+        clock = "set to 44100 Hz (reads back 44100)" in remote(h, "exec", "dmesg")
+        remote(h, "exec", "sndfmt -r 48000")
+        print("leg 44.1 kHz, the card held at 48 kHz ...")
+        got["held"] = rate_leg("held", "/tmp/rate_44100.flac", h, cap)
+    finally:
+        remote(h, "exec", "sndfmt -r match")
+        remote(h, "exec", f"config set audio_device {was}")
+
+    def ok(r):
+        f, n, _ = r
+        return f is not None and abs(f - DEPTH_FREQ) < 1.0 and n <= 2
+
+    checks = [
+        ("44.1 kHz: the clock was set to it, and reads back so", clock),
+        ("44.1 kHz: the tone came back at 1187 Hz, unbroken", ok(got["match"])),
+        ("held at 48 kHz: the same file, resampled, at 1187 Hz, unbroken", ok(got["held"])),
+    ]
+    print()
+    for k, (f, n, t) in got.items():
+        print(f"  {k:>5}: {f:.3f} Hz, {n} phase jump(s) in {t} windows" if f
+              else f"  {k:>5}: no tone")
+    print()
+    for name, good in checks:
+        print(f"  {'ok  ' if good else 'FAIL'}  {name}")
+    npass = sum(1 for _, good in checks if good)
+    print(f"\naudio_loopback --rate: {npass}/{len(checks)} checks passed")
     return 0 if npass == len(checks) else 1
 
 
@@ -591,6 +720,11 @@ def main():
     ap.add_argument("--depth", action="store_true",
                     help="the 24-bit proof: a tone below one 16-bit step, "
                          "played in a guest, found on line in")
+    ap.add_argument("--rate", action="store_true",
+                    help="44.1 kHz played on a bare-metal machine (--host), "
+                         "pitch and continuity found on line in")
+    ap.add_argument("--host", default=None,
+                    help="the machine --rate plays on (remote.py's address)")
     ap.add_argument("--seconds", type=float, default=60.0,
                     help="length of the --crackle stimulus (default 60)")
     ap.add_argument("--instance", type=int, default=0,
@@ -603,6 +737,8 @@ def main():
         return crackle(args)
     if args.depth:
         return depth(args)
+    if args.rate:
+        return rate(args)
 
     tmp = os.environ.get("TMPDIR", "/tmp")
 

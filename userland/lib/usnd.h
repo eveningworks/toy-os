@@ -46,10 +46,14 @@
 // take or give 16-bit samples -- usnd_clip_from_pcm(), usnd_push(),
 // usnd_peek() -- say so, and convert at the edge.
 
-// What a sink takes and what usnd_read() hands back: s32 stereo at
-// 48 kHz. Deliberately equal to the kernel ABI's values but spelled
-// separately -- a daemon sink would negotiate its own, and a codec must
-// not learn the device's numbers.
+// THE LIBRARY'S REFERENCE RATE: what clips are decoded to, what
+// usnd_push() takes, and the unit of every position and duration below
+// ("device frames"). The CARD may run at another -- the sink says which
+// (usnd_sink.h) -- and the mixer then converts: the streaming voice
+// straight from its file's rate, so a file at the card's rate is never
+// resampled at all; clips and pushed audio from this one. Equal to the
+// kernel's SND_RATE but spelled separately -- a codec must not learn the
+// device's numbers.
 #define USND_RATE     48000
 #define USND_CHANNELS 2
 
@@ -135,7 +139,8 @@ struct usnd_stream {
     // an exact-rate mono file means N frames in and N-1 out.
     int tail;
     int drained;    // ...and nothing more will ever come out
-    uint64_t out_pos;           // device frames handed out so far
+    uint64_t out_pos;           // frames handed out so far, at out_rate
+    uint32_t out_rate;          // what usnd_read() produces; USND_RATE by default
 };
 
 // Does any codec claim these bytes? 16 bytes is more than any probe
@@ -148,10 +153,15 @@ int usnd_load_info(const char *path, struct usnd_info *out);
 // Open for reading. On success the caller owes a usnd_close().
 int usnd_open(const char *path, struct usnd_stream *s);
 
-// Up to `frames` frames in the DEVICE format -- 48 kHz stereo s32,
-// whatever the file was. Returns the count written, 0 at end of
-// stream, negative on error.
+// Up to `frames` frames of stereo s32 at the stream's output rate --
+// USND_RATE unless usnd_stream_set_rate() said otherwise -- whatever the
+// file was. Returns the count written, 0 at end of stream, negative on
+// error.
 long usnd_read(struct usnd_stream *s, int32_t *dst, long frames);
+
+// What usnd_read() produces from here on: the card's rate, when the
+// mixer learns it. Mid-stream is fine -- the interpolator carries on.
+void usnd_stream_set_rate(struct usnd_stream *s, uint32_t rate);
 
 // Seek, in DEVICE frames. Returns 0, or a negative errno (-ENOTSUP
 // from a codec that cannot seek).

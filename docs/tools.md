@@ -3597,6 +3597,18 @@ window without going through it will find its layout polls timing out.
   already returns as soon as the child exists and that shell has no job
   control, so an ampersand arrives as a second ARGUMENT -- it failed
   once as "cannot open file", with the daemon working perfectly.
+- **`audio_rate_test.py`** -- a card's rate follows what plays, on
+  QEMU's HDA (`--card ac97` for the AC97's variable rate), judged on the
+  HOST: `/tests/sine1k.flac` (1 kHz, 1.5 s, 44.1 kHz) must record at
+  exactly 1000 Hz and 1500 ms whether the card switched to it (the
+  default) or was held at 48 kHz (`sndfmt -r 48000`); a 48 kHz file
+  joining a 44.1 kHz one must not move the card; with soundd stopped the
+  program's own sink decides the same way. A wrong rate is 1088 or 919
+  Hz. **Pitch by INTERPOLATED zero crossings over one continuous run** --
+  `audio_test.py`'s `measure()` counts within 50 ms windows and reads ~1%
+  low, too coarse here. The no-daemon run's length is only reported: its
+  start loses ~50 ms on the commit before this too (docs/bugs.md). On
+  demand (`ondemand_sweep.py`: `audio_rate`, `audio_rate97`).
 - **`usb_audio_test.py`** -- USB Audio Class 1.0 playback, on the same
   host-side oracle `audio_test.py` uses, pointed at a different bus. The
   guest plays A440 through an isochronous OUT endpoint and QEMU's wav
@@ -3703,6 +3715,19 @@ window without going through it will find its layout polls timing out.
   one people learn to ignore, so it returns non-zero only when a leg
   produced no audio at all -- that is the rig going wrong, not the bug
   still existing.
+
+  **`--rate --host <ip>` is the 44.1 kHz proof, on BARE METAL** with the
+  G6 plugged into that machine (its headphone-out still on this host's
+  line-in): a 1187 Hz tone written at 44.1 kHz, played once with the
+  card following it to 44.1 kHz and once held at 48 kHz, must come back
+  at 1187 Hz with no phase jumps in 5 ms windows (`phase_jumps()`), and
+  the clock must read back 44100. **Not through a guest**: QEMU's USB
+  passthrough breaks packets whose length varies -- 364 jumps in 398
+  windows under TCG, 398 under KVM, 0 on the ASUS and 0 from Linux
+  (docs/testing.md). It SKIPS when
+  the G6 bound UAC1 at full speed (48 kHz only): replug it. It never
+  plays unless the G6 is the machine's active output, and puts the
+  output back afterwards.
 - **`devclaim_test.py`** -- a ring-3 process takes the sound card OFF
   THE KERNEL, reads its registers, and gives it back (stage 2 of
   `docs/umdf-design.md`). It boots its own guest with an
@@ -4655,6 +4680,14 @@ window without going through it will find its layout polls timing out.
   page of links, and Right/Left expand and collapse it -- the tree is
   lazy, so a dead toggle leaves the row count unchanged. With links
   turned off it goes red on seven checks. In `gui_regress.py`.
+- **`sndformat_test.py`** -- a sound card's Format panel
+  (`ui/uui_sndformat.h`) in System Settings (Sound > Output) and Device
+  Manager, on QEMU's HDA (`gui_regress.py` boots it with `--audio hda`).
+  The controls by their layout-log names, DRAWN (ink in their rects),
+  and what they SAVE read back from `/etc/sound-cards.conf` through the
+  shell. A row that went away is seen as no ink where it was; Device
+  Manager's own `format 0|1` on its `selected` line says whether the
+  panel is up.
 - **`devmgr_test.py`** -- the Device Manager (`userland/gui/system/devmgr.c`
   over `lib/udevice.c`): the tree is DRAWN with its icons, "By connection"
   keeps the selection, and Disable/Enable on the network card round-trip

@@ -2738,13 +2738,26 @@ FLAC frame decoder could sit on unchanged -- what libogg is to libFLAC.
 
 Put on the roadmap 2026-10-06 (not scheduled). `usnd.c` converts rates
 by linear interpolation over a 16.16 phase (`usnd.h`), which dulls the
-top octave and lets images fold back as aliasing. Every 44.1 kHz file
-goes through it while the card is fixed at 48 kHz; with a per-card rate
-that follows what plays, it is left converting the SECOND stream of a
-mix at another rate. A windowed-sinc or polyphase filter (speexdsp's
+top octave and lets images fold back as aliasing. Since a card's rate
+follows what plays (2026-10-06) it converts the SECOND stream of a mix
+at another rate, every file on a card held at a fixed rate, and clips
+and pushed audio whenever the card is not at 48 kHz. A windowed-sinc or polyphase filter (speexdsp's
 quality levels, soxr, PipeWire's `resample.quality`) makes that clean;
 it belongs in the same place, so every codec and both sinks get it, and
 the bypass for an already-matching rate stays.
+
+### 44.1 kHz through the ring-3 USB driver -- `SYS_USB_ISOCH_POST` posts a group at one length, and 44.1 needs 5- and 6-frame packets
+
+Put on the roadmap 2026-10-06 (not scheduled). `userland/snd/usbaudio.c`
+posts each completion group in one `SYS_USB_ISOCH_POST`, which takes a
+single length and stride -- one syscall per group is what keeps the
+driver fast enough at 8000 packets/s. 44.1 kHz needs packets of 44/45
+frames (5/6 at high speed) from an accumulator, which the in-kernel
+driver posts one by one, so the ring-3 driver offers only rates with a
+whole number of frames per packet. The fix is a lengths array (or a
+pacing rule the kernel applies) in the syscall. Test it on BARE METAL
+(`audio_loopback_test.py --rate --host`): QEMU's USB passthrough breaks
+packets whose length varies, under KVM too (docs/testing.md).
 
 ### Dynamic linking / shared libraries
 

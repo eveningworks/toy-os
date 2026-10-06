@@ -125,9 +125,11 @@ static void find_clock(const uint8_t *cfg, uint32_t total,
 // it and this parse exists.
 //
 // WHAT IS CHECKED HERE IS THE FORMAT, NOT THE RATE. A UAC1 device lists
-// its rates in the format descriptor and one without 48 kHz is refused
-// here; a UAC2 device states no rate at all, so the check that matters
-// for one is the SET_CUR in set_clock_rate() at bind.
+// its rates in the format descriptor, and the DEFAULT alternate must
+// list 48 kHz (SND_RATE, what a stream opens at); a UAC2 device states
+// no rate at all, so the check that matters for one is the SET_CUR in
+// set_clock_rate() at bind. Every playable alternate -- 48 kHz or not --
+// goes in `formats`, which is what a format change chooses from.
 int usb_audio_parse(const uint8_t *cfg, uint32_t total,
                     struct usb_audio_stream *out,
                     struct usb_audio_report *rep) {
@@ -141,8 +143,10 @@ int usb_audio_parse(const uint8_t *cfg, uint32_t total,
     int cur_if = -1, cur_alt = -1;
     uint8_t cand_channels = 0, cand_bits = 0, cand_subslot = 0;
     uint8_t cand_link = 0;
-    uint32_t cand_rate = 0;
+    uint32_t cand_rate = 0, cand_rates = 0;
+    uint8_t cand_rate_ctl = 0;
     int format_ok = 0;
+    uint8_t fmt_if[USB_AUDIO_MAX_FORMATS];
 
     while (o + 2 <= total) {
         uint32_t blen = cfg[o];
@@ -160,6 +164,7 @@ int usb_audio_parse(const uint8_t *cfg, uint32_t total,
             if (in_control) out->ac_ifnum = cfg[o + 2];
             cand_channels = 0; cand_bits = 0; cand_subslot = 0;
             cand_rate = 0; cand_link = 0; format_ok = 0;
+            cand_rates = 0; cand_rate_ctl = 0;
         } else if (in_control && btype == DESC_CS_INTERFACE && blen >= 5 &&
                    cfg[o + 2] == AC_HEADER) {
             // bcdADC, and the one field that says UAC1 from UAC2. The
@@ -193,25 +198,24 @@ int usb_audio_parse(const uint8_t *cfg, uint32_t total,
                 cand_subslot  = cfg[o + 5];
                 cand_bits     = cfg[o + 6];
                 uint8_t freq_type = cfg[o + 7];
-                int rate_ok = 0;
                 if (freq_type == 0 && blen >= 14) {
                     // A continuous range: tLowerSamFreq, tUpperSamFreq.
-                    rate_ok = (le24(&cfg[o + 8]) <= SND_RATE &&
-                               le24(&cfg[o + 11]) >= SND_RATE);
-                    cand_rate = rate_ok ? SND_RATE : le24(&cfg[o + 8]);
+                    uint32_t lo = le24(&cfg[o + 8]), hi = le24(&cfg[o + 11]);
+                    for (int i = 0; i < SND_RATE_COUNT; i++)
+                        if (snd_rate_hz(i) >= lo && snd_rate_hz(i) <= hi) cand_rates |= 1u << i;
+                    cand_rate = (lo <= SND_RATE && hi >= SND_RATE) ? SND_RATE : lo;
+                    cand_rate_ctl = 1;
                 } else {
                     for (uint32_t i = 0; i < freq_type; i++) {
                         uint32_t at = o + 8 + i * 3;
                         if (at + 3 > o + blen) break;
                         if (!cand_rate) cand_rate = le24(&cfg[at]);
-                        if (le24(&cfg[at]) == SND_RATE) {
-                            rate_ok = 1;
-                            cand_rate = SND_RATE;
-                            break;
-                        }
+                        cand_rates |= snd_rate_mask(le24(&cfg[at]));
                     }
+                    if (cand_rates & SND_RATE_48000) cand_rate = SND_RATE;
+                    cand_rate_ctl = freq_type > 1;
                 }
-                format_ok = rate_ok && cand_channels == SND_CHANNELS;
+                format_ok = cand_rates && cand_channels == SND_CHANNELS;
             }
             // The sample widths the packet copy can write: 32-bit is a
             // memcpy from the s32 ring, 16 and 24 are narrowed per sample.
@@ -249,9 +253,22 @@ int usb_audio_parse(const uint8_t *cfg, uint32_t total,
 
             // A complete candidate: an alt setting with both the format
             // and an isochronous OUT endpoint we can actually program.
-            // THE DEEPEST WINS, so a 24-bit file reaches a 24/32-bit DAC
-            // whole; on a tie the first seen is kept.
-            if (format_ok && !(addr & 0x80) && mult == 1 &&
+            int playable = format_ok && !(addr & 0x80) && mult == 1;
+            if (playable && out->nformats < USB_AUDIO_MAX_FORMATS) {
+                struct usb_audio_format *f = &out->formats[out->nformats];
+                fmt_if[out->nformats++] = (uint8_t)cur_if;
+                f->alt = (uint8_t)cur_alt;
+                f->ep = addr;
+                f->interval = cfg[o + 6];
+                f->subslot = cand_subslot;
+                f->bits = cand_bits;
+                f->mps = mps;
+                f->rates = out->uac2 ? 0 : cand_rates;
+                f->rate_ctl = out->uac2 ? 0 : cand_rate_ctl;
+            }
+            // THE DEFAULT: the deepest that plays 48 kHz, so a 24-bit
+            // file reaches a 24/32-bit DAC whole; on a tie the first seen.
+            if (playable && (out->uac2 || (cand_rates & SND_RATE_48000)) &&
                 (!out->ep || cand_bits > out->bits)) {
                 out->ifnum    = (uint8_t)cur_if;
                 out->alt      = (uint8_t)cur_alt;
@@ -266,7 +283,59 @@ int usb_audio_parse(const uint8_t *cfg, uint32_t total,
         o += blen;
     }
 
+    // Only the default's interface and endpoint: a format change swaps
+    // the alternate under one configured endpoint, never the endpoint.
+    uint8_t keep = 0;
+    for (uint8_t i = 0; i < out->nformats; i++)
+        if (out->ep && fmt_if[i] == out->ifnum && out->formats[i].ep == out->ep)
+            out->formats[keep++] = out->formats[i];
+    out->nformats = keep;
+
     find_feature_unit(cfg, total, out);
     find_clock(cfg, total, out);
     return out->ep != 0;
+}
+
+uint32_t usb_audio_range_rates(const uint8_t *buf, uint32_t len) {
+    if (!buf || len < 2) return 0;
+    uint32_t n = (uint32_t)buf[0] | ((uint32_t)buf[1] << 8), mask = 0;
+    for (uint32_t r = 0; r < n && 2 + (r + 1) * 12 <= len; r++) {
+        const uint8_t *p = buf + 2 + r * 12;
+        uint32_t lo  = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+        uint32_t hi  = (uint32_t)p[4] | ((uint32_t)p[5] << 8) | ((uint32_t)p[6] << 16) | ((uint32_t)p[7] << 24);
+        uint32_t res = (uint32_t)p[8] | ((uint32_t)p[9] << 8) | ((uint32_t)p[10] << 16) | ((uint32_t)p[11] << 24);
+        for (int i = 0; i < SND_RATE_COUNT; i++) {
+            uint32_t hz = snd_rate_hz(i);
+            if (hz >= lo && hz <= hi && (!res || (hz - lo) % res == 0))
+                mask |= 1u << i;
+        }
+    }
+    return mask;
+}
+
+uint32_t usb_audio_pace_max(uint32_t rate, uint32_t us) {
+    return (uint32_t)(((uint64_t)rate * us + 999999u) / 1000000u);
+}
+
+uint32_t usb_audio_pace_next(struct usb_audio_pace *p) {
+    uint64_t a = (uint64_t)p->acc + (uint64_t)p->rate * p->us;
+    uint32_t n = (uint32_t)(a / 1000000u);
+    p->acc = (uint32_t)(a - (uint64_t)n * 1000000u);
+    return n;
+}
+
+int usb_audio_pick_format(const struct usb_audio_stream *s, uint32_t clock_rates,
+                          uint32_t rate, uint32_t bits, uint32_t us) {
+    uint32_t want = snd_rate_mask(rate);
+    uint32_t frames = usb_audio_pace_max(rate, us);
+    int best = -1;
+    for (int i = 0; i < s->nformats; i++) {
+        const struct usb_audio_format *f = &s->formats[i];
+        uint32_t rates = s->uac2 ? clock_rates : f->rates;
+        if (!want || !(rates & want)) continue;
+        if (frames * SND_CHANNELS * f->subslot > f->mps) continue;
+        if (bits && f->bits != bits) continue;
+        if (best < 0 || f->bits > s->formats[best].bits) best = i;
+    }
+    return best;
 }

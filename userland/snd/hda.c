@@ -50,7 +50,7 @@ struct hda_state {
     uint32_t sd;            // our output stream descriptor's base
     uint32_t chunk;         // the ring chunk the card has finished
     int      running;
-    uint16_t fmt;           // HDA_FMT_48K_STEREO(dev->bits)
+    uint16_t fmt;           // hda_fmt(dev->rate, dev->bits), set in start()
     uint32_t chunk_bytes;   // one BDL entry at that width
     struct hda_codec codec;
 };
@@ -160,9 +160,12 @@ static int hda_open(struct snd_dev *dev) {
                               &dev->rates, &dev->depths);
         dev->bits = (dev->depths & SND_DEPTH_32) ? 32 : (dev->depths & SND_DEPTH_24) ? 24 :
                     (dev->depths & SND_DEPTH_20) ? 20 : 16;
-        g_st.fmt = HDA_FMT_48K_STEREO(dev->bits);
+        dev->rate = SND_RATE;
+        g_st.fmt = hda_fmt(dev->rate, (int)dev->bits);
         g_st.chunk_bytes = dev->bits == 16 ? SND_CHUNK_BYTES_S16 : SND_CHUNK_BYTES;
-        if (dev->bits == 16) {
+        // The copy whenever 16 is a width the format may choose, not only
+        // when it is the default.
+        if (dev->bits == 16 || (dev->depths & SND_DEPTH_16)) {
             dev->bounce = (int16_t *)((uint8_t *)dev->dma + HDA_RING_BYTES);
             dev->bounce_phys = dev->dma_phys + HDA_RING_BYTES;
             memset(dev->bounce, 0, SND_CHUNKS * SND_CHUNK_BYTES_S16);
@@ -180,7 +183,15 @@ static void hda_close(struct snd_dev *dev) {
 }
 
 static int hda_start(struct snd_dev *dev, uint64_t ring_phys) {
-    uint64_t base = dev->bounce ? dev->bounce_phys : ring_phys;
+    // THE FORMAT THE HOST JUST SET: the descriptor list, the stream and
+    // the converter are all re-programmed for it below.
+    int narrow = dev->bits == 16;
+    if (narrow && !dev->bounce) return -1;
+    g_st.fmt = hda_fmt(dev->rate, (int)dev->bits);
+    if (!g_st.fmt) return -1;
+    g_st.chunk_bytes = narrow ? SND_CHUNK_BYTES_S16 : SND_CHUNK_BYTES;
+    corb_cmd(0, g_st.codec.spk.dac, V4(VERB_SET_FORMAT, g_st.fmt), 0);
+    uint64_t base = narrow ? dev->bounce_phys : ring_phys;
     mw32(g_st.sd + SD_CTL, 0);
     for (int i = 0; i < 100 && (mr32(g_st.sd + SD_CTL) & SD_CTL_RUN); i++) usleep(100);
     mw32(g_st.sd + SD_CTL, SD_CTL_SRST);

@@ -42,7 +42,9 @@ move a system-wide knob.
 
 Rate and channel conversion is the library's, so a 44.1 kHz mono
 recording plays on hardware that only does 48 kHz stereo without the
-caller knowing either number. `aplay` waits for the file to finish and
+caller knowing either number -- and on a card that follows what plays
+(the default; see [`sndfmt`](sndfmt.md)) the card goes to the file's
+rate instead, so the file is not resampled at all. `aplay` waits for the file to finish and
 then drains what is still queued, which is why a short sound is not cut
 off at the end.
 

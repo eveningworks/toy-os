@@ -155,6 +155,7 @@ TOOLS = [
     ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
     ("devmgr", "devmgr_test.py", "the device tree and its icons, disable/enable through the dialog"),
+    ("sndformat", "sndformat_test.py", "a sound card's Format panel, in Settings and Device Manager"),
     ("bootmgr", "bootmgr_test.py", "Boot Manager and Settings > Boot menu write grub.cfg; a broken file is refused"),
     ("properties", "properties_test.py", "Properties: hero by pixel, sections, chmod/rename/opens-with/SHA-256 checked outside the app"),
     ("sysupdate", "sysupdate_test.py", "System Update: finds, shows and installs a change, by pixel and by sum"),
@@ -221,6 +222,9 @@ EXTRA_VM_ARGS = {
     # recording attached. player_test.py deliberately keeps the default,
     # since a machine with NO device is its premise.
     "volume": ["--audio", "both"],
+    # A card's Format panel exists only for a card: QEMU's HDA, whose
+    # seven rates the test expects by name.
+    "sndformat": ["--audio", "hda"],
     # The Start menu's favourites have to SURVIVE A REBOOT, and the
     # default launch answers a reboot by ending QEMU (-no-reboot, so a
     # triple-faulting guest stops rather than looping). This tool is the
