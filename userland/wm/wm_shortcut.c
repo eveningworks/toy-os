@@ -103,31 +103,37 @@ void wm_shortcut_reload(void) {
     g_loaded = 1;
 }
 
-const char *wm_shortcut_match(int key, unsigned mods) {
+static const struct shortcut_action *match_action(int key, unsigned mods) {
     if (!g_loaded) wm_shortcut_reload();
     int n = shortcut_action_count();
     if (n > SHORTCUT_ACTION_MAX) n = SHORTCUT_ACTION_MAX;
     for (int i = 0; i < n; i++) {
         for (int b = 0; b < g_bound[i].count; b++) {
             if (keycombo_matches(&g_bound[i].combo[b], key, (uint8_t)mods))
-                return shortcut_action_at(i)->command;
+                return shortcut_action_at(i);
         }
     }
     return 0;
 }
 
+const char *wm_shortcut_match(int key, unsigned mods) {
+    const struct shortcut_action *a = match_action(key, mods);
+    return a ? a->command : 0;
+}
+
 int wm_shortcut_fire(int key, unsigned mods) {
-    const char *cmd = wm_shortcut_match(key, mods);
-    if (!cmd) return 0;
+    const struct shortcut_action *a = match_action(key, mods);
+    if (!a) return 0;
     // NOT WAITED FOR: this is a launch, reaped by the compositor's own
     // poll like everything else it spawns -- once it is TRACKED, which
     // it was not, and every PrtSc left a zombie.
-    int pid = sys_spawn(cmd, 0, -1);
+    int pid = sys_spawn(a->command, a->args, -1);
     if (pid > 0) wm_track_launched(pid);
     // THE ACTION A TEST WAITS FOR, once (docs/conventions/gui.md). It
     // names the COMMAND rather than the key, because what a test asserts
     // is that the right program started.
-    ulogf("wm: shortcut -> %s (pid %d)\n", cmd, pid);
+    ulogf("wm: shortcut -> %s%s%s (pid %d)\n", a->command, a->args ? " " : "",
+          a->args ? a->args : "", pid);
     return 1;
 }
 

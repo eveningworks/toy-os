@@ -50,6 +50,7 @@
 | `uline.h` | uline -- the PAINTING half of a ring-3 line-editing front end. |
 | `umd.h` | umd -- rendering Markdown as text for a terminal. |
 | `umemcomp.h` | Where the memory in use is, as four rows that SUM to it: Apps (every process's private bytes, QUERY_PROCMEM), Shared (shm objects, each once), Graphics (RAM held for the screen) and Kernel (the res... |
+| `unametpl.h` | A FILE-NAME TEMPLATE: literal text with <tokens> the caller fills -- "shot-<date>-<time>" -> "shot-20261007-142233". |
 | `unetctl.h` | The control protocol between /bin/netctl (and the desktop's network flyout) and /bin/netd, over uchan -- the initctl shape (lib/uinitctl.h). |
 | `unum.h` | A number written the way the LC_NUMERIC locale writes it: format it the C way ("1234567.89", "12.5%", "1.2 MiB") and pass the string through unum_localize(), which swaps in the decimal mark and, wi... |
 | `uopen.h` | uopen -- which program opens this file? |
@@ -128,6 +129,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_markdown.h` | uui_markdown -- a Markdown DOCUMENT, drawn as a document: proportional text, headings at real sizes, code in a monospace face on a tinted ground, lists with hanging indents, rules, and tables. |
 | `uui_menubar.h` | uui_menubar -- a menu bar with nested pull-down menus, the control Windows and KDE both put across the top of an application window. |
 | `uui_meter.h` | A MEASURED VALUE, shown big: a caption, a number, its unit, an optional detail line and an optional fill bar. |
+| `uui_nametpl.h` | uui_nametpl -- a FILE-NAME TEMPLATE FIELD: a text field, a row of chips that each type a <token> at the caret, and the name the template gives today under them ("Next file: shot-20261007-...qoi"),... |
 | `uui_optlist.h` | A scrolling list of OPTIONS, one per row: a checkbox, the option's name, an optional value field edited in place, and a one-line description. |
 | `uui_pathbar.h` | A BREADCRUMB PATH: the folder you are in as a row of buttons, one per level, each of which takes you there -- Explorer's address bar, Dolphin's URL navigator, GTK's path bar. |
 | `uui_places.h` | PLACES AND DEVICES: the list down the left of a file window -- named folders a person goes to (Home, Documents, ...), then every mounted filesystem with how full it is. |

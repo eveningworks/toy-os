@@ -1154,6 +1154,9 @@ struct win_popup_pos {
                            // its own overlay as the target.
 
 #define WIN_SHOT_POINTER 0x1 // draw the cursor into the copy
+#define WIN_SHOT_SHADOW  0x8 // WINDOW and WINDOW_AT: grow the rect by the
+                           // window's shadow, when shadows are on -- the
+                           // compositor owns how far one reaches
 
 // A CLIENT ASKING THE COMPOSITOR TO STOP EATING GLOBAL SHORTCUTS while
 // it has the focus. `window`: which one. `a`: 1 to inhibit, 0 to release.
@@ -1231,7 +1234,9 @@ struct win_popup_pos {
 // outlives the client that asked for it (a screenshot tool quits at
 // once). The path rides `text` in WIN_TITLE_LEN - 1 byte pieces:
 // a: piece index | (pieces << 8), b: WIN_NOTICE_*, c: WIN_NOTICE_F_*.
-// The card goes up when the last piece arrives; nothing answers.
+// The card goes up when the last piece arrives, and THE LAST PIECE IS
+// ANSWERED (a = 0): a client's ring dies with it, so one that sends and
+// exits -- a screenshot tool -- must wait, or the notice is lost.
 #define WIN_REQ_NOTICE     39
 // TABS IN THE TITLE BAR -- Windows 11 Explorer's, DRAWN BY THE COMPOSITOR,
 // which keeps the title bar it owns (moving, the buttons, the menu) as
@@ -1243,6 +1248,8 @@ struct win_popup_pos {
 #define WIN_TABS_MAX 8
 #define WIN_NOTICE_SCREENSHOT 1   // "Screenshot saved", the image as its thumbnail
 #define WIN_NOTICE_F_COPIED   0x1 // it is on the clipboard already: say so
+#define WIN_NOTICE_F_NO_CARD  0x2 // put up no card (the tool's own choice)
+#define WIN_NOTICE_F_FLASH    0x4 // flash the screen white (wm_flash.h)
 #define WIN_NOTICE_PIECES_MAX 4   // so a path of up to 124 bytes
 
 // What one window's map may hold. A window with more named widgets than
@@ -1281,6 +1288,9 @@ struct win_popup_pos {
 // consumer reads as fully transparent.
 struct win_shot {
     int32_t x, y, w, h;
+    // REPLY of a WINDOW or WINDOW_AT capture or probe: the window's app
+    // id, cut to fit ("notepad") -- what a file name can say about it.
+    char app[16];
 };
 
 // --- resize is a CONFIGURE/ACK HANDSHAKE ------------------------------

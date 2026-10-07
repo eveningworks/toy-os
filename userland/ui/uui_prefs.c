@@ -155,7 +155,9 @@ int uui_prefs_open(struct uapp *a) {
     g_focusables[2] = (struct uui_focusable){ &g_cancel, &uui_button_ops };
     g_page_items[0] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_heading,
                                          .flags = UUI_FILL_W, .name = "heading" };
-    show_page(0);
+    int first = g_d.first_page >= 0 && g_d.first_page < g_d.page_count ? g_d.first_page : 0;
+    show_page(first);
+    uui_sidebar_select_id(&g_pages, first);
 
     g_page_l = (struct uui_layout){ .dir = UUI_COLUMN, .items = g_page_items, .count = 1 + g_rows,
                                     .margin = 12, .gap = 10 };

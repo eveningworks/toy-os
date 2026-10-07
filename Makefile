@@ -916,6 +916,7 @@ $(LIBC): $(LIBC_OBJS)
 EXTRA_OBJS_uiclient   =
 EXTRA_OBJS_calculator =
 EXTRA_OBJS_notepad    = notepad/np_conf notepad/np_prefs
+EXTRA_OBJS_screenshot = screenshot/shot_conf screenshot/shot_prefs
 EXTRA_OBJS_terminal   = term/term_conf term/term_prefs term/term_panel
 # Shapes keeps its teapot mesh in userland/shapes/, outside the program
 # directories for the reason userland/fm/ is (see EXTRA_OBJS_files).
@@ -950,7 +951,7 @@ EXTRA_OBJS_toywm      = wm/wm wm/wm_rawin wm/wm_render wm/wm_input wm/wm_client 
                         wm/wm_geometry \
                         wm/wm_hwcursor \
                         wm/wm_dnd wm/wm_scanout wm/wm_idle wm/wm_screenshot \
-                        wm/wm_shadow wm/wm_glass wm/wm_flyout wm/wm_anim
+                        wm/wm_shadow wm/wm_glass wm/wm_flyout wm/wm_anim wm/wm_flash
 # icon_cache is NOT in that list any more: it moved to userland/lib/ when
 # the toolkit's sidebar needed icons too, so it comes from libuapp.a like
 # every other shared piece. The archive is linked into every userland ELF

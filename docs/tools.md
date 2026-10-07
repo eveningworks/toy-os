@@ -4520,6 +4520,19 @@ window without going through it will find its layout polls timing out.
   launch left a zombie. The cursor box and the taskbar clock (it shows
   seconds) are left out of every comparison.
 
+- **`screenshot_options_test.py`** -- what Screenshot's options DO to the
+  next capture: a folder, a `<mode>-<n>` template and PNG name the file
+  (`ls`, `imginfo`), card off and flash on reach the compositor (its
+  `wm: notice` line), Shift+PrtSc and Alt+PrtSc save with no overlay
+  (Alt's at the focused window's size, named by `<app>`), the pill's
+  popover keeps a toggle, and the Options window moves Print Screen in
+  `/etc/shortcuts.conf`. **The option files are PUT from the host
+  (`vm.py put`), never echoed**: a template's `<mode>` is a redirection
+  to tosh, so `write_lines()` stopped at that line and the app looked
+  as if it ignored its options. Its positive control drops the notice's
+  answered last piece and the key writer: the flash and both key checks
+  redden.
+
   **The assertion that matters is a ROUND TRIP, not "a file appeared".**
   A capture that wrote a well-formed image of the WRONG THING passes
   every did-it-produce-a-file check there is, and both ways it could be

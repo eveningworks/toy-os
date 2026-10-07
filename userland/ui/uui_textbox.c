@@ -1,5 +1,6 @@
 // field. Split out of uwidgets.c -- see ui/uui_textbox.h.
 #include "ui/uui_textbox.h"
+#include <string.h>
 #include "ui/uui_caret.h"
 #include "ui/uui_widget.h"  // the ops tables at the bottom of this file
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
@@ -185,6 +186,20 @@ int uui_textbox_key_mods(struct uui_textbox *f, int key, unsigned mods) {
 
 int uui_textbox_key(struct uui_textbox *f, int key) {
     return uui_textbox_key_mods(f, key, 0);
+}
+
+int uui_textbox_insert(struct uui_textbox *f, const char *s) {
+    if (f->disabled || !s) return 0;
+    f->undo.buf = f->undo_mem;
+    f->undo.cap = sizeof f->undo_mem;
+    f->ed.undo = &f->undo;
+    uui_edit_delete_selection(&f->ed, &TB_EDIT_OPS, f);
+    int n = (int)strlen(s);
+    if (f->len + n > UUI_TEXTBOX_MAX - 1) return 0;   // all of it or none
+    int at = f->ed.cursor;
+    int put = uui_edit_insert_text(&f->ed, &TB_EDIT_OPS, f, at, s, n);
+    uui_edit_place(&f->ed, &TB_EDIT_OPS, f, at + put, 0);
+    return put == n;
 }
 
 void uui_textbox_set_geometry(struct uui_textbox *f, int x, int y, int w, int h) {

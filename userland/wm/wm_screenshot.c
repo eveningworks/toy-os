@@ -16,7 +16,9 @@
 #include "wm_screenshot.h"
 #include "ui/ugfx.h"
 #include "wm_rawin.h"
+#include "wm_shadow.h"
 #include "rt/sys.h"
+#include "string.h"   // k_strlcpy
 #include <kerrno.h>
 #include <stdio.h>
 
@@ -77,6 +79,7 @@ int wm_screenshot_capture(int from, int mode, unsigned flags,
     struct ugfx_surface *back = &g_wm_screen.back;
     if (!back->pixels || back->w <= 0 || back->h <= 0) return -EBUSY;
 
+    rect->app[0] = '\0';
     switch (mode) {
     case WIN_SHOT_SCREEN:
         rect->x = rect->y = 0;
@@ -86,6 +89,7 @@ int wm_screenshot_capture(int from, int mode, unsigned flags,
     case WIN_SHOT_WINDOW: {
         int i = topmost_other(from);
         if (i < 0) return -EINVAL;
+        k_strlcpy(rect->app, windows[i].app_id, sizeof rect->app);
         rect->x = windows[i].x;
         rect->y = windows[i].y;
         rect->w = windows[i].w;
@@ -95,6 +99,7 @@ int wm_screenshot_capture(int from, int mode, unsigned flags,
     case WIN_SHOT_WINDOW_AT: {
         int i = topmost_at(from, rect->x, rect->y);
         if (i < 0) return -EINVAL;
+        k_strlcpy(rect->app, windows[i].app_id, sizeof rect->app);
         rect->x = windows[i].x;
         rect->y = windows[i].y;
         rect->w = windows[i].w;
@@ -105,6 +110,12 @@ int wm_screenshot_capture(int from, int mode, unsigned flags,
         break;
     default:
         return -EINVAL;
+    }
+    if ((flags & WIN_SHOT_SHADOW) && (mode == WIN_SHOT_WINDOW || mode == WIN_SHOT_WINDOW_AT) &&
+        wm_shadow_enabled()) {
+        int m = wm_shadow_margin();
+        rect->x -= m; rect->y -= m;
+        rect->w += 2 * m; rect->h += 2 * m;
     }
     clamp_rect(rect);
     if (rect->w <= 0 || rect->h <= 0) return -EINVAL;

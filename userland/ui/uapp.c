@@ -356,6 +356,8 @@ static void layout_log_flush(int src);
 static void wmap_sync(struct uapp *a);
 static int wmchan_send(uint32_t type, uint32_t window,
                        int aa, int bb, int cc, const char *text);
+static int wmchan_call(uint32_t type, uint32_t window, int aa, int bb, int cc,
+                       const char *text, int fail);
 // `text` and `dmg` share the message's one payload field: pass AT MOST
 // ONE. Both callers do; a string would win.
 static int wmchan_send_damage(uint32_t type, uint32_t window, int aa, int bb, int cc,
@@ -942,15 +944,20 @@ int uapp_notice(struct uapp *a, int kind, unsigned flags, const char *path) {
         if (n < 0) n = 0;
         memcpy(part, path + i * piece, (size_t)n);
         part[n] = '\0';
+        // THE LAST PIECE WAITS FOR ITS ANSWER: the client's ring dies
+        // with it (wm_client_chan_pump()), so a tool that exits straight
+        // after -- every screenshot does -- lost a notice still queued.
+        if (i == pieces - 1)
+            return wmchan_call(WIN_REQ_NOTICE, 0, i | (pieces << 8), kind, (int)flags, part, -1) == 0;
         if (!wmchan_send(WIN_REQ_NOTICE, 0, i | (pieces << 8), kind, (int)flags, part)) return 0;
     }
     return 1;
 }
 
-// The two requests that need an answer (lib/uwmchan.h). Returns the
+// The requests that need an answer (lib/uwmchan.h). Returns the
 // compositor's `a`, or `fail` when there is no channel or no reply --
 // both of which the callers read as a refusal.
-static int wmchan_call(uint32_t type, uint32_t window, int aa, int bb,
+static int wmchan_call(uint32_t type, uint32_t window, int aa, int bb, int cc,
                        const char *text, int fail) {
     if (!wmchan()) return fail;
     struct wmchan_msg m, r;
@@ -959,6 +966,7 @@ static int wmchan_call(uint32_t type, uint32_t window, int aa, int bb,
     m.window = window;
     m.a = aa;
     m.b = bb;
+    m.c = cc;
     if (text) snprintf(m.text, sizeof m.text, "%s", text);
     if (uchan_call(&g_wmchan, &m, sizeof m, &r, sizeof r,
                    UAPP_CALL_TIMEOUT_MS) < 0) return fail;
@@ -2173,7 +2181,7 @@ static int activate_existing(const struct uapp_desc *desc) {
     // direction here is a false "yes", which makes a single-instance
     // app exit without ever drawing; a false "no" opens a second
     // window, which the user can see and close.
-    return wmchan_call(WIN_REQ_ACTIVATE, 0, 0, 0, 0, 0) == 1;
+    return wmchan_call(WIN_REQ_ACTIVATE, 0, 0, 0, 0, 0, 0) == 1;
 }
 
 static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
@@ -2225,7 +2233,7 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     // The x/y an app used to ask for are GONE from this message: the
     // compositor has always placed windows itself (a cascade), and a
     // field nobody reads is a field that eventually gets believed.
-    int slot = wmchan_call(WIN_REQ_CREATE, 0, a->w, a->h, desc->app_id, -1);
+    int slot = wmchan_call(WIN_REQ_CREATE, 0, a->w, a->h, 0, desc->app_id, -1);
     if (slot < 0) { bufs_release(TOPLEVEL); return 0; }
     a->window = (uint32_t)slot;
     uui_popup_set_provider(&g_popup_ops, a);

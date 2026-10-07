@@ -10,6 +10,7 @@
 #include "wm_overlay.h"
 #include "wm_shadow.h"
 #include "crash_notice.h"
+#include "wm_flash.h"
 #include "gui_apps.h"
 #include "lib/icon_cache.h"
 #include "ui/uui.h"
@@ -23,6 +24,7 @@
 #include "lib/uopen.h"
 #include "win_proto.h"
 #include "wm_log.h"
+#include "ui/ulog.h"
 #include <stdio.h>
 
 #define MAX_NOTICES   3
@@ -169,26 +171,37 @@ static const char *basename_of(const char *p);
 #define ASSEMBLIES 4
 static struct { int pid; int have; char buf[PATH_MAX_NOTICE]; } g_asm[ASSEMBLIES];
 
-// A SCREENSHOT'S PATH ONLY: under /home/screenshots, plain characters,
+// A SCREENSHOT'S PATH ONLY: absolute, a .qoi or .png, plain characters,
 // no `..`. Any client may send the request, and the card decodes the
 // file in the compositor and offers to open it -- so it is held to what
 // the one kind ever names, which also keeps it fit for a JSON string.
+// The FOLDER is the person's choice (Screenshot's Options), so it is not
+// pinned to /home/screenshots; no SPACE, because Folder hands the path
+// to Files as its argument line.
 static int fit_path(const char *p) {
-    static const char dir[] = "/home/screenshots/";
-    if (k_strncmp(p, dir, sizeof dir - 1) != 0) return 0;
+    if (p[0] != '/') return 0;
     for (const char *c = p; *c; c++) {
-        int ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
-                 (*c >= '0' && *c <= '9') || *c == '/' || *c == '-' || *c == '_' || *c == '.';
+        int ok = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') ||
+                 *c == '/' || *c == '-' || *c == '_' || *c == '.';
         if (!ok) return 0;
         if (c[0] == '.' && c[1] == '.') return 0;
     }
-    return 1;
+    size_t n = k_strlen(p);
+    return n > 4 && (!k_strcmp(p + n - 4, ".qoi") || !k_strcmp(p + n - 4, ".png"));
 }
 
 #define THUMB_SOURCE_MAX (64u * 1024 * 1024)   // a larger file gets a card without a picture
 
 static void tell_file(int kind, unsigned flags, const char *path) {
     if (kind != WIN_NOTICE_SCREENSHOT || !fit_path(path)) return;
+    if (flags & WIN_NOTICE_F_FLASH) {
+        wm_flash_start();
+        redraw_pending = 1;
+    }
+    // THE ACTION A TEST WAITS FOR: the flash lasts a quarter of a second.
+    ulogf("wm: notice %s%s %s\n", (flags & WIN_NOTICE_F_FLASH) ? "flash " : "",
+            (flags & WIN_NOTICE_F_NO_CARD) ? "no-card" : "card", path);
+    if (flags & WIN_NOTICE_F_NO_CARD) return;
     struct notice n;
     k_memset(&n, 0, sizeof n);
     n.kind = KIND_SHOT;

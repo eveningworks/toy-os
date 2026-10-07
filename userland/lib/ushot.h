@@ -28,6 +28,7 @@ struct ushot {
     // capture does not know where it will land.
     int w, h, x, y;
     uint32_t *px;
+    char app[16];   // a WINDOW capture's app id ("notepad"), else ""
 
     // Private. `px` points into `map`; nothing here is separately freed.
     void *map;
@@ -69,8 +70,10 @@ int ushot_take(struct ushot *s, int mode, unsigned flags,
 // `out` gets the rect in screen coordinates. Nothing is copied and the
 // held capture is untouched, so a picker can ask on every pointer move.
 //
+// `flags`: WIN_SHOT_SHADOW, to get the rect a shadowed capture would take.
+//
 // Returns 0, or -EINVAL when there is no window there.
-int ushot_probe(struct ushot *s, int mode, int x, int y, struct win_shot *out);
+int ushot_probe(struct ushot *s, int mode, unsigned flags, int x, int y, struct win_shot *out);
 
 // Narrows the capture already held to a sub-rectangle, in the captured
 // image's own coordinates. The pixels MOVE inside the buffer, so this is

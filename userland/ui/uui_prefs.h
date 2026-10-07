@@ -34,6 +34,7 @@ struct uui_prefs_desc {
     void (*on_ok)(void);         // read the controls back; the window is already gone
     void (*on_widget)(int id, int reason);   // optional: a control changed
     void (*on_action)(int code);             // optional: one of the app's own buttons
+    int first_page;              // the page it opens on; 0 is the first
 };
 
 // Starts a new description, forgetting the last one's rows.
@@ -49,7 +50,7 @@ int uui_prefs_row(int page, const char *caption, const struct uui_widget_ops *op
 void uui_prefs_also(int row, const struct uui_widget_ops *ops, void *widget, int id,
                     const char *name);
 
-// Opens it on the first page. 0 if it is already open or could not be.
+// Opens it on `first_page`. 0 if it is already open or could not be.
 int uui_prefs_open(struct uapp *a);
 int uui_prefs_is_open(void);
 void uui_prefs_close(void);

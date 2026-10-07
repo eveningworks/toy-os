@@ -32,13 +32,22 @@
 // the two lists now, which is the check that would have caught it.
 static const struct shortcut_action ACTIONS[] = {
     { "file_manager", "File Manager",  "Open the file manager",
-      "/bin/wm/apps/files",      "Super+E" },
+      "/bin/wm/apps/files",      "Super+E", 0 },
     { "terminal",     "Terminal",      "Open a terminal window",
-      "/bin/wm/apps/uterm",      "Ctrl+Alt+T" },
+      "/bin/wm/apps/uterm",      "Ctrl+Alt+T", 0 },
     { "screenshot",   "Screenshot",    "Open the screenshot tool",
-      "/bin/wm/apps/screenshot", "Shift+Super+S, Print Screen" },
+      "/bin/wm/apps/screenshot", "Shift+Super+S, Print Screen", 0 },
+    // The same program told what to do, GNOME's three screenshot
+    // actions. Screenshot's Options shows the Print Screen keys as a
+    // view onto these bindings, so the keys stay in this one file.
+    { "screenshot_screen", "Screenshot of the screen", "Save the whole screen at once",
+      "/bin/wm/apps/screenshot", "Shift+Print Screen", "--now screen" },
+    { "screenshot_window", "Screenshot of a window",   "Save the active window at once",
+      "/bin/wm/apps/screenshot", "Alt+Print Screen", "--now window" },
+    { "screenshot_region", "Screenshot of a region",   "Open the screenshot tool ready to drag an area",
+      "/bin/wm/apps/screenshot", "", "--mode region" },
     { "task_manager", "Task Manager",  "Open the task manager",
-      "/bin/wm/system/taskmgr",  "Ctrl+Alt+Delete" },
+      "/bin/wm/system/taskmgr",  "Ctrl+Alt+Delete", 0 },
     // ^ NOT Windows' Ctrl+Shift+Esc, and not by preference: this
     // keyboard driver DROPS Ctrl with anything that is not a letter
     // (kernel/drivers/input/keyboard.c), and Esc comes off the layout

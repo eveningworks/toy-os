@@ -1,0 +1,7 @@
+Type=keycombo
+File=/etc/shortcuts.conf
+Label=Screenshot of the screen
+Category=Shortcuts
+Group=Applications
+Default=Shift+Print Screen
+Description=Save the whole screen at once

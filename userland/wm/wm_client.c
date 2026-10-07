@@ -1144,6 +1144,15 @@ void wm_client_send_tab(struct window *win, int tab, int action) {
 
 static void req_notice(int from, struct wmchan_msg *m) {
     crash_notice_piece(from, m->a, m->b, (unsigned)m->c, m->text);
+    // The LAST piece is answered (abi/win_proto.h): its sender may exit
+    // next, and its ring goes with it.
+    int idx = m->a & 0xff, pieces = (m->a >> 8) & 0xff;
+    if (idx == pieces - 1) {
+        struct wmchan_msg r;
+        k_memset(&r, 0, sizeof r);
+        r.type = WIN_REQ_NOTICE;
+        uchan_server_reply(&g_chan, from, &r, sizeof r);
+    }
 }
 
 static void req_hints(int from, struct wmchan_msg *m) {

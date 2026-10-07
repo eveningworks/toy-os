@@ -43,6 +43,7 @@
 #include "volume_popup.h"
 #include "brightness_popup.h"
 #include "crash_notice.h"
+#include "wm_flash.h"
 #include "close_batch.h"
 #include "network_popup.h"
 #include "remote_popup.h"
@@ -1121,6 +1122,10 @@ void wm_run(void) {
             // the idle park (wm_anim.h).
             if ((wm_anim_active() || start_menu_animating()) && wait_ms > WM_ANIM_FRAME_MS)
                 wait_ms = WM_ANIM_FRAME_MS;
+            {
+                int fw = wm_flash_wait_ms();
+                if (fw >= 0 && (uint32_t)fw < wait_ms) wait_ms = (uint32_t)fw;
+            }
             // The search field's caret blinks: wake for its next flip.
             {
                 int cw = start_menu_wait_ms();

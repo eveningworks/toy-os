@@ -1,12 +1,17 @@
 // Screenshot -- the shell's capture overlay, GNOME 42's shape (mockup
 // S3, 2026-10-04): PrtSc freezes the screen, dims it, and puts a pill at
 // the bottom -- Region / Screen / Window, the shutter, the pointer, copy
-// to the clipboard, a delay, close. There is no window to manage: the
-// shutter saves to /home/screenshots, the compositor puts up a card with
-// the picture and Open / Copy / Folder / Save as (WIN_REQ_NOTICE), and
-// the app is gone. /bin/screenshot is the other front end on lib/ushot.h.
-// The card's Save as comes back here as `--save-as PATH` (the bottom of
-// this file).
+// to the clipboard, a delay, more, options, close. There is no window
+// to manage: the shutter saves where the options say, the compositor
+// puts up a card with the picture and Open / Copy / Folder / Save as
+// (WIN_REQ_NOTICE), and the app is gone. /bin/screenshot is the other
+// front end on lib/ushot.h. The card's Save as comes back here as
+// `--save-as PATH` (the bottom of this file).
+//
+// THE OPTIONS (userland/screenshot/): the gear opens the Options window
+// (shot_prefs.c), the "..." a popover of the common ones drawn on the
+// overlay itself (mockups O1 + P1, 2026-10-07). `--now screen|window`
+// is Shift/Alt+PrtSc: the picture is taken with no overlay at all.
 //
 // **THE CHOICE IS MADE ON A FROZEN FRAME**, taken before the overlay is
 // shown: the thing being photographed cannot move while you choose
@@ -38,30 +43,28 @@
 #include "ui/uui_primitives.h"
 #include "lib/icon_cache.h"
 #include "lib/uclip.h"
-#include "lib/uconf.h"
+#include "lib/uopen.h"
 #include "lib/ushot.h"
 #include "keyboard.h"
 #include "kpath.h"   // k_path_basename/_dirname -- the kernel's, linked into ring 3
 #include "lib/uimg.h"
 #include "ui/uui_filedialog.h"
+#include "screenshot/screenshot.h"
+#include "ui/uui_prefs.h"
 
-#define SHOT_DIR  "/home/screenshots"
-#define PREFS     "/etc/screenshot.conf"   // the app's own (docs/conventions/gui.md)
 #define SELF_PATH "/bin/wm/apps/screenshot"
 
-enum { MODE_REGION, MODE_SCREEN, MODE_WINDOW, MODES };
-static const char *const MODE_NAME[MODES] = { "region", "screen", "window" };
+enum { MODE_REGION = SHOT_MODE_REGION, MODE_SCREEN = SHOT_MODE_SCREEN,
+       MODE_WINDOW = SHOT_MODE_WINDOW, MODES = SHOT_MODES };
+#define MODE_NAME SHOT_MODE_NAME
 static const char *const MODE_LABEL[MODES] = { "Region", "Screen", "Window" };
 static const char *const MODE_ICON[MODES] = { "tb-region", "tb-screen", "tb-window" };
 
-static const int DELAYS[] = { 0, 3, 5, 10 };
-#define DELAY_COUNT 4
-
-// The preferences: the last mode, and the three toggles.
+// Everything the options say, the pill's own state among it.
+static struct shot_conf g_conf;
 static int g_mode = MODE_REGION;
-static int g_pointer;
-static int g_copy;
-static int g_delay_i;
+#define g_pointer g_conf.pointer
+#define g_copy    g_conf.copy
 
 // The two frozen frames, copied out of the ONE capture object a process
 // may have (its buffer is named after the pid -- lib/ushot.h), and the
@@ -78,6 +81,7 @@ static int g_ok;
 struct rect { int x, y, w, h; };
 static struct rect g_sel;         // the region; w == 0 is none yet
 static struct rect g_win;         // the window under the pointer
+static char g_win_app[16];        // ...and its app id, for <app>
 static int g_win_have;
 
 enum { DRAG_NONE, DRAG_NEW, DRAG_MOVE, DRAG_HANDLE };
@@ -99,35 +103,33 @@ static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v;
 
 // --- preferences ------------------------------------------------------
 
-static void prefs_load(void) {
-    char v[16];
-    if (uconf_get(PREFS, "mode", v, sizeof v))
-        for (int i = 0; i < MODES; i++) if (!strcmp(v, MODE_NAME[i])) g_mode = i;
-    if (uconf_get(PREFS, "pointer", v, sizeof v)) g_pointer = !strcmp(v, "on");
-    if (uconf_get(PREFS, "copy", v, sizeof v)) g_copy = !strcmp(v, "on");
-    if (uconf_get(PREFS, "delay", v, sizeof v)) {
-        int d = atoi(v);
-        for (int i = 0; i < DELAY_COUNT; i++) if (DELAYS[i] == d) g_delay_i = i;
+static void prefs_save(void) {
+    g_conf.mode = g_mode;
+    if (g_sel.w >= 2 && g_sel.h >= 2) {
+        g_conf.rx = g_sel.x; g_conf.ry = g_sel.y; g_conf.rw = g_sel.w; g_conf.rh = g_sel.h;
+        g_conf.rsw = g_sw; g_conf.rsh = g_sh;
     }
+    shot_conf_save(&g_conf);
 }
 
-static void prefs_save(void) {
-    char d[8];
-    snprintf(d, sizeof d, "%d", DELAYS[g_delay_i]);
-    uconf_set(PREFS, "mode", MODE_NAME[g_mode]);
-    uconf_set(PREFS, "pointer", g_pointer ? "on" : "off");
-    uconf_set(PREFS, "copy", g_copy ? "on" : "off");
-    uconf_set(PREFS, "delay", d);
+// The timer cycles off, then the three the options offer.
+static void next_delay(void) {
+    int i = 0;
+    while (i < SHOT_DELAYS && g_conf.delays[i] != g_conf.delay) i++;
+    g_conf.delay = g_conf.delay == 0 ? g_conf.delays[0] : i + 1 < SHOT_DELAYS ? g_conf.delays[i + 1] : 0;
 }
 
 // --- the pill ---------------------------------------------------------
 //
 // Laid out from the font, left to right: the three modes (icon over a
-// label), a rule, the shutter, a rule, pointer / copy / delay / close.
+// label), a rule, the shutter, a rule, pointer / copy / delay / more /
+// options / close.
 
-enum { C_REGION, C_SCREEN, C_WINDOW, C_SHUTTER, C_POINTER, C_COPY, C_DELAY, C_CLOSE, CTLS };
+enum { C_REGION, C_SCREEN, C_WINDOW, C_SHUTTER, C_POINTER, C_COPY, C_DELAY, C_MORE, C_GEAR,
+       C_CLOSE, CTLS };
+#define SMALL_CTLS (CTLS - C_POINTER)
 static const char *const CTL_NAME[CTLS] = {
-    "region", "screen", "window", "shutter", "pointer", "copy", "delay", "close",
+    "region", "screen", "window", "shutter", "pointer", "copy", "delay", "more", "gear", "close",
 };
 
 static int unit(void) { return ugfx_char_h(); }
@@ -138,7 +140,7 @@ static void ctl_rect(int c, struct rect *r) {
     int sd = u * 3 + u / 2;               // the shutter's diameter
     int ib = u * 2 + u / 3;               // a small icon button
     int pad = u * 2 / 3, rule = u;
-    int total = pad + 3 * mw + rule + sd + rule + 4 * ib + 3 * (u / 4) + pad;
+    int total = pad + 3 * mw + rule + sd + rule + SMALL_CTLS * ib + (SMALL_CTLS - 1) * (u / 4) + pad;
     int x0 = (g_sw - total) / 2;
     int ph = mh + 2 * pad;
     int y0 = g_sh - ph - u * 4;
@@ -176,6 +178,196 @@ static int on_pill(int x, int y) {
     struct rect r;
     pill_rect(&r);
     return uui_hit(r.x, r.y, r.w, r.h, x, y);
+}
+
+// --- the popover (P1) -------------------------------------------------
+//
+// The options a capture changes most, on the overlay itself, above the
+// "..." -- each takes effect at once and is kept with the rest when the
+// overlay closes. Everything else is in the Options window.
+
+enum { P_HEAD, P_CHECK, P_SEG, P_FOLDER, P_SEP };
+enum { PI_CARD, PI_COPY, PI_OPEN, PI_FORMAT, PI_FOLDER, PI_LASTREG, PI_SHADOW, PI_NONE };
+static const struct pop_row {
+    int kind;
+    int item;          // PI_*, or PI_NONE for a heading or a rule
+    const char *label;
+    const char *name;  // the layout log's
+} POP[] = {
+    { P_HEAD,   PI_NONE,    "After capture", 0 },
+    { P_CHECK,  PI_CARD,    "Show the card", "card" },
+    { P_CHECK,  PI_COPY,    "Copy to the clipboard", "copy" },
+    { P_CHECK,  PI_OPEN,    "Open in Image Viewer", "open" },
+    { P_SEP,    PI_NONE,    0, 0 },
+    { P_HEAD,   PI_NONE,    "Save as", 0 },
+    { P_SEG,    PI_FORMAT,  0, "format" },
+    { P_FOLDER, PI_FOLDER,  "Change...", "folder" },
+    { P_SEP,    PI_NONE,    0, 0 },
+    { P_CHECK,  PI_LASTREG, "Start from the last region", "lastregion" },
+    { P_CHECK,  PI_SHADOW,  "Include window shadows", "shadow" },
+};
+#define POP_ROWS ((int)(sizeof POP / sizeof POP[0]))
+static const char *const FORMAT_SEG[3] = { "QOI", "PNG", "Ask" };
+
+static int g_pop;                 // the popover is up
+static int g_pop_hot = -1, g_pop_pressed = -1;
+static int g_pop_seg = -1;        // the segment a press on the format row armed
+
+static int pop_row_h(int k) {
+    int u = unit();
+    return POP[k].kind == P_SEP ? u / 2 + 1 : POP[k].kind == P_HEAD ? u + u / 3 : u * 2;
+}
+
+static void pop_rect(struct rect *r) {
+    int u = unit();
+    int w = ugfx_text_width("Start from the last region") + u * 4;
+    int h = u / 2 * 2;
+    for (int k = 0; k < POP_ROWS; k++) h += pop_row_h(k);
+    struct rect more, pill;
+    ctl_rect(C_MORE, &more);
+    pill_rect(&pill);
+    r->w = w;
+    r->h = h;
+    r->x = clampi(more.x + more.w - w + u, 4, g_sw - w - 4);
+    r->y = pill.y - h - u / 2;
+}
+
+static void pop_row_rect(int k, struct rect *r) {
+    struct rect p;
+    pop_rect(&p);
+    int y = p.y + unit() / 2;
+    for (int i = 0; i < k; i++) y += pop_row_h(i);
+    r->x = p.x; r->y = y; r->w = p.w; r->h = pop_row_h(k);
+}
+
+// The three segments of the format row.
+static void seg_rect(int s, struct rect *r) {
+    struct rect row;
+    pop_row_rect(6, &row);
+    int u = unit(), x0 = row.x + u, w = (row.w - 2 * u) / 3;
+    r->x = x0 + s * w; r->y = row.y + u / 4; r->w = w; r->h = row.h - u / 2;
+}
+
+static int pop_at(int x, int y, int *seg) {
+    struct rect p;
+    pop_rect(&p);
+    if (!uui_hit(p.x, p.y, p.w, p.h, x, y)) return -1;
+    for (int k = 0; k < POP_ROWS; k++) {
+        struct rect r;
+        pop_row_rect(k, &r);
+        if (!uui_hit(r.x, r.y, r.w, r.h, x, y) || POP[k].item == PI_NONE) continue;
+        if (seg) {
+            *seg = -1;
+            for (int s = 0; s < 3 && POP[k].kind == P_SEG; s++) {
+                struct rect q;
+                seg_rect(s, &q);
+                if (uui_hit(q.x, q.y, q.w, q.h, x, y)) *seg = s;
+            }
+        }
+        return k;
+    }
+    return POP_ROWS;   // inside, on no control
+}
+
+static int pop_checked(int item) {
+    switch (item) {
+    case PI_CARD: return g_conf.card;
+    case PI_COPY: return g_conf.copy;
+    case PI_OPEN: return g_conf.open;
+    case PI_LASTREG: return g_conf.last_region;
+    case PI_SHADOW: return g_conf.shadow;
+    }
+    return 0;
+}
+
+static int format_seg(void) { return g_conf.ask ? 2 : g_conf.png ? 1 : 0; }
+
+static void open_options(struct uapp *a, int page);
+
+static void pop_activate(struct uapp *a, int k, int seg) {
+    switch (POP[k].item) {
+    case PI_CARD: g_conf.card = !g_conf.card; break;
+    case PI_COPY: g_conf.copy = !g_conf.copy; break;
+    case PI_OPEN: g_conf.open = !g_conf.open; break;
+    case PI_LASTREG: g_conf.last_region = !g_conf.last_region; break;
+    case PI_SHADOW: g_conf.shadow = !g_conf.shadow; g_win_have = 0; break;
+    case PI_FORMAT:
+        if (seg == 2) g_conf.ask = 1;
+        else if (seg >= 0) { g_conf.ask = 0; g_conf.png = seg == 1; }
+        break;
+    case PI_FOLDER: g_pop = 0; open_options(a, SHOT_PAGE_SAVING); return;
+    }
+    ulogf("screenshot: option %s now card %d copy %d open %d format %s lastregion %d shadow %d\n",
+          POP[k].name, g_conf.card, g_conf.copy, g_conf.open, FORMAT_SEG[format_seg()],
+          g_conf.last_region, g_conf.shadow);
+}
+
+static void draw_check(struct ugfx_surface *s, int x, int y, int sz, int on, uint32_t ground) {
+    uint32_t edge = on ? UTHEME_ACCENT : UTHEME_OUTLINE;
+    uui_fill_round_rect(s, x, y, sz, sz, 3, edge);
+    uui_fill_round_rect(s, x + 1, y + 1, sz - 2, sz - 2, 2, on ? UTHEME_ACCENT : ground);
+    if (on) {
+        // A tick, two strokes.
+        uint32_t ink = UTHEME_ACCENT_TEXT;
+        for (int i = 0; i < sz / 4; i++) ugfx_fill_rect(s, x + sz / 4 + i, y + sz / 2 + i - 1, 2, 2, ink);
+        for (int i = 0; i < sz / 2; i++)
+            ugfx_fill_rect(s, x + sz / 4 + sz / 4 + i, y + sz / 2 + sz / 4 - i - 2, 2, 2, ink);
+    }
+}
+
+static void draw_pop(struct ugfx_surface *s) {
+    struct rect p;
+    pop_rect(&p);
+    int u = unit();
+    uint32_t ground = ugfx_rgb(244, 244, 246);
+    for (int k = 4; k >= 1; k--)
+        uui_glass_round_rect(s, p.x - k, p.y - k + 3, p.w + 2 * k, p.h + 2 * k, u / 2 + k,
+                             ugfx_rgb(0, 0, 0), (uint8_t)(18 + 6 * (4 - k)), 0);
+    uui_fill_round_rect(s, p.x, p.y, p.w, p.h, u / 2, ground);
+    for (int k = 0; k < POP_ROWS; k++) {
+        struct rect r;
+        pop_row_rect(k, &r);
+        int ty = r.y + (r.h - ugfx_char_h()) / 2;
+        uint32_t bg = ground;
+        if ((POP[k].kind == P_CHECK || POP[k].kind == P_FOLDER) && (g_pop_hot == k || g_pop_pressed == k)) {
+            bg = uui_state_bg(ground, g_pop_pressed == k ? UUI_STATE_PRESSED : UUI_STATE_HOVER);
+            ugfx_fill_rect(s, r.x, r.y, r.w, r.h, bg);
+        }
+        switch (POP[k].kind) {
+        case P_SEP:
+            ugfx_fill_rect(s, r.x, r.y + r.h / 2, r.w, 1, ugfx_rgb(208, 208, 214));
+            break;
+        case P_HEAD:
+            ugfx_draw_string_clipped(s, r.x + u, ty, r.w - 2 * u, POP[k].label,
+                                     ugfx_rgb(96, 96, 104), bg);
+            break;
+        case P_CHECK: {
+            int sz = u;
+            draw_check(s, r.x + u, r.y + (r.h - sz) / 2, sz, pop_checked(POP[k].item), bg);
+            ugfx_draw_string_clipped(s, r.x + u * 2 + u / 2, ty, r.w - u * 3, POP[k].label, UTHEME_TEXT, bg);
+            break;
+        }
+        case P_SEG:
+            for (int sg = 0; sg < 3; sg++) {
+                struct rect q;
+                seg_rect(sg, &q);
+                int on = format_seg() == sg;
+                uint32_t f = on ? UTHEME_ACCENT : UTHEME_WHITE;
+                ugfx_fill_rect(s, q.x, q.y, q.w, q.h, UTHEME_OUTLINE);
+                ugfx_fill_rect(s, q.x + (sg ? 0 : 1), q.y + 1, q.w - (sg ? 1 : 2), q.h - 2, f);
+                int tw = ugfx_text_width(FORMAT_SEG[sg]);
+                ugfx_draw_string(s, q.x + (q.w - tw) / 2, q.y + (q.h - ugfx_char_h()) / 2, FORMAT_SEG[sg],
+                                 on ? UTHEME_ACCENT_TEXT : UTHEME_TEXT, f);
+            }
+            break;
+        case P_FOLDER: {
+            int lw = ugfx_text_width(POP[k].label);
+            ugfx_draw_string_elided(s, r.x + u, ty, r.w - 3 * u - lw, g_conf.folder, UTHEME_TEXT, bg);
+            ugfx_draw_string(s, r.x + r.w - u - lw, ty, POP[k].label, UTHEME_ACCENT, bg);
+            break;
+        }
+        }
+    }
 }
 
 // --- the region's handles ---------------------------------------------
@@ -222,41 +414,29 @@ static int target(struct rect *r) {
     return g_sel.w >= 2 && g_sel.h >= 2;
 }
 
-static int save_crop(const struct rect *r, char *path, int cap) {
+// The capture object, cropped to `r` when it is not the whole of it,
+// written to the next free name the options give.
+static int save_held(const struct rect *r, int mode, const char *app, char *path, int cap) {
     struct ushot *f = &g_shot;
-    // The chosen frame back into the capture object, which crops and saves.
-    memcpy(f->px, frame(), (size_t)g_sw * (size_t)g_sh * 4);
-    f->w = g_sw;
-    f->h = g_sh;
-    sys_mkdir(SHOT_DIR);
-    time_t now = time(NULL);
-    struct tm tm;
-    char stamp[32];
-    if (!(localtime_r(&now, &tm) && strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm)))
-        snprintf(stamp, sizeof stamp, "%d", sys_getpid());
-    // TWO IN ONE SECOND get -2, -3...: the name is per second, and the
-    // first file must not be written over (its card points at it).
-    struct sys_stat st;
-    snprintf(path, (size_t)cap, SHOT_DIR "/shot-%s.qoi", stamp);
-    for (int n = 2; sys_stat(path, &st) == 0 && n < 100; n++)
-        snprintf(path, (size_t)cap, SHOT_DIR "/shot-%s-%d.qoi", stamp, n);
-    if (r->w != f->w || r->h != f->h) {
+    sys_mkdir(g_conf.folder);
+    if (!shot_next_path(&g_conf, app, mode, path, cap)) return -EINVAL;
+    if (r && (r->x || r->y || r->w != f->w || r->h != f->h)) {
         int rc = ushot_crop(f, r->x, r->y, r->w, r->h);
         if (rc < 0) return rc;
     }
-    // QOI, which this desktop's Image Viewer opens by default.
-    return ushot_save(f, path, NULL);
+    return ushot_save(f, path, NULL);   // the format from the extension
 }
 
-// The shutter: save, copy if asked, the compositor's card, and gone.
-static void finish(struct uapp *a) {
-    struct rect r;
-    if (!target(&r)) return;
-    char path[128];
-    int rc = save_crop(&r, path, sizeof path);
-    if (rc < 0) {
-        ulogf("screenshot: could not save: %s\n", ushot_strerror(rc));
-        uapp_quit(a, 1);
+// What happens to a saved file: the clipboard, the card and the flash,
+// the viewer -- or, when the options say to ask, the Save as window,
+// which then owns the rest.
+static void after_save(const char *path, int w, int h) {
+    ulogf("screenshot: saved %s %dx%d\n", path, w, h);
+    if (g_conf.ask) {
+        if (g_conf.flash) uapp_notice(g_app, WIN_NOTICE_SCREENSHOT, WIN_NOTICE_F_NO_CARD | WIN_NOTICE_F_FLASH, path);
+        char args[SHOT_PATH_MAX + 32];
+        snprintf(args, sizeof args, "--save-as --move %s", path);
+        sys_spawn(SELF_PATH, args, -1);
         return;
     }
     unsigned flags = 0;
@@ -266,26 +446,66 @@ static void finish(struct uapp *a) {
         uclip_begin(0, UCLIP_COPY);
         if (uclip_add(0, path) && uclip_commit(0) > 0) flags |= WIN_NOTICE_F_COPIED;
     }
-    ulogf("screenshot: saved %s %dx%d\n", path, r.w, r.h);
-    uapp_notice(a, WIN_NOTICE_SCREENSHOT, flags, path);
+    if (!g_conf.card) flags |= WIN_NOTICE_F_NO_CARD;
+    if (g_conf.flash) flags |= WIN_NOTICE_F_FLASH;
+    if (g_conf.card || g_conf.flash) uapp_notice(g_app, WIN_NOTICE_SCREENSHOT, flags, path);
+    if (g_conf.open && uopen_spawn(path) < 0) ulogf("screenshot: nothing opens %s\n", path);
+}
+
+// The shutter: save, everything after, and gone.
+static void finish(struct uapp *a) {
+    struct rect r;
+    if (!target(&r)) return;
+    // The chosen frame back into the capture object, which crops and saves.
+    memcpy(g_shot.px, frame(), (size_t)g_sw * (size_t)g_sh * 4);
+    g_shot.w = g_sw;
+    g_shot.h = g_sh;
+    char path[SHOT_PATH_MAX];
+    int rc = save_held(&r, g_mode, g_mode == MODE_WINDOW ? g_win_app : "", path, sizeof path);
+    if (rc < 0) {
+        ulogf("screenshot: could not save: %s\n", ushot_strerror(rc));
+        uapp_quit(a, 1);
+        return;
+    }
     prefs_save();
+    after_save(path, r.w, r.h);
     uapp_quit(a, 0);
 }
 
 static void shutter(struct uapp *a) {
     // Not in the copy that already WAITED: its shutter takes the shot,
     // or a delayed capture would relaunch itself for ever.
-    if (DELAYS[g_delay_i] > 0 && g_launch_delay <= 0) {
+    if (g_conf.delay > 0 && g_launch_delay <= 0) {
         // A DELAY IS A RELAUNCH (the top of this file): the next copy
         // sleeps with no window and freezes the screen as it is then.
         char args[48];
-        snprintf(args, sizeof args, "--delay %d --mode %s", DELAYS[g_delay_i], MODE_NAME[g_mode]);
+        snprintf(args, sizeof args, "--delay %d --mode %s", g_conf.delay, MODE_NAME[g_mode]);
         prefs_save();
         sys_spawn(SELF_PATH, args, -1);
         uapp_quit(a, 0);
         return;
     }
     finish(a);
+}
+
+// --- the Options window -----------------------------------------------
+
+static void options_done(const struct shot_conf *next) {
+    // The dialog edits what it shows; the pill's state and the last
+    // region are this run's, not the dialog's.
+    struct shot_conf keep = g_conf;
+    g_conf = *next;
+    g_conf.copy = next->copy;
+    g_conf.delay = keep.delay;
+    if (g_conf.delay && memcmp(g_conf.delays, keep.delays, sizeof keep.delays)) g_conf.delay = g_conf.delays[0];
+    prefs_save();
+    g_win_have = 0;
+    if (g_app) uapp_redraw(g_app);
+}
+
+static void open_options(struct uapp *a, int page) {
+    prefs_save();   // what the pill and the popover changed, so the dialog shows it
+    shot_prefs_open(a, &g_conf, page, options_done);
 }
 
 // --- input ------------------------------------------------------------
@@ -301,7 +521,9 @@ static void activate(struct uapp *a, int c) {
     case C_SHUTTER: shutter(a); return;
     case C_POINTER: g_pointer = !g_pointer; break;
     case C_COPY:    g_copy = !g_copy; break;
-    case C_DELAY:   g_delay_i = (g_delay_i + 1) % DELAY_COUNT; break;
+    case C_DELAY:   next_delay(); break;
+    case C_MORE:    g_pop = !g_pop; g_pop_hot = -1; break;
+    case C_GEAR:    g_pop = 0; open_options(a, SHOT_PAGE_CAPTURE); break;
     case C_CLOSE:   prefs_save(); uapp_quit(a, 0); return;
     }
     uapp_redraw(a);
@@ -309,8 +531,11 @@ static void activate(struct uapp *a, int c) {
 
 static void probe_window(int x, int y) {
     struct win_shot r;
-    if (ushot_probe(&g_shot, WIN_SHOT_WINDOW_AT, x, y, &r) == 0 && r.w > 0) {
+    unsigned how = g_conf.shadow ? WIN_SHOT_SHADOW : 0;
+    if (ushot_probe(&g_shot, WIN_SHOT_WINDOW_AT, how, x, y, &r) == 0 && r.w > 0) {
         g_win.x = r.x; g_win.y = r.y; g_win.w = r.w; g_win.h = r.h;
+        memcpy(g_win_app, r.app, sizeof g_win_app);
+        g_win_app[sizeof g_win_app - 1] = '\0';
         // Clamped to the frame: a window hanging off the screen is
         // captured as much of it as is on it.
         int x1 = clampi(g_win.x + g_win.w, 0, g_sw), y1 = clampi(g_win.y + g_win.h, 0, g_sh);
@@ -325,8 +550,28 @@ static void probe_window(int x, int y) {
 }
 
 static void on_press(struct uapp *a, int x, int y, unsigned mods) {
+    if (shot_prefs_is_open()) return;
     unsigned buttons = WIN_MOUSE_BUTTONS(mods);
-    if (buttons & 2) { prefs_save(); uapp_quit(a, 0); return; }   // the secondary button closes
+    if (buttons & 2) {   // the secondary button closes the popover, then the overlay
+        if (g_pop) { g_pop = 0; uapp_redraw(a); return; }
+        prefs_save(); uapp_quit(a, 0); return;
+    }
+    if (g_pop) {
+        int seg = -1, k = pop_at(x, y, &seg);
+        if (k >= 0) {   // on the popover: armed, acted on at the release
+            g_pop_pressed = k < POP_ROWS ? k : -1;
+            g_pop_seg = seg;
+            uapp_redraw(a);
+            return;
+        }
+        if (!on_pill(x, y) || ctl_at(x, y) != C_MORE) {
+            // A press elsewhere closes it and does nothing else, as a
+            // menu's dismissing click does.
+            g_pop = 0;
+            uapp_redraw(a);
+            return;
+        }
+    }
     if (on_pill(x, y)) {
         g_pressed_ctl = ctl_at(x, y);
         return;
@@ -360,6 +605,12 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     if (x < 0) return;   // the pointer left
     g_px = x;
     g_py = y;
+    if (g_pop) {
+        int k = pop_at(x, y, 0);
+        int hot = k >= 0 && k < POP_ROWS ? k : -1;
+        if (hot != g_pop_hot) { g_pop_hot = hot; uapp_redraw(a); }
+        if (k >= 0) { uapp_set_cursor(a, WIN_CURSOR_DEFAULT); return; }
+    }
     int hot = on_pill(x, y) ? ctl_at(x, y) : -1;
     if (hot != g_hot) { g_hot = hot; uapp_redraw(a); }
     if (g_mode == MODE_WINDOW && !on_pill(x, y)) {
@@ -401,6 +652,15 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
 
 static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
     (void)buttons;
+    if (g_pop_pressed >= 0) {
+        int k = g_pop_pressed, seg = -1;
+        g_pop_pressed = -1;
+        // Over the same row (and segment) it was pressed on.
+        if (pop_at(x, y, &seg) == k && (POP[k].kind != P_SEG || (seg >= 0 && seg == g_pop_seg)))
+            pop_activate(a, k, seg);
+        uapp_redraw(a);
+        return;
+    }
     if (g_pressed_ctl >= 0) {
         int c = g_pressed_ctl;
         g_pressed_ctl = -1;
@@ -414,8 +674,11 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
+    if (shot_prefs_is_open()) return;
     switch (key) {
-    case 0x1B: prefs_save(); uapp_quit(a, 0); return;   // Esc closes, saving nothing
+    case 0x1B:   // Esc closes the popover, then the overlay
+        if (g_pop) { g_pop = 0; break; }
+        prefs_save(); uapp_quit(a, 0); return;
     case '\n': case '\r': case ' ': shutter(a); return;
     case 'r': set_mode(MODE_REGION); break;
     case 's': set_mode(MODE_SCREEN); break;
@@ -439,6 +702,8 @@ static void frame_rect(struct ugfx_surface *s, const struct rect *r) {
     ugfx_draw_rect(s, r->x - 2, r->y - 2, r->w + 4, r->h + 4, ugfx_rgb(0, 0, 0));
 }
 
+static int sizing(void) { return g_drag == DRAG_NEW || g_drag == DRAG_HANDLE; }
+
 // Above the selection -- or, while a drag sizes it, beside the pointer,
 // where the eye is (Spectacle's shape).
 static void size_label(struct ugfx_surface *s, const struct rect *r) {
@@ -447,7 +712,7 @@ static void size_label(struct ugfx_surface *s, const struct rect *r) {
     int u = unit(), tw = ugfx_text_width(t) + u, th = u + u / 2;
     int x = r->x + (r->w - tw) / 2, y = r->y - th - u / 2;
     if (y < u / 2) y = r->y + u / 2;
-    if (g_drag == DRAG_NEW || g_drag == DRAG_HANDLE) {
+    if (sizing()) {
         x = g_px + u;
         y = g_py + u;
         if (x + tw > g_sw - 2) x = g_px - u - tw;   // flipped at the edges
@@ -457,6 +722,34 @@ static void size_label(struct ugfx_surface *s, const struct rect *r) {
     y = clampi(y, 2, g_sh - th - 2);
     uui_fill_round_rect(s, x, y, tw, th, UUI_CAPSULE, ugfx_rgb(24, 24, 28));
     ugfx_draw_string(s, x + u / 2, y + (th - ugfx_char_h()) / 2, t, UTHEME_WHITE, ugfx_rgb(24, 24, 28));
+}
+
+// THE MAGNIFIER, while an edge is being placed: the pixels round the
+// pointer at eight times, with a crosshair on the one it is on --
+// Spectacle's and Snipping Tool's loupe. Up and to the left of the
+// pointer, the size label having the other side.
+#define MAG_SRC 15
+#define MAG_ZOOM 8
+static void magnifier(struct ugfx_surface *s) {
+    int side = MAG_SRC * MAG_ZOOM, u = unit();
+    int x = g_px - u - side, y = g_py - u - side;
+    if (x < 2) x = g_px + u;
+    if (y < 2) y = g_py + u * 3;
+    x = clampi(x, 2, g_sw - side - 2);
+    y = clampi(y, 2, g_sh - side - 2);
+    ugfx_fill_rect(s, x - 2, y - 2, side + 4, side + 4, ugfx_rgb(0, 0, 0));
+    ugfx_fill_rect(s, x - 1, y - 1, side + 2, side + 2, UTHEME_WHITE);
+    const uint32_t *f = frame();
+    for (int j = 0; j < MAG_SRC; j++)
+        for (int i = 0; i < MAG_SRC; i++) {
+            int sx = g_px - MAG_SRC / 2 + i, sy = g_py - MAG_SRC / 2 + j;
+            uint32_t c = sx >= 0 && sy >= 0 && sx < g_sw && sy < g_sh
+                       ? f[(size_t)sy * (size_t)g_sw + (size_t)sx] & 0xFFFFFF : 0;
+            ugfx_fill_rect(s, x + i * MAG_ZOOM, y + j * MAG_ZOOM, MAG_ZOOM, MAG_ZOOM, c);
+        }
+    int c0 = (MAG_SRC / 2) * MAG_ZOOM;
+    ugfx_draw_rect(s, x + c0 - 1, y + c0 - 1, MAG_ZOOM + 2, MAG_ZOOM + 2, ugfx_rgb(0, 0, 0));
+    ugfx_draw_rect(s, x + c0, y + c0, MAG_ZOOM, MAG_ZOOM, UTHEME_WHITE);
 }
 
 static void draw_icon(struct ugfx_surface *s, const char *name, int cx, int cy, uint32_t ink) {
@@ -480,7 +773,7 @@ static void draw_pill(struct ugfx_surface *s) {
         ctl_rect(c, &r);
         int on = (c <= C_WINDOW && g_mode == c - C_REGION) ||
                  (c == C_POINTER && g_pointer) || (c == C_COPY && g_copy) ||
-                 (c == C_DELAY && g_delay_i > 0);
+                 (c == C_DELAY && g_conf.delay > 0) || (c == C_MORE && g_pop);
         int hot = g_hot == c;
         if (c == C_SHUTTER) {
             // A ring and a disc: the camera's button.
@@ -498,13 +791,15 @@ static void draw_pill(struct ugfx_surface *s) {
             draw_icon(s, MODE_ICON[m], r.x + r.w / 2, r.y + r.h / 2 - u / 2, ink);
             int tw = ugfx_text_width(MODE_LABEL[m]);
             ugfx_draw_string(s, r.x + (r.w - tw) / 2, r.y + r.h - u - u / 4, MODE_LABEL[m], ink, bg);
-        } else if (c == C_DELAY && g_delay_i > 0) {
+        } else if (c == C_DELAY && g_conf.delay > 0) {
             char t[8];
-            snprintf(t, sizeof t, "%ds", DELAYS[g_delay_i]);
+            snprintf(t, sizeof t, "%ds", g_conf.delay);
             int tw = ugfx_text_width(t);
             ugfx_draw_string(s, r.x + (r.w - tw) / 2, r.y + (r.h - ugfx_char_h()) / 2, t, ink, bg);
         } else {
-            static const char *const icons[] = { 0, 0, 0, 0, "tb-pointer", "tb-copy", "tb-timer", "tb-close" };
+            static const char *const icons[CTLS] = {
+                0, 0, 0, 0, "tb-pointer", "tb-copy", "tb-timer", "tb-more", "tb-gear", "tb-close",
+            };
             draw_icon(s, icons[c], r.x + r.w / 2, r.y + r.h / 2, ink);
         }
     }
@@ -531,7 +826,21 @@ static void log_layout(void) {
         uapp_logf_layout("screenshot: layout selection %d %d %d %d\n", t.x, t.y, t.w, t.h);
     uapp_logf_layout("screenshot: layout mode %s\n", MODE_NAME[g_mode]);
     uapp_logf_layout("screenshot: layout options pointer %d copy %d delay %d\n",
-                     g_pointer, g_copy, DELAYS[g_delay_i]);
+                     g_pointer, g_copy, g_conf.delay);
+    uapp_logf_layout("screenshot: layout popover %d\n", g_pop);
+    if (g_pop) {
+        for (int k = 0; k < POP_ROWS; k++) {
+            if (!POP[k].name) continue;
+            struct rect r;
+            pop_row_rect(k, &r);
+            uapp_logf_layout("screenshot: layout pop.%s %d %d %d %d\n", POP[k].name, r.x, r.y, r.w, r.h);
+        }
+        for (int sg = 0; sg < 3; sg++) {
+            struct rect q;
+            seg_rect(sg, &q);
+            uapp_logf_layout("screenshot: layout pop.seg%d %d %d %d %d\n", sg, q.x, q.y, q.w, q.h);
+        }
+    }
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
@@ -550,7 +859,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
         if (have) {
             lit(s, &r);
             frame_rect(s, &r);
-            size_label(s, &r);
+            if (g_conf.size_label) size_label(s, &r);
         }
         if (g_mode == MODE_REGION && have && g_drag != DRAG_NEW) {
             int hr = unit() / 3 + 1;
@@ -562,6 +871,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
                 uui_fill_round_rect(s, hx - hr, hy - hr, 2 * hr, 2 * hr, UUI_CAPSULE, UTHEME_WHITE);
             }
         }
+        if (g_mode == MODE_REGION && g_conf.magnifier && sizing()) magnifier(s);
         if (!have) {
             const char *hint = g_mode == MODE_REGION ? "Drag to select an area"
                                                      : "Point at a window and click it";
@@ -570,11 +880,11 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
         }
     }
     draw_pill(s);
+    if (g_pop) draw_pop(s);
     log_layout();
 }
 
 // --- life -------------------------------------------------------------
-
 
 static void on_open(struct uapp *a) {
     g_app = a;
@@ -599,6 +909,12 @@ static void on_open(struct uapp *a) {
     g_sw = g_shot.w;
     g_sh = g_shot.h;
     g_ok = 1;
+    // THE LAST REGION, on the screen it was drawn on: on another size it
+    // could hang off the edge, so it is not offered there.
+    if (g_conf.last_region && g_conf.rsw == g_sw && g_conf.rsh == g_sh && g_conf.rw >= 2 &&
+        g_conf.rh >= 2 && g_conf.rx + g_conf.rw <= g_sw && g_conf.ry + g_conf.rh <= g_sh) {
+        g_sel.x = g_conf.rx; g_sel.y = g_conf.ry; g_sel.w = g_conf.rw; g_sel.h = g_conf.rh;
+    }
     // A delayed SCREEN capture needs no choosing: that frame is the shot.
     if (g_launch_delay > 0 && g_mode == MODE_SCREEN) { finish(a); return; }
     uapp_set_fullscreen(a, 1);
@@ -608,11 +924,38 @@ static void on_open(struct uapp *a) {
 
 static int on_close(struct uapp *a) {
     (void)a;
+    if (shot_prefs_is_open()) uui_prefs_close();
     ushot_close(&g_shot);
     free(g_fr[0]);
     free(g_fr[1]);
     free(g_dim);
     return 1;
+}
+
+// --- Shift/Alt+PrtSc: the picture with no overlay -------------------------
+//
+// `--now screen|window`: one capture, saved, everything after, and gone --
+// no window is ever made, so there is nothing of this program to hide.
+// The window is the topmost one (WIN_SHOT_WINDOW), the one with the focus
+// when the key was pressed.
+static int now_main(int mode) {
+    if (ushot_open_on(&g_shot, uapp_wmchan()) < 0) {
+        ulog("screenshot: no compositor to capture from\n");
+        return 1;
+    }
+    unsigned how = g_conf.pointer ? WIN_SHOT_POINTER : 0;
+    if (mode == MODE_WINDOW && g_conf.shadow) how |= WIN_SHOT_SHADOW;
+    int rc = ushot_take(&g_shot, mode == MODE_WINDOW ? WIN_SHOT_WINDOW : WIN_SHOT_SCREEN, how, 0, 0, 0, 0);
+    char path[SHOT_PATH_MAX];
+    if (rc == 0) rc = save_held(0, mode, g_shot.app, path, sizeof path);
+    if (rc < 0) {
+        ulogf("screenshot: could not take %s: %s\n", MODE_NAME[mode], ushot_strerror(rc));
+        ushot_close(&g_shot);
+        return 1;
+    }
+    after_save(path, g_shot.w, g_shot.h);
+    ushot_close(&g_shot);
+    return 0;
 }
 
 // --- Save as (the card's fourth button) --------------------------------
@@ -621,12 +964,18 @@ static int on_close(struct uapp *a) {
 // chooser over it, and a COPY written where it says -- the original
 // stays, because it is the folder's record of the capture. The format is
 // the new name's extension (uimg_save()).
+//
+// `--save-as --move PATH` is "Ask where to save it": the capture was
+// written to the folder first, so nothing is lost if this window is
+// never answered; a save MOVES it, and the card follows the new name.
+// Cancel leaves it where it was.
 
 static char g_save_src[256];
 static struct uimg g_src, g_preview;
 static struct uui_filedialog g_chooser;
 static int g_chooser_asked;
 static char g_save_note[128];
+static int g_save_move;
 
 static int keep_images(void *ctx, const char *dir, const struct sys_dirent *e) {
     (void)ctx; (void)dir;
@@ -644,7 +993,7 @@ static void save_chosen(void *ctx, const char *path);
 
 static void ask_where(struct uapp *a) {
     char dir[sizeof g_save_src];
-    if (!k_path_dirname(g_save_src, dir, sizeof dir)) snprintf(dir, sizeof dir, "%s", SHOT_DIR);
+    if (!k_path_dirname(g_save_src, dir, sizeof dir)) snprintf(dir, sizeof dir, "%s", SHOT_DEFAULT_DIR);
     struct uui_filedialog_opts o = {
         .mode = UUI_FILEDIALOG_SAVE,
         .title = "Save Screenshot As",
@@ -662,6 +1011,12 @@ static void save_chosen(void *ctx, const char *path) {
     int rc = uimg_save(path, &g_src, NULL);
     if (rc == 0) {
         ulogf("screenshot: saved as %s\n", path);
+        if (g_save_move) {
+            if (sys_unlink(g_save_src) < 0) ulogf("screenshot: could not remove %s\n", g_save_src);
+            g_conf.ask = 0;
+            g_conf.flash = 0;   // the flash was the shutter's, already seen
+            after_save(path, g_src.w, g_src.h);
+        }
         uapp_quit(a, 0);
         return;
     }
@@ -736,22 +1091,31 @@ static int save_as_main(void) {
 }
 
 int main(int argc, char **argv) {
+    shot_conf_load(&g_conf);
     // The card's Save as: the rest of the line is the path.
     if (argc > 2 && !strcmp(argv[1], "--save-as")) {
+        int first = 2;
+        if (!strcmp(argv[2], "--move")) { g_save_move = 1; first = 3; }
         size_t n = 0;
-        for (int i = 2; i < argc; i++)
+        for (int i = first; i < argc; i++)
             n += (size_t)snprintf(g_save_src + n, n < sizeof g_save_src ? sizeof g_save_src - n : 0,
-                                  "%s%s", i > 2 ? " " : "", argv[i]);
-        if (n >= sizeof g_save_src) return 1;
+                                  "%s%s", i > first ? " " : "", argv[i]);
+        if (n == 0 || n >= sizeof g_save_src) return 1;
         return save_as_main();
     }
-    prefs_load();
+    int now = -1;
     for (int i = 1; i + 1 < argc; i++) {
-        if (!strcmp(argv[i], "--delay")) g_launch_delay = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--mode"))
+        if (!strcmp(argv[i], "--delay")) {
+            g_launch_delay = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--mode")) {
             for (int m = 0, j = ++i; m < MODES; m++) if (!strcmp(argv[j], MODE_NAME[m])) g_launch_mode = m;
+        } else if (!strcmp(argv[i], "--now")) {
+            for (int m = 0, j = ++i; m < MODES; m++) if (!strcmp(argv[j], MODE_NAME[m])) now = m;
+        }
     }
-    if (g_launch_mode >= 0) g_mode = g_launch_mode;
+    if (now == MODE_SCREEN || now == MODE_WINDOW) return now_main(now);
+    // The mode it opens in: what the key asked, else what the options say.
+    g_mode = g_launch_mode >= 0 ? g_launch_mode : g_conf.start == SHOT_START_LAST ? g_conf.mode : g_conf.start;
     // THE DELAY HAPPENS BEFORE THERE IS A WINDOW, so nothing is drawn as
     // Not Responding and nothing of this app is on the screen meanwhile.
     if (g_launch_delay > 0 && g_launch_delay <= 60) sleep((unsigned)g_launch_delay);

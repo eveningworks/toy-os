@@ -362,6 +362,9 @@ static uint16_t ext_keycode(uint8_t sc) {
 int keyboard_wire_keycode(uint8_t sc, int extended, uint16_t *out) {
     uint16_t kc = extended ? ext_keycode((uint8_t)(sc & 0x7F))
                             : (uint16_t)(sc & 0x7F);
+    // ALT+PRINT SCREEN IS ITS OWN SCANCODE, 0x54 with no E0 -- the AT's
+    // SysRq -- so without this Alt+PrtSc reached nobody.
+    if (!extended && kc == 0x54) kc = INPUT_KEY_SYSRQ;
     if (!kc) return 0;
     if (out) *out = kc;
     return 1;

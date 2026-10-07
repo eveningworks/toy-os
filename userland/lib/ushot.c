@@ -100,17 +100,19 @@ int ushot_take(struct ushot *s, int mode, unsigned flags,
     s->y = r.shot.y;
     s->w = r.shot.w;
     s->h = r.shot.h;
+    memcpy(s->app, r.shot.app, sizeof s->app);
+    s->app[sizeof s->app - 1] = '\0';
     return 0;
 }
 
-int ushot_probe(struct ushot *s, int mode, int x, int y, struct win_shot *out) {
+int ushot_probe(struct ushot *s, int mode, unsigned flags, int x, int y, struct win_shot *out) {
     if (!s->chan) return -EINVAL;
 
     struct wmchan_msg m;
     memset(&m, 0, sizeof m);
     m.type = WIN_REQ_SCREENSHOT;
     m.a = mode;
-    m.b = WIN_SHOT_PROBE;
+    m.b = (int32_t)(flags | WIN_SHOT_PROBE);
     m.c = s->cap_px;
     m.shot.x = x;
     m.shot.y = y;

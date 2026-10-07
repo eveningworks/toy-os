@@ -14,6 +14,7 @@ struct shortcut_action {
     const char *desc;      // the sentence under that label
     const char *command;   // what the compositor spawns
     const char *fallback;  // the factory binding, when /etc says nothing
+    const char *args;      // its argument line, or NULL
 };
 
 int shortcut_action_count(void);

@@ -207,6 +207,9 @@ TESTS = [
     # lib/urename.h: each rule against a hand-worked table, then the plan's
     # two refusals on real files. SPAWNED, as ufileundo_test.
     ("urename_test", None, None, None),
+    # lib/unametpl.h: file-name templates against a hand-worked table,
+    # the refusals, and cleaning a window title into a name.
+    ("unametpl_test", None, None, None),
     # /bin/head, tail and wc on pipes, against a hand-worked fixture.
     # SPAWNED: it spawns them and waits.
     ("textcmd_test", None, None, None),

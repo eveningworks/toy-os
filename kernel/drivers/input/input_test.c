@@ -482,6 +482,17 @@ KTEST("input", "the ISO key that carries `|` survives the PS/2 wire unprefixed")
     KTEST_ASSERT(!keyboard_wire_keycode(0x56, 1, &kc));
 }
 
+KTEST("input", "Print Screen arrives as Print Screen with and without Alt held") {
+    // E0 37 alone, and 0x54 unprefixed: what an AT keyboard sends for the
+    // same key while Alt is down (the old SysRq). Alt+PrtSc is a
+    // screenshot binding, and 0x54 used to be a key with no name.
+    uint16_t kc = 0;
+    KTEST_ASSERT(keyboard_wire_keycode(0x37, 1, &kc));
+    KTEST_ASSERT_EQ((int)kc, INPUT_KEY_SYSRQ);
+    KTEST_ASSERT(keyboard_wire_keycode(0x54, 0, &kc));
+    KTEST_ASSERT_EQ((int)kc, INPUT_KEY_SYSRQ);
+}
+
 KTEST("input", "a keycode goes to the layout unchanged, whichever driver reported it") {
     // The evdev numbering is what BOTH paths now carry, so the layout
     // sees the same number either way. Asserted through the layout

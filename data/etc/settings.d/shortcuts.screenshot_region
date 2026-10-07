@@ -1,0 +1,7 @@
+Type=keycombo
+File=/etc/shortcuts.conf
+Label=Screenshot of a region
+Category=Shortcuts
+Group=Applications
+Default=
+Description=Open the screenshot tool ready to drag an area

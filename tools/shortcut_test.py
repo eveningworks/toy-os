@@ -25,6 +25,7 @@ Four things here have bitten and are each pinned by a check:
   end to end for that reason: Apply, then press the NEW key.
 """
 import argparse
+import glob
 import os
 import re
 import sys
@@ -36,6 +37,7 @@ from qmp_test import QMPSession                        # noqa: E402
 import port_guard  # noqa: E402
 from harness import Results  # noqa: E402
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SETTINGS_EXEC = "/bin/wm/system/settings"
 CONF = "/etc/shortcuts.conf"
 
@@ -47,6 +49,8 @@ DEFAULTS = [
     ("terminal",     "Ctrl+Alt+T",    "gui key 0x14 ctrl alt",  "/bin/wm/apps/uterm"),
     ("screenshot",   "Shift+Super+S", "gui key S shift super",  "/bin/wm/apps/screenshot"),
     ("screenshot",   "Print Screen",  "gui key 0xf888",           "/bin/wm/apps/screenshot"),
+    ("screenshot_screen", "Shift+Print Screen", "gui key 0xf888 shift", "/bin/wm/apps/screenshot"),
+    ("screenshot_window", "Alt+Print Screen",   "gui key 0xf888 alt",   "/bin/wm/apps/screenshot"),
     ("task_manager", "Ctrl+Alt+Del",  "gui key 0xf788 ctrl alt",  "/bin/wm/system/taskmgr"),
 ]
 
@@ -203,12 +207,15 @@ def run_rebinding(dbg, qmp, res):
     # the time it was read on a busy run -- with the page plainly open.
     page = []
     deadline = time.time() + 8
-    while time.time() < deadline and not any("slots 4" in l for l in page):
+    # One slot per declared action, counted from the files that declare
+    # them rather than a number this file would have to keep true.
+    want = f"slots {len(glob.glob(os.path.join(ROOT, 'data/etc/settings.d/shortcuts.*')))}"
+    while time.time() < deadline and not any(want in l for l in page):
         page = [l for l in dbg.logs("settings: page Shortcuts", clear=False)]
         time.sleep(0.3)
     res.check("the Shortcuts page lists every action",
-              any("slots 4" in l for l in page),
-              f"page line: {page[-1] if page else row or 'none'}")
+              any(want in l for l in page),
+              f"want {want}; page line: {page[-1] if page else row or 'none'}")
 
     # **CAPTURE A COMBINATION THAT IS ALREADY BOUND.** Without the
     # compositor standing down (WIN_REQ_INHIBIT_SHORTCUTS) this launches

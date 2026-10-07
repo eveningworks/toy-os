@@ -19,6 +19,7 @@
 #include "osk.h"
 #include "wm_tooltip.h"
 #include "crash_notice.h"
+#include "wm_flash.h"
 #include "ui/uui_primitives.h" // uui_hit
 
 // The two that take no cursor, adapted rather than changed: their
@@ -60,6 +61,10 @@ static const struct wm_overlay g_overlays[] = {
     // returns 0: a tooltip must never consume the click the person was
     // about to make, which is the one thing every toolkit gets wrong
     // about them. No hover op either; it is not a control.
+    // The shutter flash (wm_flash.h): over everything, PASSIVE, and the
+    // whole screen while it fades.
+    { "flash",    wm_flash_open, wm_flash_draw,    tooltip_click,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, WM_OVERLAY_REPAINT_WHILE_OPEN },
     { "tooltip",  open_tooltip,  wm_tooltip_draw,  tooltip_click,
       0, wm_tooltip_damage, wm_tooltip_rect, 0, 0, 0, wm_tooltip_cancel, 0, 0, 0, 0, 0 },
     // The taskbar's window preview (wm_peek.h): above every menu, since

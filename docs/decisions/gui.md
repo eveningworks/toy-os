@@ -10697,3 +10697,30 @@ Yesterday / Earlier this week / Earlier, newest first; Delete there
 takes a row off the list and never touches the file, as Explorer's
 does. Files that no longer exist are hidden, not dropped -- an unplugged
 disk comes back.
+
+## Screenshot's Print Screen keys are a view onto shortcuts.conf, not options of its own
+
+**Picked 2026-10-07** (canvas O1 + P1). GNOME binds three separate
+actions -- take a screenshot, of the screen, of a window -- and
+Spectacle does the same through KDE's global shortcuts; Windows has one
+switch, "Print Screen opens screen capture". toy-os follows GNOME:
+`screenshot`, `screenshot_screen` (Shift+PrtSc, `--now screen`),
+`screenshot_window` (Alt+PrtSc, `--now window`) and `screenshot_region`
+(unbound) are ordinary rows in `lib/ushortcut_actions.c` with an
+argument line, rebindable in System Settings like any other. **The
+Options window shows them KEY-FIRST** ("Print Screen: Opens the capture
+bar") because that is the question a person asks, and choosing moves the
+key between those four actions' binding lists in `/etc/shortcuts.conf`
+(`shot_keys_set()`), leaving any other key on them alone. The obvious
+alternative -- an app option "what PrtSc does" that the one bound action
+reads at launch -- was rejected: it is a second copy of the binding, and
+a person who rebinds in System Settings would find the app's answer
+disagreeing with it. **The card's path rule widened with it**: the
+folder is the person's, so `fit_path()` takes any absolute `.qoi`/`.png`
+in plain characters, still no space, because Folder hands the path to
+Files on its argument line. **And a notice's last piece is answered**:
+a client's ring is shm it created and dies with it, so a tool that sent
+a notice and exited lost it whenever the compositor had not drained the
+ring yet -- the Screenshot card had worked only because a config write
+came after the send.
+

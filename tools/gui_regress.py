@@ -159,6 +159,7 @@ TOOLS = [
     ("cursorshp", "cursor_shapes_test.py", "hand over a link, move, not-allowed on a refused drop"),
     ("saver", "screensaver_test.py", "the idle clock, and the savers it spawns"),
     ("shot", "screenshot_test.py", "screen capture: the command, the app, the region band"),
+    ("shotopts", "screenshot_options_test.py", "Screenshot's options: naming, card/flash, Shift/Alt+PrtSc, popover, keys"),
     ("doomdata", "doom_data_test.py", "DOOM's game-data card, a refused tampered download, the launcher and F1's key sheet"),
     ("crash", "crashtest_test.py", "fault paths: ring-3 crashes, and the gate on kernel panics"),
     ("hoversweep", "hover_sweep_test.py", "a hover over any widget of any app opens nothing"),

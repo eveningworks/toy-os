@@ -99,6 +99,12 @@ void uui_textbox_select(struct uui_textbox *f, int start, int end);
 int uui_textbox_key(struct uui_textbox *f, int key);
 int uui_textbox_key_mods(struct uui_textbox *f, int key, unsigned mods);
 
+// Types `s` at the caret, over any selection, as one undoable edit --
+// what a button that inserts a token does. All of it or nothing: 0 when
+// it would not fit, or the field is disabled. Works whether or not the
+// field has the focus.
+int uui_textbox_insert(struct uui_textbox *f, const char *s);
+
 // The text, and how much of it is selected. For an app that wants to
 // read a field without knowing about the edit core.
 const char *uui_textbox_text(const struct uui_textbox *f);
