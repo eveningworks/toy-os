@@ -4501,7 +4501,7 @@ caller is a test.
 
 - [x] ~~Port the `apps/ui/` widgets Calculator needs to userland~~ -- done: `userland/ui/uui.c` (`ui_primitives` + `ui_button` + `ui_button_group`). Statically linked per client for now, not a shared library -- see the note below on when that should change.
 
-- [x] ~~Migrate one real app (Calculator) to `userland/`~~ -- done, see the git history. `apps/calc_engine.c` is SHARED (compiled twice, once per code model) rather than copied, so there is only ever one arithmetic implementation.
+- [x] ~~Migrate one real app (Calculator) to `userland/`~~ -- done, see the git history. `apps/calc_engine.c` was SHARED (compiled twice, once per code model) rather than copied, so there was only ever one arithmetic implementation; it is `userland/calc/` and ring 3's alone since 2026-10-07.
 
 - [x] ~~Migrate Notepad to `userland/`~~ -- done, see the git history. Its file dialog is drawn by the APP, not the window server, which is what GTK/Qt do; the WM's own picker was a modal and was not portable (deleted 2026-09-14).
 

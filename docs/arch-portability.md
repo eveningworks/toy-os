@@ -22,7 +22,7 @@ Roughly **2,200-2,500 lines of C plus 3 assembly files** (`boot.asm`,
 about 30,000 lines of C in the repo (~24,700 in `kernel/`, ~5,300 in
 `apps/`) -- under 10%. The rest (the
 filesystem, the window manager, every GUI app, the scheduler's actual
-round-robin *policy*, the font renderer, `apps/calc_engine.c`, etc.)
+round-robin *policy*, the font renderer, `userland/calc/calc_engine.c`, etc.)
 is already ordinary freestanding C with no CPU-specific content. This
 is a smaller lift than it might look from the outside, but the parts
 that ARE arch-specific are foundational -- boot, interrupts, paging,
@@ -42,7 +42,7 @@ path fixes, not a rewrite):
   `wm_render.c`/`desktop.c`/`context_menu.c`/`start_menu.c`) -- the
   window manager, aside from one bare `hlt` in `wm.c`'s idle wait
   (trivially wrapped, see below).
-- `apps/calc_engine.c` (287 lines), `apps/ui/*` (the widget primitives
+- `userland/calc/calc_engine.c` (287 lines), `apps/ui/*` (the widget primitives
   -- see `apps/README.md`), `theme.h`.
 - `kernel/drivers/font_ttf.c` (16,700+ generated lines) + `gfx.c` (337
   lines) -- font rendering and the framebuffer blit/blend primitives.

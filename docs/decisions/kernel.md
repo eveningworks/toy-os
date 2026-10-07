@@ -2067,6 +2067,13 @@ not qualify, and the `-Iapps` that lets `calculator.c` see
 variable so no other userland program gains the ability to include
 `apps/` headers.
 
+**SINCE 2026-10-07 THE ENGINE IS RING 3'S ALONE** (`userland/calc/`,
+linked through `EXTRA_OBJS_calculator`). The kernel Calculator it was
+shared with went on 2026-08-18, and the kernel had gone on compiling an
+engine nothing in it called; `-Iapps` went with it. The rule above
+still governs what stays on the shared path -- `geom.c`, `string.c`,
+`knum.c`.
+
 What was deliberately NOT shared: the presentation layer.
 `ui_button_group` became `uui_button_group` (`userland/ui/uui.c`), because
 the kernel version draws through `gfx_*` straight to the framebuffer

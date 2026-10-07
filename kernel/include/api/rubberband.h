@@ -18,9 +18,9 @@
 //
 // **It is SHARED SOURCE compiled twice** -- once into the kernel and
 // once into libuapp.a (see the Makefile's build/userland/shared/ rule),
-// the same arrangement kernel/lib/geom.c and apps/calc_engine.c already
-// use. So it must stay freestanding: <stdint.h> only, no kernel state,
-// no allocator, no drawing.
+// the same arrangement kernel/lib/geom.c already uses. So it must stay
+// freestanding: <stdint.h> only, no kernel state, no allocator, no
+// drawing.
 //
 // It deliberately does NOT do group DRAGGING (moving every selected item
 // together). That is the natural next layer and this is the piece it

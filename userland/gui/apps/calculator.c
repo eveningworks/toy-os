@@ -1,6 +1,7 @@
 // Calculator, as a RING-3 PROCESS.
 //
-// The same application as apps/calculator.c, moved out of the kernel:
+// The same application as the kernel's apps/calculator.c (deleted
+// once this one was the default), moved out of the kernel:
 // same button grid, same keyboard handling, same commit-on-release
 // behaviour, same look -- but running as an ordinary ring-3 program
 // that talks to the window server over the windowing protocol
@@ -9,13 +10,9 @@
 //
 // WHAT IS ACTUALLY SHARED, AND WHAT IS A PORT
 // -------------------------------------------
-// The arithmetic is not reimplemented or copied: apps/calc_engine.c is
-// compiled a SECOND time with USERLAND_CFLAGS and linked in here (see
-// the Makefile's shared-source rule). It only ever needed string.h and
-// knum.h -- both freestanding -- so it was already portable; nothing
-// about it had to change. That is the strongest form this migration
-// could take: a bug fixed in the engine fixes both copies of the app,
-// because there is only one engine.
+// The arithmetic is not reimplemented or copied: userland/calc/
+// calc_engine.c is the engine the kernel version ran, compiled into
+// both rings while both apps existed and ring 3's alone since.
 //
 // What IS ported is the presentation layer: `ui_button_group` becomes
 // `uui_button_group` (userland/uui.c), `gfx_*` becomes `ugfx_*`, and
@@ -46,7 +43,7 @@
 #include "ui/uui.h"
 #include "ui/uapp.h"
 #include "ui/utheme.h"
-#include "calc_engine.h"
+#include "calc/calc_engine.h"
 #include "string.h"
 #include "lib/unum.h"   // the display, in the locale's decimal mark
 

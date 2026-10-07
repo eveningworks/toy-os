@@ -813,8 +813,8 @@ USERLAND_RT = $(BUILD)/userland/rt/crt0.o $(BUILD)/userland/rt/sys.o \
 # load-bearing for the same reason -- see the comment there.
 #
 # `shared/` is in here too (see the shared-source rule below), which is
-# why the ring-3 Calculator no longer has to name calc_engine, string
-# and knum: it references calc_* and the linker finds it.
+# why a program no longer has to name string or knum: it references
+# them and the linker finds them.
 LIBUAPP_SRCS = $(shell find userland/ui userland/lib -name '*.c' 2>/dev/null | sort)
 LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/geom.o \
@@ -822,7 +822,6 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/icon_grid.o \
                $(BUILD)/userland/shared/etc_config.o \
                $(BUILD)/userland/shared/fixed.o \
-               $(BUILD)/userland/shared/calc_engine.o \
                $(BUILD)/userland/shared/ansi.o \
                $(BUILD)/userland/shared/klineedit.o \
                $(BUILD)/userland/shared/termkey.o \
@@ -914,7 +913,9 @@ $(LIBC): $(LIBC_OBJS)
 # today for the single-file programs, and an empty list is the good
 # outcome for those -- see $(LIBUAPP) above.
 EXTRA_OBJS_uiclient   =
-EXTRA_OBJS_calculator =
+# The Calculator's arithmetic, outside the program directories (see
+# EXTRA_OBJS_files); compiled into the kernel as well until 2026-10-07.
+EXTRA_OBJS_calculator = calc/calc_engine
 EXTRA_OBJS_notepad    = notepad/np_conf notepad/np_prefs
 EXTRA_OBJS_screenshot = screenshot/shot_conf screenshot/shot_prefs
 EXTRA_OBJS_terminal   = term/term_conf term/term_prefs term/term_panel
@@ -923,7 +924,7 @@ EXTRA_OBJS_terminal   = term/term_conf term/term_prefs term/term_panel
 EXTRA_OBJS_gfxdemo    = shapes/teapot
 # The HD Audio codec parser, compiled a second time for ring 3 -- the
 # geom.c/klineedit.c rule (see the shared-source section below), so
-# /bin/lscodec and /bin/hdad walk the graph with the kernel's own
+# /bin/lscodec and /lib/snd/hda.so walk the graph with the kernel's own
 # implementation rather than a second copy of it.
 EXTRA_OBJS_lscodec    = shared/hda_codec
 
@@ -1016,8 +1017,8 @@ $(BUILD)/userland/ports/doom/%.o: userland/ports/doom/%.c $(BUILD)/.sanitize-fla
 
 # OUR backend needs doomgeneric's headers (doomgeneric.h, doomkeys.h) but
 # is ours, so it keeps every warning. Scoped to this one object with a
-# target-specific variable, exactly as calculator.o gets -Iapps, so no
-# other userland program gains the ability to include doom's headers.
+# target-specific variable, so no other userland program gains the
+# ability to include doom's headers.
 # A PATTERN-specific variable, so every file of the backend gets it and
 # adding one needs no Makefile edit. FEATURE_SOUND is defined HERE rather
 # than in doomfeatures.h because that header is vendored: upstream ships
@@ -1250,11 +1251,7 @@ $(BUILD)/userland-pic/%.o: userland/%.S $(BUILD)/.sanitize-flag
 
 $(BUILD)/userland-pic/shared/%.o: kernel/lib/%.c $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
-	$(CC) $(LIBC_PIC_SHARED_CFLAGS) -Iapps $< -o $@
-
-$(BUILD)/userland-pic/shared/%.o: apps/%.c $(BUILD)/.sanitize-flag
-	@mkdir -p $(dir $@)
-	$(CC) $(LIBC_PIC_SHARED_CFLAGS) -Iapps $< -o $@
+	$(CC) $(LIBC_PIC_SHARED_CFLAGS) $< -o $@
 
 LIBC_SO = $(BUILD)/lib/libc.so
 $(LIBC_SO): $(LIBC_PIC_OBJS)
@@ -1554,18 +1551,12 @@ $(BUILD)/userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/rt/link.l
 # different target. The kernel objects are -mcmodel=kernel and cannot be
 # linked into a ring-3 ELF (which is -mcmodel=large and links at
 # VMM_USER_BASE), so a second compile is the only way to share the
-# SOURCE. That matters most for apps/calc_engine.c: the ring-3
-# Calculator runs the identical arithmetic as the kernel-space one
-# because there is exactly one engine, not two that have to be kept in
-# step.
+# SOURCE: one implementation, not two that have to be kept in step.
 #
 # Everything listed here must be freestanding -- kernel/lib/string.c and
-# knum.c include only <stddef.h>/<stdint.h>, and calc_engine.c only
-# those two headers. A file that reaches for kernel state does not
-# belong on this path.
+# knum.c include only <stddef.h>/<stdint.h>. A file that reaches for
+# kernel state does not belong on this path.
 #
-# -Iapps is needed for calc_engine.h and is scoped to this rule alone,
-# so an ordinary userland program still cannot include apps/ headers.
 # AND THE C LIBRARY IS TAKEN BACK OFF THE INCLUDE PATH HERE. A file on
 # this list is compiled into BOTH rings, so it may only use the toolkit
 # -- kernel/lib/klineedit.c, kfmt.c and heap_core.c all include
@@ -1579,17 +1570,7 @@ SHARED_CFLAGS = $(subst $(LIBC_INCLUDES),,$(USERLAND_CFLAGS))
 
 $(BUILD)/userland/shared/%.o: kernel/lib/%.c $(BUILD)/.sanitize-flag
 	@mkdir -p $(dir $@)
-	$(CC) $(SHARED_CFLAGS) -Iapps $< -o $@
-
-$(BUILD)/userland/shared/%.o: apps/%.c $(BUILD)/.sanitize-flag
-	@mkdir -p $(dir $@)
-	$(CC) $(SHARED_CFLAGS) -Iapps $< -o $@
-
-# calculator.c is the one ordinary userland program that includes an
-# apps/ header (calc_engine.h). Scoped to this object with a
-# target-specific variable rather than added to the pattern rule above,
-# so no OTHER userland program gains the ability to reach into apps/.
-$(BUILD)/userland/gui/apps/calculator.o: USERLAND_CFLAGS += -Iapps
+	$(CC) $(SHARED_CFLAGS) $< -o $@
 
 # The kernel is linked TWICE, and the reason is kernel ASLR.
 #

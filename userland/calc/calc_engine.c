@@ -1,5 +1,5 @@
 #include "calc_engine.h"
-#include "string.h"
+#include <string.h>
 #include "knum.h"
 
 // Max digits accepted for the integer part of an entry -- enough for any
@@ -170,7 +170,7 @@ void calc_reset(struct calc_state *st) {
     st->accumulator = 0;
     st->pending_op = 0;
     st->error = 0;
-    k_strlcpy(st->display, "0", sizeof st->display);
+    strlcpy(st->display, "0", sizeof st->display);
 }
 
 // Applies whatever operator is already pending (if any) against the
@@ -235,7 +235,7 @@ void calc_input(struct calc_state *st, char code) {
         render_entry(&st->entry, st->display);
     } else if (code == '+' || code == '-' || code == '*' || code == '/' || code == '%') {
         if (!fold_pending(st)) {
-            k_strlcpy(st->display, "Error", sizeof st->display);
+            strlcpy(st->display, "Error", sizeof st->display);
             st->pending_op = 0;
             st->fresh = 1;
             return;
@@ -245,7 +245,7 @@ void calc_input(struct calc_state *st, char code) {
         calc_format_scaled(st->accumulator, st->display);
     } else if (code == '=') {
         if (!fold_pending(st)) {
-            k_strlcpy(st->display, "Error", sizeof st->display);
+            strlcpy(st->display, "Error", sizeof st->display);
             st->pending_op = 0;
             st->fresh = 1;
             return;

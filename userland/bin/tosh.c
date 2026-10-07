@@ -16,7 +16,7 @@
 // the physical shell and the GUI Terminal already share, and it turned
 // out to be freestanding already -- it includes klineedit.h, string.h
 // and keyboard.h and touches no kernel state -- so this is the
-// shared-source rule (geom.c, etc_config.c, calc_engine.c), not a port.
+// shared-source rule (geom.c, etc_config.c), not a port.
 // There is ONE definition of what Ctrl-A means on this machine.
 //
 // THERE IS NO ECHO FROM THE KERNEL, BECAUSE THIS SHELL ASKS FOR NONE.
