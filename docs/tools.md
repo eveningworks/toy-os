@@ -2986,6 +2986,26 @@ window without going through it will find its layout polls timing out.
   a history shared between tabs would stay put. Its positive control
   stops a tab from restoring its history: that check reddens.
 
+- **`launch_test.py`** -- running programs and scripts (`lib/ulaunch.h`,
+  `ui/uui_runask.h`, `/bin/wm/system/runask`, Terminal's `-e`) from the
+  File Manager and through `/bin/open`: the "Run hello.sh?" card and
+  each of its answers, the Terminal held open with the exit status and
+  closed by Ctrl+D, "Always do this" kept in `/etc/mimeapps.conf`,
+  Shift+Enter, the context menu's first row, a file without an execute
+  bit, an ELF program, an app (no card) and `open` on a script. **Each
+  act is proved by its EFFECT** -- the script touches a marker, uterm
+  logs `<path> finished, status 0`, `stat` reads the mode -- never by
+  the card having closed. Two traps it encodes: **a layout block is
+  logged only when it CHANGES**, so a second identical card logs nothing
+  and the rects are read from the LAST block rather than after a clear;
+  and **a card a failed step left open takes the next step's Enter**
+  (its default button is Run in Terminal), which once turned a broken
+  Shift+Enter green -- every step closes stray cards first. `/bin/open`
+  is started with `gui spawn`, not `sh`: from `sh` runask's stderr, and
+  so its layout report, is the shell's. Its positive controls drop the
+  Always save and the Shift+Enter handler: each reddens its own check
+  and only that one.
+
 - **`pins_gui_test.py`** -- Pin to Places (`lib/upins.h`) through the
   File Manager's context menu, read back from `/etc/places.conf` with
   `cat` and from the side column's rows by PATH. **The target is

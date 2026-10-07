@@ -88,6 +88,7 @@
 #include "lib/utween.h"
 #include <unistd.h>   // chdir/getcwd, around a new tab's spawn
 #include "keyboard.h"
+#include "kpath.h"    // k_path_basename, a -e tab's name
 #include "ansi.h"   // the kernel's parser, compiled into libuapp too
 #include "ui/umonofont.h"   // the grid's face at a chosen size
 #include "term/term.h"    // /etc/terminal.conf and the Preferences dialog
@@ -105,6 +106,11 @@
 // (120x30 by default, Windows Terminal's).
 
 #define SHELL_FALLBACK "/bin/tosh"
+
+// `uterm -e PATH`: this window's first tab runs PATH instead of a shell
+// -- the File Manager's "Run in Terminal" (lib/ulaunch.h). xterm's and
+// Konsole's -e.
+static char g_cmd[256];
 
 // WHICH SHELL, from the registry rather than baked in (`system.shell`,
 // kernel/lib/shell_config.c). Read per session rather than once at
@@ -213,6 +219,10 @@ struct session {
     // THE SHELL HAS EXITED AND THE TAB WAS KEPT (`on_exit=keep`): reaped,
     // its last output still on screen, Enter starts a new shell in it.
     int exited;
+    // A `-e` PROGRAM, not a shell: always kept when it ends, whatever
+    // on_exit says -- its output is the reason the window exists -- and
+    // Enter runs it again. session_start() zeroes it; mark_cmd() sets it.
+    int is_cmd;
 
     // TYPE-AHEAD IS HELD UNTIL THE SHELL FIRST SPEAKS. A pty starts with
     // the line discipline echoing (abi/tty_abi.h), and tosh only turns
@@ -1347,6 +1357,28 @@ static int open_tab_with(const char *shell) {
 
 static int open_tab(void) { return open_tab_with(0); }
 
+static void mark_cmd(struct session *s) {
+    s->is_cmd = 1;
+    strlcpy(s->title, k_path_basename(s->shell), sizeof s->title);
+    s->title_locked = 1;
+}
+
+// The `-e` tab: PATH, standing in its own folder, as a double-click on
+// Windows or GNOME runs a program.
+static int open_cmd_tab(void) {
+    char dir[TITLE_MAX];
+    strlcpy(dir, g_cmd, sizeof dir);
+    char *slash = strrchr(dir, '/');
+    if (slash) *(slash == dir ? slash + 1 : slash) = '\0';
+    if (!session_start(0, g_cmd, slash ? dir : 0)) return 0;
+    mark_cmd(g_slot[0]);
+    g_tab_slot[0] = 0;
+    g_ntabs = 1;
+    g_strip.selected = 0;
+    tabs_refresh();
+    return 1;
+}
+
 static void close_tab(int tab) {
     if (tab < 0 || tab >= g_ntabs) return;
     struct session *s = g_slot[g_tab_slot[tab]];
@@ -2220,15 +2252,22 @@ static void reap_dead_tabs(void) {
         // -- GNOME Terminal's "hold the terminal open". The note is
         // written THROUGH THE PARSER, so it lands in the grid and the
         // scrollback like any other line.
-        if (g_conf.keep_on_exit) {
+        if (g_conf.keep_on_exit || s->is_cmd) {
             int status = 0;
             if (s->child > 0) sys_waitpid(s->child, &status);
             s->child = 0;
             s->exited = 1;
-            char note[96];
-            snprintf(note, sizeof note,
-                     "\r\n\x1b[0;2m[shell exited with status %d -- Enter starts a new one]\x1b[0m\r\n",
-                     status);
+            char note[TITLE_MAX + 96];
+            if (s->is_cmd) {
+                snprintf(note, sizeof note,
+                         "\r\n\x1b[0;2m[%s finished, exit status %d -- Enter runs it again, Ctrl+D closes]\x1b[0m\r\n",
+                         s->title, status);
+                ulogf("uterm: %s finished, status %d\n", s->shell, status);
+            } else {
+                snprintf(note, sizeof note,
+                         "\r\n\x1b[0;2m[shell exited with status %d -- Enter starts a new one]\x1b[0m\r\n",
+                         status);
+            }
             vt_write(s, note, (int)strlen(note));
             continue;
         }
@@ -2550,12 +2589,19 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // starts a new shell in it, in the same place, and nothing else does
     // anything. Once its reader has let go of the slot.
     if (s->exited) {
+        if (s->is_cmd && (key == 0x04 || key == 0x1B)) {   // Ctrl+D, Esc
+            close_tab(g_strip.selected);
+            uapp_redraw(a);
+            return;
+        }
         if ((key == '\n' || key == '\r') && s->done) {
             char shell[TERM_SHELL_MAX], dir[TITLE_MAX];
             strlcpy(shell, s->shell, sizeof shell);
             strlcpy(dir, s->cwd, sizeof dir);
+            int was_cmd = s->is_cmd;
             if (s->master >= 0) { sys_close(s->master); s->master = -1; }
             if (!session_start(s->index, shell, dir[0] ? dir : 0)) ulog("uterm: could not restart the shell\n");
+            else if (was_cmd) mark_cmd(s);
             tabs_refresh();
             uapp_redraw(a);
         }
@@ -2931,7 +2977,7 @@ static void on_open_cb(struct uapp *a) {
                       (int)(sizeof menu_bar / sizeof menu_bar[0]));
     g_menu.item_flags = menu_item_flags;
 
-    if (!open_tab()) {
+    if (!(g_cmd[0] ? open_cmd_tab() : open_tab())) {
         ulog("uterm: could not open a pty or start the shell\n");
         uapp_quit(a, 1);
     }
@@ -2971,7 +3017,8 @@ static void default_size(int *w, int *h) {
     *h = g_conf.rows * cell_h() + chrome_h() + 2 * g_margin;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc >= 3 && strcmp(argv[1], "-e") == 0) strlcpy(g_cmd, argv[2], sizeof g_cmd);
     // **BEFORE uapp_run(), because default_size() runs before on_open**
     // and derives the window from cell_w()/cell_h() -- which are this
     // terminal's font, not the desktop's. Read here and the window opens

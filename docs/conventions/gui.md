@@ -3857,6 +3857,16 @@ real scanout hardware does. Do not write a pixel assertion for one.
   files. **Notepad takes a path in `argv[1]`** because of this, and
   titles itself after it, which is also what lets a test tell "opened
   the file" from "opened a window".
+- **A PROGRAM OR SCRIPT IS RUN THROUGH `lib/ulaunch.h`, NEVER SPAWNED
+  BY AN OPENER BY HAND.** Anything that starts a file a person picked
+  asks `ulaunch_classify()` first (an ELF program or a `#!` script, by
+  content and mode), honours `ulaunch_policy()` (the user's "Always do
+  this", kept in `/etc/mimeapps.conf`), and asks with `ui/uui_runask.h`
+  -- or `/bin/wm/system/runask` when it has no window -- otherwise. An
+  opener that spawned an executable itself would skip the execute-bit
+  check the card exists to make, and a fourth answer to "what does a
+  double-click run" would drift from the File Manager's, the desktop's
+  and `open`'s. `uopen_spawn()` already does all of it.
 
 - **A MOVE EVENT REACHES EVERY WIDGET AT EVERY DEPTH, AND A CLIPPED
   SUBTREE THE CURSOR HAS LEFT IS TOLD "NOWHERE".** `uui_router_motion()`

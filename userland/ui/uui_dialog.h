@@ -11,12 +11,12 @@
 // MessageBox -- the control every toolkit has because every app
 // eventually has to ask something.
 //
-// **IT IS DRAWN IN THE APP'S OWN WINDOW**, and that is not a shortcut:
-// a TWP client draws into its own buffer and nothing else (enforced --
-// see docs/gui-guidelines.md), so there is no such thing as a dialog
-// window a client can open. Notepad and the File Manager each drew
-// their own before this; the WM's `confirm_dialog.c` is the
-// compositor's own chrome and not reachable from a client.
+// **IT IS DRAWN IN THE APP'S OWN WINDOW**: a question that belongs to
+// the window it covers. A dialog that is a window of its own -- an
+// Options window, "Run backup.sh?" -- is a second toplevel instead
+// (uapp_window_open(), ui/uapp.h; ui/uui_prefs.h and ui/uui_runask.h
+// are built on it). The WM's `confirm_dialog.c` is the compositor's
+// own chrome and not reachable from a client.
 //
 // **IT IS AN OVERLAY, so the router offers it every press FIRST**
 // (`overlay_active`). A modal that could be clicked past is not a

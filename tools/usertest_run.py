@@ -210,6 +210,10 @@ TESTS = [
     # lib/unametpl.h: file-name templates against a hand-worked table,
     # the refusals, and cleaning a window title into a name.
     ("unametpl_test", None, None, None),
+    # lib/ulaunch.h: what a double-click runs -- programs, an app, a
+    # library, scripts with and without an interpreter or execute bit --
+    # the argv per act, chmod a+x, and the policy's round trip.
+    ("ulaunch_test", None, None, None),
     # /bin/head, tail and wc on pipes, against a hand-worked fixture.
     # SPAWNED: it spawns them and waits.
     ("textcmd_test", None, None, None),

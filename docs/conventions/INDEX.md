@@ -6,7 +6,7 @@ Every headline below is a real rule. The BODY is one file away, in the
 This is the companion to CLAUDE.md, not a part of it. CLAUDE.md is the
 always-loaded context and carries only the conventions that fire
 UNANNOUNCED -- the ones a session trips before it knows to look anything
-up. Everything else is here, because 436 headlines in always-loaded
+up. Everything else is here, because 437 headlines in always-loaded
 context are carried rather than read. **Read this file before editing an
 area**, ahead of the area file itself: skim for a headline that tells you
 something you did not know, then open the area file for its body.
@@ -681,6 +681,8 @@ whenever a headline here tells you something you did not already know.
   total is walked a few directories per tick**
 - **WHAT OPENS A FILE TYPE IS DECLARED BY THE APP THAT OPENS IT
   (`Handles=`), AND `/etc/mimeapps.conf` OUTRANKS IT**
+- **A PROGRAM OR SCRIPT IS RUN THROUGH `lib/ulaunch.h`, NEVER SPAWNED
+  BY AN OPENER BY HAND**
 - **A TITLE-BAR BUTTON IS A DISC, AND EVERY GLYPH CENTRES ON THE SAME
   PIXEL AS IT.**
 - **AN ICON COLUMN IN A SIDEBAR IS PER SIDEBAR, NOT PER ROW**

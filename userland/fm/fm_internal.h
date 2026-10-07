@@ -111,6 +111,7 @@ enum {
     CMD_EXTRACT_ALL, CMD_EXTRACT_SEL,            // fm_zip.c; CMD_EXTRACT the worker's op
     CMD_EXTRACT,
     CMD_RECENT_FOLDER, CMD_RECENT_FORGET, CMD_RECENT_CLEAR,   // fm_recent.c
+    CMD_RUN_TERMINAL, CMD_RUN,                   // a program or script, lib/ulaunch.h
 };
 
 // The Recycle Bin's folder, as uui_fileview and the breadcrumb see it --
@@ -385,6 +386,11 @@ int  zip_default_dest(const char *archive, char *out, int cap);
 // `then` 1 goes there when it is done, 2 opens the one file extracted.
 void do_extract(int all, const char *dest, int then);
 void open_path(const char *path);   // files.c: by its type, through lib/uopen
+// files.c: a program or script (lib/ulaunch.h) -- run it with an
+// ULAUNCH_* act, or ask with the card (ui/uui_runask.h).
+struct ulaunch_info;
+void launch_start(const char *path, int kind, int act);
+void launch_ask(const char *path, const struct ulaunch_info *li);
 
 // --- Recent (fm_recent.c) ---------------------------------------------------
 const struct uui_fileview_source *recent_source(void);   // recent:/

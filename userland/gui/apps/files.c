@@ -36,12 +36,14 @@
 #include "lib/human.h"
 #include "lib/udate.h"
 #include "lib/uopen.h"
+#include "lib/ulaunch.h"
 #include "lib/uclip.h"
 #include "lib/upins.h"
 #include <errno.h>
 #include "ui/uui.h"
 #include "ui/utheme.h"
 #include "ui/uui_dialog.h"
+#include "ui/uui_runask.h"
 #include "lib/ufileop.h"
 #include "ui/ulog.h"
 #include "keyboard.h"
@@ -308,6 +310,11 @@ static const struct uui_toolbar_item viewbar_items[] = {
 // The order is Explorer's and Dolphin's: open first, the verbs, then
 // Properties last with a separator before it.
 static const struct uui_menu_item ctx_items[] = {
+    // A PROGRAM OR SCRIPT runs rather than opens: these two take Open's
+    // place (build_ctx_items), Run in Terminal first because it is the
+    // one that shows what the thing printed.
+    UUI_MENU("Run in Terminal", CMD_RUN_TERMINAL, "Shift+Enter"),
+    UUI_MENU("Run",         CMD_RUN,      0),
     UUI_MENU("Open",        CMD_OPEN,     "Enter"),
     UUI_MENU("Open in new tab", CMD_OPEN_TAB, 0),   // dropped for anything but a folder
     UUI_MENU("Pin to Places",     CMD_PIN,   0),     // a folder not yet pinned
@@ -415,6 +422,22 @@ static int looks_like_text(const char *path) {
     return 1;
 }
 
+// What the selected file is to lib/ulaunch.h: ULAUNCH_NONE for a
+// document, a folder or nothing selected. Reads its first bytes, so it
+// is asked on a menu's opening and a command, never per frame.
+static int selected_launch(struct ulaunch_info *out) {
+    struct ulaunch_info li;
+    char path[PATH_MAX_LEN];
+    if (!out) out = &li;
+    memset(out, 0, sizeof *out);
+    if (uui_fileview_selected_is_dir(active()) ||
+        !uui_fileview_selected_path(active(), path, sizeof path) ||
+        in_bin(active()) || in_zip(active()))
+        return ULAUNCH_NONE;
+    ulaunch_classify(path, out);
+    return out->kind;
+}
+
 static int build_ctx_items(void) {
     int can_edit = 0;
     char path[PATH_MAX_LEN];
@@ -434,8 +457,11 @@ static int build_ctx_items(void) {
             g_ctx_built[n++] = recent_ctx_items[i];
         return n;
     }
+    int runs = !is_dir && selected_launch(0) != ULAUNCH_NONE && selected_launch(0) != ULAUNCH_APP;
     for (int i = 0; i < (int)(sizeof ctx_items / sizeof ctx_items[0]); i++) {
         if (ctx_items[i].code == CMD_EDIT && !can_edit) continue;
+        if ((ctx_items[i].code == CMD_RUN || ctx_items[i].code == CMD_RUN_TERMINAL) && !runs) continue;
+        if (ctx_items[i].code == CMD_OPEN && runs) continue;
         if (ctx_items[i].code == CMD_OPEN_TAB && !uui_fileview_selected_is_dir(active())) continue;
         if (ctx_items[i].code == CMD_PIN && (!is_dir || pinned)) continue;
         if (ctx_items[i].code == CMD_UNPIN && (!is_dir || !pinned)) continue;
@@ -979,6 +1005,21 @@ void do_command(struct uapp *a, int code) {
         // the Handles= declarations resolve to (lib/uopen.h).
         if (!fm_goto_activate(g_active)) set_note("nothing selected");
         break;
+    case CMD_RUN_TERMINAL:
+    case CMD_RUN: {
+        char path[PATH_MAX_LEN];
+        struct ulaunch_info li;
+        if (selected_launch(&li) == ULAUNCH_NONE ||
+            !uui_fileview_selected_path(active(), path, sizeof path)) {
+            set_note("not a program");
+            break;
+        }
+        // Chosen from the menu, so not asked -- unless it cannot run as
+        // it is, and then the card says why.
+        if (!li.runnable || !li.interp_found) launch_ask(path, &li);
+        else launch_start(path, li.kind, code == CMD_RUN ? ULAUNCH_RUN : ULAUNCH_TERMINAL);
+        break;
+    }
     case CMD_EDIT: {
         // A launch, like on_pane_open(): not waited for.
         char path[PATH_MAX_LEN];
@@ -1511,6 +1552,15 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         }
     }
 
+    // SHIFT+ENTER RUNS a program or script in a Terminal without asking;
+    // plain Enter is the double-click, which asks.
+    if ((key == '\n' || key == '\r') && (mods & KEY_MOD_SHIFT) &&
+        selected_launch(0) != ULAUNCH_NONE && selected_launch(0) != ULAUNCH_APP) {
+        do_command(a, CMD_RUN_TERMINAL);
+        uapp_redraw(a);
+        return;
+    }
+
     // Everything else is the active pane's: arrows, Home/End, PageUp/
     // PageDown, Enter (descend) and Backspace (up) are all one call,
     // because uui_fileview owns what a directory listing does.
@@ -1600,7 +1650,50 @@ static void on_pane_open(void *ctx, const char *path) {
     open_path(path);
 }
 
+// --- running a program or a script (lib/ulaunch.h) -----------------------
+
+void launch_start(const char *path, int kind, int act) {
+    if (act == ULAUNCH_ASK) return;
+    if (uui_runask_start(g_app, path, kind, act) < 0) {
+        snprintf(g_stat_note, sizeof g_stat_note, "could not run %s", k_path_basename(path));
+        ulogf("files: run %s act %d FAILED\n", path, act);
+        return;
+    }
+    snprintf(g_stat_note, sizeof g_stat_note,
+             act == ULAUNCH_TERMINAL ? "started %s in Terminal" :
+             act == ULAUNCH_EDIT ? "editing %s" : "started %s", k_path_basename(path));
+    ulogf("files: run %s act %d\n", path, act);
+}
+
+static void launch_answered(void *ctx, const char *path, int kind, int act) {
+    (void)ctx;
+    launch_start(path, kind, act);
+    uapp_redraw(g_app);
+}
+
+void launch_ask(const char *path, const struct ulaunch_info *li) {
+    if (!uui_runask_open(g_app, path, li, launch_answered, 0))
+        set_note("could not ask");
+}
+
+// An app opens at once; a program or script runs by the policy, asking
+// unless the user chose -- and always asking when it CANNOT run as it is
+// (no execute bit, no interpreter), so the card can say why.
+static int launch(const char *path) {
+    struct ulaunch_info li;
+    if (!ulaunch_classify(path, &li) || li.kind == ULAUNCH_NONE) return 0;
+    if (li.kind == ULAUNCH_APP && li.runnable) {
+        launch_start(path, li.kind, ULAUNCH_RUN);
+        return 1;
+    }
+    int act = li.runnable && li.interp_found ? ulaunch_policy(li.kind) : ULAUNCH_ASK;
+    if (act == ULAUNCH_ASK) launch_ask(path, &li);
+    else launch_start(path, li.kind, act);
+    return 1;
+}
+
 void open_path(const char *path) {
+    if (launch(path)) return;
     char exec[PATH_MAX_LEN];
     if (!uopen_resolve(path, exec, sizeof exec)) {
         // Said out loud rather than doing nothing: a double click that

@@ -47,6 +47,7 @@
 | `uinflate.h` | DEFLATE, both directions, in ring 3 -- RFC 1951, plus the zlib (RFC 1950) and gzip (RFC 1952) wrappers around it. |
 | `uinitctl.h` | The control protocol between `/bin/service` and init, over uchan. |
 | `ukeymap.h` | A keyboard layout read from /usr/share/kbs/<name>, for SHOWING it -- which character each key gives on each level, and which keys are dead. |
+| `ulaunch.h` | ulaunch -- is this file something to RUN, and how should it run? |
 | `uline.h` | uline -- the PAINTING half of a ring-3 line-editing front end. |
 | `umd.h` | umd -- rendering Markdown as text for a terminal. |
 | `umemcomp.h` | Where the memory in use is, as four rows that SUM to it: Apps (every process's private bytes, QUERY_PROCMEM), Shared (shm objects, each once), Graphics (RAM held for the screen) and Kernel (the res... |
@@ -141,6 +142,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_radio_list.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |
 | `uui_renamer.h` | THE RENAME-MANY DIALOG: a window of its own, over lib/urename.h -- a rule (Numbered, Find and replace, Change case), Keep extensions, and a PREVIEW of every old name beside its new one, with the cl... |
 | `uui_route.h` | uui_route -- pointer input, delivered to widgets by the toolkit instead of by every app. |
+| `uui_runask.h` | uui_runask -- "Run backup.sh?": the card that asks what to do with a program or a script before anything runs. |
 | `uui_scale.h` | A CONTINUOUS value on a range, dragged with the pointer -- a media player's position bar, a volume control, a percentage. |
 | `uui_scrollanim.h` | SMOOTH SCROLLING AS A DISPLACEMENT OF THE DRAWN CONTENT, easing to zero -- the widget's own position (`top`, `offset`, `scroll_offset`) still jumps exactly as it always did, so every reader of it,... |
 | `uui_scrollbar.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |

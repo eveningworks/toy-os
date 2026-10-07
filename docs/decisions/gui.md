@@ -10724,3 +10724,55 @@ a notice and exited lost it whenever the compositor had not drained the
 ring yet -- the Screenshot card had worked only because a config write
 came after the send.
 
+
+## A program or a script is RUN, asked about first, by its content and its execute bit
+
+**Picked 2026-10-07** (canvas D1, "apps run, the rest ask", all four
+extras, shared). Before this a double-click on `backup.sh` or a program
+said "no app for backup.sh". Windows runs an `.exe` at once and gives a
+console program a console window that closes when it ends (and opens a
+`.ps1` in Notepad on purpose); Dolphin asks about an executable script
+("Execute / Open", with "Do not ask again") and runs an executable
+binary; GNOME Files long had "Executable text files: Display / Run /
+Ask", whose Ask offered Run in Terminal. toy-os follows KDE's shape
+with GNOME's Terminal choice: **an APP opens at once, a text-mode
+program or a script asks** with a card naming its interpreter and
+showing its first lines, Run in Terminal the default because it is the
+one that shows what the thing printed.
+
+- **What a file IS comes from its first bytes and its mode**
+  (`lib/ulaunch.c`), never its name: an ELF `ET_EXEC` (or `ET_DYN`
+  with an entry point -- a library has none) is a program, `#!` a
+  script. An APP is a program a desktop entry runs or one under
+  `/bin/wm` -- the PE header's GUI/console subsystem field is Windows'
+  answer, freedesktop's is `Terminal=` in the entry; this OS has neither
+  in the ELF, and every windowed program it ships has an entry or that
+  path. `ufiletype.h` stays extension-only because a listing asks it
+  per row per frame; ulaunch is asked on a double-click or a menu's
+  opening, where reading 512 bytes is free.
+- **The execute bit is the desktop's to enforce.** The kernel's loader
+  does not check it, but dash does, so a desktop that ran a file the
+  shell refuses would make the bit meaningless -- every Linux desktop
+  refuses the same way. A file without it gets the card's other face,
+  "Allow running, and run" (`chmod a+x` by read bit). FAT32 keeps no
+  mode, and the card says the change did not take.
+- **The policy lives in `/etc/mimeapps.conf` under freedesktop's MIME
+  names** (`application/x-shellscript`, `application/x-executable`),
+  beside the per-extension choices, rather than in the File Manager's
+  own file: the desktop's double-click and `open` read the same answer,
+  so "Always do this" in one place holds in all three. Ask is the key's
+  ABSENCE.
+- **A caller with no window asks through a program**,
+  `/bin/wm/system/runask` -- Windows' OpenWith.exe arrangement -- and
+  the File Manager shows the same card in-process (`ui/uui_runask.h`
+  builds both). `uopen_spawn()` classifies before it resolves, so the
+  desktop needed no change of its own.
+- **Run in Terminal is `uterm -e PATH`** (xterm's and Konsole's flag):
+  the tab runs the file in its own folder, is named after it, and is
+  ALWAYS held when it ends, whatever the shell setting says, with the
+  exit status -- Windows Terminal's "[process exited with code 0]".
+  Enter runs it again, Ctrl+D or Esc closes it. **Enter in the File
+  Manager stays the double-click** (it asks); Shift+Enter is Run in
+  Terminal without asking -- Enter meaning two things depending on the
+  file was the alternative, and Explorer's rule is that Enter IS the
+  double-click.

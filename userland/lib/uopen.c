@@ -3,6 +3,7 @@
 // was the design doc's "the day a second caller wants one".
 #include <stdlib.h>
 #include "lib/uopen.h"
+#include "lib/ulaunch.h"
 #include "lib/urecent.h"
 #include "lib/uconf.h"
 #include "etc_config.h"
@@ -121,7 +122,27 @@ static int spawn_with(const char *exec, const char *path) {
     return sys_spawn_argv(exec, argv);
 }
 
+// A program or a script is RUN, not opened (lib/ulaunch.h): an app at
+// once, the rest by the policy -- and asking is /bin/wm/system/runask's
+// card, since this caller may have no window to put it on.
+static int launch(const char *path) {
+    struct ulaunch_info li;
+    if (!ulaunch_classify(path, &li) || li.kind == ULAUNCH_NONE) return -2;
+    int act = li.runnable && li.interp_found ? ulaunch_policy(li.kind) : ULAUNCH_ASK;
+    char *argv[5];
+    if (act == ULAUNCH_ASK) {
+        argv[0] = ULAUNCH_ASK_EXEC;
+        argv[1] = (char *)path;
+        argv[2] = 0;
+    } else if (!ulaunch_argv(path, li.kind, act, argv)) {
+        return -1;
+    }
+    return sys_spawn_argv(argv[0], argv);
+}
+
 int uopen_spawn(const char *path) {
+    int pid = launch(path);
+    if (pid != -2) return pid;
     char exec[UOPEN_PATH_MAX];
     if (uopen_resolve(path, exec, sizeof exec)) {
         int pid = spawn_with(exec, path);

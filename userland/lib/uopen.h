@@ -54,7 +54,9 @@ int uopen_resolve(const char *path, char *exec, int cap);
 
 // Resolve and spawn, NOT waited for -- an opener that waited would
 // freeze its caller for as long as the editor stays open. A DIRECTORY
-// opens in the File Manager. Returns the pid, or a negative value.
+// opens in the File Manager. A PROGRAM OR SCRIPT runs instead, by
+// lib/ulaunch.h's policy -- asking through /bin/wm/system/runask unless
+// the user chose. Returns the pid, or a negative value.
 int uopen_spawn(const char *path);
 
 // --- choosing what opens a type (Properties' "Opens with") ---------------

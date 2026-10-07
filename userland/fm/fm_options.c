@@ -15,6 +15,8 @@
 #include "ui/uui_route.h"
 #include "ui/utheme.h"
 #include "lib/uconf.h"
+#include "lib/ulaunch.h"
+#include "ui/ulog.h"
 #include <string.h>
 
 // The defaults: what Explorer and Dolphin ship.
@@ -83,7 +85,7 @@ void options_apply(void) {
 enum { PAGE_GENERAL, PAGE_VIEW, PAGE_FILES, PAGE_COUNT };
 enum {
     OPT_PAGES = 1, OPT_START, OPT_CLICK, OPT_VIEWSEL, OPT_THUMBS, OPT_HIDDEN, OPT_EXT,
-    OPT_RENAME, OPT_CONFIRM, OPT_DEFAULTS, OPT_OK, OPT_CANCEL,
+    OPT_RENAME, OPT_CONFIRM, OPT_DEFAULTS, OPT_OK, OPT_CANCEL, OPT_SCRIPTS, OPT_PROGRAMS,
 };
 
 static const struct uui_sidebar_row PAGE_ROWS[] = {
@@ -98,9 +100,14 @@ static const char *const VIEW_OPTS[]   = { "Large icons", "Icons", "Details" };
 static const int VIEW_OF_SEG[] = { FM_VIEW_LARGE, FM_VIEW_ICONS, FM_VIEW_DETAILS };
 static const int SEG_OF_VIEW[] = { 1, 0, 2 };
 static const char *const RENAME_OPTS[] = { "In place", "In a dialog" };
+// INDEXED BY ULAUNCH_* ACT. Not the File Manager's own setting: the
+// desktop and `open` read it too (lib/ulaunch.h), so OK writes it to
+// /etc/mimeapps.conf rather than FILES_CONF.
+static const char *const SCRIPT_OPTS[]  = { "Ask", "Run in Terminal", "Run", "Edit" };
+static const char *const PROGRAM_OPTS[] = { "Ask", "Run in Terminal", "Run" };
 
 // One row per setting: its page, a caption and a control.
-#define ROWS 8
+#define ROWS 10
 static struct {
     int page;
     struct uui_label caption;
@@ -113,7 +120,7 @@ static struct fm_options g_edit;   // what the window shows, until OK
 static struct uui_sidebar g_pages;
 static struct uui_label g_heading;
 static char g_heading_text[32];
-static struct uui_segmented g_start, g_click, g_view, g_rename;
+static struct uui_segmented g_start, g_click, g_view, g_rename, g_scripts, g_programs;
 static struct uui_checkbox g_thumbs, g_hidden, g_ext, g_confirm;
 static struct uui_button g_defaults, g_ok, g_cancel;
 static struct uui_label g_spacer;
@@ -169,11 +176,15 @@ static void on_action(struct uapp_window *w, int code) {
     if (code == OPT_DEFAULTS) {
         g_edit = DEFAULTS;
         to_controls();
+        g_scripts.selected = g_programs.selected = ULAUNCH_ASK;
     } else if (code == OPT_OK) {
         from_controls();
         int view_changed = g_edit.view != g_opt.view;
         g_opt = g_edit;
         save();
+        if (!ulaunch_set_policy(ULAUNCH_SCRIPT, g_scripts.selected) ||
+            !ulaunch_set_policy(ULAUNCH_PROGRAM, g_programs.selected))
+            ulog("files: could not save what a double-click runs\n");
         if (view_changed)
             for (int i = 0; i < 2; i++) {
                 g_pane[i].icon_px = g_opt.view == FM_VIEW_LARGE ? ugfx_char_h() * 6 : 0;
@@ -234,6 +245,8 @@ void options_open(struct uapp *a) {
     uui_segmented_init(&g_click, CLICK_OPTS, 2, 0);
     uui_segmented_init(&g_view, VIEW_OPTS, 3, 1);
     uui_segmented_init(&g_rename, RENAME_OPTS, 2, 0);
+    uui_segmented_init(&g_scripts, SCRIPT_OPTS, 4, ulaunch_policy(ULAUNCH_SCRIPT));
+    uui_segmented_init(&g_programs, PROGRAM_OPTS, 3, ulaunch_policy(ULAUNCH_PROGRAM));
     uint32_t bg = UTHEME_WINDOW_BG, fg = UTHEME_TEXT;
     uui_checkbox_init(&g_thumbs, 0, 0, 0, "Show thumbnails", bg, fg);
     uui_checkbox_init(&g_hidden, 0, 0, 0, "Show names that start with a dot", bg, fg);
@@ -250,6 +263,8 @@ void options_open(struct uapp *a) {
                                          .flags = UUI_FILL_W, .name = "heading" };
     add_row(0, PAGE_GENERAL, "Open in:",         &uui_segmented_ops, &g_start,   OPT_START,   "start");
     add_row(1, PAGE_GENERAL, "Open items with:", &uui_segmented_ops, &g_click,   OPT_CLICK,   "click");
+    add_row(8, PAGE_GENERAL, "Scripts:",         &uui_segmented_ops, &g_scripts, OPT_SCRIPTS, "scripts");
+    add_row(9, PAGE_GENERAL, "Programs:",        &uui_segmented_ops, &g_programs, OPT_PROGRAMS, "programs");
     add_row(2, PAGE_VIEW,    "New windows use:", &uui_segmented_ops, &g_view,    OPT_VIEWSEL, "view");
     add_row(3, PAGE_VIEW,    "Pictures:",        &uui_checkbox_ops,  &g_thumbs,  OPT_THUMBS,  "thumbs");
     add_row(4, PAGE_VIEW,    "Hidden files:",    &uui_checkbox_ops,  &g_hidden,  OPT_HIDDEN,  "hidden");
