@@ -47,11 +47,22 @@ void utheme_default(struct utheme *out) {
     out->action[UTHEME_ACT_DANGER]  = ugfx_rgb(178, 58, 50);
     out->action[UTHEME_ACT_ARRANGE] = ugfx_rgb(199, 116, 40);
     out->action[UTHEME_ACT_MEDIA]   = ugfx_rgb(168, 99, 15);
+    out->severity[UTHEME_SEV_NONE]    = out->text;
+    out->severity[UTHEME_SEV_ERROR]   = ugfx_rgb(178, 58, 50);
+    // Amber DARKER than the arrange orange: that one is icon ink at 3:1,
+    // this is text at 4.5:1 on white -- and lighter than the error red,
+    // so the two still differ in lightness, not hue alone.
+    out->severity[UTHEME_SEV_WARNING] = ugfx_rgb(160, 92, 0);
 }
 
 uint32_t utheme_action(int role) {
     if (role < 0 || role >= UTHEME_ACT_COUNT) role = UTHEME_ACT_NONE;
     return utheme_current()->action[role];
+}
+
+uint32_t utheme_severity(int sev) {
+    if (sev < 0 || sev >= UTHEME_SEV_COUNT) sev = UTHEME_SEV_NONE;
+    return utheme_current()->severity[sev];
 }
 
 void utheme_init(void) {

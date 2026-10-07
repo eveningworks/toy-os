@@ -95,6 +95,9 @@ TESTS = [
     # (lib/ubootcfg.h), on fixtures; tools/bootcfg_test.py is the real
     # /boot and the reboot into a trial.
     ("bootcfg_test", 0, None, None),
+    # lib/ulogset.h, the Log Viewer's lines: the merge, repeats, the
+    # filter, and a saved file read back. tools/logview_test.py is the app.
+    ("ulogset_test", 0, None, None),
     # lib/uargs.h, the declared-table parser behind -h/--help.
     ("uargs_test", 0, None, None),
     # SYS_FS_CHECK by path, and /bin/fsck's exit statuses. Spawned: it

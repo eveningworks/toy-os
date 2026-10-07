@@ -828,6 +828,15 @@ media), never RGB typed into an app. A `uui_toolbar_item`'s `tint`
 names the role, and the icon is drawn symbolic in it. The same command
 takes the same colour in every app, so delete is red wherever it is.
 
+**A SEVERITY is a role too, and never only a colour** --
+`utheme_severity()`: error (a red) and warning (an amber, lighter than
+the red), dark enough for text on white. Kept apart from the action
+roles because they mean different things, even where today's error red
+equals the danger red. Wherever one is drawn it comes with a SHAPE that
+differs as well -- a cross in a disc for an error, a bar in a triangle
+for a warning (ui/uui_loglist.c) -- so the two are told apart without
+colour vision, and an ordinary line draws neither.
+
 ## Motion: a window arrives, leaves and minimizes with a gesture
 
 A new window scales in from 92% while fading in; a closing one scales

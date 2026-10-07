@@ -502,6 +502,21 @@ manual steps to be worth automating:
   unknown entry, and a core recorded without `loadenv`. On demand: it
   reboots twice. **The debug console's shell has no redirection** -- a
   file the test needs in the guest goes in with `vm.py put`.
+- **`logview_test.py`** -- the Log Viewer on a FIXTURE log it is opened
+  at (`logview <file>`): an error, a warning, an ordinary line, the
+  error again and a program line, planted with `vm.py put` -- not
+  `DebugConsole.write_lines()`, which types through `tosh -c echo`
+  where a level's `<3>` is an input redirection and the file never
+  appears. Checks the rows are DRAWN in severity colours (the error's
+  Level cell has the theme's red, the warning's its amber, an ordinary
+  row neither, from a settled screenshot), Errors shows exactly the two,
+  the error reports `seen 2`, Only this message and Show the lines
+  around it, and a Mute kept in `/etc/logview.conf` (read back with
+  `cat`) and taken out again. In `gui_regress.py`. Controls
+  (`mutate.py`): the severity drawn in text colour reddens the colour
+  checks; a Mute that never writes the file reddens the `/etc` check.
+  `/tests/ulogset_test` covers the line store underneath (the merge,
+  repeats, the filter, a saved file read back).
 - **`bootmgr_test.py`** -- the Boot Manager and System Settings > Boot
   menu write the real `grub.cfg`. The word list is DRAWN (a word the
   entry has has an accent checkbox, one it lacks a white one, by pixel);

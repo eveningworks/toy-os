@@ -49,6 +49,7 @@
 | `ukeymap.h` | A keyboard layout read from /usr/share/kbs/<name>, for SHOWING it -- which character each key gives on each level, and which keys are dead. |
 | `ulaunch.h` | ulaunch -- is this file something to RUN, and how should it run? |
 | `uline.h` | uline -- the PAINTING half of a ring-3 line-editing front end. |
+| `ulogset.h` | ulogset -- log lines held for READING: the kernel ring, the application ring, a stored boot or any /var/log file, parsed into time, level, source and subsystem, merged in time order, counted for re... |
 | `umd.h` | umd -- rendering Markdown as text for a terminal. |
 | `umemcomp.h` | Where the memory in use is, as four rows that SUM to it: Apps (every process's private bytes, QUERY_PROCMEM), Shared (shm objects, each once), Graphics (RAM held for the screen) and Kernel (the res... |
 | `unametpl.h` | A FILE-NAME TEMPLATE: literal text with <tokens> the caller fills -- "shot-<date>-<time>" -> "shot-20261007-142233". |
@@ -128,6 +129,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_label.h` | A line of text the LAYOUT knows about. |
 | `uui_layout.h` | uui_layout -- places widgets so apps stop doing coordinate arithmetic. |
 | `uui_listbox.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |
+| `uui_loglist.h` | uui_loglist -- a log's lines (lib/ulogset.h) as a list: Time, Level, Source and the message with its subsystem in bold, a severity drawn as a shape AND a theme colour, errors marked on the scrollba... |
 | `uui_markdown.h` | uui_markdown -- a Markdown DOCUMENT, drawn as a document: proportional text, headings at real sizes, code in a monospace face on a tinted ground, lists with hanging indents, rules, and tables. |
 | `uui_menubar.h` | uui_menubar -- a menu bar with nested pull-down menus, the control Windows and KDE both put across the top of an application window. |
 | `uui_meter.h` | A MEASURED VALUE, shown big: a caption, a number, its unit, an optional detail line and an optional fill bar. |

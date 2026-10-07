@@ -59,7 +59,22 @@ struct utheme {
     // bar (Image Viewer's, the File Manager's): indexed by enum
     // utheme_action. Ink on light chrome, so dark enough for 3:1 there.
     uint32_t action[8];
+    // SEVERITY -- a log line's or a notice's level, indexed by enum
+    // utheme_severity. Separate from `action` because they mean different
+    // things and a palette may move them apart, even where today's error
+    // red is the danger red. Text-dark on white (4.5:1), and ALWAYS
+    // drawn with a shape that differs too (a cross, a triangle), so the
+    // two are told apart by more than hue.
+    uint32_t severity[4];
 };
+
+enum utheme_severity {
+    UTHEME_SEV_NONE = 0,   // ordinary text
+    UTHEME_SEV_ERROR,      // klog 0..3: emerg, alert, crit, err
+    UTHEME_SEV_WARNING,    // klog 4
+    UTHEME_SEV_COUNT
+};
+uint32_t utheme_severity(int sev);
 
 // What a command does, as a colour role -- semantic like the close
 // button's red, never decoration. A uui_toolbar_item's `tint` may name

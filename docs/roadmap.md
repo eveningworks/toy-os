@@ -784,6 +784,9 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~File Manager to the design language~~ DONE 2026-10-01 -- soft selection, grey chrome, one navigation tree with volumes as roots
 - [x] ~~A Help browser over `docs/`~~ DONE 2026-09-14 -- `/bin/wm/apps/help`; contents, links, history and search since 2026-09-29
 - [x] ~~A Log Viewer~~ DONE 2026-09-15 -- both rings merged on their shared stamp, a level filter and a search field
+- [x] ~~Log Viewer redesign~~ DONE 2026-10-07 -- details pane, timeline, repeats, kept mutes, Save as, any /var/log file; `uui_loglist`
+- [ ] Open a `.log` from the File Manager in the Log Viewer -- Notepad claims `.log` today, and two `Handles` claims have no rule
+- [ ] Tag the failures logged at info (`usb: port N: enumeration GAVE UP` and kin) with a level, so Errors finds them
 - [x] ~~CPU/memory over time as a TAB in Task Manager~~ DONE 2026-09-15 -- history is collected whether or not the tab is showing
 - [ ] Scientific mode for Calculator
 - [x] ~~Device Manager: devices by bus with their bound driver, properties, and unbind/rebind~~ DONE 2026-09-28

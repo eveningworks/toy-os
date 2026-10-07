@@ -203,6 +203,15 @@ this the obvious way), not from how much history it accumulated.
   action role, the content as the hero, soft accent selection, rounded
   shapes, colour by meaning, a full screen with floating controls. The
   Image Viewer is the reference; mock a redesign up before coding it.
+- **A SEVERITY IS `utheme_severity()` AND A SHAPE, NEVER A HAND-PICKED
+  RED.** Error and warning are theme roles of their own, apart from the
+  action roles, and every place one is drawn adds a shape that differs
+  too (`uui_loglist`'s cross-in-a-disc and bar-in-a-triangle), so colour
+  is never the only signal. A log or a list of results reaches for
+  `ui/uui_loglist.h` over `lib/ulogset.h` before drawing its own rows --
+  and `uui_table` is NOT a merge: it sorts at most `UUI_TABLE_MAX_ROWS`
+  and leaves the rest unsorted, which put a long log's program lines out
+  of time order before the Log Viewer sorted its lines itself.
 - **A HELD BUTTON FREEZES THE HOVERED WINDOW: no leave, no enter, until
   the release** (`wm_update_content_hover()`). Wayland's implicit grab.
   A leave reaches a client as a move to (-1,-1) with NO button held,

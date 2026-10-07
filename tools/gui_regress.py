@@ -169,6 +169,7 @@ TOOLS = [
     ("devmgr", "devmgr_test.py", "the device tree and its icons, disable/enable through the dialog"),
     ("sndformat", "sndformat_test.py", "a sound card's Format panel, in Settings and Device Manager"),
     ("bootmgr", "bootmgr_test.py", "Boot Manager and Settings > Boot menu write grub.cfg; a broken file is refused"),
+    ("logview", "logview_test.py", "Log Viewer: severity colours, Errors, repeats, Only this, a kept Mute"),
     ("properties", "properties_test.py", "Properties: hero by pixel, sections, chmod/rename/opens-with/SHA-256 checked outside the app"),
     ("sysupdate", "sysupdate_test.py", "System Update: finds, shows and installs a change, by pixel and by sum"),
     ("help", "help_test.py", "Help: contents, links, history and full-text search"),

@@ -24,7 +24,8 @@
 // or the suite goes red for a reason that has nothing to do with what
 // broke. Keep the "wm: " prefix and the existing wording.
 
-// Formats and writes one line to stderr. Truncates rather than growing:
+// Formats and writes one line to stderr, adding the "\n" if the format
+// has none. Truncates rather than growing:
 // a diagnostic is not worth a heap allocation, and a line long enough to
 // overflow this is one nobody was going to read anyway.
 void wm_logf(const char *fmt, ...);

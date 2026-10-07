@@ -712,6 +712,8 @@ whenever a headline here tells you something you did not already know.
   the release** (Wayland's implicit grab)
 - **A NEW OR REDESIGNED APP FOLLOWS THE APP DESIGN LANGUAGE** at the top
   of `docs/gui-guidelines.md` (the Image Viewer is the reference)
+- **A SEVERITY IS `utheme_severity()` AND A SHAPE, NEVER A HAND-PICKED
+  RED**
 - **A WINDOW HAS THREE BUFFERS, AND A CLIENT DRAWS ONLY INTO ONE THE
   COMPOSITOR HAS RELEASED** (`WIN_EV_BUF_RELEASE`)
 - **A DRAG'S APPEARANCE IS A SETTING, AND `auto` LEARNS RATHER THAN
