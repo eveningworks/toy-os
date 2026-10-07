@@ -152,7 +152,7 @@ struct block_device {
 // user-facing lever here (`novirtio` and `noahci` already exist) and
 // because this OS has no /dev for `/dev/sda1` to be a path into.
 #define BLK_NAME_MAX 16     // "virtio0p15" and room to spare
-#define BLK_MAX_DEVICES 16  // disks plus their partitions
+#define BLK_MAX_DEVICES 32  // disks plus their partitions
 
 struct blk_entry {
     const struct block_device *dev;
@@ -209,9 +209,9 @@ int blk_set_root(const struct block_device *dev);
 // Registers a device. Returns 0 (and registers nothing) if the device's
 // capability bits and function pointers disagree.
 //
-// STILL SETS THE ROOT, last-writer-wins, so the boot order in
-// kernel/fs/mount.c keeps deciding precedence exactly as it did. What
-// changed is that losing that race no longer means being forgotten.
+// STILL SETS THE ROOT, last-writer-wins -- a PROVISIONAL root. At boot
+// mount.c's choose_root_disk() overrides it with blk_set_root(), so
+// which driver registered last decides nothing about the root disk.
 int blk_register(const struct block_device *dev);
 
 // Registers `dev` as the root while recording what it SITS ON. A plain
@@ -243,22 +243,22 @@ void blk_ata_init(void);
 // Registers the virtio disk as the active device, if there is one and
 // it should have it. Returns 1 if it took the role.
 //
-// PRECEDENCE, since blk_register() is last-writer-wins and order alone
-// decides: virtio-blk is PREFERRED when a virtio disk is attached, and
-// ATA is the fallback and the legacy path. `novirtio` on the boot line
-// forces ATA. See kernel/fs/vfs.c, where the choice is made in one
-// place, and block_virtio.c for the measurements behind it.
+// PRECEDENCE: virtio-blk ranks first in mount.c's ROOT_PRECEDENCE,
+// the tie-break when nothing names the boot disk, and ATA is the
+// fallback and the legacy path. `novirtio` on the boot line forces ATA.
+// block_virtio.c has the measurements behind it.
 int blk_virtio_init(void);
 
-// Registers the AHCI drive as the active device, if there is one and
-// it should have it. Returns 1 if it took the role.
-//
-// PRECEDENCE: virtio-blk first (measured, see block_virtio.c), then
-// AHCI, then ATA -- AHCI is what a modern machine presents and legacy
-// IDE is the fallback. `noahci` on the boot line forces ATA back, which
-// is what keeps that path reachable and therefore tested. The choice is
-// made in one place, kernel/fs/mount.c.
+// Registers every AHCI drive the driver found: the first as the active
+// device, the rest named but not active (ahci1, ahci2, ...). `noahci` on
+// the boot line registers none, which is what keeps the ATA fallback
+// reachable and therefore tested. Which disk ends up the ROOT is
+// mount.c's choice, not registration order's.
 int blk_ahci_init(void);
+
+// Drive `drive`'s block device, or NULL when it was not registered
+// (`noahci`, a full table). For QUERY_AHCI_PORT's device name.
+const struct block_device *blk_ahci_device(int drive);
 
 // Registers every NVMe namespace the driver found: the first as the
 // active device, the rest named but not active. `nonvme` on the boot

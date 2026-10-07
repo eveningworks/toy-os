@@ -3581,3 +3581,58 @@ The considered alternative was a `void *priv` field, Linux's
 `private_data`. It was not needed: both multi-device drivers already
 keep their devices in an array or an enclosing struct, so the pointer
 they are handed IS the key.
+
+## The root disk is the boot disk, not the fastest controller's
+
+**The problem.** The root disk was whichever driver registered LAST --
+`blk_register()` is last-writer-wins and the boot runs ATA, AHCI, NVMe,
+virtio in that order. That encoded a preference between DRIVERS ("virtio
+is faster than IDE") as a choice between DISKS, which it is not: a blank
+disk on a faster controller took the root, `try_partitions()` found no
+table, and a machine with a perfectly good system disk booted into ramfs.
+`root=` worked around it only for someone who already knew.
+
+**What real systems do.** None of them picks by controller. Linux needs
+`root=` (or an initramfs that finds the root by UUID); systemd-boot
+passes `LoaderDevicePartUUID` and `systemd-gpt-auto-generator` looks for
+the root on the disk the loader came from; Windows' BCD names the boot
+partition by disk signature and offset; FreeBSD's loader hands over the
+device it booted from. **The loader knows where it came from, and says
+so.**
+
+**What toy-os does.** Three rules in `choose_root_disk()`, in order:
+
+1. `root=<device>` -- unchanged, the person decides.
+2. `bootpart=<PARTUUID>`, which grub.cfg passes from `probe --part-uuid
+   --set=bootpart $root` (GRUB's prefix partition, the ESP or the MBR
+   boot partition). The disk carrying it is the root disk. This is the
+   systemd shape, done with the loader toy-os already ships.
+3. By content, disks in `ROOT_PRECEDENCE` order: the first with a boot
+   partition (BIOS-boot/ESP, or an active MBR slot), then the first with
+   any table, then the first. Old grub.cfgs, the CD, and a GRUB whose
+   probe failed land here.
+
+**Rule 2 is AUTHORITATIVE, not the start of a search.** If the boot
+disk's partitions hold nothing, the boot goes to ramfs with that disk's
+first partition active, exactly as a one-disk machine does. Moving on
+to the next disk with a filesystem is the friendlier-looking answer and
+the dangerous one: `fsformat` formats the active partition, and an
+active partition on a different disk than the one the machine booted
+from is how the wrong disk gets erased.
+
+**Considered and rejected.** Content search alone (rule 3 without 2):
+it fixes the blank-disk case but cannot tell two bootable disks apart
+-- an old install on a second drive would win by controller again.
+Multiboot2's boot-device tag: it carries a BIOS drive number (0x80),
+and nothing in the kernel can map that to a controller. Finding the ESP
+whose `kernel.bin` matches the running image: reads FAT on every disk
+at boot to answer a question the loader can just state.
+
+**The known gap.** Host-seeded images (`seed_disk.py`) derive their
+partition GUIDs from the index for reproducible builds, so every
+`disk.img` copy shares PARTUUIDs and two of them on one machine are told
+apart by precedence, not by `bootpart=` -- Linux has the same problem
+with cloned disks. The in-OS `install` writes random GUIDs. And
+System Update does not rewrite grub.cfg, so an installed machine gets
+rule 2 only after a reinstall or adding the two lines by hand; rule 3
+covers it meanwhile.

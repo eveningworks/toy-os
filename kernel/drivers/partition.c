@@ -102,6 +102,7 @@ static void parse_mbr_entries(const uint8_t *mbr, uint32_t spb, struct partition
         struct partition_entry *pe = &out->entries[out->entry_count++];
         k_memset(pe, 0, sizeof(*pe));
         pe->mbr_type = type;
+        pe->mbr_slot = (uint8_t)(i + 1);
         pe->mbr_active = (e[0] == 0x80);   // read back, so `parttable` can show it
         pe->mbr_lba_start = read_le32(e + 8) * spb;
         pe->mbr_num_sectors = read_le32(e + 12) * spb;
@@ -235,6 +236,9 @@ int partition_read_table_of(const struct block_device *dev,
         return 1; // readable disk, just no MBR/GPT signature -- PART_TABLE_NONE stands
     }
 
+    out->mbr_disk_signature = (uint32_t)mbr[440] | ((uint32_t)mbr[441] << 8) |
+                              ((uint32_t)mbr[442] << 16) | ((uint32_t)mbr[443] << 24);
+
     if (!mbr_has_gpt_protective_entry(mbr)) {
         out->kind = PART_TABLE_MBR;
         parse_mbr_entries(mbr, spb, out);
@@ -329,6 +333,23 @@ int partition_is_firmware(const struct partition_entry *pe,
                k_memcmp(pe->gpt_type_guid, GPT_TYPE_ESP, 16) == 0;
     }
     return pe->mbr_type == 0xEF;   // MBR's EFI System type
+}
+
+int partition_partuuid(const struct partition_table *t, int index, char *out, uint32_t size) {
+    if (!t || !out || size < 37 || index < 0 || index >= t->entry_count) return 0;
+    if (t->kind == PART_TABLE_GPT) {
+        // The on-disk GUID is mixed-endian: the first three fields
+        // little-endian, the last eight bytes as they are.
+        const uint8_t *g = t->entries[index].gpt_unique_guid;
+        return k_snprintf(out, size,
+                          "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+                          g[3], g[2], g[1], g[0], g[5], g[4], g[7], g[6],
+                          g[8], g[9], g[10], g[11], g[12], g[13], g[14], g[15]) == 36;
+    }
+    if (t->kind == PART_TABLE_MBR)
+        return k_snprintf(out, size, "%08x-%02x", t->mbr_disk_signature,
+                          t->entries[index].mbr_slot) == 11;
+    return 0;
 }
 
 int partition_is_esp(const struct partition_entry *pe,

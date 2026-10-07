@@ -295,24 +295,40 @@ this the obvious way), not from how much history it accumulated.
   first, surfacing as the system and `config` disagreeing about a file.
   **If you add an entry point, ask which half it belongs in: does it
   look at a buffer, or at a file?**
-- **THE DISK PRECEDENCE IS VIRTIO-BLK, THEN AHCI, THEN ATA, and each
-  rung has a boot word that steps down to the next.** `kernel/fs/mount.c`
-  decides it in ONE line, because `blk_register()` is last-writer-wins
-  and order alone would otherwise settle it somewhere nobody looks.
-  `novirtio` and `noahci` are what keep the lower rungs reachable and
-  therefore tested. **`noahci` is not a driver kill switch** -- the
-  driver still finds the HBA, brings up the port and reports it through
-  `/bin/ahci`; only `blk_ahci_init()` reads the word, so a test can
-  assert "the driver ran" and "the block layer did not take it" at once.
-  On a machine whose only disk is the SATA one that means ramfs, which
-  is correct and looks like a failure, so the boot log says which rung
-  it landed on.
-- **AHCI ENUMERATES EVERY PORT AND DRIVES ONE, AND SAYS SO.**
-  `kernel/drivers/ahci.c`: up to 32 ports are scanned and reported
-  (link state, speed, signature -- an ATAPI drive or a port multiplier
-  answers the link and is not a disk), and exactly one SATA drive
-  becomes the block device through command slot 0 with one transfer
-  outstanding. **NCQ and 64-bit addressing are REPORTED, not used**, and
+- **THE ROOT DISK IS THE BOOT DISK, THEN THE FIRST BOOTABLE ONE --
+  NEVER WHICHEVER DRIVER PROBED LAST.** `choose_root_disk()` in
+  `kernel/fs/mount.c`: `root=` if given; else the disk carrying
+  `bootpart=`, the PARTUUID grub.cfg passes for the partition GRUB
+  loaded from (`probe --part-uuid`), AUTHORITATIVE even when that disk's
+  partitions hold nothing; else by content, in `ROOT_PRECEDENCE`
+  (virtio-blk, NVMe, AHCI, ATA): a disk with a boot partition, then one
+  with any table, then the first. `blk_register()` is still
+  last-writer-wins, which is exactly why it must not be what decides:
+  a blank disk on a faster controller took the root that way.
+  **Host-seeded images share PARTUUIDs** (`seed_disk.py` derives them
+  from the index), so two copies of `disk.img` are told apart by
+  precedence, not by `bootpart=`; the in-OS `install` randomises them.
+  `novirtio`, `nonvme` and `noahci` still step down a rung each and keep
+  the lower rungs reachable. **`noahci` is not a driver kill switch** --
+  the driver still finds the HBA, brings up the ports and reports them
+  through `/bin/ahci`; only `blk_ahci_init()` reads the word, so a test
+  can assert "the driver ran" and "the block layer did not take it" at
+  once. `tools/rootdisk_test.py` boots the cases.
+- **AHCI DRIVES EVERY SATA DISK ON EVERY HBA, EACH WITH ITS OWN
+  COMMAND LIST, BUFFER AND LOCK.** `kernel/drivers/ahci.c` is libahci's
+  host/port split: a `struct hba` per controller (up to
+  `AHCI_MAX_HBAS`), a `struct drive` per port with a disk, numbered
+  across HBAs in probe order and registered as `ahci0`, `ahci1`, ...
+  Ports without a disk are still scanned and reported (link state,
+  speed, signature -- an ATAPI drive or a port multiplier answers the
+  link and is not a disk). **ONE INTERRUPT HANDLER FOR EVERY HBA**
+  (neither `irq_register_handler()` nor `pci_msi_request()` passes
+  context), demultiplexed by `HBA_IS`; **acknowledge only your own
+  port's `HBA_IS` bit** -- writing the whole register back clears
+  another drive's pending completion and its waiter sleeps out its
+  deadline. One request at a time per drive goes through slot 0 with one
+  transfer
+outstanding. **NCQ and 64-bit addressing are REPORTED, not used**, and
   `/bin/ahci` prints that rather than leaving a reader to infer queuing
   from `CAP.SNCQ`: what NCQ needs is an asynchronous block interface,
   not more AHCI code. **There is no sector cache under it** -- unlike
@@ -1315,11 +1331,13 @@ person wrote both halves.
 
 ## EVERY DISK DRIVER RUNS, AND THE ROOT IS A SEPARATE CHOICE.
 
-`kernel/fs/mount.c` calls `blk_ata_init()`, `blk_ahci_init()` and
-`blk_virtio_init()` unconditionally, and each registers what it finds
-into **block.h's device table**. What carries the root is decided
-afterwards: `root=` on the boot line, else registration order (ATA,
-AHCI, virtio, so virtio wins — unchanged).
+`kernel/fs/mount.c` calls every `blk_*_init()` unconditionally, and
+each registers what it finds into **block.h's device table**. What
+carries the root is decided afterwards by `choose_root_disk()`:
+`root=` on the boot line, else the disk GRUB booted from
+(`bootpart=`), else the first disk with a boot partition in driver
+precedence -- NOT registration order, which let a blank disk on a
+faster controller take the root.
 
 **It used to be one line, and the short circuit was the bug**:
 

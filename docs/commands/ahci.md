@@ -10,23 +10,26 @@
 
 ## Description
 
-The SATA host bus adapter: its version, how many ports it implements,
+Every SATA host bus adapter: its version, how many ports it implements,
 how many command slots it offers, whether completions arrive by
-interrupt — and then the drive, and then every port.
+interrupt -- then each drive on it, and then every port.
 
     ahci: HBA version 1.3, 1 port implemented, 32 command slots, IRQ-driven
-      drive: "SAMSUNG MZNLN128HAHQ-000H1" on port 0
-      capacity: 250069680 sectors (119.2G), LBA48
-      transfers: DMA, up to 512 sectors each
-      waits that slept: 103685
-      TRIM: in use -- freed blocks are discarded to the host image
-      NCQ: 32 tags; 135 batch(es) of 272 commands queued, 0 replayed one at a time
-      64-bit addressing: offered, used for a queued buffer above 4 GiB
+      NCQ: offered; 64-bit addressing: offered, used for a queued buffer above 4 GiB
+      ahci0: "SAMSUNG MZNLN128HAHQ-000H1" on port 0
+        capacity: 250069680 sectors (119.2G), LBA48
+        transfers: DMA, up to 512 sectors each, IRQ-driven
+        waits that slept: 103685
+        TRIM: in use -- freed blocks are discarded to the host image
+        NCQ: 32 tags; 135 batch(es) of 272 commands queued, 0 replayed one at a time
       port  link       speed     signature
-      0     device     6 Gbps    0x00000101  SATA disk  <- in use
+      0     device     6 Gbps    0x00000101  SATA disk  <- ahci0
 
 (The ASUS test laptop. QEMU's `ich9-ahci` reports six ports, five of them
-`empty`, and a 1.5 Gbps link.)
+`empty`, and a 1.5 Gbps link.) **Every SATA disk is driven**, on every
+controller: a second drive is `ahci1`, a second HBA prints its own block
+after a blank line, and `<- ahciN` names the block device each port's
+drive became -- the name `lsblk`, `mount` and `root=` use.
 
 **The port table is the point.** "No drive" and "a drive this driver
 cannot speak to" both leave `df` reporting the same thing, and the
@@ -61,7 +64,7 @@ chosen by the driver when the chipset routes it no interrupt line, not
 by a tunable. To force the *legacy IDE* driver instead, put `noahci` on
 the GRUB command line.
 
-It reports the ports the driver did not claim rather than hiding them,
+It reports the ports without a disk rather than hiding them,
 and it does not enumerate a port multiplier's downstream devices,
 because nothing here speaks to one.
 
@@ -73,9 +76,9 @@ attaches a virtio one; neither has an HBA. `make run DISK=ahci` is what
 puts a SATA drive on an ICH9 controller in front of this command.
 
 **A drive listed here is not necessarily the one carrying the root.**
-`<- in use` marks the port the block device sits on; `df` names the
-backend actually mounted, which is `virtio-blk` on a machine that has
-both.
+`<- ahci0` names the block device a port's drive became; which disk
+carries the root is `lsblk`'s answer -- the disk GRUB booted from
+(`bootpart=` in `docs/boot-flags.md`), not the first drive.
 
 **`waits that slept`** counts command waits that parked their caller so something else could run -- a process's disk wait sleeps on the controller's interrupt, INTx or MSI. The kernel context still halts or polls, so a count that stays at 0 while a program writes means the sleep path is not being reached.
 

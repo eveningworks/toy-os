@@ -1249,7 +1249,11 @@ struct query_ata {
                                 // than polling; APPENDED
 };
 
-// QUERY_AHCI's record.
+// QUERY_AHCI's record -- ONE PER HBA, in probe order. Record 0 exists
+// even with no controller, PRESENT clear, so "no AHCI here" is an
+// answer rather than an error. The drive fields (DRIVE, LBA48, TRIM,
+// active_port, sector_count, model, the NCQ and sleep counters) are
+// the HBA's FIRST drive; QUERY_AHCI_PORT has every drive's.
 #define QUERY_AHCI_PRESENT (1u << 0) // a controller was found and mapped
 #define QUERY_AHCI_DRIVE   (1u << 1) // a SATA drive answered IDENTIFY
 #define QUERY_AHCI_IRQ     (1u << 2) // completions arrive by interrupt
@@ -1278,14 +1282,19 @@ struct query_ahci {
     uint64_t ncq_cmds;          // commands those carried
     uint64_t ncq_fallbacks;     // rounds that failed and were replayed
                                 // one at a time; all four APPENDED
+    uint64_t drives;            // SATA drives driven on this HBA; APPENDED
 };
 
-// QUERY_AHCI_PORT's record. `port` is the HARDWARE's number and the
-// record index is a position in the implemented list -- they differ
-// whenever PI has a gap, which is why both exist.
+// QUERY_AHCI_PORT's record: every implemented port of every HBA, HBA
+// by HBA. `port` is the HARDWARE's number and the record index is a
+// position in that list -- they differ whenever PI has a gap, which is
+// why both exist. The drive fields are zero on a port with no drive.
 #define QUERY_AHCI_PORT_DEVICE  (1u << 0) // DET says the link is up to a device
 #define QUERY_AHCI_PORT_RUNNING (1u << 1) // PxCMD.ST and .FRE are both set
-#define QUERY_AHCI_PORT_ACTIVE  (1u << 2) // this port carries the block device
+#define QUERY_AHCI_PORT_ACTIVE  (1u << 2) // a drive here is driven as a disk
+#define QUERY_AHCI_PORT_LBA48   (1u << 3) // the drive's addressing
+#define QUERY_AHCI_PORT_TRIM    (1u << 4) // DATA SET MANAGEMENT TRIM
+#define QUERY_AHCI_PORT_IRQ     (1u << 5) // its completions interrupt
 
 struct query_ahci_port {
     uint64_t port;
@@ -1294,6 +1303,18 @@ struct query_ahci_port {
     uint64_t ipm;               // PxSSTS.IPM: 1 = active
     uint64_t speed;             // PxSSTS.SPD: 1/2/3 = 1.5/3/6 Gbps
     uint64_t signature;         // PxSIG: 0x00000101 is a SATA disk
+    // Everything below APPENDED with multi-drive AHCI.
+    uint64_t hba;               // which QUERY_AHCI record this port is on
+    int64_t  drive;             // the driver's drive number, -1 for none
+    uint64_t sector_count;
+    uint64_t max_sectors_xfer;
+    uint64_t cmd_sleeps;        // command waits that PARKED their caller
+    uint64_t ncq_depth;         // tags queued at once; 0 = NCQ not in use
+    uint64_t ncq_rounds;
+    uint64_t ncq_cmds;
+    uint64_t ncq_fallbacks;
+    char     model[QUERY_AHCI_MODEL_MAX];
+    char     device[16];        // its block device, "ahci1"; "" if none
 };
 
 // QUERY_KSTACK's record -- one live kernel stack.

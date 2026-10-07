@@ -35,12 +35,12 @@
 
 // driver-none: partitions of a disk another driver drives
 
-// One per partition that anything holds a device for. Four is MBR's
-// limit and more than this OS's own disk uses (bios, esp, tfs3); the
-// pool is bounded because a `struct block_device` plus its name is
+// One per partition that anything holds a device for, across EVERY
+// disk -- every disk's table is named at boot, and this OS's own disk
+// alone takes three (bios, esp, tfs3). The pool is bounded because a `struct block_device` plus its name is
 // static storage, and an unbounded one would be a heap allocation with
 // a lifetime nobody owns.
-#define PART_SLOTS 8
+#define PART_SLOTS 16
 
 struct part_slot {
     // The parent is BORROWED, not copied -- the disk drivers' device

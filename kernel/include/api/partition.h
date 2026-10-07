@@ -66,6 +66,10 @@ struct partition_entry {
     // decoration, it is whether the firmware will boot the disk at all.
     // Meaningless on GPT, whose protective entry stays 0 by spec.
     uint8_t mbr_active;
+    // Which of LBA 0's four slots it came from, 1-based. entries[] skips
+    // empty slots, so this and the entry's index differ after a gap --
+    // and an MBR PARTUUID names the SLOT.
+    uint8_t mbr_slot;
     uint32_t mbr_lba_start;
     uint32_t mbr_num_sectors;
 
@@ -91,6 +95,10 @@ struct partition_table {
     // from "no GPT at all", if that distinction ever matters).
     uint8_t disk_guid[16];
     int gpt_header_valid;
+
+    // LBA 0's NT disk signature (bytes 440-443), read whatever the kind
+    // -- an MBR partition's PARTUUID is built from it.
+    uint32_t mbr_disk_signature;
 };
 
 // Reads LBA 0 (and LBA 1 + the partition entry array, if a protective
@@ -115,6 +123,14 @@ int partition_read_table_of(const struct block_device *dev,
 // to `fsformat`. See partition.c for the GUIDs and the reasoning.
 int partition_is_firmware(const struct partition_entry *pe,
                           enum partition_table_kind kind);
+
+// Entry `index`'s PARTUUID as Linux's `root=PARTUUID=` and GRUB's
+// `probe --part-uuid` spell it: a GPT entry's unique GUID in the usual
+// lowercase 8-4-4-4-12 form, an MBR entry as `<disk signature>-<nn>`
+// with nn its mbr_slot. Returns 0 (writing nothing usable) for no
+// table, an index past the end, or a buffer too small -- 37 bytes fits
+// both.
+int partition_partuuid(const struct partition_table *t, int index, char *out, uint32_t size);
 
 // Is it specifically an EFI System Partition? A NARROWER question than
 // partition_is_firmware(), and the two are asked by different passes

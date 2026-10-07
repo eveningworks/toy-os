@@ -494,7 +494,8 @@ SeaBIOS did before GRUB loaded us.
 
 **Which disk wins, and why it is decided in `vfs.c`.** `blk_register()`
 is last-writer-wins, so order alone would decide it somewhere nobody
-looks.
+looks. (For the ROOT this is now only the tie-break: storage.md's "The
+root disk is the boot disk, not the fastest controller's" has why.)
 
 It shipped conservative -- virtio only when ATA had no disk -- on the
 reasoning that a real installed system must not be quietly displaced.

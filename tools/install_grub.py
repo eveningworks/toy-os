@@ -89,6 +89,9 @@ MODULE_DIRS = ("/usr/lib/grub/i386-pc", "/usr/share/grub/i386-pc",
 CORE_MODULES = ("biosdisk", "part_gpt", "part_msdos", "fat", "normal",
                 "configfile", "multiboot2", "all_video", "gfxterm", "echo",
                 "test", "search", "search_fs_uuid", "search_label", "ls",
+                # grub.cfg's `bootpart=`: the PARTUUID of the partition
+                # GRUB booted from, which tells the kernel its boot disk.
+                "probe", "true",
                 # GZIO -- so a GZIPPED kernel boots from the disk. GRUB
                 # decompresses any file whose CONTENT starts with the gzip
                 # magic, but only if this module is in the core image; the
@@ -547,29 +550,47 @@ def install(disk, kernel, grub_cfg, verbose=True, optional=False):
               + (" [formatted]" if fresh else ""))
 
 
-def add_boot_word(img, word):
-    """Append `word` to every multiboot2 line in the image's grub.cfg.
+def patch_grub_cfg(img, transform, tag="patched"):
+    """Rewrite the image's /boot/grub/grub.cfg through `transform(text)`.
 
-    GRUB's command line is baked into /boot/grub/grub.cfg at `make iso`
-    time, so a test that needs a boot word rewrites that file inside its
-    image COPY -- the alternative, `make iso KCMDLINE=...`, rebuilds the
-    media every other tool shares. Returns (ok, why)."""
+    GRUB's command line is baked into that file at `make iso` time, so a
+    test that needs a different boot line rewrites it inside its image
+    COPY -- the alternative, `make iso KCMDLINE=...`, rebuilds the media
+    every other tool shares. Returns (ok, why)."""
     _bios, esp = parts_of(img)
     if not esp:
         return False, "the image has no FAT32 /boot partition"
     cfg = mtype(img, esp, "::/boot/grub/grub.cfg")
     if not cfg or "multiboot2" not in cfg:
         return False, "could not read /boot/grub/grub.cfg out of the image"
-    patched = re.sub(r"^(\s*multiboot2\s+\S+.*)$", r"\1 " + word, cfg,
-                     flags=re.MULTILINE)
-    tmp = os.path.abspath(f"grub-{word}.cfg")
+    tmp = os.path.abspath(f"grub-{tag}.cfg")
     with open(tmp, "w") as f:
-        f.write(patched)
+        f.write(transform(cfg))
     try:
         mcopy_into(img, esp, [tmp], "::/boot/grub/grub.cfg")
     finally:
         os.unlink(tmp)
     return True, ""
+
+
+def add_boot_word(img, word):
+    """Append `word` to every multiboot2 line in the image's grub.cfg."""
+    return patch_grub_cfg(
+        img, lambda cfg: re.sub(r"^(\s*multiboot2\s+\S+.*)$", r"\1 " + word, cfg,
+                                flags=re.MULTILINE), word)
+
+
+def drop_boot_word(img, prefix):
+    """Remove every word starting with `prefix` from the multiboot2 lines."""
+    def drop(cfg):
+        out = []
+        for line in cfg.splitlines(keepends=True):
+            if line.lstrip().startswith("multiboot2"):
+                words = [w for w in line.rstrip("\n").split(" ") if not w.startswith(prefix)]
+                line = " ".join(words) + "\n"
+            out.append(line)
+        return "".join(out)
+    return patch_grub_cfg(img, drop, "drop")
 
 
 def _is_gpt(disk):

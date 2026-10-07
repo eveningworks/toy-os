@@ -821,14 +821,16 @@ static void name_all_partitions(void) {
 static char g_root_disk[BLK_NAME_MAX];
 static int  g_root_part;   // 1-based partition number, 0 = any
 
-// Same substring-plus-boundary matching every boot word here uses, and
-// for the reason target.c gives: without the boundary check a longer
-// word ending in `root=` would silently match.
-static int cmdline_root(const char *cmdline, char *out, uint32_t out_size) {
+// `<key><value>` off the boot line, e.g. `root=ahci0p2`. Same
+// substring-plus-boundary matching every boot word here uses, and for
+// the reason target.c gives: without the boundary check a longer word
+// ending in `root=` would silently match. 0 for absent or empty.
+static int cmdline_value(const char *cmdline, const char *key, char *out, uint32_t out_size) {
     if (!cmdline) return 0;
-    for (const char *p = cmdline; (p = k_strstr(p, "root=")) != 0; p += 5) {
+    uint32_t klen = (uint32_t)k_strlen(key);
+    for (const char *p = cmdline; (p = k_strstr(p, key)) != 0; p += klen) {
         if (p != cmdline && p[-1] != ' ') continue;
-        const char *v = p + 5;
+        const char *v = p + klen;
         uint32_t n = 0;
         while (v[n] && v[n] != ' ' && n + 1 < out_size) n++;
         if (n == 0) return 0;
@@ -867,10 +869,11 @@ static void split_root(const char *name) {
 // Every /etc reader here treats a typo that way, and the argument is
 // stronger on the boot line: a machine that refuses to boot because of
 // one mistyped word gives its owner nothing to fix it with. What it
-// must not do is fail SILENTLY, so the table is printed.
-static void root_override(const char *cmdline) {
+// must not do is fail SILENTLY, so the table is printed. Returns 1 when
+// a `root=` was applied.
+static int root_override(const char *cmdline) {
     char want[BLK_NAME_MAX];
-    if (!cmdline_root(cmdline, want, sizeof want)) return;
+    if (!cmdline_value(cmdline, "root=", want, sizeof want)) return 0;
 
     split_root(want);
     const struct blk_entry *e = blk_device_by_name(g_root_disk);
@@ -880,11 +883,11 @@ static void root_override(const char *cmdline) {
                         want, g_root_disk, g_root_part);
         else
             klog_printf("fs: root=%s -- using %s\n", want, g_root_disk);
-        return;
+        return 1;
     }
 
-    klog_printf("fs: root=%s names no device this boot found; using %s instead\n",
-                want, blk_root_present() ? blk_device_name(blk_root()) : "nothing");
+    klog_printf("fs: root=%s names no device this boot found; choosing as if it were absent\n",
+                want);
     for (int i = 0; i < blk_device_count(); i++) {
         const struct blk_entry *d = blk_device_at(i);
         klog_printf("fs:   have %s (%llu sectors)\n", d->name,
@@ -892,6 +895,118 @@ static void root_override(const char *cmdline) {
     }
     g_root_disk[0] = '\0';
     g_root_part = 0;
+    return 0;
+}
+
+// ---- which disk is the root, when `root=` does not say -------------
+//
+// NOT REGISTRATION ORDER. blk_register() is last-writer-wins, and that
+// made the root whichever controller probed last -- so a blank disk on
+// a faster controller took it and the machine booted into ramfs with
+// its real system disk sitting right there. Two rules instead, in the
+// order a real system asks them:
+//
+//   1. `bootpart=<PARTUUID>`, which grub.cfg passes for the partition
+//      GRUB loaded the kernel from (`probe --part-uuid`): the disk
+//      carrying it IS the boot disk, and it is the root disk whatever
+//      its partitions hold. systemd's LoaderDevicePartUUID, NT's BCD
+//      device -- the loader says where it came from.
+//   2. Otherwise BY CONTENT, disks in driver precedence: the first that
+//      looks BOOTABLE (a BIOS-boot/ESP partition, or an active MBR
+//      slot), else the first with any partition table, else the first.
+//      A blank disk never outranks one with a table on it.
+//
+// AUTHORITATIVE, NOT A SEARCH: rule 1 does not move on to another disk
+// when the boot disk's partitions hold nothing -- `fsformat` formats the
+// root disk's partition, and handing it a different disk than the one
+// the machine booted from is how the wrong one gets erased.
+
+// Best first. A driver not named here ranks after all of them.
+static const char *const ROOT_PRECEDENCE[] = { "virtio-blk", "nvme", "ahci", "ata" };
+#define ROOT_RANKS ((int)(sizeof ROOT_PRECEDENCE / sizeof ROOT_PRECEDENCE[0]))
+
+static int precedence_of(const struct block_device *dev) {
+    for (int i = 0; i < ROOT_RANKS; i++)
+        if (dev->driver && k_strcmp(dev->driver, ROOT_PRECEDENCE[i]) == 0) return i;
+    return ROOT_RANKS;
+}
+
+// Every persistent DISK -- not a partition, not a live image -- best
+// first, in table order within a driver.
+static int root_candidates(const struct block_device **out, int max) {
+    int n = 0;
+    for (int rank = 0; rank <= ROOT_RANKS; rank++)
+        for (int i = 0; i < blk_device_count() && n < max; i++) {
+            const struct blk_entry *e = blk_device_at(i);
+            if (e->dev != e->parent || !e->dev->persistent) continue;
+            if (precedence_of(e->dev) == rank) out[n++] = e->dev;
+        }
+    return n;
+}
+
+enum { DISK_BLANK, DISK_TABLE, DISK_BOOTABLE };
+static const char *const DISK_KIND_NAME[] = {
+    "no partition table", "a partition table", "a boot partition"
+};
+
+// STATIC, not a stack local: a partition table is ~1.5 KB against a
+// 1 KB kernel frame budget (mount_rescan_disk() says the same).
+static struct partition_table g_probe_tbl;
+
+static int disk_kind(const struct block_device *disk) {
+    if (!partition_read_table_of(disk, &g_probe_tbl) || g_probe_tbl.kind == PART_TABLE_NONE)
+        return DISK_BLANK;
+    for (int i = 0; i < g_probe_tbl.entry_count; i++) {
+        const struct partition_entry *pe = &g_probe_tbl.entries[i];
+        if (partition_is_firmware(pe, g_probe_tbl.kind)) return DISK_BOOTABLE;
+        if (g_probe_tbl.kind == PART_TABLE_MBR && pe->mbr_active) return DISK_BOOTABLE;
+    }
+    return DISK_TABLE;
+}
+
+// Does `disk`'s table carry a partition whose PARTUUID is `want`?
+// Case-blind: GRUB prints lowercase, a person may not.
+static int disk_has_partuuid(const struct block_device *disk, const char *want) {
+    if (!partition_read_table_of(disk, &g_probe_tbl)) return 0;
+    char id[40];
+    for (int i = 0; i < g_probe_tbl.entry_count; i++)
+        if (partition_partuuid(&g_probe_tbl, i, id, sizeof id) && k_strcasecmp(id, want) == 0)
+            return 1;
+    return 0;
+}
+
+static void choose_root_disk(const char *cmdline) {
+    const struct block_device *cand[BLK_MAX_DEVICES];
+    int n = root_candidates(cand, BLK_MAX_DEVICES);
+    if (n == 0) return;                 // no disk: the live image, or ramfs
+
+    char want[40];
+    if (cmdline_value(cmdline, "bootpart=", want, sizeof want)) {
+        for (int i = 0; i < n; i++) {
+            if (!disk_has_partuuid(cand[i], want)) continue;
+            blk_set_root(cand[i]);
+            g_tbl_valid = 0;
+            klog_printf("fs: bootpart=%s is on %s -- the boot disk is the root disk\n",
+                        want, blk_device_name(cand[i]));
+            return;
+        }
+        klog_printf("fs: bootpart=%s is on no disk this kernel drives -- choosing by content\n",
+                    want);
+    }
+
+    int best = 0, best_kind = -1;
+    for (int i = 0; i < n; i++) {
+        int kind = disk_kind(cand[i]);
+        if (kind > best_kind) { best = i; best_kind = kind; }
+    }
+    blk_set_root(cand[best]);
+    g_tbl_valid = 0;
+    // Said only when it differs from what precedence alone would pick,
+    // which is the case a person needs explained.
+    if (best != 0)
+        klog_printf("fs: %s has %s, so the root disk is %s (%s) instead\n",
+                    blk_device_name(cand[0]), DISK_KIND_NAME[disk_kind(cand[0])],
+                    blk_device_name(cand[best]), DISK_KIND_NAME[best_kind]);
 }
 
 static int try_partitions(void) {
@@ -1048,14 +1163,14 @@ static void probe_and_mount_root(void) {
     // and is what makes every disk reachable. See block.h's device
     // table for the split this is half of.
     //
-    // ORDER STILL SETS PRECEDENCE, because blk_register() is
-    // last-writer-wins: ATA, then AHCI, then NVMe, then VIRTIO, so virtio
-    // ends up the default root exactly as before -- it is the faster and
-    // better-tested path (block_virtio.c has the numbers), NVMe is what
-    // a laptop of this decade boots from, AHCI is what a SATA machine
-    // presents, legacy IDE is the fallback and still the only disk on
-    // some hardware. `novirtio`, `nonvme` and `noahci` step down a rung
-    // each, which keeps the lower paths reachable and tested.
+    // ORDER NO LONGER CHOOSES THE ROOT -- choose_root_disk() does, and
+    // its ROOT_PRECEDENCE breaks ties the way this order used to:
+    // virtio is the faster and better-tested path (block_virtio.c has
+    // the numbers), NVMe is what a laptop of this decade boots from,
+    // AHCI is what a SATA machine presents, legacy IDE is the fallback
+    // and still the only disk on some hardware. `novirtio`, `nonvme` and
+    // `noahci` step down a rung each, which keeps the lower paths
+    // reachable and tested.
     blk_ata_init();
     blk_ahci_init();
     blk_nvme_init();
@@ -1068,10 +1183,11 @@ static void probe_and_mount_root(void) {
     // most of what a live CD is for, and it could not before.
     if (forced || !blk_root_present()) try_live_module(forced);
 
-    // `root=` overrides the precedence, naming a disk from the table.
-    // Linux's `root=` and NT's BCD `osdevice`: the boot line decides,
-    // not whichever driver happened to probe last.
-    root_override(cmdline);
+    // `root=` names a disk from the table -- Linux's `root=`, NT's BCD
+    // `osdevice` -- and otherwise the boot disk or the contents decide,
+    // not whichever driver happened to probe last. A live image asked
+    // for keeps the root it just took.
+    if (!root_override(cmdline) && !forced) choose_root_disk(cmdline);
 
     // Every disk's partitions get a name, not just the root's. A device
     // with no name cannot be mounted, so without this pass the second

@@ -3988,8 +3988,9 @@ window without going through it will find its layout polls timing out.
   that turned it red was a handler that never counted.
 - **`bigdisk_test.py`** -- a **sparse 2200 GiB disk past 2 TiB**,
   attached as a second disk on virtio-blk, AHCI and NVMe in turn beside
-  the IDE root (pinned with `root=ata0p3` via `add_boot_word()`, since a
-  blank disk on a faster controller outranks IDE). The guest makes a
+  the IDE root (pinned with `root=ata0p3` via `add_boot_word()`; the
+  kernel would pick it anyway now -- `bootpart=` names it -- but the pin
+  keeps the test independent of that rule). The guest makes a
   64 MiB partition 2 wholly past sector 2^32, formats it TFS3, writes and
   reads a marker, fscks it. Three boots, on demand.
 
@@ -5442,6 +5443,14 @@ runs first**: a `doom1.wad` with one
   partition is reported and skipped rather than being an error, so a
   `disk.img` predating this layout keeps working (booting the ISO).
   It never partitions and never reformats an existing `/boot`.
+
+  **`add_boot_word(img, word)` / `drop_boot_word(img, prefix)`** edit
+  the multiboot2 lines of an image COPY's grub.cfg (over
+  `patch_grub_cfg()`), so a test gets its own boot line without `make
+  iso KCMDLINE=...` rebuilding the media everyone shares. `core.img`
+  carries `probe` and `true` for grub.cfg's `bootpart=` lines -- a
+  module the config needs must be in `CORE_MODULES`, because an
+  installed target has no module directory to load it from.
 - **`tfs3_writer_test.py`** -- does the host seeder's OVERWRITE hand
   every block back? Host-only, no VM, about a second: it formats a
   scratch image, writes one file per block-map level (direct,
@@ -6589,6 +6598,27 @@ runs first**: a `doom1.wad` with one
   mid-run under anything else booting `toy-os.iso`, which `iso_guard`
   then refuses as stale (seen with `install_test.py` alongside). On
   demand, not in any gate.
+
+- **`rootdisk_test.py`** -- **every SATA drive, and which disk is the
+  root.** Five boots, on demand. **A**: three SATA drives on TWO
+  `ich9-ahci` HBAs, the system disk on HBA 0 PORT 1 (booted by
+  `bootindex`), a host-seeded data disk on port 0 and a blank disk on
+  the second HBA -- three drives named, the root from port 1 rather than
+  the first drive, the port-0 disk reading the host's marker AND keeping
+  a file across a remount, `ahci` marking all three, `ktest ahci` with
+  none skipped. **B**: a blank virtio disk beside an IDE system disk,
+  with `bootpart=` and then with it removed from grub.cfg
+  (`install_grub.drop_boot_word()`): both must root on IDE. **C**: two
+  system disks, the virtio one with its partition GUIDs changed
+  (`reguid()`, both GPT headers re-CRCed) -- `bootpart=` must pick IDE
+  and removing it must flip the root to virtio, which is what proves
+  `bootpart=` decided rather than agreed.
+
+  Its controls (`mutate.py`): AHCI stopping at one drive per HBA
+  reddens every check of A; the content rule reduced to precedence
+  boots B into ramfs; ignoring `bootpart=` reddens C's first check and
+  only that. A's serial socket lives under `--tmp`, and a UNIX socket
+  path over 107 bytes makes QEMU refuse to start -- keep `--tmp` short.
 
 - **`net_test.py`** -- the network stack end to end, on both NICs, with
   the verdict taken on the HOST. The KTESTs in `kernel/net/net_test.c`

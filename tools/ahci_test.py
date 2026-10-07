@@ -174,8 +174,8 @@ def main():
     check("the root is persistent, not ramfs",
           re.search(r"ramfs\s+/\s", t1) is None
           and re.search(r"tfs3\s+/\s+\S+\s+\S+\s+\S+\s+\S+\s+yes", t1) is not None)
-    check("/bin/ahci reports the drive and marks one port in use",
-          "<- in use" in t1 and t1.count("<- in use") == 1)
+    check("/bin/ahci reports the drive and marks its port as ahci0",
+          t1.count("<- ahci") == 1 and "<- ahci0" in t1)
 
     # THE LOAD-BEARING CHECK. Every ahci KTEST skips on a machine without
     # a controller, so a suite reporting "passed" says nothing on its
@@ -283,7 +283,7 @@ def main():
         check("`noahci` leaves the driver running",
               "ahci: HBA" in t3 and re.search(r'ahci: port \d+: "', t3) is not None)
         check("`noahci` keeps AHCI out of the block layer",
-              "block: ahci active" not in t3)
+              re.search(r"block: ahci\d* active", t3) is None)
         check("and the root falls through to ramfs", "ramfs" in t3)
 
     failures = [n for n, ok, _ in checks if not ok]
