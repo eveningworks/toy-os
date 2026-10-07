@@ -477,8 +477,8 @@ int fs_mount_usage(const void *m, uint64_t *out_used_bytes, uint64_t *out_total_
 //   - an out-of-range pointer is zeroed, turning it into a hole.
 // Double-allocated blocks are always REPORTED, never repaired: two
 // records genuinely claim the same block, and choosing which one keeps
-// it is a data-destroying guess this can't make for you. Sort those out
-// by deleting one of the files named in the log.
+// it is a data-destroying guess this can't make for you. The pass
+// COUNTS them and names no file yet (docs/roadmap.md).
 //
 // Returns 1 on a completed pass, 0 if the filesystem isn't disk-backed
 // (nothing to check -- RAM-only mode has no persistent bitmap).
