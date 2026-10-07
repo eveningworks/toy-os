@@ -77,6 +77,24 @@ def click_rect(dbg, win, r):
     dbg.settle(0.4)
 
 
+def popup_drawn(dbg, qmp):
+    """Is the open popup's first row PAINTED? The compositor lists a popup
+    surface as soon as it is created, presented or not, so the window list
+    cannot tell. Its selected first row is the accent; the dialog under an
+    unpresented one is panel grey, the same as the control beside it."""
+    pop = next((w for w in dbg.windows() if w.get("title") == "Popup"), None)
+    if not pop:
+        return False, f"no popup: {[w['title'] for w in dbg.windows()]}"
+    from PIL import Image
+    path = os.path.join(tempfile.mkdtemp(prefix="shotopts-"), "pop.png")
+    qmp.screenshot(path)
+    im = Image.open(path).convert("RGB")
+    y = pop["y"] + 6
+    inside = im.getpixel((pop["x"] + pop["w"] - 8, y))
+    beside = im.getpixel((pop["x"] + pop["w"] + 40, y))
+    return inside != beside, f"popup {pop['x']},{pop['y']} row={inside} beside={beside}"
+
+
 def files(dbg):
     return sorted(n for n in (dbg.send(f"sh ls {DIR}") or "").split()
                   if n.endswith(".png") or n.endswith(".qoi"))
@@ -141,7 +159,7 @@ def use_conf(dbg, fixture):
     return all(w in got for w in FIXTURES[fixture])
 
 
-def run(dbg, res):
+def run(dbg, res, qmp):
     sh = lambda c: dbg.send(f"sh {c}") or ""   # noqa: E731
     sh(f"rm -r {DIR}")
     sh(f"rm {CONF}")
@@ -242,6 +260,8 @@ def run(dbg, res):
               f"windows={[x['title'] for x in dbg.windows()]}")
     if ow and k0:
         click_rect(dbg, ow, k0)          # opens the list and takes the focus
+        drawn, why = popup_drawn(dbg, qmp)
+        res.check("the Print Screen dropdown's list is drawn over an idle overlay", drawn, why)
         dbg.send("gui key 0x1b")         # closed again, focused
         dbg.send("gui key D")            # "Does nothing", by its letter
         dbg.settle(0.3)
@@ -308,7 +328,7 @@ def main():
         enter_gui(qmp, args.sock)
     dbg = DebugConsole(args.sock)
     try:
-        run(dbg, res)
+        run(dbg, res, qmp)
     finally:
         dbg.close()
     print(f"\nscreenshot_options_test: {len(res.passes)} passed, {len(res.fails)} failed")

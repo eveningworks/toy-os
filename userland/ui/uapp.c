@@ -424,6 +424,18 @@ static int surf_present(struct uapp_surf *s) {
     return 1;
 }
 
+// THE POPUPS AFTER THEIR PARENT, in slot order -- the order they were
+// opened, which is the order the compositor stacks them. Only those
+// drawn into this frame: a menu nobody hovered is unchanged and
+// re-presenting it would be a wake-up for nothing. EVERY toplevel's
+// frame calls this for its own: a dialog's dropdown sent only on the
+// MAIN window's frame never appeared over an idle app.
+static void present_popups(uint32_t parent) {
+    for (int i = 1; i < WIN_CLIENT_MAX; i++)
+        if (g_surf[i].used && g_surf[i].dirty && g_surf[i].parent == parent)
+            surf_present(&g_surf[i]);
+}
+
 static void present(struct uapp *a) {
     TOPLEVEL->w = a->w;
     TOPLEVEL->h = a->h;
@@ -444,12 +456,7 @@ static void present(struct uapp *a) {
         surf_present(TOPLEVEL);
     }
     a->shown = 1;
-    // THE POPUPS AFTER THE TOPLEVEL, in slot order -- the order they
-    // were opened, which is the order the compositor stacks them. Only
-    // those drawn into this frame: a menu nobody hovered is unchanged
-    // and re-presenting it would be a wake-up for nothing.
-    for (int i = 1; i < WIN_CLIENT_MAX; i++)
-        if (g_surf[i].used && g_surf[i].dirty) surf_present(&g_surf[i]);
+    present_popups(a->window);
 }
 
 // Draw + present, but only if something actually asked. This is the
@@ -1086,6 +1093,7 @@ static void dlg_flush(struct uapp_window *w) {
     if (w->router.count) uui_router_draw(&w->router, &s->surface);
     layout_log_flush(1);
     surf_present(s);
+    present_popups((uint32_t)w->slot);
 }
 
 static int ids_unique(const struct uui_router *r, const char *who);   // below
