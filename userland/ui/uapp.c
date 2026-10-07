@@ -266,7 +266,40 @@ static void bufs_release(struct uapp_surf *s) {
     s->owner = 0;
 }
 
+// ONE TOPLEVEL -- the main window, or a dialog window (uapp_window_open):
+// what both ARE, so a frame and an input event take ONE path whichever
+// it is. Two paths drifted: popups were presented on the main window's
+// frame only, and a dropdown in a dialog over an idle app never showed.
+// Qt's QDialog is a top-level QWidget like the main window; GTK keeps a
+// list of equal GtkWindows. What differs -- the main window's draw
+// hooks, its button group, drag and drop -- wraps these, never copies.
+struct uapp_top;
+struct uapp_top_ops {
+    // A widget did something: on_action for a lone button's commit, else
+    // on_widget (tell_app's rule, which both kinds of window keep).
+    void (*tell)(struct uapp_top *t, int id, int reason, int committed);
+    // A key, after the widgets have had it (on_key).
+    void (*key)(struct uapp_top *t, int key, unsigned mods);
+};
+struct uapp_top {
+    uint32_t slot;              // the window its events name; a closed dialog's is 0
+    struct uui_router router;
+    struct uui_focus *focus;    // the app's focus ring, or NULL
+    int dirty;                  // something asked for a repaint since the last present
+    // The last cursor position seen, because a WHEEL event carries
+    // notches and no coordinates -- and "which widget is under the
+    // cursor" is the only sane answer to where a wheel goes.
+    int mouse_x, mouse_y;
+    // The WIN_CURSOR_* last named, so a repeat is dropped -- motion
+    // names one on every move.
+    int cursor;
+    int hears;                  // the app has an on_widget: a focused key is reported
+    const struct uapp_top_ops *ops;
+};
+static const struct uapp_top_ops APP_OPS, WIN_OPS;   // defined with the input below
+
 struct uapp {
+    struct uapp_top top;        // FIRST: uapp_of() casts back from it
     const struct uapp_desc *desc;
     uint32_t window;
     int w, h;
@@ -274,7 +307,6 @@ struct uapp {
     // here because every draw callback is handed `&a->surface` and the
     // two are refreshed together in present() and uapp_resize().
     struct ugfx_surface surface;
-    int dirty;    // something asked for a repaint since the last present
     int shown;    // presented at least once, so the compositor maps it
     // THE FIRST FRAME HELD for a fullscreen request made before it, until
     // the compositor's size proposal (or this deadline, in ms). xdg-shell's
@@ -288,17 +320,9 @@ struct uapp {
     int poll_paused; // uapp_poll_pause(): park in the blocking wait instead
                      // as an event and the loop can block
 
-    // Pointer routing (ui/uui_route.h). Empty unless the app declared
-    // widgets, so an app that does its own hit-testing is untouched.
-    struct uui_router router;
-    // The last cursor position seen, because a WHEEL event carries
-    // notches and no coordinates -- and "which widget is under the
-    // cursor" is the only sane answer to where a wheel goes.
-    int mouse_x, mouse_y;
-
-    // The WIN_CURSOR_* last named, so uapp_set_cursor() can drop the
-    // no-op -- an app calls it on every motion event.
-    int cursor;
+    // Pointer routing (ui/uui_route.h) is top.router: empty unless the
+    // app declared widgets, so an app that does its own hit-testing is
+    // untouched. uapp_set_cursor() drops a no-op through top.cursor.
     int cursor_before_busy;
     // While a motion is being dispatched: the cursor it has settled on so
     // far, sent once when it ends. -1 when not in a motion. Without it the
@@ -334,14 +358,6 @@ static struct ugfx_surface lease_surface(struct uapp *a) {
 }
 
 // --- TWP plumbing, in one place instead of once per client ------------
-
-static void req_clear(struct win_request_msg *req) {
-    for (unsigned i = 0; i < sizeof(*req); i++) ((uint8_t *)req)[i] = 0;
-}
-
-static int req_send(struct win_request_msg *req) {
-    return sys_win_request(req);
-}
 
 // Fill a request's `text` from a NUL-terminated string, truncating to
 // fit. Shared by the title and the app id -- both ride that one field
@@ -456,14 +472,38 @@ static void present(struct uapp *a) {
         surf_present(TOPLEVEL);
     }
     a->shown = 1;
-    present_popups(a->window);
+    present_popups(a->top.slot);
+}
+
+// ONE FRAME'S PAINTING, for either kind of toplevel. ORDER, and it is
+// load-bearing: clear, then the APP's own painting, then the widgets, then
+// overlays. The app paints UNDER its widgets, which makes the failure that
+// produced this structurally impossible: an app whose on_draw began by
+// clearing the surface -- the natural first line -- wiped everything the
+// toolkit had drawn, and UI Demo came up blank with a 35-check suite
+// passing it. An app that must paint OVER a widget says so with
+// on_draw_over. `a` is the main window's app, for its draw hooks; a
+// dialog window has none.
+static void top_paint(struct uapp_top *t, struct ugfx_surface *s, struct uui_layout *layout,
+                      struct uapp *a) {
+    if (layout || t->router.count) ugfx_fill(s, UTHEME_PANEL_BG);
+    if (a && a->desc->on_draw) {
+        struct uapp_draw d = { s, UTHEME_TEXT, UTHEME_PANEL_BG };
+        a->desc->on_draw(a, &d);
+    }
+    if (layout) uui_layout_draw(s, layout);
+    if (t->router.count) uui_router_draw(&t->router, s);
+    if (a && a->desc->on_draw_over) {
+        struct uapp_draw d = { s, UTHEME_TEXT, UTHEME_PANEL_BG };
+        a->desc->on_draw_over(a, &d);
+    }
 }
 
 // Draw + present, but only if something actually asked. This is the
 // coalescing uapp_redraw() promises: a burst of events costs one round
 // trip, not one per event.
 static void flush(struct uapp *a) {
-    if (!a->dirty) return;
+    if (!a->top.dirty) return;
     if (a->hold_until_ms) {
         if (sys_monotonic_ns() / 1000000ULL < a->hold_until_ms) return;
         a->hold_until_ms = 0;
@@ -475,42 +515,9 @@ static void flush(struct uapp *a) {
         if (!sf) return;
         a->surface = *sf;
     }
-    a->dirty = 0;
+    a->top.dirty = 0;
 
-    // ORDER, and it is load-bearing: clear, then the APP's own painting,
-    // then the widgets, then overlays.
-    //
-    // The app paints UNDER its widgets, which makes the failure that
-    // produced this comment structurally impossible. It had already
-    // happened twice: an app whose on_draw begins by clearing the
-    // surface -- the natural first line, and what every client wrote
-    // before the toolkit cleared for them -- wiped everything the
-    // toolkit had just drawn, and the window came up completely blank
-    // with no error anywhere. UI Demo shipped that way and a 35-check
-    // suite passed it, because every check asserted on the app's LOG
-    // and the widgets were live, hit-testable and simply invisible.
-    //
-    // With the app first, a stray clear can only ever wipe its own
-    // backdrop. An app that genuinely needs to paint OVER a widget says
-    // so with on_draw_over.
-    if (a->desc->layout || a->router.count) ugfx_fill(&a->surface, UTHEME_PANEL_BG);
-
-    if (a->desc->on_draw) {
-        struct uapp_draw d = { &a->surface, UTHEME_TEXT, UTHEME_PANEL_BG };
-        a->desc->on_draw(a, &d);
-    }
-
-    if (a->desc->layout) uui_layout_draw(&a->surface, a->desc->layout);
-    if (a->router.count) uui_router_draw(&a->router, &a->surface);
-
-    // The escape hatch, deliberately separate and deliberately last: a
-    // status line over a canvas, a drag ghost. Rare enough that making
-    // it explicit is better than letting every on_draw be ambiguous
-    // about whether it runs above or below the widgets.
-    if (a->desc->on_draw_over) {
-        struct uapp_draw d = { &a->surface, UTHEME_TEXT, UTHEME_PANEL_BG };
-        a->desc->on_draw_over(a, &d);
-    }
+    top_paint(&a->top, &a->surface, a->desc->layout, a);
     // The layout block this frame produced, emitted only if it differs
     // from the last -- see uapp_log_layout(). Here rather than in the
     // apps because only the toolkit knows when a frame has ended.
@@ -521,7 +528,7 @@ static void flush(struct uapp *a) {
 
 // --- public: state ----------------------------------------------------
 
-void uapp_redraw(struct uapp *a) { a->dirty = 1; }
+void uapp_redraw(struct uapp *a) { a->top.dirty = 1; }
 
 // --- posts: the one thing a worker thread may do -----------------------
 //
@@ -821,7 +828,7 @@ void uapp_log_layout(struct uapp *a, const char *prefix) {
     if (!layout_log_enabled()) return;
     g_log_seen_n = 0;
     if (a->desc->layout) log_items(prefix, a->desc->layout->items, a->desc->layout->count);
-    if (a->router.count) log_items(prefix, a->router.items, a->router.count);
+    if (a->top.router.count) log_items(prefix, a->top.router.items, a->top.router.count);
 }
 
 void uapp_flush(struct uapp *a) { flush(a); }
@@ -1035,7 +1042,7 @@ static void popup_close(void *ctx, int id) {
     popup_press_closed(id);
     wmchan_send(WIN_REQ_DESTROY, (uint32_t)id, 0, 0, 0, 0);
     bufs_release(&g_surf[id]);
-    g_app.dirty = 1;   // the widget that owned it repaints its own state
+    g_app.top.dirty = 1;   // the widget that owned it repaints its own state
 }
 
 static struct ugfx_surface *popup_surface(void *ctx, int id) {
@@ -1043,7 +1050,7 @@ static struct ugfx_surface *popup_surface(void *ctx, int id) {
     if (id <= 0 || id >= WIN_CLIENT_MAX || !g_surf[id].used) return 0;
     struct uapp_surf *s = &g_surf[id];
     struct ugfx_surface *sf = surf_back(s);
-    if (!sf) { g_app.dirty = 1; return 0; }   // drawn once a buffer is back
+    if (!sf) { g_app.top.dirty = 1; return 0; }   // drawn once a buffer is back
     s->dirty = 1;   // present() sends it after the toplevel
     return sf;
 }
@@ -1057,43 +1064,37 @@ static struct ugfx_surface *popup_surface(void *ctx, int id) {
 // a second view of the first one's widgets would be a split view, not
 // a dialog.
 struct uapp_window {
-    int slot;               // 0 = closed; also the `window` its events name
+    struct uapp_top top;    // FIRST: window_of() casts back from it; top.slot 0 = closed
     struct uapp *app;
     struct uapp_window_desc desc;
     char title[WIN_TITLE_LEN];
-    struct uui_router router;
-    int dirty;
-    int cursor;
-    int mouse_x, mouse_y;   // a WHEEL carries notches and no position
 };
 static struct uapp_window g_dlg[WIN_CLIENT_MAX];
 
 static struct uapp_window *dlg_for(uint32_t slot) {
     if (slot == 0 || slot >= WIN_CLIENT_MAX) return 0;
-    return g_dlg[slot].slot ? &g_dlg[slot] : 0;
+    return g_dlg[slot].top.slot ? &g_dlg[slot] : 0;
 }
 
 // Places the content and paints it. The same order flush() uses for the
 // toplevel, minus the app hooks a dialog has no equivalent of.
 static void dlg_flush(struct uapp_window *w) {
-    if (!w->slot || !w->dirty) return;
-    w->dirty = 0;
-    struct uapp_surf *s = &g_surf[w->slot];
-    if (!surf_back(s)) { w->dirty = 1; return; }   // drawn once a buffer is back
+    if (!w->top.slot || !w->top.dirty) return;
+    w->top.dirty = 0;
+    struct uapp_surf *s = &g_surf[w->top.slot];
+    if (!surf_back(s)) { w->top.dirty = 1; return; }   // drawn once a buffer is back
     if (w->desc.layout) uui_layout_run(w->desc.layout, 0, 0, s->w, s->h);
     if (w->desc.log_prefix && layout_log_enabled()) {
         g_log_seen_n = 0;
         if (w->desc.layout) log_items(w->desc.log_prefix, w->desc.layout->items,
                                       w->desc.layout->count);
-        if (w->router.count) log_items(w->desc.log_prefix, w->router.items, w->router.count);
+        if (w->top.router.count) log_items(w->desc.log_prefix, w->top.router.items, w->top.router.count);
         if (w->desc.on_log_layout) w->desc.on_log_layout(w);
     }
-    ugfx_fill(&s->surface, UTHEME_PANEL_BG);
-    if (w->desc.layout) uui_layout_draw(&s->surface, w->desc.layout);
-    if (w->router.count) uui_router_draw(&w->router, &s->surface);
+    top_paint(&w->top, &s->surface, w->desc.layout, 0);
     layout_log_flush(1);
     surf_present(s);
-    present_popups((uint32_t)w->slot);
+    present_popups((uint32_t)w->top.slot);
 }
 
 static int ids_unique(const struct uui_router *r, const char *who);   // below
@@ -1127,45 +1128,48 @@ struct uapp_window *uapp_window_open(struct uapp *a, const struct uapp_window_de
         uchan_call(&g_wmchan, &m, sizeof m, &r, sizeof r, UAPP_CALL_TIMEOUT_MS) < 0 ||
         r.a < 0) {
         bufs_release(s);
-        d->slot = 0;
+        d->top.slot = 0;
         return 0;
     }
 
-    d->slot = slot;
+    d->top.slot = slot;
+    d->top.ops = &WIN_OPS;
+    d->top.focus = desc->focus;
+    d->top.hears = desc->on_widget != 0;
     d->app = a;
-    d->cursor = WIN_CURSOR_DEFAULT;
+    d->top.cursor = WIN_CURSOR_DEFAULT;
     if (desc->widgets && desc->widget_count > 0) {
-        uui_router_init(&d->router, desc->widgets, desc->widget_count);
+        uui_router_init(&d->top.router, desc->widgets, desc->widget_count);
         // Too late to refuse the app, so the window routes nothing.
-        if (!ids_unique(&d->router, desc->title) ||
-            !buttons_heard(&d->router, desc->on_action != 0, desc->title))
-            d->router.count = 0;
+        if (!ids_unique(&d->top.router, desc->title) ||
+            !buttons_heard(&d->top.router, desc->on_action != 0, desc->title))
+            d->top.router.count = 0;
     }
-    d->dirty = 1;
+    d->top.dirty = 1;
     dlg_flush(d);
     return d;
 }
 
 void uapp_window_close(struct uapp_window *w) {
-    if (!w || !w->slot) return;
-    int slot = w->slot;
+    if (!w || !w->top.slot) return;
+    int slot = w->top.slot;
     wmchan_send(WIN_REQ_DESTROY, (uint32_t)slot, 0, 0, 0, 0);
     bufs_release(&g_surf[slot]);
-    w->slot = 0;
-    if (w->app) w->app->dirty = 1;   // the owner repaints, now unblocked
+    w->top.slot = 0;
+    if (w->app) w->app->top.dirty = 1;   // the owner repaints, now unblocked
 }
 
-int   uapp_window_is_open(const struct uapp_window *w) { return w && w->slot != 0; }
-void  uapp_window_redraw(struct uapp_window *w)  { if (w && w->slot) w->dirty = 1; }
+int   uapp_window_is_open(const struct uapp_window *w) { return w && w->top.slot != 0; }
+void  uapp_window_redraw(struct uapp_window *w)  { if (w && w->top.slot) w->top.dirty = 1; }
 void *uapp_window_state(struct uapp_window *w)   { return w ? w->desc.state : 0; }
 struct uapp *uapp_window_app(struct uapp_window *w) { return w ? w->app : 0; }
-int uapp_window_width(const struct uapp_window *w)  { return w && w->slot ? g_surf[w->slot].w : 0; }
-int uapp_window_height(const struct uapp_window *w) { return w && w->slot ? g_surf[w->slot].h : 0; }
+int uapp_window_width(const struct uapp_window *w)  { return w && w->top.slot ? g_surf[w->top.slot].w : 0; }
+int uapp_window_height(const struct uapp_window *w) { return w && w->top.slot ? g_surf[w->top.slot].h : 0; }
 
 void uapp_window_set_title(struct uapp_window *w, const char *title) {
-    if (!w || !w->slot || !title) return;
+    if (!w || !w->top.slot || !title) return;
     strlcpy(w->title, title, sizeof w->title);
-    wmchan_send(WIN_REQ_TITLE, (uint32_t)w->slot, 0, 0, 0, w->title);
+    wmchan_send(WIN_REQ_TITLE, (uint32_t)w->top.slot, 0, 0, 0, w->title);
 }
 
 // One event, in the dialog's OWN coordinate space -- it is a toplevel,
@@ -1196,7 +1200,7 @@ static int motion_wanted(const struct uui_router *r, int id, unsigned held) {
 static void tell_app(struct uapp *a, int id, int reason, int committed) {
     const struct uapp_desc *d = a->desc;
     if (!id) return;
-    const struct uui_button *b = lone_button(&a->router, id);
+    const struct uui_button *b = lone_button(&a->top.router, id);
     if (b) { if (committed && d->on_action) d->on_action(a, b->code); return; }
     if (d->on_widget) d->on_widget(a, id, reason);
 }
@@ -1204,9 +1208,100 @@ static void tell_app(struct uapp *a, int id, int reason, int committed) {
 static void tell_window(struct uapp_window *w, int id, int reason, int committed) {
     const struct uapp_window_desc *d = &w->desc;
     if (!id) return;
-    const struct uui_button *b = lone_button(&w->router, id);
+    const struct uui_button *b = lone_button(&w->top.router, id);
     if (b) { if (committed && d->on_action) d->on_action(w, b->code); return; }
     if (d->on_widget) d->on_widget(w, id, reason);
+}
+
+// --- one toplevel's input, routed the same way in either kind -------------
+
+static struct uapp *uapp_of(struct uapp_top *t) { return (struct uapp *)t; }
+static struct uapp_window *window_of(struct uapp_top *t) { return (struct uapp_window *)t; }
+
+static void app_tell(struct uapp_top *t, int id, int reason, int committed) {
+    tell_app(uapp_of(t), id, reason, committed);
+}
+static void app_key(struct uapp_top *t, int key, unsigned mods) {
+    struct uapp *a = uapp_of(t);
+    if (a->desc->on_key) a->desc->on_key(a, key, mods);
+}
+static void win_tell(struct uapp_top *t, int id, int reason, int committed) {
+    tell_window(window_of(t), id, reason, committed);
+}
+static void win_key(struct uapp_top *t, int key, unsigned mods) {
+    struct uapp_window *w = window_of(t);
+    if (w->desc.on_key) w->desc.on_key(w, key, mods);
+}
+static const struct uapp_top_ops APP_OPS = { app_tell, app_key };
+static const struct uapp_top_ops WIN_OPS = { win_tell, win_key };
+
+// A SHORTCUT SKIPS THE WIDGETS (uui_widget.h): Ctrl+1 goes to the app, and
+// a focused field does not type a 1. Then AN OPEN POPUP OUTRANKS the focus
+// ring -- it is drawn over everything and is what the user is looking at,
+// the keyboard's half of the overlay rule (ui/uui_route.h) -- then the
+// ring, then the app, which still hears a key the ring took so it can
+// re-read the widget whose value just changed.
+static void top_key(struct uapp_top *t, const struct win_event *ev) {
+    if (uui_key_is_shortcut(ev->a, ev->mods)) { t->ops->key(t, ev->a, ev->mods); return; }
+    if (t->router.count) {
+        int changed = 0;
+        int id = uui_router_overlay_key(&t->router, ev->a, ev->mods, &changed);
+        if (changed) t->dirty = 1;
+        if (id) { t->ops->tell(t, id, UUI_REASON_KEY, 0); return; }
+    }
+    if (t->focus && uui_focus_key(t->focus, ev->a, ev->mods)) {
+        t->dirty = 1;
+        // AND THE APP IS TOLD, by the same id a click on that widget
+        // reports: a value the keyboard changed is as much a change as a
+        // clicked one. Not Tab, which moved focus and changed no value.
+        if (ev->a != '\t' && t->hears && t->focus->current >= 0) {
+            int id = uui_router_id_of(&t->router, t->focus->items[t->focus->current].widget);
+            t->ops->tell(t, id, UUI_REASON_KEY, 1);
+        }
+    }
+    t->ops->key(t, ev->a, ev->mods);
+}
+
+// A PRIMARY press: the widgets first (one takes the pointer grab), then
+// keyboard focus follows the click -- but not for a press on a popup,
+// which is its owner's: moving focus there closed a dropdown under the
+// press choosing its row.
+static void top_press(struct uapp_top *t, int x, int y, unsigned kmods) {
+    int changed = 0;
+    int id = t->router.count ? uui_router_press(&t->router, x, y, kmods, &changed) : 0;
+    if (changed) t->dirty = 1;
+    t->ops->tell(t, id, UUI_REASON_PRESS, 0);
+    if (t->focus && !g_press_slot && uui_focus_click(t->focus, x, y)) t->dirty = 1;
+}
+
+// With the primary button held this re-hit-tests the press (the GRAB: a
+// drag goes to whoever took the press, wherever the cursor is); with none
+// it is hover. A hover is not the app's unless it asked (motion_wanted).
+static void top_motion(struct uapp_top *t, int x, int y, unsigned held, unsigned kmods) {
+    if (!t->router.count) return;
+    int changed = 0;
+    int id = uui_router_motion(&t->router, x, y, held, kmods, &changed);
+    if (changed) t->dirty = 1;
+    if (motion_wanted(&t->router, id, held)) t->ops->tell(t, id, UUI_REASON_MOTION, 0);
+}
+
+static void top_release(struct uapp_top *t, int x, int y) {
+    if (!t->router.count) return;
+    int changed = 0;
+    int id = uui_router_release(&t->router, x, y, &changed);
+    if (changed) t->dirty = 1;
+    t->ops->tell(t, id, UUI_REASON_RELEASE, changed);
+}
+
+// To the widget UNDER THE CURSOR, not down a fixed chain (ui/uui_route.h).
+// The id, or 0 when no widget took it.
+static int top_wheel(struct uapp_top *t, int notches) {
+    if (!t->router.count) return 0;
+    int changed = 0;
+    int id = uui_router_wheel(&t->router, t->mouse_x, t->mouse_y, notches, &changed);
+    if (changed) t->dirty = 1;
+    t->ops->tell(t, id, UUI_REASON_WHEEL, 0);
+    return id;
 }
 
 // IDS ARE UNIQUE, or the lookup above names the wrong widget. Refused
@@ -1264,7 +1359,7 @@ int uapp_inwindow_question_open(struct uapp *a) {
 
 int uapp_question_open(struct uapp *a) {
     for (int i = 1; i < WIN_CLIENT_MAX; i++)
-        if (g_dlg[i].slot && (g_dlg[i].desc.flags & UAPP_WIN_MODAL)) return 1;
+        if (g_dlg[i].top.slot && (g_dlg[i].desc.flags & UAPP_WIN_MODAL)) return 1;
     return uapp_inwindow_question_open(a);
 }
 
@@ -1272,88 +1367,42 @@ static void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
     const struct uapp_window_desc *d = &w->desc;
     switch (ev->type) {
     case WIN_EV_PING:
-        wmchan_send(WIN_REQ_PONG, (uint32_t)w->slot, (int)ev->a, 0, 0, 0);
+        wmchan_send(WIN_REQ_PONG, (uint32_t)w->top.slot, (int)ev->a, 0, 0, 0);
         return;
     case WIN_EV_CLOSE:
         if (d->on_close) d->on_close(w);
         else uapp_window_close(w);
         return;
-    case WIN_EV_KEY: {
-        if (uui_key_is_shortcut(ev->a, ev->mods)) {   // as dispatch() does
-            if (d->on_key) d->on_key(w, ev->a, ev->mods);
-            return;
-        }
-        if (w->router.count) {
-            int changed = 0;
-            int id = uui_router_overlay_key(&w->router, ev->a, ev->mods, &changed);
-            if (changed) w->dirty = 1;
-            if (id) {
-                tell_window(w, id, UUI_REASON_KEY, 0);
-                return;
-            }
-        }
-        if (d->focus && uui_focus_key(d->focus, ev->a, ev->mods)) {
-            w->dirty = 1;
-            if (ev->a != '\t' && d->on_widget && d->focus->current >= 0) {
-                int id = uui_router_id_of(&w->router,
-                                          d->focus->items[d->focus->current].widget);
-                tell_window(w, id, UUI_REASON_KEY, 1);
-            }
-        }
-        if (d->on_key) d->on_key(w, ev->a, ev->mods);
+    case WIN_EV_KEY:
+        top_key(&w->top, ev);
         return;
-    }
-    case WIN_EV_MOUSE_DOWN: {
-        w->mouse_x = ev->a;
-        w->mouse_y = ev->b;
-        unsigned btns = WIN_MOUSE_BUTTONS(ev->mods);
-        unsigned kmods = WIN_MOUSE_MODS(ev->mods);
-        if (!(btns & 0x1)) return;
-        int changed = 0;
-        int id = w->router.count
-                     ? uui_router_press(&w->router, ev->a, ev->b, kmods, &changed) : 0;
-        if (changed) w->dirty = 1;
-        tell_window(w, id, UUI_REASON_PRESS, 0);
-        if (d->focus && !g_press_slot && uui_focus_click(d->focus, ev->a, ev->b)) w->dirty = 1;
+    case WIN_EV_MOUSE_DOWN:
+        w->top.mouse_x = ev->a;
+        w->top.mouse_y = ev->b;
+        if (WIN_MOUSE_BUTTONS(ev->mods) & 0x1)
+            top_press(&w->top, ev->a, ev->b, WIN_MOUSE_MODS(ev->mods));
         return;
-    }
     case WIN_EV_MOUSE_MOVE: {
         if (ev->a < 0 || ev->b < 0) return;   // a leave carries no position
-        w->mouse_x = ev->a;
-        w->mouse_y = ev->b;
-        unsigned held = ev->mods & 0x1;
-        if (!w->router.count) return;
-        int changed = 0;
-        int id = uui_router_motion(&w->router, ev->a, ev->b, held,
-                                   WIN_MOUSE_MODS(ev->mods), &changed);
-        if (changed) w->dirty = 1;
-        if (motion_wanted(&w->router, id, held)) tell_window(w, id, UUI_REASON_MOTION, 0);
-        int want = uui_router_cursor(&w->router, ev->a, ev->b);
-        if (want != w->cursor && want >= 0 && want < WIN_CURSOR_COUNT) {
-            w->cursor = want;
-            wmchan_send(WIN_REQ_CURSOR, (uint32_t)w->slot, want, 0, 0, 0);
+        w->top.mouse_x = ev->a;
+        w->top.mouse_y = ev->b;
+        if (!w->top.router.count) return;
+        top_motion(&w->top, ev->a, ev->b, ev->mods & 0x1, WIN_MOUSE_MODS(ev->mods));
+        int want = uui_router_cursor(&w->top.router, ev->a, ev->b);
+        if (want != w->top.cursor && want >= 0 && want < WIN_CURSOR_COUNT) {
+            w->top.cursor = want;
+            wmchan_send(WIN_REQ_CURSOR, (uint32_t)w->top.slot, want, 0, 0, 0);
         }
         return;
     }
-    case WIN_EV_MOUSE_UP: {
-        w->mouse_x = ev->a;
-        w->mouse_y = ev->b;
-        if (!w->router.count) return;
-        int changed = 0;
-        int id = uui_router_release(&w->router, ev->a, ev->b, &changed);
-        if (changed) w->dirty = 1;
-        tell_window(w, id, UUI_REASON_RELEASE, changed);
+    case WIN_EV_MOUSE_UP:
+        w->top.mouse_x = ev->a;
+        w->top.mouse_y = ev->b;
+        top_release(&w->top, ev->a, ev->b);
         return;
-    }
-    case WIN_EV_WHEEL: {
-        if (!w->router.count) return;
-        int changed = 0;
-        int id = uui_router_wheel(&w->router, w->mouse_x, w->mouse_y,
-                                  (int)ev->a, &changed);
-        if (changed) w->dirty = 1;
-        tell_window(w, id, UUI_REASON_WHEEL, 0);
+    case WIN_EV_WHEEL:
+        top_wheel(&w->top, (int)ev->a);
         return;
-    }
     default:
         return;
     }
@@ -1377,7 +1426,7 @@ static void popup_dismissed(int id) {
     popup_press_closed(id);
     bufs_release(s);
     if (done) done(owner);
-    g_app.dirty = 1;
+    g_app.top.dirty = 1;
 }
 
 int uapp_press_on_popup(struct uapp *a) {
@@ -1386,21 +1435,21 @@ int uapp_press_on_popup(struct uapp *a) {
 }
 
 int uapp_drag_active(struct uapp *a) {
-    return uui_router_drag_active(&a->router);
+    return uui_router_drag_active(&a->top.router);
 }
 
 const struct uui_drag *uapp_drag(struct uapp *a) {
-    if (uui_router_drag_active(&a->router)) return uui_router_drag(&a->router);
-    return uui_router_dropped(&a->router);
+    if (uui_router_drag_active(&a->top.router)) return uui_router_drag(&a->top.router);
+    return uui_router_dropped(&a->top.router);
 }
 
 void uapp_set_cursor(struct uapp *a, int cursor) {
     if (cursor < 0 || cursor >= WIN_CURSOR_COUNT) return;
     if (a->motion_cursor >= 0) { a->motion_cursor = cursor; return; }
-    if (a->cursor == cursor) return;
+    if (a->top.cursor == cursor) return;
     // Either way: a server that refuses this (one built before the
     // request existed) must not be asked again on every motion.
-    a->cursor = cursor;
+    a->top.cursor = cursor;
     wmchan_send(WIN_REQ_CURSOR, a->window, cursor, 0, 0, 0);
 }
 
@@ -1431,7 +1480,7 @@ int uapp_set_tick(struct uapp *a, unsigned ms) {
 }
 
 void uapp_busy_begin(struct uapp *a) {
-    a->cursor_before_busy = a->cursor;
+    a->cursor_before_busy = a->top.cursor;
     uapp_set_cursor(a, WIN_CURSOR_WAIT);
     // The shape has to be ON THE WIRE before the caller blocks, and
     // uapp_set_cursor() is a syscall, so it already is -- the compositor
@@ -1468,12 +1517,12 @@ struct uchan_client *uapp_wmchan(void) {
 // means "nothing routed and nothing drawn", which is the point.
 void uapp_set_widgets(struct uapp *a, struct uui_item *items, int count) {
     if (!a) return;
-    uui_router_init(&a->router, items, count > 0 ? count : 0);
+    uui_router_init(&a->top.router, items, count > 0 ? count : 0);
     const char *who = a->desc ? a->desc->title : 0;
-    if (!ids_unique(&a->router, who) ||
-        !buttons_heard(&a->router, a->desc && a->desc->on_action, who))
-        a->router.count = 0;
-    a->dirty = 1;
+    if (!ids_unique(&a->top.router, who) ||
+        !buttons_heard(&a->top.router, a->desc && a->desc->on_action, who))
+        a->top.router.count = 0;
+    a->top.dirty = 1;
 }
 
 int uapp_fullscreen(const struct uapp *a) { return a ? a->fullscreen : 0; }
@@ -1667,7 +1716,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         struct uapp_window *dw = dlg_for(in->window);
         if (dw) {
             uint32_t prev = g_popup_parent;
-            g_popup_parent = dw->slot;
+            g_popup_parent = dw->top.slot;
             dlg_dispatch(dw, in);
             g_popup_parent = prev;
             return;
@@ -1731,7 +1780,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
                 struct win_event out = *ev;
                 out.window = s->parent;
                 uint32_t prev = g_popup_parent;
-                g_popup_parent = ow->slot;
+                g_popup_parent = ow->top.slot;
                 dlg_dispatch(ow, &out);
                 g_popup_parent = prev;
                 return;
@@ -1756,7 +1805,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             a->surface = TOPLEVEL->surface;
         }
         // Whatever the last frame drew is in the OTHER buffer: repaint.
-        a->dirty = 1;
+        a->top.dirty = 1;
         break;
     case WIN_EV_PING: {
         // Answered HERE, with no app involvement and no callback --
@@ -1779,7 +1828,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         // A drag from ANOTHER window. The files are in the drag slot;
         // the directory they are in and the count come from it, so the
         // fileview's own refusal ("their own directory") still works.
-        if (!a->router.count) break;
+        if (!a->top.router.count) break;
         static struct uclip c;   // 64 KiB, lib/uclip.h says why static
         static char dir[80], label[80];
         uclip_drag_load(&c);
@@ -1791,27 +1840,27 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         else snprintf(label, sizeof label, "%d items", n);
         unsigned mods = WIN_MOUSE_MODS(ev->mods);
         if (ev->type == WIN_EV_DRAG_OVER) {
-            uui_router_extern_over(&a->router, ev->a, ev->b, mods, dir, n, label);
+            uui_router_extern_over(&a->top.router, ev->a, ev->b, mods, dir, n, label);
         } else {
-            int id = uui_router_extern_drop(&a->router, ev->a, ev->b, mods);
+            int id = uui_router_extern_drop(&a->top.router, ev->a, ev->b, mods);
             if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_DROP);
         }
-        a->dirty = 1;
+        a->top.dirty = 1;
         break;
     }
     case WIN_EV_DRAG_LEAVE:
-        if (a->router.count) { uui_router_extern_leave(&a->router); a->dirty = 1; }
+        if (a->top.router.count) { uui_router_extern_leave(&a->top.router); a->top.dirty = 1; }
         break;
 
     case WIN_EV_TAB:
-        if (d->on_tab) { d->on_tab(a, (int)ev->a, (int)ev->b); a->dirty = 1; }
+        if (d->on_tab) { d->on_tab(a, (int)ev->a, (int)ev->b); a->top.dirty = 1; }
         break;
 
     case WIN_EV_USER:
         // Posted by this program itself, almost always from a worker
         // thread -- see uapp_post(). Nothing in the toolkit interprets
         // the payload; waking the loop IS the message.
-        if (d->on_user && d->on_user(a, (int)ev->a, (int)ev->b)) a->dirty = 1;
+        if (d->on_user && d->on_user(a, (int)ev->a, (int)ev->b)) a->top.dirty = 1;
         break;
 
     case WIN_EV_TIMER:
@@ -1819,7 +1868,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         // this is its on_tick -- reached from the BLOCKING loop, which
         // is the entire point: the same callback, without the process
         // being runnable the whole time in between.
-        if (d->on_tick && d->on_tick(a)) a->dirty = 1;
+        if (d->on_tick && d->on_tick(a)) a->top.dirty = 1;
         // THE SESSION FONT MAY HAVE BEEN REPUBLISHED. Asked here rather
         // than only on WIN_EV_FONT because that event fires when the
         // SETTING changes and fontd rebuilds a moment later -- so the
@@ -1827,7 +1876,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         if (ugfx_font_recheck()) {
             if (d->layout) uui_layout_run(d->layout, 0, 0, a->w, a->h);
             if (d->on_font) d->on_font(a);
-            a->dirty = 1;
+            a->top.dirty = 1;
         }
         break;
 
@@ -1846,12 +1895,12 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         // against the font that just went away is the one mistake this
         // callback exists to prevent.
         if (d->on_font) d->on_font(a);
-        a->dirty = 1;
+        a->top.dirty = 1;
         // AND EVERY DIALOG WINDOW. The event names the toplevel's slot,
         // so marking only `a` would leave a chooser laid out for the
         // font that just went away until something else touched it.
         for (int i = 1; i < WIN_CLIENT_MAX; i++)
-            if (g_dlg[i].slot) g_dlg[i].dirty = 1;
+            if (g_dlg[i].top.slot) g_dlg[i].top.dirty = 1;
         break;
 
     case WIN_EV_SETTING:
@@ -1861,9 +1910,9 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         // which -- Windows' WM_SETTINGCHANGE carries no more than this.
         tzset();
         setlocale(LC_ALL, "");
-        a->dirty = 1;
+        a->top.dirty = 1;
         for (int i = 1; i < WIN_CLIENT_MAX; i++)
-            if (g_dlg[i].slot) g_dlg[i].dirty = 1;
+            if (g_dlg[i].top.slot) g_dlg[i].top.dirty = 1;
         break;
 
     case WIN_EV_CLOSE:
@@ -1924,7 +1973,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             // thing is about. Presenting is the answer the protocol
             // already has: the frame carries the front buffer's own
             // dimensions and the compositor adopts THOSE.
-            a->dirty = 1;
+            a->top.dirty = 1;
             break;
         }
         {
@@ -1937,25 +1986,15 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             if (d->min_h > 0 && rh < d->min_h) rh = d->min_h;
             if (uapp_resize(a, rw, rh)) {
                 if (d->on_resize) d->on_resize(a, a->w, a->h);
-                a->dirty = 1;
+                a->top.dirty = 1;
             }
         }
         break;
 
-    case WIN_EV_WHEEL: {
-        // To the widget UNDER THE CURSOR, not down a fixed chain -- see
-        // uui_route.h. The app's own on_wheel still fires for anything
-        // the widgets did not take.
-        int changed = 0;
-        int id = a->router.count
-                     ? uui_router_wheel(&a->router, a->mouse_x, a->mouse_y,
-                                        ev->a, &changed)
-                     : 0;
-        if (changed) a->dirty = 1;
-        tell_app(a, id, UUI_REASON_WHEEL, 0);
-        if (!id && d->on_wheel) { d->on_wheel(a, ev->a); a->dirty = 1; }
+    case WIN_EV_WHEEL:
+        // The app's own on_wheel fires for anything the widgets did not take.
+        if (!top_wheel(&a->top, ev->a) && d->on_wheel) { d->on_wheel(a, ev->a); a->top.dirty = 1; }
         break;
-    }
 
     case WIN_EV_FOCUS:
         // Recorded and repainted for the app, so the common case --
@@ -1967,57 +2006,19 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             ulogf("uapp: pid %d focus %d\n", (int)sys_getpid(), ev->a ? 1 : 0);
         a->focused = ev->a ? 1 : 0;
         if (d->on_focus) d->on_focus(a, a->focused);
-        a->dirty = 1;
+        a->top.dirty = 1;
         break;
 
     case WIN_EV_KEY:
-        // The focus ring gets the key first: Tab/Shift-Tab move focus,
-        // everything else goes to the focused widget. on_key still fires
-        // afterwards -- for a key the ring did not take, and so an app
-        // can re-read a focused widget whose value the ring just changed.
-        // AN OPEN POPUP OUTRANKS BOTH. It is drawn over everything and
-        // is what the user is looking at, so it takes the key before
-        // the focus ring or the app sees it -- the keyboard's half of
-        // the overlay rule the pointer already follows, and what makes
-        // typing in a dropdown work in an app with no focus ring at
-        // all. See ui/uui_route.h.
         // ESC CANCELS A DRAG before anything else sees the key: the
         // pointer is still held, so nothing else can be meant by it.
-        if (a->router.count && ev->a == 0x1B && uui_router_drag_active(&a->router)) {
-            uui_router_drag_cancel(&a->router);
+        if (a->top.router.count && ev->a == 0x1B && uui_router_drag_active(&a->top.router)) {
+            uui_router_drag_cancel(&a->top.router);
             wmchan_send(WIN_REQ_DRAG_END, 0, 0, 0, 0, 0);
-            a->dirty = 1;
+            a->top.dirty = 1;
             break;
         }
-        // A SHORTCUT SKIPS THE WIDGETS (uui_widget.h): Ctrl+1 goes to the
-        // app, and a focused field does not type a 1.
-        if (uui_key_is_shortcut(ev->a, ev->mods)) {
-            if (d->on_key) d->on_key(a, ev->a, ev->mods);
-            break;
-        }
-        if (a->router.count) {
-            int changed = 0;
-            int id = uui_router_overlay_key(&a->router, ev->a, ev->mods, &changed);
-            if (changed) a->dirty = 1;
-            if (id) {
-                tell_app(a, id, UUI_REASON_KEY, 0);
-                break;
-            }
-        }
-        if (d->focus && uui_focus_key(d->focus, ev->a, ev->mods)) {
-            a->dirty = 1;
-            // AND THE APP IS TOLD, by the same id a click on that widget
-            // reports. A focused control whose value the keyboard just
-            // changed is exactly as much a change as a clicked one, and
-            // an app hearing only about clicks silently drops it. Tab
-            // is excluded: it moved focus and changed no value.
-            if (ev->a != '\t' && d->on_widget && d->focus->current >= 0) {
-                int id = uui_router_id_of(&a->router,
-                                          d->focus->items[d->focus->current].widget);
-                tell_app(a, id, UUI_REASON_KEY, 1);
-            }
-        }
-        if (d->on_key) d->on_key(a, ev->a, ev->mods);
+        top_key(&a->top, ev);
         break;
 
     case WIN_EV_KEY_PHYS:
@@ -2033,118 +2034,68 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         if (d->on_key_up) d->on_key_up(a, ev->a, ev->mods);
         break;
 
-    case WIN_EV_MOUSE_DOWN: {
-        a->mouse_x = ev->a;
-        a->mouse_y = ev->b;
-        // ONLY THE PRIMARY BUTTON ACTIVATES A WIDGET. `mods` carries the
-        // button bits (abi/win_proto.h), and TWS delivers a secondary
-        // click inside a client's content area like any other press --
-        // so without this test a right-click would arm buttons, move the
-        // focus and commit menu items, which no toolkit does. Qt and GTK
-        // both hand every button to the app and act on button 1 alone.
-        //
-        // on_press still fires for EVERY button, because the app is the
-        // only thing that can know what a secondary click means to it
-        // (Minesweeper flags a cell; Calculator ignores it).
-        // The event's `mods` is TWO fields (WIN_MOUSE_MODS_SHIFT): the
-        // buttons now down, and the keyboard modifiers held.
-        unsigned btns = WIN_MOUSE_BUTTONS(ev->mods);
-        unsigned kmods = WIN_MOUSE_MODS(ev->mods);
-        int primary = (btns & 0x1) != 0;
-        if (primary) {
-            // Routed FIRST, so a widget that wants this press gets it and
-            // takes the pointer grab. The app's on_press still runs: an app
-            // may want a press the widgets ignored (a canvas, a text area),
-            // or may want to log one they took.
-            int changed = 0;
-            int id = a->router.count
-                         ? uui_router_press(&a->router, ev->a, ev->b, kmods,
-                                            &changed) : 0;
-            if (changed) a->dirty = 1;
-            tell_app(a, id, UUI_REASON_PRESS, 0);
-            // Keyboard focus follows the click, after the widgets have had
-            // the press (a widget takes the pointer grab; this only moves
-            // which one keys go to). See uui_focus_click(). NOT for a
-            // press on a popup: it is its owner's, and whatever lies
-            // under it in the window took nothing -- moving focus there
-            // closed a dropdown under the press choosing its row.
-            if (d->focus && !g_press_slot && uui_focus_click(d->focus, ev->a, ev->b)) a->dirty = 1;
-            if (d->buttons && uui_button_group_press(d->buttons, ev->a, ev->b)) a->dirty = 1;
+    case WIN_EV_MOUSE_DOWN:
+        a->top.mouse_x = ev->a;
+        a->top.mouse_y = ev->b;
+        // ONLY THE PRIMARY BUTTON ACTIVATES A WIDGET. TWS delivers a
+        // secondary click inside a client's content like any other press,
+        // and no toolkit lets a right-click arm buttons, move the focus or
+        // commit menu items -- Qt and GTK both hand every button to the
+        // app and act on button 1 alone. on_press still fires for EVERY
+        // button: only the app knows what a secondary click means to it
+        // (Minesweeper flags a cell). `mods` is TWO fields
+        // (WIN_MOUSE_MODS_SHIFT): the buttons now down, and the keys held.
+        if (WIN_MOUSE_BUTTONS(ev->mods) & 0x1) {
+            top_press(&a->top, ev->a, ev->b, WIN_MOUSE_MODS(ev->mods));
+            if (d->buttons && uui_button_group_press(d->buttons, ev->a, ev->b)) a->top.dirty = 1;
         }
         if (d->on_press) d->on_press(a, ev->a, ev->b, ev->mods);
         break;
-    }
 
-    case WIN_EV_MOUSE_MOVE:
-        // With a button held this re-hit-tests the press, so dragging
-        // off a control un-presses it; with none held it is hover
-        // tracking. Both report "did anything change", so a cursor
-        // crossing the window only repaints when it crosses a boundary.
-        // This is the arm that was copied verbatim into three apps.
-        a->mouse_x = ev->a;
-        a->mouse_y = ev->b;
-        // Masked to the PRIMARY button for the same reason as the press
-        // above: a drag with only the secondary button held is not a
-        // drag as far as a widget is concerned, it is hover with
-        // something else held down.
+    case WIN_EV_MOUSE_MOVE: {
+        a->top.mouse_x = ev->a;
+        a->top.mouse_y = ev->b;
+        // Masked to the PRIMARY button, as the press is: a drag with only
+        // the secondary held is hover with something else held down.
         unsigned held = ev->mods & 0x1;
-        if (a->router.count) {
-            int changed = 0;
-            // The GRAB lives here: while a button is held this goes to
-            // whoever took the press, wherever the cursor now is, which
-            // is what makes a drag work with no app state at all.
-            int was_dragging = uui_router_drag_active(&a->router);
-            int id = uui_router_motion(&a->router, ev->a, ev->b, held,
-                                       WIN_MOUSE_MODS(ev->mods), &changed);
-            if (changed) a->dirty = 1;
-            // A HOVER IS NOT AN EVENT FOR THE APP unless it asked
-            // (motion_wanted()). The widget has already redrawn its hover;
-            // an app that read every call as "act" opened Notepad per row
-            // crossed (Crash Reports).
-            if (motion_wanted(&a->router, id, held)) tell_app(a, id, UUI_REASON_MOTION, 0);
-            // A drag just began: tell the compositor, so it can offer it
-            // to whatever the pointer leaves this window for. The source
-            // widget has filled the drag slot (lib/uclip.h) in drag_start.
-            if (!was_dragging && uui_router_drag_active(&a->router)) {
-                const struct uui_drag *dg = uui_router_drag(&a->router);
-                wmchan_send(WIN_REQ_DRAG_START, 0, dg ? dg->count : 1, 0, 0, 0);
-            }
+        int was_dragging = a->top.router.count && uui_router_drag_active(&a->top.router);
+        top_motion(&a->top, ev->a, ev->b, held, WIN_MOUSE_MODS(ev->mods));
+        // A drag just began: tell the compositor, so it can offer it to
+        // whatever the pointer leaves this window for. The source widget
+        // has filled the drag slot (lib/uclip.h) in drag_start.
+        if (a->top.router.count && !was_dragging && uui_router_drag_active(&a->top.router)) {
+            const struct uui_drag *dg = uui_router_drag(&a->top.router);
+            wmchan_send(WIN_REQ_DRAG_START, 0, dg ? dg->count : 1, 0, 0, 0);
         }
         if (d->buttons) {
             int changed = held ? uui_button_group_press(d->buttons, ev->a, ev->b)
                                 : uui_button_group_hover(d->buttons, ev->a, ev->b);
-            if (changed) a->dirty = 1;
+            if (changed) a->top.dirty = 1;
         }
         // The widget tree answers first; on_motion below overrides, and
         // only the final answer is sent (motion_cursor).
-        a->motion_cursor = a->cursor;
-        if (a->router.count) {
-            uapp_set_cursor(a, uui_router_cursor(&a->router, ev->a, ev->b));
-        }
+        a->motion_cursor = a->top.cursor;
+        if (a->top.router.count) uapp_set_cursor(a, uui_router_cursor(&a->top.router, ev->a, ev->b));
         if (d->on_motion) d->on_motion(a, ev->a, ev->b, ev->mods);
-        {
-            int want = a->motion_cursor;
-            a->motion_cursor = -1;
-            uapp_set_cursor(a, want);
-        }
+        int want = a->motion_cursor;
+        a->motion_cursor = -1;
+        uapp_set_cursor(a, want);
         break;
+    }
 
     case WIN_EV_MOUSE_UP:
-        a->mouse_x = ev->a;
-        a->mouse_y = ev->b;
-        if (a->router.count) {
-            int changed = 0;
-            int was_dragging = uui_router_drag_active(&a->router);
-            int id = uui_router_release(&a->router, ev->a, ev->b, &changed);
-            if (changed) a->dirty = 1;
-            tell_app(a, id, UUI_REASON_RELEASE, changed);
+        a->top.mouse_x = ev->a;
+        a->top.mouse_y = ev->b;
+        if (a->top.router.count) {
+            int was_dragging = uui_router_drag_active(&a->top.router);
+            top_release(&a->top, ev->a, ev->b);
             // The slot stays: a target in another window reads it AFTER
             // this release reaches the compositor (wm_dnd.c says why).
             if (was_dragging) wmchan_send(WIN_REQ_DRAG_END, 0, 0, 0, 0, 0);
             // A release that DROPPED names the target instead. The
             // payload is still readable through uapp_drag() here and
             // nowhere later -- the router has already let go of it.
-            int drop = uui_router_take_drop(&a->router);
+            int drop = uui_router_take_drop(&a->top.router);
             if (drop && d->on_widget) d->on_widget(a, drop, UUI_REASON_DROP);
         }
         if (d->buttons) {
@@ -2152,7 +2103,7 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
             // already cleared by the moves above, so this returns -1
             // and correctly does nothing.
             int code = uui_button_group_release(d->buttons);
-            a->dirty = 1;
+            a->top.dirty = 1;
             if (code >= 0 && d->on_action) d->on_action(a, code);
         }
         if (d->on_release) d->on_release(a, ev->a, ev->b, ev->mods);
@@ -2199,7 +2150,7 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     // Settings is not something an app should have to opt into.
     setlocale(LC_ALL, "");
     a->desc = desc;
-    a->dirty = 1;
+    a->top.dirty = 1;
     a->running = 1;
     // A window is frontmost the moment it is created, so TWS sends no
     // event to say so -- see wm_client.c's on_window_created().
@@ -2244,6 +2195,10 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     int slot = wmchan_call(WIN_REQ_CREATE, 0, a->w, a->h, 0, desc->app_id, -1);
     if (slot < 0) { bufs_release(TOPLEVEL); return 0; }
     a->window = (uint32_t)slot;
+    a->top.slot = a->window;
+    a->top.ops = &APP_OPS;
+    a->top.focus = desc->focus;
+    a->top.hears = desc->on_widget != 0;
     uui_popup_set_provider(&g_popup_ops, a);
 
     if (desc->title) uapp_set_title(a, desc->title);
@@ -2277,7 +2232,7 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     // Re-run rather than trusting the natural-size pass: the window may
     // have been created at a different size than was asked for.
     if (desc->layout) uui_layout_run(desc->layout, 0, 0, a->w, a->h);
-    uui_router_init(&a->router, desc->widgets, desc->widget_count);
+    uui_router_init(&a->top.router, desc->widgets, desc->widget_count);
 
     if (desc->on_open) desc->on_open(a);
     flush(a); // the first frame, from the dirty flag set above
@@ -2327,9 +2282,9 @@ static int uapp_pump(struct uapp *a, int block) {
             if (caret == 0) {
                 // Which surface drew the caret is not recorded, so all
                 // of them repaint -- two frames a second, for ten seconds.
-                a->dirty = 1;
+                a->top.dirty = 1;
                 for (int i = 0; i < WIN_CLIENT_MAX; i++)
-                    if (g_dlg[i].slot) g_dlg[i].dirty = 1;
+                    if (g_dlg[i].top.slot) g_dlg[i].top.dirty = 1;
                 break;
             }
             if (caret > 0 && caret < wait) wait = caret;
@@ -2369,9 +2324,9 @@ static int uapp_pump(struct uapp *a, int block) {
     // surface, since nothing says which one it was on. Only while
     // something moves, so the over-paint is bounded by the motion.
     if (uui_anim_take()) {
-        a->dirty = 1;
+        a->top.dirty = 1;
         for (int i = 0; i < WIN_CLIENT_MAX; i++)
-            if (g_dlg[i].slot) g_dlg[i].dirty = 1;
+            if (g_dlg[i].top.slot) g_dlg[i].top.dirty = 1;
     }
 
     // Input the inbox could not hold went missing, and that is worth
@@ -2388,7 +2343,7 @@ static int uapp_pump(struct uapp *a, int block) {
     // during the toplevel's own frame, while a dialog has its own
     // content and paints itself.
     for (int i = 1; i < WIN_CLIENT_MAX; i++)
-        if (g_dlg[i].slot) dlg_flush(&g_dlg[i]);
+        if (g_dlg[i].top.slot) dlg_flush(&g_dlg[i]);
     return a->running;
 }
 
@@ -2434,7 +2389,7 @@ int uapp_run(const struct uapp_desc *desc) {
                 uapp_pump(a, 1);
                 continue;
             }
-            if (desc->on_tick(a)) a->dirty = 1;
+            if (desc->on_tick(a)) a->top.dirty = 1;
             uapp_pump(a, 0);
             sys_yield();
         }
