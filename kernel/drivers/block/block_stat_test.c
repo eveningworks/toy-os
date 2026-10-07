@@ -111,7 +111,7 @@ KTEST("blkstat", "a flush is counted and moves no sectors") {
     uint64_t calls0 = 0, sectors0 = 0;
     blk_stat_get(BLK_STAT_FLUSH, &calls0, &sectors0, NULL, NULL);
 
-    KTEST_ASSERT_EQ(blk_flush(), 1);
+    KTEST_ASSERT_EQ(blkdev_flush(blk_root()), 1);
 
     uint64_t calls1 = 0, sectors1 = 0;
     blk_stat_get(BLK_STAT_FLUSH, &calls1, &sectors1, NULL, NULL);

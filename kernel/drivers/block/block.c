@@ -15,15 +15,12 @@
 
 // driver-none: the block class registry itself
 
-static const struct block_device *g_dev;
-
-// What the active device sits on, and where it starts there. For a
-// plain disk these are the device itself and 0; for a partition they
-// are the parent disk and the partition's first LBA. Kept HERE rather
-// than in block_part.c so that "which device does the partition table
-// live on" has one answer whatever is mounted.
-static const struct block_device *g_whole;
-static uint64_t g_base;
+// The ROOT device, and the disk it sits on -- itself for a plain disk,
+// the parent for a partition. Kept HERE rather than in block_part.c so
+// that "which device does the partition table live on" has one answer
+// whatever is mounted.
+static const struct block_device *g_root;
+static const struct block_device *g_root_disk;
 
 static struct blk_entry g_table[BLK_MAX_DEVICES];
 static int g_count;
@@ -94,7 +91,7 @@ int blk_track(const struct block_device *dev,
 }
 
 int blk_untrack(const struct block_device *dev) {
-    if (!dev || dev == g_dev || dev == g_whole) return 0;
+    if (!dev || dev == g_root || dev == g_root_disk) return 0;
     for (int i = 0; i < g_count; i++) {
         if (g_table[i].dev != dev) continue;
         // Compacted rather than tombstoned, so blk_device_at() stays a
@@ -133,7 +130,7 @@ int blk_register(const struct block_device *dev) {
 
 int blk_register_over(const struct block_device *dev,
                       const struct block_device *parent, uint64_t base_lba) {
-    if (!dev) { g_dev = NULL; g_whole = NULL; g_base = 0; return 1; }
+    if (!dev) { g_root = NULL; g_root_disk = NULL; return 1; }
 
     if (!dev->name || !dev->sector_count || !dev->read_sectors ||
         !dev->write_sectors || !dev->max_sectors_per_xfer) {
@@ -178,13 +175,12 @@ int blk_register_over(const struct block_device *dev,
         return 0;
     }
 
-    g_dev = dev;
-    g_whole = parent ? parent : dev;
-    g_base = base_lba;
+    g_root = dev;
+    g_root_disk = parent ? parent : dev;
     if (base_lba) {
         klog_printf("block: %s active (%llu sectors at LBA %llu of %s)\n", e->name,
                     (unsigned long long)dev->sector_count(dev), (unsigned long long)base_lba,
-                    blk_device_name(g_whole));
+                    blk_device_name(g_root_disk));
     } else {
         klog_printf("block: %s active (%llu sectors)\n", e->name,
                     (unsigned long long)dev->sector_count(dev));
@@ -199,21 +195,14 @@ int blk_register_over(const struct block_device *dev,
 int blk_set_root(const struct block_device *dev) {
     for (int i = 0; i < g_count; i++) {
         if (g_table[i].dev != dev) continue;
-        g_dev   = g_table[i].dev;
-        g_whole = g_table[i].parent;
-        g_base  = g_table[i].base_lba;
+        g_root      = g_table[i].dev;
+        g_root_disk = g_table[i].parent;
         return 1;
     }
     return 0; // not registered -- a `root=` naming something never found
 }
 
-const struct block_device *blk_whole_disk(void) { return g_whole; }
-
-uint64_t blk_base_lba(void) { return g_base; }
-
-uint64_t blk_disk_sector_count(void) {
-    return g_whole ? g_whole->sector_count(g_whole) : 0;
-}
+const struct block_device *blk_root_disk(void) { return g_root_disk; }
 
 uint32_t blkdev_block_size(const struct block_device *dev) {
     return dev && dev->block_size ? dev->block_size : 512;
@@ -246,8 +235,6 @@ static int aligned(const struct block_device *dev, uint64_t lba, uint32_t count,
 // EVERY path below goes through these four, so a caller cannot be
 // counted twice and cannot escape being counted at all -- the same
 // reason fault injection sits at this layer rather than in a driver.
-// blk_*, blk_disk_* and blkdev_* differ only in WHICH device they pick;
-// what they do with it is here, once.
 //
 // A FAILED CALL IS STILL TIMED. A command that timed out is the most
 // expensive one the layer ever issues, and dropping it from the total
@@ -290,56 +277,13 @@ static int io_trim(const struct block_device *dev, uint64_t lba, uint32_t count)
     return ok;
 }
 
-// The fault-injection hooks are the same ones blk_read_sectors() uses:
-// a partition-table read failing under injection is a case worth being
-// able to test, and there is no reason for it to be exempt.
-int blk_disk_read_sectors(uint64_t lba, int count, void *buf) {
-    return io_read(g_whole, lba, count, buf);
-}
+const struct block_device *blk_root(void) { return g_root; }
 
-int blk_disk_write_sectors(uint64_t lba, int count, const void *buf) {
-    return io_write(g_whole, lba, count, buf);
-}
+int blk_root_present(void) { return g_root != NULL; }
 
-const struct block_device *blk_active(void) { return g_dev; }
+int blk_root_persistent(void) { return g_root && g_root->persistent; }
 
-int blk_present(void) { return g_dev != NULL; }
-
-int blk_persistent(void) { return g_dev && g_dev->persistent; }
-
-const char *blk_name(void) { return g_dev ? g_dev->name : "none"; }
-
-uint64_t blk_sector_count(void) { return g_dev ? g_dev->sector_count(g_dev) : 0; }
-
-// Fault injection lives HERE, not in a driver, so a filesystem error
-// path can be tested whatever the filesystem is mounted on. See
-// fault_inject.h -- the ATA-specific pair still exists for ATA's own
-// write-back cache tests, which sit below this layer.
-int blk_read_sectors(uint64_t lba, int count, void *buf) {
-    return io_read(g_dev, lba, count, buf);
-}
-
-int blk_write_sectors(uint64_t lba, int count, const void *buf) {
-    return io_write(g_dev, lba, count, buf);
-}
-
-int blk_max_sectors_per_xfer(void) {
-    return blkdev_max_sectors_per_xfer(g_dev);
-}
-
-// RETURNS whether the data is actually durable. It was `void`, and a
-// barrier that cannot fail is exactly what a write-back cache turns
-// into a silent data-loss bug: the failure of a deferred write surfaces
-// HERE, at the flush, long after the write() that returned success.
-// TFS3's txn_commit() checks it -- see ata_cache.h.
-//
-// 1 on a device with no cache, which is correct and not a degradation:
-// a RAM device has nothing that can be lost independently of everything
-// else. Only a device that HAS a cache and does not flush it would be
-// lying, and blk_register() refuses that shape.
-int blk_flush(void) {
-    return io_flush(g_dev);
-}
+const char *blk_root_name(void) { return g_root ? g_root->name : "none"; }
 
 // `notrim` ON THE BOOT LINE STOPS EVERY BACKEND DISCARDING. Gated HERE,
 // at the one place every trim decision passes through, rather than in
@@ -369,23 +313,10 @@ static int trim_disabled(void) {
     return g_trim_disabled;
 }
 
-int blk_trim_supported(void) {
-    if (trim_disabled()) return 0;
-    return g_dev && (g_dev->caps & BLK_CAP_TRIM);
-}
-
-int blk_trim(uint64_t lba, uint32_t count) {
-    if (!blk_trim_supported()) return 0;
-    return io_trim(g_dev, lba, count);
-}
-
 // ---- I/O on a NAMED device ------------------------------------------
 //
-// Everything above answers for the ACTIVE device. These answer for the
-// one the caller was handed at mount time, which is what a filesystem
-// mounted anywhere but the root has to use -- see block.h. The
-// fault-injection hooks are the same ones, deliberately: an error path
-// does not become untestable by being on a second mount.
+// The only I/O path: every caller names its device. The fault-injection
+// hooks live in io_*(), so an error path is testable on any mount.
 int blkdev_read_sectors(const struct block_device *dev, uint64_t lba, int count, void *buf) {
     return io_read(dev, lba, count, buf);
 }
@@ -447,17 +378,20 @@ int blkdev_max_sectors_per_xfer(const struct block_device *dev) {
     return n > 0 ? n : spb;
 }
 
-// Same contract as blk_flush(): 1 on a device with no cache, because
-// there is nothing that can be lost independently of everything else.
+// RETURNS whether the data is actually durable. It was `void`, and a
+// barrier that cannot fail is exactly what a write-back cache turns
+// into a silent data-loss bug: the failure of a deferred write surfaces
+// HERE, at the flush, long after the write() that returned success.
+// TFS3's txn_commit() checks it -- see ata_cache.h. 1 on a device with
+// no cache, which is correct: a RAM device has nothing that can be lost
+// independently of everything else, and only a device that HAS a cache
+// and does not flush it would be lying -- blk_register() refuses that.
 int blkdev_flush(const struct block_device *dev) {
     if (fault_should_fail_block_flush()) return 0;
     return io_flush(dev);
 }
 
 int blkdev_trim_supported(const struct block_device *dev) {
-    // `notrim` covers this path too. Gating only the active device would
-    // leave a second mount still discarding, which is exactly the "it
-    // only half works" answer a diagnostic switch must not give.
     if (trim_disabled()) return 0;
     return dev && (dev->caps & BLK_CAP_TRIM);
 }

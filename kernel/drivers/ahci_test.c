@@ -147,10 +147,10 @@ KTEST("ahci", "TRIM refuses what it cannot discard") {
 KTEST("ahci", "the block layer's TRIM capability matches the drive's answer") {
     if (!hba_on_bus()) KTEST_SKIP("no AHCI controller on this machine");
     if (!ahci_present()) KTEST_SKIP("no drive claimed");
-    const char *name = blk_name();
+    const char *name = blk_root_name();
     if (!name || name[0] != 'a' || name[1] != 'h') KTEST_SKIP("AHCI is not the active device");
 
-    KTEST_ASSERT_EQ(blk_trim_supported() ? 1 : 0, ahci_trim_supported() ? 1 : 0);
+    KTEST_ASSERT_EQ(blkdev_trim_supported(blk_root()) ? 1 : 0, ahci_trim_supported() ? 1 : 0);
 }
 
 KTEST("ahci", "the drive acknowledges a flush") {

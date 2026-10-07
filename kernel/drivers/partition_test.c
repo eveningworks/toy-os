@@ -113,12 +113,12 @@ KTEST("partition", "validate accepts partitions that merely touch") {
 }
 
 KTEST("partition", "validate refuses a partition running past the disk") {
-    if (!blk_present()) KTEST_SKIP("no block device");
+    if (!blk_root_present()) KTEST_SKIP("no block device");
     static struct partition_table t;
     k_memset(&t, 0, sizeof t);
     t.kind = PART_TABLE_MBR;
     t.entry_count = 1;
-    t.entries[0].mbr_lba_start = blk_disk_sector_count() - 10;
+    t.entries[0].mbr_lba_start = blkdev_sector_count(blk_root_disk()) - 10;
     t.entries[0].mbr_num_sectors = 1000;
     const char *why = "";
     KTEST_ASSERT(!partition_validate(&t, &why));
@@ -157,7 +157,7 @@ KTEST("partition", "a GPT round-trips through the writer and the parser") {
     // Everything from here until the restore runs with the real block
     // device swapped out. Preemption stays off across all of it.
     scheduler_preempt_disable();
-    const struct block_device *saved = blk_active();
+    const struct block_device *saved = blk_root();
     int registered = blk_ram_register((uint64_t)(uintptr_t)scratch, SCRATCH_BYTES);
 
     int wrote = 0, read_back = 0;
@@ -213,7 +213,7 @@ KTEST("partition", "an MBR round-trips, and a GPT disk is not read as one") {
     if (!scratch) KTEST_SKIP("no memory for a scratch disk");
 
     scheduler_preempt_disable();
-    const struct block_device *saved = blk_active();
+    const struct block_device *saved = blk_root();
     int registered = blk_ram_register((uint64_t)(uintptr_t)scratch, SCRATCH_BYTES);
 
     int wrote = 0, read_back = 0;

@@ -30,7 +30,7 @@
 // because its two barriers mean "everything before this is on the
 // platter", and a barrier that cannot fail cannot say otherwise.
 //
-// So atac_flush() RETURNS a status, ata_flush_now() and blk_flush()
+// So atac_flush() RETURNS a status, ata_flush_now() and blkdev_flush(blk_root())
 // pass it up, and tfs3_journal.c's t3_txn_commit() checks it -- all three used to
 // be `void`. A failed write-back keeps its line DIRTY rather than
 // dropping it (losing the data is the one unrecoverable outcome) and

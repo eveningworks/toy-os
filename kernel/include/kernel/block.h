@@ -197,8 +197,8 @@ const char *blk_device_name(const struct block_device *dev);
 int blk_track(const struct block_device *dev,
               const struct block_device *parent, uint64_t base_lba);
 
-// Makes an already-registered device the ROOT: what blk_active() and
-// every blk_*() wrapper answer for. Returns 0 for a device that is not
+// Makes an already-registered device the ROOT: what blk_root() and the
+// other blk_root_*() answer for. Returns 0 for a device that is not
 // in the table, which is what stops `root=` naming something that was
 // never found.
 //
@@ -214,7 +214,7 @@ int blk_set_root(const struct block_device *dev);
 // changed is that losing that race no longer means being forgotten.
 int blk_register(const struct block_device *dev);
 
-// Registers `dev` as active while recording what it SITS ON. A plain
+// Registers `dev` as the root while recording what it SITS ON. A plain
 // disk is its own whole disk at base 0, which is what blk_register()
 // passes; a partition passes its parent and its start LBA.
 //
@@ -225,24 +225,16 @@ int blk_register(const struct block_device *dev);
 int blk_register_over(const struct block_device *dev,
                       const struct block_device *parent, uint64_t base_lba);
 
-// The active device, or NULL when nothing is registered -- which is the
-// normal state on a machine with no disk and no live image, and is what
-// "RAM-only, nothing mounted" means.
-const struct block_device *blk_active(void);
-
-// Thin wrappers, so a filesystem never repeats the NULL check. Reads and
-// writes return 0 with no device; the two optional operations are no-ops
-// rather than errors, exactly as they are on a device that lacks them.
-int blk_present(void);
-int blk_persistent(void);
-const char *blk_name(void);
-uint64_t blk_sector_count(void);
-int blk_read_sectors(uint64_t lba, int count, void *buf);
-int blk_write_sectors(uint64_t lba, int count, const void *buf);
-int blk_max_sectors_per_xfer(void);
-int blk_flush(void);
-int blk_trim_supported(void);
-int blk_trim(uint64_t lba, uint32_t count);
+// THE ROOT DEVICE -- the volume the root filesystem is mounted from, or
+// NULL when nothing is registered, which is the normal state on a
+// machine with no disk and no live image and is what "RAM-only, nothing
+// mounted" means. It is a NAME for one device, not an I/O path: a
+// caller doing I/O passes the device to blkdev_*(), which is what every
+// mount does since mount points became real.
+const struct block_device *blk_root(void);
+int blk_root_present(void);
+int blk_root_persistent(void);
+const char *blk_root_name(void);       // the driver's stem, "none" with no root
 
 // Registers the ATA disk as the active device, if there is one. Called
 // at boot before the filesystem mounts.
@@ -302,7 +294,7 @@ int blk_ram_register(uint64_t base, uint64_t bytes);
 // scan and `fsformat` want.
 //
 // `parent` must be a device that is already known-good (in practice
-// blk_active() immediately after a disk driver registered), and it is
+// blk_root() immediately after a disk driver registered), and it is
 // borrowed, not copied -- the disk drivers' device structs are static
 // and outlive everything.
 //
@@ -317,9 +309,9 @@ int blk_ram_register(uint64_t base, uint64_t bytes);
 int blk_part_register(const struct block_device *parent,
                       uint64_t base_lba, uint64_t sectors, int index);
 
-// The same window WITHOUT making it active -- what a second mount
+// The same window WITHOUT making it the root -- what a second mount
 // needs, since the mount table holds a device per mount and only one
-// of them can be blk_active(). Asking twice for the same window
+// of them can be blk_root(). Asking twice for the same window
 // returns the SAME device, so pointer identity answers "is this volume
 // already mounted?"; the pool is small and bounded, and a caller that
 // exhausts it gets NULL and a logged reason.
@@ -340,21 +332,10 @@ int blk_part_release(const struct block_device *dev);
 const struct block_device *blk_part_parent(const struct block_device *dev,
                                            uint64_t *out_base);
 
-// The disk the partition table lives on: the active device, or its
-// PARENT when a partition is active. NULL when nothing is registered.
-const struct block_device *blk_whole_disk(void);
-
-// Where the active device starts on that disk -- 0 when the active
-// device IS the whole disk.
-uint64_t blk_base_lba(void);
-
-// Whole-disk I/O, ignoring any partition window. This is what a
-// partition-table reader or writer wants and what a filesystem must
-// never use: blk_read_sectors(0) is the volume's first sector, while
-// blk_disk_read_sectors(0) is the MBR. Same fault-injection hooks.
-uint64_t blk_disk_sector_count(void);
-int blk_disk_read_sectors(uint64_t lba, int count, void *buf);
-int blk_disk_write_sectors(uint64_t lba, int count, const void *buf);
+// The disk the root sits on: the root itself, or its PARENT when the
+// root is a partition. What `parttable`, `mkpart` and `fsformat` mean by
+// "the disk" when not told another. NULL when nothing is registered.
+const struct block_device *blk_root_disk(void);
 
 // ---- I/O on a NAMED device ------------------------------------------
 //

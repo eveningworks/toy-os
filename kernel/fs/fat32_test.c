@@ -409,7 +409,7 @@ KTEST("fat32", "probing a second volume does not disturb the mounted one") {
     // A PROBE RUNS ON A SCRATCH STATE. That is mount.c's rule now
     // rather than a save/restore inside fat32_probe(), so this drives
     // it the way mount.c does: a second state, a probe on it, then back.
-    const struct block_device *elsewhere = blk_active();
+    const struct block_device *elsewhere = blk_root();
     if (elsewhere && elsewhere != &IMG_DEV) {
         struct fs_scratch sc;
         if (mount_scratch_begin(F(), &sc)) {

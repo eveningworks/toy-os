@@ -11,7 +11,7 @@
 #include "fault_inject.h"
 #include "kapi.h"
 #include "tfs3.h" // the caps-declaration test below reads tfs3_ops directly
-#include "block.h" // blk_sector_count() -- the geometry test at the bottom
+#include "block.h" // blkdev_sector_count(blk_root()) -- the geometry test at the bottom
 #include "storage_config.h" // storage_sync_batched() -- the deferred-commit test
 #include "mount.h" // mount_at()/MNT_RDONLY -- the read-only transition is a MOUNT fact
 
@@ -546,7 +546,7 @@ KTEST("fs", "triple-indirect blocks survive a write and a read back") {
     if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
     // ~4.3 GB of file OFFSET, but only a handful of blocks of it. The
     // volume still has to be able to address that far.
-    if ((uint64_t)blk_sector_count() * 512ull < (uint64_t)(T3_TRIPLE_FIRST + 8) * T3_BLK)
+    if ((uint64_t)blkdev_sector_count(blk_root()) * 512ull < (uint64_t)(T3_TRIPLE_FIRST + 8) * T3_BLK)
         KTEST_SKIP("volume too small to reach the triple-indirect table");
     FRESH("/.ktest_tri");
 
@@ -1000,7 +1000,7 @@ KTEST("fs", "reported size matches the volume, partial last group included") {
     // up to a whole group, and the old T3_BPG assumption over-reported
     // by one. Both directions are checked because they failed in
     // opposite directions.
-    uint64_t device = (uint64_t)blk_sector_count() * 512;
+    uint64_t device = (uint64_t)blkdev_sector_count(blk_root()) * 512;
     KTEST_ASSERT(total <= device);
     KTEST_ASSERT(used <= total);
     if (device > 64u * 1024 * 1024) {

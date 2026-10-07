@@ -95,7 +95,7 @@ this the obvious way), not from how much history it accumulated.
   `partition.c` bypass the block layer, and a bypass past a write-back
   cache is a silent correctness hole in both directions). The
   consequence that matters: a write that returned success can be refused
-  LATER, at the flush, so `blk_flush()`, `ata_flush_now()` and the block
+  LATER, at the flush, so `blkdev_flush()`, `ata_flush_now()` and the block
   device's flush op all RETURN A STATUS and TFS3's `txn_commit()` checks
   it -- barrier 1 failing ABANDONS the transaction rather than
   overwriting targets. A failed write-back keeps its line dirty rather
@@ -345,7 +345,7 @@ this the obvious way), not from how much history it accumulated.
   only and the real proof is the host's: write 40 MiB, delete it, and
   require the sparse image's allocated size back at baseline.
   **`notrim` on the boot line turns discards off for EVERY backend**,
-  gated once in `blk_trim_supported()`/`blkdev_trim_supported()` rather
+  gated once in `blkdev_trim_supported()` rather
   than per driver. It is a diagnostic A/B rather than a preference: a
   discard punches a hole in the host image and a flush after one is far
   slower on some host filesystems than others, so "is it the trims?"
@@ -357,23 +357,23 @@ this the obvious way), not from how much history it accumulated.
   The reversal was measured, not preferred: ~10x ATA's write throughput
   under KVM, and 3 clean runs in 3 where ATA managed 2 in 3. **Fault
   injection moved to the BLOCK LAYER because of this**
-  (`fault_should_fail_block_read/write()`, consulted in
-  `blk_read_sectors()`/`blk_write_sectors()`): four filesystem
+  (`fault_should_fail_block_read/write()`, consulted in the block
+  layer's `io_read()`/`io_write()`): four filesystem
   error-path KTESTs armed the ATA-specific injector and stopped testing
   anything the moment the filesystem was not on ATA. **Use the
   `fault_fail_next_block_*` pair for anything testing a FILESYSTEM**;
   the ATA pair stays for ATA's own write-back cache, which sits below
   the block layer and cannot be reached from it.
 - **A filesystem talks to a `block_device`, not to a disk.**
-  `kernel/include/kernel/block.h` -- five required ops, two optional
-  behind capability bits, one active device, registered like
+  `kernel/include/kernel/block.h` -- five required ops, each handed
+  its device, optional ones behind capability bits, registered like
   `display_driver`. TFS3 uses it (that is what lets a live image mount
   from RAM); **TFS2 deliberately still calls `ata_*` directly**, since a
   live image is always TFS3. Two things to know: capabilities are
   checked at registration (claim FLUSH with no `flush()` and you are
   refused), and **`persistent` is a field on the DEVICE** -- a backend
   cannot tell RAM from disk, so `fs_is_persistent()` is
-  `fs->init() && blk_persistent()`. Getting that wrong makes a live
+  `fs->init() && blk_root_persistent()`. Getting that wrong makes a live
   session tell the user their files are saved.
 - **TFS3's last block group may be PARTIAL** (ext2/3/4's rule), so a
   volume need not be a multiple of 128 MiB. `group_span(g)` is the one
@@ -612,7 +612,8 @@ line before quoting any microsecond figure.
 `kernel/drivers/block/block_part.c` wraps a parent `struct
 block_device` and shifts every LBA by `base_lba`, so what mounts on it
 sees a device starting at sector 0. TFS3 needed no change: its volume is
-`{0, blk_sector_count()}` as always, and that now *means* the partition.
+`{0, blkdev_sector_count(dev)}` as always, and that now *means* the
+partition.
 
 This is Linux's `bd_start_sect` and Windows' `partmgr`. The alternative
 — each filesystem adding its own offset — is the layering both moved
@@ -621,19 +622,17 @@ away from, and it is work every future backend would repeat. See
 
 Four things to know.
 
-**The active device stays SINGULAR.** A partition *replaces* its parent
-rather than sitting beside it, which is what keeps this clear of the
-mount-table work "Real mount points" is holding. One partition is
-mounted at a time, exactly as one whole disk was.
+**Every mount holds its own device**, and every read and write names
+it (`blkdev_*`). The one device the block layer singles out is the
+ROOT's -- `blk_root()`, and `blk_root_disk()` for the disk under it --
+which is a name, not an I/O path.
 
-**`blk_read_sectors()` is the VOLUME; `blk_disk_read_sectors()` is the
-DISK.** `blk_read_sectors(0)` is the mounted volume's first sector.
-The MBR is at the *disk's* sector 0, so anything reading a partition
-table must use the `blk_disk_*` family — a parser reading through its
-own partition window finds no table at all. `blk_whole_disk()` and
-`blk_base_lba()` answer the same question for anything else that needs
-it, and they live in `block.c` so there is one answer whatever is
-mounted.
+**A partition's device is the VOLUME; its parent is the DISK.** Sector
+0 of a partition is the volume's first sector. The MBR is at the
+*disk's* sector 0, so anything reading a partition table must read the
+whole disk (`blk_root_disk()`, or `blk_part_parent()` for a partition
+it holds) -- a parser reading through its own partition window finds
+no table at all.
 
 **Capabilities are INHERITED, both the bit and the pointer**, so
 `blk_register_over()`'s both-directions honesty check keeps holding. The
@@ -1251,17 +1250,17 @@ that nothing enforced was being honoured by accident, and the accident
 was "this only ever runs at one point in the boot". When you make
 something happen at a second time, re-read what it promised.
 
-## THE BLOCK LAYER HAS ONE ACTIVE DEVICE AND MANY CREATABLE ONES
+## THE BLOCK LAYER NAMES ONE ROOT DEVICE AND CREATES MANY
 
-`blk_active()` is still singular — it is what `parttable`, `mkpart` and
-the ROOT filesystem mean by "the disk". What changed is that creating a
-partition device is now separate from making it active:
+`blk_root()` is singular -- the volume the root is mounted from, and
+`blk_root_disk()` the disk under it, which is what `parttable`, `mkpart`
+and `fsformat` mean by "the disk" when not told another. It is a NAME,
+not an I/O path: there is no I/O call that answers for "whatever is
+active" any more (they were removed, unused, 2026-10-07). Creating a
+partition device is separate from making it the root:
 `blk_part_create()` hands one back, `blk_part_register()` does that and
-registers it. A mount holds its own device and reads it through
-`blkdev_*` (the same fault-injection hooks, no dependence on what is
-active); a backend that reached for the `blk_*` wrappers while mounted
-somewhere else would read the WRONG VOLUME and report no error, which is
-the whole reason `fs_ops.init()` takes a device at all.
+makes it the root. A mount holds its own device and reads it through
+`blkdev_*`, which is the whole reason `fs_ops.init()` takes a device.
 
 Asking twice for the same window returns the SAME device, so pointer
 identity answers "is this volume already mounted?".

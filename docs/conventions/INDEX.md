@@ -919,7 +919,7 @@ whenever a headline here tells you something you did not already know.
   ZEROED**
 - **A PROBE MUST NOT DISTURB A MOUNT, and that contract was only ever
   honoured by accident**
-- **`fs_ops.init()` TAKES A DEVICE, and `blk_active()` is not it**
+- **`fs_ops.init()` TAKES A DEVICE, and `blk_root()` is not it**
 - **FAT32 IS A GENERIC DRIVER AND KNOWS NOTHING ABOUT BOOTLOADERS**
 - **`/boot` IS READABLE FROM INSIDE toy-os NOW, AND IT IS THE ESP**
 - **TOY-OS BOOTS FROM ITS OWN DISK, AND `/boot` IS FAT32 BECAUSE GRUB

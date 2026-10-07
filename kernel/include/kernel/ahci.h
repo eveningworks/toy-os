@@ -16,7 +16,7 @@ struct pci_device;
 // hardware's real structure and skipping it would be a lie about what
 // was found -- but only ONE drive becomes the block device, using slot
 // 0 with one command outstanding. That is the honest ceiling of a
-// kernel whose block layer has a singular blk_active() and no /dev:
+// kernel whose block layer has a singular blk_root() and no /dev:
 // NCQ buys nothing until something can issue a second request while the
 // first is in flight. docs/roadmap.md holds the rest.
 //

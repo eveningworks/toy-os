@@ -25,7 +25,7 @@ struct block_device; // kernel/block.h -- what probe()/init() are handed
 //
 // What DID have to change is where a backend's volume comes from.
 // probe(), format(), wipe() and init() take a `struct block_device *`
-// now instead of reading blk_active(): with two mounts there is no
+// now instead of reading blk_root(): with two mounts there is no
 // single active device a backend could correctly assume, and one that
 // assumed anyway would read the wrong volume and report no error.
 // Linux's `super_block->s_bdev`, arriving for the same reason.

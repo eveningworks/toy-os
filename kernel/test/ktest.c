@@ -100,8 +100,8 @@ int ktest_run_all(const char *suite_filter) {
     // the filesystem on virtio or ATA?", and two different wrong
     // conclusions were drawn from greps that measured nothing.
     vga_write("ktest: block device = ");
-    vga_write(blk_present() ? blk_name() : "none");
-    vga_write(blk_present() && blk_persistent() ? " (persistent)" : " (RAM-only)");
+    vga_write(blk_root_present() ? blk_root_name() : "none");
+    vga_write(blk_root_present() && blk_root_persistent() ? " (persistent)" : " (RAM-only)");
     vga_write("\n");
 
     // One pass per test, printing the suite header whenever it changes.

@@ -624,7 +624,7 @@ static int remove_locked(const char *point, const char **why) {
 // LEGACY IDE probe. On a machine whose only disk is AHCI or virtio it
 // answered "no disk" and a live boot displaced the real one anyway;
 // on a machine presenting both, the opposite. The predicate that was
-// meant is blk_present(), and it cannot be read here -- it is only true
+// meant is blk_root_present(), and it cannot be read here -- it is only true
 // after the disk drivers have run, which a FORCED live session must
 // happen before. So the caller asks, in that order.
 // THE IMAGE ON THE MEDIA IS GZIPPED AND THE KERNEL NEVER SEES THAT.
@@ -701,7 +701,7 @@ static int entry_window_of(const struct partition_table *tbl,
 }
 
 const struct block_device *mount_partition_device(int number) {
-    const struct block_device *disk = blk_whole_disk();
+    const struct block_device *disk = blk_root_disk();
     if (!disk || !read_table()) return NULL;
     if (number < 1 || number > g_tbl.entry_count) return NULL;
     uint64_t base, count;
@@ -884,7 +884,7 @@ static void root_override(const char *cmdline) {
     }
 
     klog_printf("fs: root=%s names no device this boot found; using %s instead\n",
-                want, blk_present() ? blk_device_name(blk_active()) : "nothing");
+                want, blk_root_present() ? blk_device_name(blk_root()) : "nothing");
     for (int i = 0; i < blk_device_count(); i++) {
         const struct blk_entry *d = blk_device_at(i);
         klog_printf("fs:   have %s (%llu sectors)\n", d->name,
@@ -895,7 +895,7 @@ static void root_override(const char *cmdline) {
 }
 
 static int try_partitions(void) {
-    const struct block_device *disk = blk_whole_disk();
+    const struct block_device *disk = blk_root_disk();
     if (!disk) return -1;
     if (!read_table()) return -1;
     if (g_tbl.entry_count == 0) return 0; // an empty table is still a table
@@ -940,7 +940,7 @@ static int try_partitions(void) {
             first_base = base; first_count = count; first_index = i + 1; first_ok = 1;
         }
 
-        const struct block_device *dev = blk_active();
+        const struct block_device *dev = blk_root();
         for (int b = 0; b < FS_BACKEND_COUNT; b++) {
             const struct fs_ops *fs = g_backends[b];
             // A backend that addresses the disk absolutely would bypass
@@ -1066,7 +1066,7 @@ static void probe_and_mount_root(void) {
     // rule, and now the disks stay in the table and stay reachable, so a
     // live session can see and mount the machine's own drives. That is
     // most of what a live CD is for, and it could not before.
-    if (forced || !blk_present()) try_live_module(forced);
+    if (forced || !blk_root_present()) try_live_module(forced);
 
     // `root=` overrides the precedence, naming a disk from the table.
     // Linux's `root=` and NT's BCD `osdevice`: the boot line decides,
@@ -1080,7 +1080,7 @@ static void probe_and_mount_root(void) {
     // at all. Creating a window does NOT mount or activate it.
     name_all_partitions();
 
-    if (!blk_present()) {
+    if (!blk_root_present()) {
         mount_ramfs_root("fs: no disk -- mounting ramfs (nothing here survives a reboot)\n");
         return;
     }
@@ -1128,7 +1128,7 @@ void mount_boot_root(void) {
 // way in, which is exactly Linux's shape -- an ESP in /etc/fstab is
 // conventionally `ro` or not mounted at all until something needs it.
 void mount_boot_auto(void) {
-    const struct block_device *disk = blk_whole_disk();
+    const struct block_device *disk = blk_root_disk();
     if (!disk || !read_table()) return;
     if (!mount_root()) return;
 

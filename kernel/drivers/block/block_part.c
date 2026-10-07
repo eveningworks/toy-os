@@ -95,7 +95,7 @@ static int part_xfer(const struct block_device *self) {
 // Forwarded unchanged. This flushes the parent's WHOLE cache, not just
 // this window -- broader than asked for, and deliberately so: a barrier
 // that covers more than it promised is safe, one that covers less is
-// the silent data-loss bug blk_flush()'s comment is about.
+// the silent data-loss bug blkdev_flush(blk_root())'s comment is about.
 static int part_flush(const struct block_device *self) {
     struct part_slot *s = slot_of(self);
     return s->parent->flush(s->parent);

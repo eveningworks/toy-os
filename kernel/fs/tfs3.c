@@ -9,7 +9,7 @@
 //
 // Everything on disk is VOLUME-relative: block b lives at sector
 // sbi->vol.base_lba + b * T3_SPB, and the backend only touches the disk
-// through the vol_* helpers below. The volume is {0, blk_sector_count()}
+// through the vol_* helpers below. The volume is {0, blkdev_sector_count(blk_root())}
 // and STAYS that way even inside a partition, because the
 // probe loop hands in a partition's extent instead and nothing here
 // changes -- that seam is the point (see the design doc's "Volumes

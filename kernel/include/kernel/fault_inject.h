@@ -35,8 +35,8 @@ void fault_fail_next_ata_writes(uint32_t count);
 // Same for ata_read_sector()/ata_read_sectors().
 void fault_fail_next_ata_reads(uint32_t count);
 
-// The next `count` blk_write_sectors()/blk_read_sectors() calls fail
-// without reaching whatever device is registered.
+// The next `count` block-layer writes/reads (blkdev_*, on any device)
+// fail without reaching the device.
 //
 // USE THESE, NOT THE ATA PAIR ABOVE, FOR ANYTHING TESTING THE
 // FILESYSTEM. The ATA injectors reach only one backend, so a

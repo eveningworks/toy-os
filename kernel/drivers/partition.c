@@ -216,14 +216,11 @@ static __attribute__((noinline)) int parse_gpt(const struct block_device *dev,
 // Reads the table on the ACTIVE disk -- the boot-time caller and every
 // existing tool mean that one.
 int partition_read_table(struct partition_table *out) {
-    return partition_read_table_of(blk_whole_disk(), out);
+    return partition_read_table_of(blk_root_disk(), out);
 }
 
 // ...and the same on ANY disk, which is what makes a second drive's
-// partitions reachable at all. Every read below goes through `dev`
-// rather than blk_disk_read_sectors(), which could only ever answer for
-// the active one -- so before this, a machine's other disks had a
-// partition table nothing in the kernel could parse.
+// partitions reachable at all. Every read below goes through `dev`.
 int partition_read_table_of(const struct block_device *dev,
                             struct partition_table *out) {
     if (!dev) return 0;
@@ -621,11 +618,11 @@ int partition_write_table_of(const struct block_device *dev, const struct partit
 // THE BOOT DISK, which is what every caller meant before a table could
 // be written anywhere else.
 int partition_validate(const struct partition_table *in, const char **why) {
-    return partition_validate_on(blk_whole_disk(), in, why);
+    return partition_validate_on(blk_root_disk(), in, why);
 }
 
 int partition_write_table(const struct partition_table *in) {
-    return partition_write_table_of(blk_whole_disk(), in);
+    return partition_write_table_of(blk_root_disk(), in);
 }
 
 // Fills in the fields a caller should not have to invent: a fresh

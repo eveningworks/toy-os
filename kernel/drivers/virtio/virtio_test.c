@@ -295,8 +295,8 @@ KTEST("virtio-blk", "discard refuses what it cannot release") {
 // alone would declare BLK_CAP_TRIM and then fail every discard.
 KTEST("virtio-blk", "the block layer's TRIM capability matches the device's maximum") {
     if (!virtio_blk_present()) KTEST_SKIP("no virtio-blk on this machine");
-    const char *name = blk_name();
+    const char *name = blk_root_name();
     if (!name || name[0] != 'v') KTEST_SKIP("virtio-blk is not the active device");
 
-    KTEST_ASSERT_EQ(blk_trim_supported() ? 1 : 0, virtio_blk_discard_supported() ? 1 : 0);
+    KTEST_ASSERT_EQ(blkdev_trim_supported(blk_root()) ? 1 : 0, virtio_blk_discard_supported() ? 1 : 0);
 }

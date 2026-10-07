@@ -3568,6 +3568,15 @@ its own roadmap item. `tools/bigdisk_test.py` puts a partition past
 sector 2^32 on each of the three drivers and checks the image from the
 host.
 
+**And "the active device" became "the root device".** The block layer
+had kept a second, implicit I/O path -- `blk_read_sectors()` and its
+siblings, answering for whichever device was active -- from before
+mount points were real. Nothing called it any more: every mount holds
+its device and uses `blkdev_*`. It was deleted, and the one fact it
+had carried -- which device the root is on -- is `blk_root()` /
+`blk_root_disk()`, a name rather than an I/O path. Linux's `ROOT_DEV`
+is the same thing, kept for the same reason.
+
 The considered alternative was a `void *priv` field, Linux's
 `private_data`. It was not needed: both multi-device drivers already
 keep their devices in an array or an enclosing struct, so the pointer

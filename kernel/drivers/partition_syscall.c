@@ -27,7 +27,7 @@
 // boot disk, or when any mount sits on it or on a partition of it.
 // mount->dev is a partition device, so the parent is what to compare.
 static int disk_is_in_use(const struct block_device *disk) {
-    if (disk == blk_whole_disk() && fs_is_persistent()) return 1;
+    if (disk == blk_root_disk() && fs_is_persistent()) return 1;
     for (int i = 0; i < mount_count(); i++) {
         const struct mount *m = mount_at(i);
         if (!m || !m->used || !m->dev) continue;
@@ -65,7 +65,7 @@ static const struct block_device *resolve_disk(const char *name, struct syscall_
         }
         disk = e->dev;
     } else {
-        disk = blk_whole_disk();
+        disk = blk_root_disk();
     }
     if (!disk || blkdev_sector_count(disk) == 0) {
         c->regs[14] = (uint64_t)(int64_t)-ENODEV;

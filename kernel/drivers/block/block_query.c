@@ -36,7 +36,7 @@ static int blkdev_fill(int index, void *out) {
 
     d->sectors = e->dev->sector_count(e->dev);
     d->base_lba = e->base_lba;
-    d->is_root = (blk_active() == e->dev) ? 1 : 0;
+    d->is_root = (blk_root() == e->dev) ? 1 : 0;
     d->persistent = e->dev->persistent ? 1 : 0;
     d->block_size = blkdev_block_size(e->dev);
     if (e->dev->model) k_strlcpy(d->model, e->dev->model, sizeof d->model);

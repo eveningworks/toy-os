@@ -8,7 +8,7 @@
 //
 //   1. What comes back is what went in -- including across the
 //      cached/bypass boundary, which is the seam most likely to rot.
-//   2. A flush FAILURE is reported. blk_flush() and ata_flush_now()
+//   2. A flush FAILURE is reported. blkdev_flush(blk_root()) and ata_flush_now()
 //      were `void` before this cache existed; TFS3's journal barriers
 //      now depend on the answer, and a barrier that always says "yes"
 //      is worse than no barrier at all.

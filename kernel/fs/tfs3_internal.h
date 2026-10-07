@@ -154,7 +154,7 @@ struct t3_vol {
     // THE DEVICE, not "the active device". TFS3 is handed its volume by
     // fs_ops.init() now, because with a mount table there is no single
     // active device it could correctly assume -- a TFS3 root reading
-    // blk_active() while /boot is mounted reads the ESP. Linux's
+    // blk_root() while /boot is mounted reads the ESP. Linux's
     // super_block->s_bdev. The base_lba stays 0 in practice (the
     // partition window is in the device, block_part.c), and the field
     // survives because a flat volume seam is what makes a KTEST able to

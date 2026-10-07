@@ -231,8 +231,8 @@ int fs_format_device(const struct block_device *dev, const char *fstype) {
 int fs_format_backend(const char *name) {
     const struct fs_ops *target = mount_backend_named(name);
     if (!target) return 0;
-    if (!blk_present()) return 0;
-    const struct block_device *dev = blk_active();
+    if (!blk_root_present()) return 0;
+    const struct block_device *dev = blk_root();
 
     // Formatting the volume something is mounted from, while it is
     // mounted, is how a live mount ends up describing a filesystem that

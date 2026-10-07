@@ -30,7 +30,7 @@
 #include "string.h"
 #include "kfmt.h"          // k_snprintf -- the reason names the live device
 #include "setting_abi.h"   // SETTING_ABI_DESC_MAX -- the reason's own budget
-#include "block.h"        // blk_name() -- what IS carrying the transfers
+#include "block.h"        // blk_root_name() -- what IS carrying the transfers
 #include "keyboard_tap.h" // kbdtap_enabled()/_set_enabled() -- kernel.kbdtap
 #include "syscall_stall.h" // syscall_stall_get()/_set() -- kernel.syscall_stall
 #include "sound.h"        // hda_diag_tone() -- kernel.hda_tone
@@ -126,7 +126,7 @@ static void ata_nodma_get(char *out, uint32_t cap) {
 static const char *ata_nodma_unavailable(void) {
     // No ATA disk: this setting is about the ATA driver, and the ATA
     // driver is not carrying anything. Name what IS, so the reader is
-    // not left to guess -- `blk_name()` is what `df` prints.
+    // not left to guess -- `blk_root_name()` is what `df` prints.
     if (!ata_present()) {
         // Two variants, because a machine with no disk at all should not
         // be told it is using one. Static buffer rather than a format at
@@ -136,12 +136,12 @@ static const char *ata_nodma_unavailable(void) {
         //
         // Two readers CAN now reach this at once, and it is benign
         // rather than guarded: every input here is a fact about the
-        // MACHINE (ata_present(), blk_name()), so both writers put the
+        // MACHINE (ata_present(), blk_root_name()), so both writers put the
         // same bytes in the same buffer. A guard would narrow a window
         // with nothing different on either side of it. That stops being
         // true the moment a reason depends on who is asking.
         static char why[SETTING_ABI_DESC_MAX];
-        const char *dev = blk_name();
+        const char *dev = blk_root_name();
         if (dev && k_strcmp(dev, "none") != 0) {
             k_snprintf(why, sizeof why,
                        "This machine has no ATA disk -- storage is on %s, "
