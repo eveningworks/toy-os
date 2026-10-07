@@ -1362,7 +1362,7 @@ whether or not ownership was granted.
 
 **THE ORDERING IS THE DECISION, not the code.** Linux does this in a PCI
 quirk that runs BEFORE the driver binds. Here the capability walk used
-to run AFTER `reset_controller()`, so the reset -- a write to the
+to run AFTER `xhci_reset_controller()`, so the reset -- a write to the
 operational registers -- happened while the firmware still owned the
 device, before anything had even discovered that it did. The walk moved
 ahead of the reset. A handoff performed after the first write is not a
@@ -3218,3 +3218,18 @@ can tell it missed some. **Ids are `userland/lib/udevice.c`'s**
 device the way the reader does, which is why `usb_device_id()` exists and
 why usb-audio's device id moved off the root port (a card behind a hub
 used to carry an id no list contained).
+
+## The xHCI driver is split as Linux's is: bring-up, transfers, root ports
+
+**2026-10-07.** `xhci.c` had reached about 3,440 lines -- the largest file
+in the tree -- with the root ports alone over a thousand, much of it a
+recovery ladder measured on the laptops. Linux divides
+`drivers/usb/host/` into `xhci.c` (bring-up), `xhci-ring.c` (commands,
+transfers, events), `xhci-mem.c` and `xhci-hub.c` (the root hub's
+ports); this driver already had a ring file, so it took the same seams:
+`xhci.c`, `xhci_xfer.c`, `xhci_port.c`, over `xhci_internal.h`.
+**Moved, not changed** -- checked in QEMU (`usb_test.py`) and on the
+ASUS, whose network adapter is itself on USB. The next step Linux's
+shape implies -- root ports driven by the hub driver through a virtual
+root hub -- is on the roadmap and waits for both laptops, because it
+does change behaviour.

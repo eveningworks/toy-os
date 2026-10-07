@@ -6,7 +6,7 @@ Every headline below is a real rule. The BODY is one file away, in the
 This is the companion to CLAUDE.md, not a part of it. CLAUDE.md is the
 always-loaded context and carries only the conventions that fire
 UNANNOUNCED -- the ones a session trips before it knows to look anything
-up. Everything else is here, because 437 headlines in always-loaded
+up. Everything else is here, because several hundred headlines in always-loaded
 context are carried rather than read. **Read this file before editing an
 area**, ahead of the area file itself: skim for a headline that tells you
 something you did not know, then open the area file for its body.
@@ -62,6 +62,8 @@ whenever a headline here tells you something you did not already know.
   `pci_bar_mem_size()`**
 - **USB IS xHCI ONLY, ITS PORTS WAIT ON PED RATHER THAN PRC, AND EVERY
   DMA OBJECT IS ITS OWN FRAME**
+- **THE xHCI DRIVER IS FOUR FILES, AND WHAT CROSSES THEM IS
+  `xhci_`-PREFIXED**
 - **INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event
   is evdev -- including `/usr/share/kbs`, so only the PS/2 driver ever sees a
   scancode**
@@ -457,6 +459,10 @@ whenever a headline here tells you something you did not already know.
   `open_seq`**
 - **A CLOSE WHILE AN APP IS ASKING SOMETHING IS IGNORED, AND A SINGLE
   CLOSE BRINGS A MODAL FORWARD**
+- **A MAIN WINDOW AND A DIALOG WINDOW ARE ONE KIND OF TOPLEVEL -- A
+  FRAME OR INPUT PATH IS WRITTEN ONCE, IN `ui/uapp_window.c`**
+- **A TERMINAL IS `ui/uvterm.h` -- the GUI Terminal hosts one per tab and
+  never touches a grid itself**
 - **AN APP'S OPTIONS WINDOW IS `ui/uui_prefs.h`, AND ITS OPTIONS FILE
   IS ONE `lib/uprefs.h` TABLE**
 - **A POPUP CHOOSES ON THE RELEASE, AND ONE CLOSED UNDER A PRESS OWES

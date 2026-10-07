@@ -10813,3 +10813,21 @@ kept tab whose program has exited is resized with the rest, since its
 grid is its own. **No widget ops table yet**: nothing but Terminal hosts
 a terminal, and an ops table no host drives would be untested; a second
 host wraps the engine in one.
+
+## A main window and a dialog window are one toplevel in uapp
+
+**2026-10-07.** `uapp_window_open()` added dialog windows beside the
+main window, and each kind got its own router, focus, dirty flag and
+cursor, and its own copy of the frame (`flush()` / `dlg_flush()`) and
+of input routing (`dispatch()` / `dlg_dispatch()`). The copies drifted:
+only the main window's frame presented popups, so a dropdown in
+Screenshot's Options over an idle overlay never showed (0572ecce),
+while Terminal's looked fine only because its caret kept redrawing the
+main window. Qt makes a QDialog a top-level QWidget like any other, and
+GTK keeps a list of equal GtkWindows -- one kind of thing, not two.
+So `struct uapp_top` is what both are, and one `top_paint()` and one set
+of `top_*` input helpers serve both; the main window's extras (its draw
+hooks, button group, drag and drop, raw pointer callbacks) WRAP them.
+**No API changed** -- `uapp_window_*` and `uapp_*` are as they were --
+which is why it could land under every app at once. The file then split
+along the seams this exposed (`docs/uapp-design.md`).

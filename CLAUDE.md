@@ -273,7 +273,7 @@ look fine.
 
 ## Conventions indexed in `docs/conventions/INDEX.md`
 
-**Everything above is what fires UNANNOUNCED. The other ~436 conventions
+**Everything above is what fires UNANNOUNCED. The other conventions -- several hundred --
 are indexed by headline in `docs/conventions/INDEX.md`, one hop away** --
 `kernel.md`, `gui.md`, `storage.md`, `shell.md` and `build.md` carry the
 bodies, and the index names every rule in all five.

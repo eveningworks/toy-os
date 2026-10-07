@@ -1099,6 +1099,22 @@ from PS/2** because QEMU routes keystrokes to it -- which is why the
 axis is off by default, and what makes `tools/usb_test.py`
 self-controlling.
 
+## THE xHCI DRIVER IS FOUR FILES, AND WHAT CROSSES THEM IS `xhci_`-PREFIXED
+
+`xhci.c` finds and brings up the controller (discovery, the legacy
+handoff, the Intel port mux, rings, init, `lsusb`'s dump);
+`xhci_xfer.c` is contexts, the command ring, transfers, endpoints and
+the event ring that completes them (Linux's `xhci-ring.c`);
+`xhci_port.c` is the root ports -- socket pairing, resets, the recovery
+ladder, attach and the deferred work (Linux's `xhci-hub.c`);
+`xhci_ring.c` is one TRB ring as a data structure. They share
+`kernel/drivers/usb/xhci_internal.h`, which nothing outside the driver
+includes. **A function or global that crosses files is named `xhci_*`**
+(the controller state is `g_xhci`): the kernel is one link, and a
+generic name like `reset_port` made global is a collision waiting for
+the next driver. Root-port behaviour goes in `xhci_port.c`, never back
+into `xhci.c` (acedf0e8).
+
 ## A STATE TRANSITION THAT ENDS IN A SWITCH MUST NOT BE PREEMPTIBLE
 
 The rotation rewrites the state of whatever process is CURRENT: it saves
@@ -2616,7 +2632,7 @@ actually protects the driver, and it runs whether or not ownership was
 granted. Linux's `quirk_usb_handoff_xhci`, in its shape.
 
 **THE ORDERING IS THE RULE.** The capability walk runs BEFORE
-`reset_controller()`, because the walk is where the capability is found
+`xhci_reset_controller()`, because the walk is where the capability is found
 and the reset is a write to the operational registers. A handoff
 performed after the first write is not a handoff — and that is exactly
 how this was wrong: the walk used to run after the reset, so the driver

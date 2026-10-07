@@ -479,11 +479,19 @@ rule -- and worth applying the same way, by having the server refuse a
 hint that contradicts itself (a minimum larger than
 `WIN_CLIENT_MAX_*`) rather than silently clamping.
 
-**One process, one window, still.** `uapp` handles a single window,
-because that is what every client does today and what `WIN_CLIENT_MAX`
-being untested at >1 means (M41 lists it). The handle is opaque
-specifically so a future `uapp_window_create()` can appear without the
-single-window API changing shape.
+**One process, one window -- SUPERSEDED.** The first draft handled a
+single window and kept the handle opaque so a second could appear
+without the API changing shape. It did: `uapp_window_open()` opens a
+DIALOG WINDOW, a second toplevel with its own widgets, layout and focus
+(Options windows, the file chooser, "Run backup.sh?"). **Since
+2026-10-07 the main window and a dialog window are ONE KIND OF
+TOPLEVEL** (`struct uapp_top`, `ui/uapp_window.c`): one frame path and
+one input path, with what only the main window has -- its draw hooks,
+its button group, drag and drop -- wrapped around them. Two copies had
+drifted: popups were presented on the main window's frame only, and a
+dropdown in a dialog over an idle app never showed (0572ecce). Qt's
+QDialog is a top-level QWidget like the main window; GTK keeps a list of
+equal GtkWindows.
 
 **`uapp` is ring-3 only; `gui_app` stays as it is.** Confirmed with the
 maintainer. No attempt to unify the two toolkits. `apps/ui/` and
@@ -913,6 +921,17 @@ both are reachable when something does.
   *refusing* politely, which is not the same problem as one that never
   answers.
 
+## Where it lives now
+
+`ui/uapp.c` is the app -- lifecycle, the event pump, the main window's
+events and frame, the compositor channel, posts, children.
+`ui/uapp_window.c` is the toplevel both kinds of window are: input
+routing, painting, telling the app, and dialog windows.
+`ui/uapp_surface.c` owns a surface's buffers, presenting them, and popup
+surfaces; `ui/uapp_log.c` the layout log and the widget map `gui probe`
+reads. They share `ui/uapp_internal.h`, all of it hidden from
+`libuapp.so`'s exports (b8051ab6).
+
 ## Revision history
 
 - **First draft.** The library, the callbacks, the protocol additions,
@@ -928,3 +947,6 @@ both are reachable when something does.
   and settles the GUI-string question as "no type, formalise the
   chokepoints". The composition rule survives in a narrower form:
   `uapp` composes with `uui` rather than absorbing it.
+- **2026-10-07.** "One process, one window" superseded by dialog windows
+  and then by one toplevel type for both (0fa732bb); `uapp.c` split by
+  concern (b8051ab6). See "Where it lives now".

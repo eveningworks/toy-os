@@ -3060,3 +3060,31 @@ several WM pumps, so a GUI check for "a press and a release drained in
 ONE pass keep their own positions" passed with either layer broken and
 was dropped; the kernel half is a KTEST instead. Ask whether the
 fixture can produce the state at all before trusting a green.
+
+## Four ways today's GUI checks could have lied (2026-10-07)
+
+- **A POPUP THE COMPOSITOR LISTS IS NOT A POPUP THAT WAS DRAWN.** `gui
+  windows` shows a popup surface from its creation, presented or not;
+  Screenshot's dropdowns "opened" in every log while nothing reached the
+  screen. Assert the popup's PIXELS against the window beside it
+  (`screenshot_options_test.py`'s `popup_drawn()`).
+- **A LAYOUT BLOCK IS LOGGED ONLY WHEN IT CHANGES**, so a second
+  identical window logs nothing new: clearing the log before waiting for
+  it leaves a test with no rects to click. Read the LAST block instead
+  (`launch_test.py`'s `rect()`).
+- **A FAILED STEP'S LEFTOVER WINDOW TAKES THE NEXT STEP'S KEY.** A card
+  left open by a red step had Run in Terminal as its default button, and
+  the next step's Shift+Enter pressed it -- a broken Shift+Enter passed.
+  Close stray windows at the top of every step; the positive control is
+  what showed it.
+- **ANY EDIT TO A SOURCE FILE VOIDS A RUNNING SUITE**, a comment
+  included: `iso_guard` sees the source newer than the image and every
+  tool refuses to boot (96 "stale image" reds). The PreToolUse hook only
+  sees Edit/Write; a `python3 -c` rewrite slips past it. Docs only until
+  the suite ends.
+
+And one about fixtures: **a fixture that stands for a KIND of file must
+still be that kind after the change under test.** `filemanager_test.py`'s
+"binary" was `/bin/hello` -- a program, so once programs got Run rows its
+menu stopped being the one-row-shorter control. A library is a binary
+that is not a program.

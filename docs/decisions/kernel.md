@@ -8108,7 +8108,7 @@ it properly.
 **A tick counter only advances on a timer interrupt.** Anywhere that
 interrupt cannot land, every one of those loops is infinite. That is
 not hypothetical: it hung the machine when an xHCI recovery path called
-`power_ports()` -- whose spin was the naive kind -- from a syscall
+`xhci_power_ports()` -- whose spin was the naive kind -- from a syscall
 (docs/bugs.md). The failure has no symptom other than the machine
 stopping, which is the worst shape a wait can have.
 

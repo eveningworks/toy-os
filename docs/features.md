@@ -228,6 +228,15 @@ one you have. A launcher page shows the data's own title picture, Start
 and the keys, and **F1 in a level** puts the same key sheet over the
 paused game; F1 again is DOOM's own help.
 
+**Programs and scripts run from the File Manager**, KDE's way: a
+double-click on an app opens it, and on any other program or `#!`
+script asks first -- "Run backup.sh?" with the script's first lines and
+Run in Terminal, Run, Open in Notepad or Cancel, and "Always do this".
+A file without an execute bit is offered "Allow running, and run". The
+Terminal runs it in a tab of its own that stays open with the exit
+status (`uterm -e`); Shift+Enter skips the question; the desktop and
+`open` ask the same way, and File Manager > Options keeps the choice.
+
 **Notepad** is a tabbed editor in Kate's and Windows 11 Notepad's shape:
 a colour-coded command bar, a line-number gutter with the caret's line
 tinted, find with every hit highlighted, a live Markdown preview beside

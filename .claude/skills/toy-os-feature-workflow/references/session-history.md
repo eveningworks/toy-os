@@ -665,3 +665,21 @@ false -- a killed process reports -1. A wrong aside made the right option
 look useless, the wrong one was chosen, and it broke *Exit to shell*.
 **Check the claim you attach to an option, not just the options.**
 
+
+**2026-10-07 (run programs from the File Manager; a refactor round).**
+Feature: the "Run backup.sh?" card (`lib/ulaunch`, `ui/uui_runask`,
+`/bin/wm/system/runask`, `uterm -e`), chosen from a mockup canvas
+(D1, apps run and the rest ask, all extras, shared). Bug: dropdowns in
+dialog windows never shown, because only the main window presented
+popups (0572ecce). Then the maintainer asked what to refactor, then
+asked for the MODULAR version of each rather than file moves, and all
+of it landed except one: `uopen_decide()`; declared options
+(`lib/uprefs` + bound `uui_prefs` rows, all four Options windows);
+one toplevel type in uapp and its split; the kernel shell's chains;
+Terminal's engine as `ui/uvterm`; the xHCI split. **The xHCI virtual
+root hub waits** (roadmap): it changes root-port behaviour, the Lenovo
+was down, and on the ASUS USB is the network link. Lesson: "should we
+refactor?" was answered with file sizes and duplication counts; the
+better answer came on the second question -- which seams carry a REAL
+bug class (two present paths, a copied options cycle, two port state
+machines) -- so ask that one first.

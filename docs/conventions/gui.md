@@ -780,7 +780,7 @@ this the obvious way), not from how much history it accumulated.
   `::-webkit-scrollbar-thumb`, GTK's CSS, the radius a Qt style passes
   its painter. **The arc is BLENDED against what is already on the
   surface**, so a caller must paint under the bar in the same pass --
-  every one does (`uapp.c` clears the window, and each container fills
+  every one does (`uapp_window.c`'s `top_paint()` clears the window, and each container fills
   its own rect first), and blending against a stale back buffer would
   darken the corner a little every frame. Only the drawing knows about
   the radius: `uui_scrollbar_hit()` and the drag maths still work on the
@@ -1276,7 +1276,7 @@ this the obvious way), not from how much history it accumulated.
   content area rather than send it, naming the coordinate
   (`settings_test.py`'s `click()`).
 - **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**
-  `uapp.c`'s order is "clear, then the APP's own painting, then the
+  `uapp_window.c`'s `top_paint()` order is "clear, then the APP's own painting, then the
   widgets, then overlays", and it is that way deliberately: an app whose
   first line clears the surface -- the natural thing to write -- can
   then only ever wipe its own backdrop, which is a bug that shipped
@@ -1721,6 +1721,25 @@ this the obvious way), not from how much history it accumulated.
   above). Wayland's
   `xdg_toplevel.close` is the same contract: a request, the client's to
   answer.
+- **A MAIN WINDOW AND A DIALOG WINDOW ARE ONE KIND OF TOPLEVEL --
+  A FRAME OR INPUT PATH IS WRITTEN ONCE, IN `ui/uapp_window.c`.**
+  `struct uapp_top` is what both are: the router, the focus ring, the
+  dirty flag, the cursor and an ops table (tell, key). `top_paint()` and
+  `top_key()`/`top_press()`/`top_motion()`/`top_release()`/`top_wheel()`
+  serve both; what only the main window has -- `on_draw`, the button
+  group, drag and drop, `on_press` -- is wrapped AROUND them in
+  `uapp.c`, never copied beside them. A second copy is how a dialog's
+  dropdown went unshown (0572ecce). uapp's files share
+  `ui/uapp_internal.h`, all of it HIDDEN visibility, so `libuapp.so`
+  exports only the `uapp_*` API (`docs/uapp-design.md`, "Where it lives
+  now").
+- **A TERMINAL IS `ui/uvterm.h` -- the GUI Terminal hosts one per tab
+  and never touches a grid itself.** Each terminal owns its grid,
+  scrollback, alternate screen, parser, pty, reader thread and
+  selection, draws its rows (and, separately, its caret), and encodes
+  keys; `terminal.c` is tabs, menus, find, the Session panel, the screen
+  effect and sizing. A new terminal behaviour goes in the engine, so a
+  second host gets it (VteTerminal's line; `docs/decisions/gui.md`).
 - **AN APP'S OPTIONS WINDOW IS `ui/uui_prefs.h`, AND ITS OPTIONS FILE
   IS ONE `lib/uprefs.h` TABLE.** A sidebar of pages, "Caption: control"
   rows, Defaults / OK / Cancel, modal, nothing applied until OK. The file
@@ -3932,7 +3951,7 @@ real scanout hardware does. Do not write a pixel assertion for one.
   the prefix**: Task Manager calls it on every refresh, so a resetting
   version drops the second letter of anything typed across a tick.
 - **A WIDGET THAT TAKES KEYS STILL GETS NONE UNTIL THE APP ROUTES
-  THEM.** `uapp.c` offers a key to `uapp_desc.focus` and then to
+  THEM.** `uapp_window.c`'s `top_key()` offers a key to `uapp_desc.focus` and then to
   `uapp_desc.on_key`; an app declaring NEITHER -- as Task Manager did
   from the day it was written -- reaches no widget's `key` op at all,
   and nothing says so. Its table's arrows, Home/End, paging and
@@ -5423,7 +5442,7 @@ it with a fixture stored out of screen order.
 ## A BUTTON'S CLICK IS `on_action`; `on_widget` NEVER CARRIES A COMMAND, AND A HOVER REACHES IT ONLY IF ASKED
 
 `uapp` tells an app about its widgets through two callbacks, and keeps
-them apart (`ui/uapp.c`'s `tell_app()`). **A lone `uui_button`'s
+them apart (`ui/uapp_window.c`'s `tell_app()`). **A lone `uui_button`'s
 COMMIT** -- released over itself while armed, or Space/Enter on it --
 arrives as `on_action(a, code)` with the button's code; its press, hover
 and drag-off reach the app not at all. **Every other widget's change**
