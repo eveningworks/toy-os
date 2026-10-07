@@ -84,6 +84,85 @@ int resolve_path(const char *input, char *out) {
     return k_path_resolve(cwd, input, out, FS_PATH_MAX, &sc);
 }
 
+// ---- the builtins ----------------------------------------------------
+//
+// THE NAMES THIS SHELL HANDLES ITSELF, in one table that dispatch(),
+// tab completion and the drift KTEST all read -- bash's `struct builtin`
+// and busybox's applet table. A command that is a /bin program is NOT
+// here: PATH finds it, and a builtin always wins over PATH, so a row
+// here hides a program of the same name.
+
+static void b_clear(const char *a)     { (void)a; vga_clear(); }
+static void b_beep(const char *a)      { (void)a; cmd_beep(); }
+static void b_pwd(const char *a)       { (void)a; cmd_pwd(); }
+static void b_path(const char *a)      { (void)a; cmd_path(); }
+static void b_apps(const char *a)      { (void)a; cmd_apps(); }
+static void b_fputest(const char *a)   { (void)a; cmd_fputest(); }
+static void b_history(const char *a)   { (void)a; cmd_history(); }
+static void b_schedtest(const char *a) { (void)a; scheduler_demo_run(); }
+static void b_write(const char *a)     { cmd_write_or_append(a, 0); }
+static void b_append(const char *a)    { cmd_write_or_append(a, 1); }
+static void b_gui(const char *a)       { (void)a; app_run("gui"); }
+
+static void b_gui3(const char *a) {
+    (void)a;
+    app_run("gui3");
+    vga_clear();
+    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    vga_write("Back from GUI mode.\n");
+    vga_set_color(shell_fg, VGA_BLACK);
+}
+
+static void b_ring3test(const char *a) {
+    (void)a;
+    vga_write("Running ring-3 isolation test. This does NOT return --\n");
+    vga_write("see the diagnostic output for what it proves.\n\n");
+    ring3_test_run();
+}
+
+const struct shell_builtin SHELL_BUILTINS[] = {
+    { "help",      cmd_help },
+    { "clear",     b_clear },
+    { "beep",      b_beep },
+    { "hwcursor",  cmd_hwcursor },
+    { "gfxbench",  cmd_gfxbench },
+    { "stress",    cmd_stress },
+    { "dmatest",   cmd_dmatest },
+    { "steptest",  cmd_steptest },
+    { "fsformat",  cmd_fsformat },
+    { "ktest",     cmd_ktest },
+    { "debug",     cmd_debug },
+    { "color",     cmd_color },
+    { "cd",        cmd_cd },
+    { "pwd",       b_pwd },
+    { "path",      b_path },
+    // Not a name any ordinary command has -- shell_rescue.c says why the
+    // kernel's file-command copies live behind one name that can never
+    // shadow /bin.
+    { "rescue",    cmd_rescue },
+    { "write",     b_write },
+    { "append",    b_append },
+    { "gui",       b_gui },
+    { "gui3",      b_gui3 },
+    { "apps",      b_apps },
+    { "run",       cmd_run },
+    { "ring3test", b_ring3test },
+    { "schedtest", b_schedtest },
+    { "fputest",   b_fputest },
+    { "cursor",    cmd_cursor },
+    { "fontsize",  cmd_fontsize },
+    { "fontface",  cmd_fontface },
+    { "keyboard",  cmd_keyboard },
+    { "history",   b_history },
+};
+const int SHELL_BUILTIN_COUNT = (int)(sizeof SHELL_BUILTINS / sizeof SHELL_BUILTINS[0]);
+
+const struct shell_builtin *shell_builtin_find(const char *name) {
+    for (int i = 0; i < SHELL_BUILTIN_COUNT; i++)
+        if (k_strcmp(SHELL_BUILTINS[i].name, name) == 0) return &SHELL_BUILTINS[i];
+    return 0;
+}
+
 static void dispatch(char *line) {
     // split first word from the rest
     char *cmd = line;
@@ -108,102 +187,17 @@ static void dispatch(char *line) {
         args = 0;
     }
 
-    // dispatch-ok: KNOWN, and the last big chain in the tree -- see
-    // docs/roadmap.md's "The shell's command dispatch is a long
-    // if/else chain". It is waived rather than converted because the
-    // conversion is entangled with moving the shell to ring 3: what is
-    // left here after the file commands became /bin programs is
-    // overwhelmingly kernel introspection (meminfo, kstack, heap debug,
-    // ktest), so the table they want is a /proc-shaped one, not a
-    // registry of function pointers. Converting first would build the
-    // wrong table.
-    if (k_strlen(cmd) == 0) {
-        return;
-    } else if (k_strcmp(cmd, "help") == 0) {
-        cmd_help(args);
-    } else if (k_strcmp(cmd, "clear") == 0) {
-        vga_clear();
-    } else if (k_strcmp(cmd, "beep") == 0) {
-        cmd_beep();
-    } else if (k_strcmp(cmd, "hwcursor") == 0) {
-        cmd_hwcursor(args ? args : "");
-    } else if (k_strcmp(cmd, "gfxbench") == 0) {
-        cmd_gfxbench(args ? args : "");
-    } else if (k_strcmp(cmd, "stress") == 0) {
-        cmd_stress(args ? args : "");
-    } else if (k_strcmp(cmd, "dmatest") == 0) {
-        cmd_dmatest(args ? args : "");
-    } else if (k_strcmp(cmd, "steptest") == 0) {
-        cmd_steptest(args ? args : "");
-    } else if (k_strcmp(cmd, "fsformat") == 0) {
-        cmd_fsformat(args ? args : "");
-    } else if (k_strcmp(cmd, "ktest") == 0) {
-        cmd_ktest(args ? args : "");
-    } else if (k_strcmp(cmd, "debug") == 0) {
-        cmd_debug(args ? args : "");
-    } else if (k_strcmp(cmd, "color") == 0) {
-        cmd_color(args ? args : "");
-    } else if (k_strcmp(cmd, "cd") == 0) {
-        cmd_cd(args ? args : "");
-    } else if (k_strcmp(cmd, "pwd") == 0) {
-        cmd_pwd();
-    } else if (k_strcmp(cmd, "path") == 0) {
-        cmd_path();
-    } else if (k_strcmp(cmd, "rescue") == 0) {
-        // Deliberately BEFORE the PATH resolver and deliberately not a
-        // name any ordinary command has -- see shell_rescue.c on why
-        // the kernel's file-command copies live behind one name that
-        // can never shadow /bin.
-        cmd_rescue(args ? args : "");
-    } else if (k_strcmp(cmd, "write") == 0) {
-        cmd_write_or_append(args ? args : "", 0);
-    } else if (k_strcmp(cmd, "append") == 0) {
-        cmd_write_or_append(args ? args : "", 1);
-    } else if (k_strcmp(cmd, "gui") == 0) {
-        app_run("gui"); // shortcut for `run gui`
-    } else if (k_strcmp(cmd, "gui3") == 0) {
-        app_run("gui3"); // the ring-3 desktop -- see apps/gui3.c
-        vga_clear();
-        vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
-        vga_write("Back from GUI mode.\n");
-        vga_set_color(shell_fg, VGA_BLACK);
-    } else if (k_strcmp(cmd, "apps") == 0) {
-        cmd_apps();
-    } else if (k_strcmp(cmd, "run") == 0) {
-        cmd_run(args ? args : "");
-    } else if (k_strcmp(cmd, "ring3test") == 0) {
-        vga_write("Running ring-3 isolation test. This does NOT return --\n");
-        vga_write("see the diagnostic output for what it proves.\n\n");
-        ring3_test_run();
-    } else if (k_strcmp(cmd, "schedtest") == 0) {
-        scheduler_demo_run();
-    } else if (k_strcmp(cmd, "fputest") == 0) {
-        cmd_fputest();
-    } else if (k_strcmp(cmd, "cursor") == 0) {
-        cmd_cursor(args ? args : "");
-    } else if (k_strcmp(cmd, "fontsize") == 0) {
-        cmd_fontsize(args ? args : "");
-    } else if (k_strcmp(cmd, "fontface") == 0) {
-        cmd_fontface(args ? args : "");
-    } else if (k_strcmp(cmd, "keyboard") == 0) {
-        cmd_keyboard(args ? args : "");
-    } else if (k_strcmp(cmd, "history") == 0) {
-        cmd_history();
+    if (k_strlen(cmd) == 0) return;
+    const struct shell_builtin *b = shell_builtin_find(cmd);
+    if (b) {
+        b->fn(args ? args : "");
     } else if (shell_exec_name(cmd, args, 0)) {
         // Not a builtin -- a console app from apps.c's registry, or an
         // executable found by searching PATH (shell_path.c). This is
         // what makes `nx_test` work with no `run` prefix; `run` itself
         // is still a command, and goes through the same resolver so the
-        // two can't diverge. Builtins are checked first (every branch
-        // above this one) -- see docs/decisions.md for why.
-    } else if (completion_is_known_command(cmd)) {
-        // Listed in apps/completion.c's table but not handled above --
-        // the two lists have drifted. Say so specifically rather than
-        // claiming the command doesn't exist, since tab-completion just
-        // offered it. See completion.h on why the table is separate.
-        vga_write("Internal error: '");
-        vga_write(cmd);
-        vga_write("' is tab-completable but has no dispatch case.\n");
+        // two can't diverge. Builtins are checked first (the table
+        // above) -- see docs/decisions.md for why.
     } else {
         vga_write("Unknown command: ");
         vga_write(cmd);

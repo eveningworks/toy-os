@@ -1314,7 +1314,7 @@ this to be better?".
 - [ ] A FAT32 `disk_usage()` scans the whole FAT the first time anything asks, inside the VFS preemption guard
 - [ ] `blk_part_create()`'s pool needs one thunk set per slot, because a `block_device` op takes no context argument
 - [ ] A ramfs root is EMPTY -- no `/bin`, so a diskless boot has a filesystem and no programs
-- [ ] The shell's command dispatch is a long `if/else` chain, and the fix is not the obvious one
+- [x] ~~The shell's command dispatch is a long `if/else` chain, and the fix is not the obvious one~~ DONE 2026-10-07 -- `SHELL_BUILTINS`
 - [ ] Settings: a ring-3 settings daemon (stage 2)
 - [x] ~~The ring-3 WM busy-waits instead of sleeping~~ DONE 2026-08-29 -- `SYS_WAIT_READY`, a wait with a deadline that consumes nothing
 - [ ] There is no `uui_grid` widget until a second grid-shaped app (beside Minesweeper) wants one

@@ -437,8 +437,8 @@ def shell_commands():
     The /bin list comes from the SEED TREE rather than from
     userland/bin/*.c, because the Makefile renames three of them on the
     way in (tests/echo -> echo_test and friends) and the name on disk is
-    the name people type. The builtins come from dispatch() itself,
-    which is the only authority on what the shell handles.
+    the name people type. The builtins come from SHELL_BUILTINS, the
+    table dispatch() runs, which is the only authority on what it handles.
 
     THERE ARE TWO SHELLS AND BOTH ARE ASKED. This used to read only
     apps/shell.c, which was right when the kernel shell was the only one
@@ -453,7 +453,9 @@ def shell_commands():
         for n in os.listdir(seed_bin):
             if os.path.isfile(os.path.join(seed_bin, n)):
                 names.add(n)
-    for m in re.finditer(r'k_strcmp\(cmd, "([a-z0-9_]+)"\)', read("apps/shell.c")):
+    # The kernel shell's builtins are one table, SHELL_BUILTINS.
+    table = re.search(r'SHELL_BUILTINS\[\] = \{(.*?)\n\};', read("apps/shell.c"), re.S)
+    for m in re.finditer(r'\{ "([a-z0-9_]+)",', table.group(1) if table else ""):
         names.add(m.group(1))
     for m in re.finditer(r'seq\(cmd, "([a-z0-9_]+)"\)', read("userland/lib/tosh.c")):
         names.add(m.group(1))

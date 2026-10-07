@@ -11,36 +11,11 @@
 #include "font_faces.h" // the face list `fontface` completes against
 #include "shell_complete.h"
 #include "shell.h"
+#include "shell_internal.h" // SHELL_BUILTINS
 #include "apps.h"
 #include "kapi.h"
 #include "debugflags.h"
 #include "tz.h"
-
-// The names dispatch() handles ITSELF. Deliberately NOT a list of
-// everything you can type: `rm`, `cat`, `touch` and friends are ring-3
-// programs now, and complete_executables() below finds them by listing
-// PATH -- which is also what keeps this table honest, since a name here
-// that dispatch() does not handle is reported as an internal error.
-const char *const COMPLETION_COMMANDS[] = {
-    "append", "apps", "beep", "cd", "clear", "color",
-    // `dmesg` was here until it became /bin/dmesg and this table's own
-    // guard started reporting it: typing it hit "is tab-completable but
-    // has no dispatch case". complete_executables() offers the real one
-    // off PATH, which is the point of the split.
-    "cursor", "debug", "dmatest", "edit", "fontface", "fontsize",
-    "fputest", "fsformat", "gui", "help", "ktest", "history", "keyboard",
-    "nano", "pwd", "rescue",
-    "ring3test", "run", "schedtest", "steptest", "stress",
-    "path", "write",
-    0
-};
-
-int completion_is_known_command(const char *name) {
-    for (int i = 0; COMPLETION_COMMANDS[i]; i++) {
-        if (k_strcmp(COMPLETION_COMMANDS[i], name) == 0) return 1;
-    }
-    return 0;
-}
 
 // The colour names `color <name>` accepts. shell_sys.c's
 // color_from_name() is the authority on what they mean; this is the
@@ -171,13 +146,16 @@ static int shell_resolve(const char *in, char *out, int cap) {
     return shell_resolve_path(in, out);
 }
 
-// The console app registry: names that are neither builtins nor files,
-// which is a ring-0-only concept.
-static int shell_extra_count(void) { return app_registry_count; }
-static const char *shell_extra_name(int i) { return app_registry[i].name; }
+// The first-word names that are not files: the builtin table, then the
+// console app registry (a ring-0-only concept). Read from the table
+// dispatch() runs, so completion cannot offer a name it does not handle.
+static int shell_extra_count(void) { return SHELL_BUILTIN_COUNT + app_registry_count; }
+static const char *shell_extra_name(int i) {
+    return i < SHELL_BUILTIN_COUNT ? SHELL_BUILTINS[i].name
+                                   : app_registry[i - SHELL_BUILTIN_COUNT].name;
+}
 
 static const struct completion_env SHELL_ENV = {
-    .commands    = COMPLETION_COMMANDS,
     .extra_count = shell_extra_count,
     .extra_name  = shell_extra_name,
     .path_count  = shell_path_count,

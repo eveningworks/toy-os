@@ -66,7 +66,9 @@ def known_commands():
         p = os.path.join(REPO, rel)
         return open(p).read() if os.path.exists(p) else ""
 
-    for m in re.finditer(r'k_strcmp\(cmd, "([a-z0-9_]+)"\)', read("apps/shell.c")):
+    # The kernel shell's builtins are one table, SHELL_BUILTINS.
+    table = re.search(r'SHELL_BUILTINS\[\] = \{(.*?)\n\};', read("apps/shell.c"), re.S)
+    for m in re.finditer(r'\{ "([a-z0-9_]+)",', table.group(1) if table else ""):
         names.add(m.group(1))
     for m in re.finditer(r'seq\(cmd, "([a-z0-9_]+)"\)', read("userland/lib/tosh.c")):
         names.add(m.group(1))

@@ -25,6 +25,9 @@
 #include "ktest.h"
 #include "shell_complete.h"
 #include "string.h"
+#include "shell_internal.h" // SHELL_BUILTINS
+#include "fs.h"
+#include "kfmt.h"
 
 // ONE SHARED RESULT, NOT A LOCAL PER TEST. `struct completion_result`
 // is ~3.1 KB (48 candidates x 64 bytes plus the insert buffer), and the
@@ -140,4 +143,28 @@ KTEST("completion", "a prefix matching nothing yields nothing") {
     KTEST_ASSERT_EQ(g_r.count, 0);
     // And it must not hand back something that would edit the line.
     KTEST_ASSERT_EQ((int)k_strlen(g_r.insert), 0);
+}
+
+// ---- the builtin table -------------------------------------------------
+//
+// dispatch() and completion read ONE table (shell.c's SHELL_BUILTINS);
+// these keep the two promises that table makes.
+
+KTEST("completion", "every builtin is offered") {
+    for (int i = 0; i < SHELL_BUILTIN_COUNT; i++) {
+        const char *n = SHELL_BUILTINS[i].name;
+        completion_run(n, (int)k_strlen(n), &g_r);
+        KTEST_ASSERT(has(&g_r, n));
+    }
+}
+
+KTEST("completion", "no builtin hides a /bin program") {
+    // A builtin wins over PATH, so a row whose name /bin also has makes
+    // the program unreachable from this prompt -- the trap `rescue`
+    // exists to avoid for the kernel's file-command copies.
+    static char p[64];
+    for (int i = 0; i < SHELL_BUILTIN_COUNT; i++) {
+        k_snprintf(p, sizeof p, "/bin/%s", SHELL_BUILTINS[i].name);
+        KTEST_ASSERT(!fs_exists(p));
+    }
 }

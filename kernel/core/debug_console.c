@@ -133,7 +133,7 @@ static const struct vga_sink g_serial_sink = {
 // way to read keys back -- it would hang waiting for input this console
 // can't deliver.
 static const char *const DBG_BLOCKED_CMDS[] = {
-    "gui", "gui3", "ring3test", "schedtest", "edit", "nano",
+    "gui", "gui3", "ring3test", "schedtest", "edit",
 };
 
 static int dbg_is_blocked(const char *cmd) {

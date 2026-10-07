@@ -66,6 +66,16 @@ void cmd_path(void);
 // shell_rescue.c, which is also where the set of them is listed.
 void cmd_rescue(const char *args);
 
+// One builtin: the shell's own command, never a /bin program. `args` is
+// the rest of the line, "" when there is none -- never NULL.
+struct shell_builtin {
+    const char *name;
+    void (*fn)(const char *args);
+};
+extern const struct shell_builtin SHELL_BUILTINS[];  // shell.c
+extern const int SHELL_BUILTIN_COUNT;
+const struct shell_builtin *shell_builtin_find(const char *name);
+
 // Is `name` one of the commands `rescue` carries? dispatch() asks so
 // that a name whose /bin program is MISSING gets told where the kernel
 // copy is, rather than a flat "unknown command".
