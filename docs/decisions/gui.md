@@ -10241,6 +10241,21 @@ the window does, as Windows Notepad's Word wrap is remembered), and
 tabs to reopen live in `/var/lib/notepad/`, the options in `/etc`, the
 FHS's split between state and configuration.
 
+**Declared, not copied (2026-10-07).** Moving onto the shared window left
+each app writing the same cycle by hand -- a defaults function, a loader,
+a saver, `to_controls`/`from_controls` -- and Notepad's and Screenshot's
+loaders were already the same table copied. Options are now DECLARED:
+`lib/uprefs.h` is the table (KDE's KConfigXT generates the settings class
+from a `.kcfg`), and `uui_prefs`' bound rows edit the struct by offset
+(KConfigDialog binds widgets named `kcfg_<key>`; GTK has
+`g_settings_bind()`). **They stay in each app's own file, not the
+settings registry**: the registry is the SYSTEM's (`(namespace, name)`,
+a value seen by every process, `config`, System Settings), and an app's
+options are its own -- dconf holds both, but here that would put
+Notepad's tab width in a registry every process loads. The one reading
+that changed: a boolean reads `on`/`1`/`yes` and their opposites, since
+the File Manager wrote `1`/`0`, and every app now writes `on`/`off`.
+
 ## Disk Mark draws the run, and keeps every run
 
 CrystalDiskMark shows four numbers at the end. GNOME Disks draws

@@ -1721,17 +1721,23 @@ this the obvious way), not from how much history it accumulated.
   above). Wayland's
   `xdg_toplevel.close` is the same contract: a request, the client's to
   answer.
-- **AN APP'S OPTIONS WINDOW IS `ui/uui_prefs.h`.** A sidebar of pages,
-  "Caption: control" rows, Defaults / OK / Cancel, modal, nothing applied
-  until OK. The app declares its controls (ids below
-  `UUI_PREFS_ID_BASE`), fills them before `uui_prefs_open()` and reads
-  them back in `on_ok`; `on_action` is for its own buttons (Notepad's
-  Clear list). Checkboxes STACK, one row each with an empty caption --
-  two side by side ran off the window. Notepad uses it; Terminal
-  (`term_prefs.c`) and File Manager (`fm_options.c`) still hand-build the
-  same dialog and move onto it when next touched. A size for a
-  monospace face comes from `ui/umonofont.h`, shared by Terminal and
-  Notepad. `tools/notepad_options_test.py`.
+- **AN APP'S OPTIONS WINDOW IS `ui/uui_prefs.h`, AND ITS OPTIONS FILE
+  IS ONE `lib/uprefs.h` TABLE.** A sidebar of pages, "Caption: control"
+  rows, Defaults / OK / Cancel, modal, nothing applied until OK. The file
+  is a table -- key, struct field, type, range or words, default -- that
+  load, save and Defaults all walk, so they cannot disagree; an option
+  that is only a key is then one table row and one BOUND window row
+  (`uui_prefs_check`/`_choice`/`_number`, by `offsetof`), which the
+  window fills, resets and reads back itself, with a value map where a
+  segment is not the value ("On | Off" over `wrap=1`). Only what a table
+  cannot say stays the app's: a gallery, a chooser, a key bound in
+  another file, a size whose 0 means "the desktop's". KDE's KConfigXT
+  and GNOME's `g_settings_bind()` are the shape. Checkboxes STACK, one
+  row each with an empty caption -- two side by side ran off the window
+  -- except a bound one `uui_prefs_also_check()` puts beside its
+  partner. Notepad, Screenshot, Terminal and the File Manager all use
+  it. A size for a monospace face comes from `ui/umonofont.h`.
+  `tools/notepad_options_test.py`, `screenshot_options_test.py`.
 - **A POPUP CHOOSES ON THE RELEASE, AND ONE CLOSED UNDER A PRESS OWES
   THAT PRESS A RELEASE.** `uui_dropdown` arms a row on the press and
   picks it on the release (Windows', Qt's and GTK's combo boxes), which

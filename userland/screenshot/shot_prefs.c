@@ -4,6 +4,7 @@
 // (shot_conf.c), never kept here.
 #include "screenshot.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -11,7 +12,6 @@
 #include "ui/ulog.h"
 #include "ui/utheme.h"
 #include "ui/uui_button.h"
-#include "ui/uui_checkbox.h"
 #include "ui/uui_dropdown.h"
 #include "ui/uui_filedialog.h"
 #include "ui/uui_label.h"
@@ -46,9 +46,7 @@ static struct shot_conf g_edit;
 static void (*g_on_commit)(const struct shot_conf *next);
 static struct uapp *g_app;
 
-static struct uui_segmented g_start, g_format;
-static struct uui_checkbox g_lastreg, g_size, g_mag, g_shadow, g_pointer,
-                           g_card, g_copy, g_open, g_flash, g_ask;
+static struct uui_segmented g_format;
 static struct uui_dropdown g_delays, g_key[SHOT_KEYS];
 static struct uui_label g_folder;
 static struct uui_button g_browse;
@@ -56,6 +54,9 @@ static struct uui_nametpl g_name;
 static struct shot_vars g_sample;
 static char g_folder_text[SHOT_DIR_MAX + 48];
 static struct uui_filedialog g_chooser;
+
+// `start` is a mode or SHOT_START_LAST; the row shows "Last used" first.
+static const int START_VALUES[] = { SHOT_START_LAST, SHOT_MODE_REGION, SHOT_MODE_SCREEN, SHOT_MODE_WINDOW };
 
 static int delay_set_of(const int d[SHOT_DELAYS]) {
     for (int i = 0; i < DELAY_SET_COUNT; i++)
@@ -69,52 +70,33 @@ static void show_folder(const char *note) {
     uui_label_set_text(&g_folder, g_folder_text);
 }
 
+// The rows the window cannot bind: the timer's SETS, the keys (which live
+// in /etc/shortcuts.conf), the folder, the template and the format.
 static void to_controls(void) {
-    g_start.selected = g_edit.start == SHOT_START_LAST ? 0 : g_edit.start + 1;
-    g_lastreg.checked = g_edit.last_region;
-    g_size.checked = g_edit.size_label;
-    g_mag.checked = g_edit.magnifier;
-    g_shadow.checked = g_edit.shadow;
-    g_pointer.checked = g_edit.pointer;
     int ds = delay_set_of(g_edit.delays);
     uui_dropdown_set_selected(&g_delays, ds >= 0 ? ds : 0);
     int keys[SHOT_KEYS];
     shot_keys_get(keys);
     for (int i = 0; i < SHOT_KEYS; i++) uui_dropdown_set_selected(&g_key[i], keys[i]);
-    g_card.checked = g_edit.card;
-    g_copy.checked = g_edit.copy;
-    g_open.checked = g_edit.open;
-    g_flash.checked = g_edit.flash;
     show_folder(0);
     uui_textbox_set_text(&g_name.field, g_edit.name);
     g_format.selected = g_edit.png ? 1 : 0;
-    g_ask.checked = g_edit.ask;
 }
 
 static void from_controls(void) {
-    g_edit.start = g_start.selected <= 0 ? SHOT_START_LAST : g_start.selected - 1;
-    g_edit.last_region = g_lastreg.checked;
-    g_edit.size_label = g_size.checked;
-    g_edit.magnifier = g_mag.checked;
-    g_edit.shadow = g_shadow.checked;
-    g_edit.pointer = g_pointer.checked;
     int ds = uui_dropdown_selected(&g_delays);
     if (ds >= 0 && ds < DELAY_SET_COUNT && ds != delay_set_of(g_edit.delays))
         memcpy(g_edit.delays, DELAY_SETS[ds], sizeof g_edit.delays);
-    g_edit.card = g_card.checked;
-    g_edit.copy = g_copy.checked;
-    g_edit.open = g_open.checked;
-    g_edit.flash = g_flash.checked;
     // AN UNUSABLE TEMPLATE IS NOT SAVED: the field said so under itself,
     // and the name that works stays.
     if (uui_nametpl_valid(&g_name) && strlen(uui_nametpl_text(&g_name)) < sizeof g_edit.name)
         snprintf(g_edit.name, sizeof g_edit.name, "%s", uui_nametpl_text(&g_name));
     g_edit.png = g_format.selected == 1;
-    g_edit.ask = g_ask.checked;
 }
 
+static void edit_defaults(void *edit) { shot_conf_defaults(edit); }
+
 static void on_defaults(void) {
-    shot_conf_defaults(&g_edit);
     to_controls();
     // The keys' factory bindings: Print Screen opens the bar, Shift saves
     // the screen, Alt the window (lib/ushortcut_actions.c).
@@ -122,9 +104,7 @@ static void on_defaults(void) {
 }
 
 static void on_ok(void) {
-    struct shot_conf keep = g_edit;   // the pill's own state is not the dialog's
     from_controls();
-    g_edit.mode = keep.mode;
     int keys[SHOT_KEYS];
     for (int i = 0; i < SHOT_KEYS; i++) {
         int k = uui_dropdown_selected(&g_key[i]);
@@ -175,19 +155,7 @@ void shot_prefs_open(struct uapp *a, const struct shot_conf *c, int page,
     g_edit = *c;
     g_on_commit = on_commit;
 
-    uint32_t bg = UTHEME_WINDOW_BG, fg = UTHEME_TEXT;
-    uui_segmented_init(&g_start, START_OPTS, 4, 0);
     uui_segmented_init(&g_format, FORMAT_OPTS, 2, 0);
-    uui_checkbox_init(&g_lastreg, 0, 0, 0, "Start from the last region", bg, fg);
-    uui_checkbox_init(&g_size,    0, 0, 0, "Show the size beside the pointer", bg, fg);
-    uui_checkbox_init(&g_mag,     0, 0, 0, "Magnifier while dragging an edge", bg, fg);
-    uui_checkbox_init(&g_shadow,  0, 0, 0, "Include the shadow", bg, fg);
-    uui_checkbox_init(&g_pointer, 0, 0, 0, "In the picture", bg, fg);
-    uui_checkbox_init(&g_card,    0, 0, 0, "Show the card", bg, fg);
-    uui_checkbox_init(&g_copy,    0, 0, 0, "Copy to the clipboard", bg, fg);
-    uui_checkbox_init(&g_open,    0, 0, 0, "Open in Image Viewer", bg, fg);
-    uui_checkbox_init(&g_flash,   0, 0, 0, "Flash the screen", bg, fg);
-    uui_checkbox_init(&g_ask,     0, 0, 0, "Ask where to save it", bg, fg);
     uui_dropdown_init(&g_delays, 0, 0, 0, 0, DELAY_OPTS, DELAY_SET_COUNT);
     for (int i = 0; i < SHOT_KEYS; i++)
         uui_dropdown_init(&g_key[i], 0, 0, 0, 0, SHOT_KEY_LABEL, SHOT_KEY_CHOICES);
@@ -203,6 +171,8 @@ void shot_prefs_open(struct uapp *a, const struct shot_conf *c, int page,
         .pages = PAGE_ROWS,
         .page_count = SHOT_PAGES,
         .log_prefix = "options",
+        .edit = &g_edit,
+        .edit_defaults = edit_defaults,
         .on_defaults = on_defaults,
         .on_ok = on_ok,
         .on_widget = on_widget,
@@ -213,23 +183,25 @@ void shot_prefs_open(struct uapp *a, const struct shot_conf *c, int page,
     uui_prefs_row(SHOT_PAGE_CAPTURE, "Print Screen:", &uui_dropdown_ops, &g_key[0], OPT_KEY0, "key0", 0);
     uui_prefs_row(SHOT_PAGE_CAPTURE, "Shift+Print Screen:", &uui_dropdown_ops, &g_key[1], OPT_KEY1, "key1", 0);
     uui_prefs_row(SHOT_PAGE_CAPTURE, "Alt+Print Screen:", &uui_dropdown_ops, &g_key[2], OPT_KEY2, "key2", 0);
-    uui_prefs_row(SHOT_PAGE_CAPTURE, "Start in:", &uui_segmented_ops, &g_start, OPT_START, "start", 0);
-    uui_prefs_row(SHOT_PAGE_CAPTURE, "Region:", &uui_checkbox_ops, &g_lastreg, OPT_LASTREG, "lastregion", 0);
-    uui_prefs_row(SHOT_PAGE_CAPTURE, "", &uui_checkbox_ops, &g_size, OPT_SIZE, "sizelabel", 0);
-    uui_prefs_row(SHOT_PAGE_CAPTURE, "", &uui_checkbox_ops, &g_mag, OPT_MAG, "magnifier", 0);
-    uui_prefs_row(SHOT_PAGE_CAPTURE, "Window:", &uui_checkbox_ops, &g_shadow, OPT_SHADOW, "shadow", 0);
-    uui_prefs_row(SHOT_PAGE_CAPTURE, "Pointer:", &uui_checkbox_ops, &g_pointer, OPT_POINTER, "pointer", 0);
+#define F(field) offsetof(struct shot_conf, field)
+    uui_prefs_choice(SHOT_PAGE_CAPTURE, "Start in:", START_OPTS, START_VALUES, 4, F(start), "start");
+    uui_prefs_check(SHOT_PAGE_CAPTURE, "Region:", "Start from the last region", F(last_region), "lastregion");
+    uui_prefs_check(SHOT_PAGE_CAPTURE, "", "Show the size beside the pointer", F(size_label), "sizelabel");
+    uui_prefs_check(SHOT_PAGE_CAPTURE, "", "Magnifier while dragging an edge", F(magnifier), "magnifier");
+    uui_prefs_check(SHOT_PAGE_CAPTURE, "Window:", "Include the shadow", F(shadow), "shadow");
+    uui_prefs_check(SHOT_PAGE_CAPTURE, "Pointer:", "In the picture", F(pointer), "pointer");
     uui_prefs_row(SHOT_PAGE_CAPTURE, "Timer offers:", &uui_dropdown_ops, &g_delays, OPT_DELAYS, "delays", 0);
 
-    uui_prefs_row(SHOT_PAGE_AFTER, "After saving:", &uui_checkbox_ops, &g_card, OPT_CARD, "card", 0);
-    uui_prefs_row(SHOT_PAGE_AFTER, "", &uui_checkbox_ops, &g_copy, OPT_COPY, "copy", 0);
-    uui_prefs_row(SHOT_PAGE_AFTER, "", &uui_checkbox_ops, &g_open, OPT_OPEN, "open", 0);
-    uui_prefs_row(SHOT_PAGE_AFTER, "", &uui_checkbox_ops, &g_flash, OPT_FLASH, "flash", 0);
+    uui_prefs_check(SHOT_PAGE_AFTER, "After saving:", "Show the card", F(card), "card");
+    uui_prefs_check(SHOT_PAGE_AFTER, "", "Copy to the clipboard", F(copy), "copy");
+    uui_prefs_check(SHOT_PAGE_AFTER, "", "Open in Image Viewer", F(open), "open");
+    uui_prefs_check(SHOT_PAGE_AFTER, "", "Flash the screen", F(flash), "flash");
 
     r = uui_prefs_row(SHOT_PAGE_SAVING, "Folder:", &uui_label_ops, &g_folder, OPT_FOLDER, "folder", UUI_FILL_W);
     uui_prefs_also(r, &uui_button_ops, &g_browse, OPT_BROWSE, "browse");
     uui_prefs_row(SHOT_PAGE_SAVING, "File name:", &uui_nametpl_ops, &g_name, OPT_NAME, "name", UUI_FILL_W);
     uui_prefs_row(SHOT_PAGE_SAVING, "Format:", &uui_segmented_ops, &g_format, OPT_FORMAT, "format", 0);
-    uui_prefs_row(SHOT_PAGE_SAVING, "Each capture:", &uui_checkbox_ops, &g_ask, OPT_ASK, "ask", 0);
+    uui_prefs_check(SHOT_PAGE_SAVING, "Each capture:", "Ask where to save it", F(ask), "ask");
+#undef F
     if (!uui_prefs_open(a)) ulog("screenshot: could not open Options\n");
 }

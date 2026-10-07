@@ -11,6 +11,7 @@
 #include "ansi.h"        // ansi_color(), which is the ANSI -> VGA permutation
 #include "lib/dirsort.h"
 #include "lib/uconf.h"
+#include "lib/uprefs.h"
 #include "rt/sys.h"
 #include "ui/ulog.h"
 
@@ -157,34 +158,23 @@ int term_scheme_list(char names[][TERM_NAME_MAX],
 
 // --- /etc/terminal.conf -----------------------------------------------
 
+// Declared ahead of the table they read; defined with it below.
+static void table_defaults(struct term_conf *c);
+
 void term_conf_defaults(struct term_conf *c) {
     memset(c, 0, sizeof *c);
-    strlcpy(c->scheme, "slate", sizeof c->scheme);
-    c->font_size = 0;          // follow system.font_size
-    c->scrollback = 240;
-    c->cursor = TERM_CURSOR_BLOCK;
-    // **OFF BY DEFAULT, and the reason is testability rather than
-    // taste.** A blinking caret makes a focused terminal ANIMATE, and a
-    // settled-frame comparison -- the standard tool for judging
-    // anything drawn here (docs/testing.md) -- cannot tell a real
-    // change from a caret in the other phase. Turning it on made an
-    // unrelated tab-switch check fail intermittently. xterm and VS
+    table_defaults(c);
+    // **THE CARET DOES NOT BLINK BY DEFAULT, and the reason is
+    // testability rather than taste.** A blinking caret makes a focused
+    // terminal ANIMATE, and a settled-frame comparison -- the standard
+    // tool for judging anything drawn here (docs/testing.md) -- cannot
+    // tell a real change from a caret in the other phase. xterm and VS
     // Code's terminal both ship it off too; Konsole and GNOME Terminal
     // ship it on, so this is a real split and not a lone opinion.
-    c->cursor_blink = 0;
-    c->menubar = 0;         // the bar's menu button holds every command
-    c->panel = 0;
-    c->scrollbar = 1;
-    c->cols = 120;          // Windows Terminal's default grid
-    c->rows = 30;
-    c->newtab_dir = TERM_NEWTAB_HERE;
-    c->keep_on_exit = 0;
-    c->copy_on_select = 1;
-    c->scroll_on_output = 1;
-    c->confirm_close = 1;
-    // Off, and when turned on, the Subtle look -- the one that suits any
-    // scheme. Flicker and noise animate the window, so no preset has them.
-    c->effect = 0;
+    //
+    // The effect is off, and when turned on, the Subtle look -- the one
+    // that suits any scheme. Flicker and noise animate the window, so no
+    // preset has them.
     c->crt = ucrt_presets[UCRT_PRESET_SUBTLE];
 }
 
@@ -197,143 +187,58 @@ static const char *const LEVEL_WORDS[] = { "off", "low", "medium", "high" };
 static const char *const CURVE_WORDS[] = { "off", "subtle", "strong" };
 static const char *const MASK_WORDS[] = { "off", "aperture", "slot" };
 
-static const char *cursor_word(int shape) {
-    if (shape < 0 || shape >= CURSOR_WORD_COUNT) shape = TERM_CURSOR_BLOCK;
-    return CURSOR_WORDS[shape];
-}
+static const char *const NEWTAB_WORDS[] = { "here", "home" };    // enum term_newtab_dir
+static const char *const ONEXIT_WORDS[] = { "close", "keep" };
 
-static void get_int(const char *key, int *val, int lo, int hi) {
-    char v[24];
-    if (!etc_config_buf_get(&g_buf, key, v, sizeof v) || !v[0]) return;
-    for (int i = 0; v[i]; i++) if (v[i] < '0' || v[i] > '9') return;
-    int n = atoi(v);
-    // OUT OF RANGE KEEPS THE DEFAULT. Clamping would silently turn a
-    // hand-typed 50000 into 10000 and report it back as what was asked
-    // for; the same rule uui_spinbox states for typed input.
-    if (n < lo || n > hi) return;
-    *val = n;
-}
+static int scheme_ok(const char *v) { return v[0] != '\0'; }
+static int shell_ok(const char *v) { return v[0] == '/'; }
 
-static void get_bool(const char *key, int *val) {
-    char v[16];
-    if (!etc_config_buf_get(&g_buf, key, v, sizeof v) || !v[0]) return;
-    if (strcmp(v, "on") == 0 || strcmp(v, "yes") == 0 || strcmp(v, "1") == 0) *val = 1;
-    else if (strcmp(v, "off") == 0 || strcmp(v, "no") == 0 || strcmp(v, "0") == 0) *val = 0;
-}
+// One lib/uprefs.h table. The CRT look's defaults are a PRESET, not per
+// key, so term_conf_defaults() puts them in and the load reads over them.
+#define C struct term_conf
+static const struct upref KEYS[] = {
+    UPREF_TEXT_KEY("scheme",           C, scheme,           "slate", scheme_ok),
+    // 0 is "follow the desktop", so the floor is 0 and the hole below
+    // TERM_FONT_MIN is closed after the read.
+    UPREF_INT_KEY("font_size",         C, font_size,        0, TERM_FONT_MAX, 0),
+    UPREF_INT_KEY("scrollback",        C, scrollback,       TERM_SB_MIN, TERM_SB_MAX, 240),
+    UPREF_TEXT_KEY("shell",            C, shell,            "", shell_ok),
+    UPREF_INT_KEY("cols",              C, cols,             TERM_COLS_MIN, TERM_COLS_MAX, 120),
+    UPREF_INT_KEY("rows",              C, rows,             TERM_ROWS_MIN, TERM_ROWS_MAX, 30),
+    UPREF_WORD_KEY("new_tab_dir",      C, newtab_dir,       NEWTAB_WORDS, 2, TERM_NEWTAB_HERE),
+    UPREF_WORD_KEY("on_exit",          C, keep_on_exit,     ONEXIT_WORDS, 2, 0),
+    UPREF_BOOL_KEY("panel",            C, panel,            0),
+    UPREF_BOOL_KEY("scrollbar",        C, scrollbar,        1),
+    UPREF_WORD_KEY("cursor",           C, cursor,           CURSOR_WORDS, CURSOR_WORD_COUNT, TERM_CURSOR_BLOCK),
+    UPREF_BOOL_KEY("cursor_blink",     C, cursor_blink,     0),
+    UPREF_BOOL_KEY("menubar",          C, menubar,          0),
+    UPREF_BOOL_KEY("copy_on_select",   C, copy_on_select,   1),
+    UPREF_BOOL_KEY("scroll_on_output", C, scroll_on_output, 1),
+    UPREF_BOOL_KEY("confirm_close",    C, confirm_close,    1),
+    UPREF_BOOL_KEY("effect",           C, effect,           0),
+    UPREF_WORD_KEY("crt_scanlines",    C, crt.scanlines,    LEVEL_WORDS, UCRT_LEVEL_MAX + 1, 0),
+    UPREF_WORD_KEY("crt_glow",         C, crt.glow,         LEVEL_WORDS, UCRT_LEVEL_MAX + 1, 0),
+    UPREF_WORD_KEY("crt_vignette",     C, crt.vignette,     LEVEL_WORDS, UCRT_LEVEL_MAX + 1, 0),
+    UPREF_WORD_KEY("crt_curve",        C, crt.curve,        CURVE_WORDS, UCRT_CURVE_COUNT, 0),
+    UPREF_WORD_KEY("crt_mask",         C, crt.mask,         MASK_WORDS, UCRT_MASK_COUNT, 0),
+    UPREF_BOOL_KEY("crt_flicker",      C, crt.flicker,      0),
+    UPREF_BOOL_KEY("crt_noise",        C, crt.noise,        0),
+};
+#undef C
+static const struct uprefs PREFS = { TERM_CONF_PATH, KEYS, (int)(sizeof KEYS / sizeof KEYS[0]) };
 
-// A word from `words`, or the default kept: a misspelling is refused, not guessed.
-static void get_word(const char *key, int *val, const char *const *words, int n) {
-    char v[16];
-    if (!etc_config_buf_get(&g_buf, key, v, sizeof v) || !v[0]) return;
-    for (int i = 0; i < n; i++)
-        if (strcmp(v, words[i]) == 0) { *val = i; return; }
-}
+static void table_defaults(struct term_conf *c) { uprefs_defaults(&PREFS, c); }
 
 void term_conf_load(struct term_conf *c) {
     term_conf_defaults(c);
-    if (!uconf_load(TERM_CONF_PATH, &g_buf)) return;
-
-    char v[TERM_NAME_MAX];
-    if (etc_config_buf_get(&g_buf, "scheme", v, sizeof v) && v[0])
-        strlcpy(c->scheme, v, sizeof c->scheme);
-
-    // font_size 0 is "follow the desktop", so its floor is 0 rather
-    // than TERM_FONT_MIN -- a range with a hole in it, which is why
-    // this one key is not a plain get_int() call.
-    char fv[16];
-    if (etc_config_buf_get(&g_buf, "font_size", fv, sizeof fv) && fv[0]) {
-        int ok = 1;
-        for (int i = 0; fv[i]; i++) if (fv[i] < '0' || fv[i] > '9') ok = 0;
-        int n = ok ? atoi(fv) : -1;
-        if (n == 0 || (n >= TERM_FONT_MIN && n <= TERM_FONT_MAX)) c->font_size = n;
-    }
-
-    get_int("scrollback", &c->scrollback, TERM_SB_MIN, TERM_SB_MAX);
-    get_int("cols", &c->cols, TERM_COLS_MIN, TERM_COLS_MAX);
-    get_int("rows", &c->rows, TERM_ROWS_MIN, TERM_ROWS_MAX);
-
-    char sv[TERM_SHELL_MAX];
-    if (etc_config_buf_get(&g_buf, "shell", sv, sizeof sv) && sv[0] == '/')
-        strlcpy(c->shell, sv, sizeof c->shell);
-    char nv[16];
-    if (etc_config_buf_get(&g_buf, "new_tab_dir", nv, sizeof nv))
-        c->newtab_dir = strcmp(nv, "home") == 0 ? TERM_NEWTAB_HOME : TERM_NEWTAB_HERE;
-    if (etc_config_buf_get(&g_buf, "on_exit", nv, sizeof nv))
-        c->keep_on_exit = strcmp(nv, "keep") == 0;
-
-    char cv[16];
-    if (etc_config_buf_get(&g_buf, "cursor", cv, sizeof cv) && cv[0])
-        for (int i = 0; i < CURSOR_WORD_COUNT; i++)
-            if (strcmp(cv, CURSOR_WORDS[i]) == 0) { c->cursor = i; break; }
-
-    get_bool("cursor_blink", &c->cursor_blink);
-    get_bool("menubar", &c->menubar);
-    get_bool("panel", &c->panel);
-    get_bool("scrollbar", &c->scrollbar);
-    get_bool("copy_on_select", &c->copy_on_select);
-    get_bool("scroll_on_output", &c->scroll_on_output);
-    get_bool("confirm_close", &c->confirm_close);
-    get_bool("effect", &c->effect);
-    get_word("crt_scanlines", &c->crt.scanlines, LEVEL_WORDS, UCRT_LEVEL_MAX + 1);
-    get_word("crt_glow", &c->crt.glow, LEVEL_WORDS, UCRT_LEVEL_MAX + 1);
-    get_word("crt_vignette", &c->crt.vignette, LEVEL_WORDS, UCRT_LEVEL_MAX + 1);
-    get_word("crt_curve", &c->crt.curve, CURVE_WORDS, UCRT_CURVE_COUNT);
-    get_word("crt_mask", &c->crt.mask, MASK_WORDS, UCRT_MASK_COUNT);
-    get_bool("crt_flicker", &c->crt.flicker);
-    get_bool("crt_noise", &c->crt.noise);
-}
-
-// One key, written only when it moved. `*failed` is sticky: a save that
-// writes four keys and fails on the fifth has half-applied the change
-// and must say so rather than reporting the four.
-static int put(const char *key, const char *value, int *failed) {
-    if (!uconf_set(TERM_CONF_PATH, key, value)) { *failed = 1; return 0; }
-    return 1;
-}
-
-static int put_int(const char *key, int value, int *failed) {
-    char v[16];
-    snprintf(v, sizeof v, "%d", value);
-    return put(key, v, failed);
-}
-
-static int put_bool(const char *key, int value, int *failed) {
-    return put(key, value ? "on" : "off", failed);
+    uprefs_read(&PREFS, c);
+    if (c->font_size && c->font_size < TERM_FONT_MIN) c->font_size = 0;
 }
 
 int term_conf_save(const struct term_conf *c, const struct term_conf *old) {
-    int n = 0, failed = 0;
-
-    if (strcmp(c->scheme, old->scheme) != 0) n += put("scheme", c->scheme, &failed);
-    if (c->font_size != old->font_size) n += put_int("font_size", c->font_size, &failed);
-    if (c->scrollback != old->scrollback) n += put_int("scrollback", c->scrollback, &failed);
-    if (strcmp(c->shell, old->shell) != 0) n += put("shell", c->shell, &failed);
-    if (c->cols != old->cols) n += put_int("cols", c->cols, &failed);
-    if (c->rows != old->rows) n += put_int("rows", c->rows, &failed);
-    if (c->newtab_dir != old->newtab_dir)
-        n += put("new_tab_dir", c->newtab_dir == TERM_NEWTAB_HOME ? "home" : "here", &failed);
-    if (c->keep_on_exit != old->keep_on_exit)
-        n += put("on_exit", c->keep_on_exit ? "keep" : "close", &failed);
-    if (c->panel != old->panel) n += put_bool("panel", c->panel, &failed);
-    if (c->scrollbar != old->scrollbar) n += put_bool("scrollbar", c->scrollbar, &failed);
-    if (c->cursor != old->cursor) n += put("cursor", cursor_word(c->cursor), &failed);
-    if (c->cursor_blink != old->cursor_blink) n += put_bool("cursor_blink", c->cursor_blink, &failed);
-    if (c->menubar != old->menubar) n += put_bool("menubar", c->menubar, &failed);
-    if (c->copy_on_select != old->copy_on_select) n += put_bool("copy_on_select", c->copy_on_select, &failed);
-    if (c->scroll_on_output != old->scroll_on_output) n += put_bool("scroll_on_output", c->scroll_on_output, &failed);
-    if (c->confirm_close != old->confirm_close) n += put_bool("confirm_close", c->confirm_close, &failed);
-    if (c->effect != old->effect) n += put_bool("effect", c->effect, &failed);
-    const struct ucrt_look *l = &c->crt, *o = &old->crt;
-    if (l->scanlines != o->scanlines) n += put("crt_scanlines", LEVEL_WORDS[l->scanlines], &failed);
-    if (l->glow != o->glow) n += put("crt_glow", LEVEL_WORDS[l->glow], &failed);
-    if (l->vignette != o->vignette) n += put("crt_vignette", LEVEL_WORDS[l->vignette], &failed);
-    if (l->curve != o->curve) n += put("crt_curve", CURVE_WORDS[l->curve], &failed);
-    if (l->mask != o->mask) n += put("crt_mask", MASK_WORDS[l->mask], &failed);
-    if (l->flicker != o->flicker) n += put_bool("crt_flicker", l->flicker, &failed);
-    if (l->noise != o->noise) n += put_bool("crt_noise", l->noise, &failed);
-
-    ulogf("uterm: conf save %d key(s)%s\n", n, failed ? " (a write failed)" : "");
-    return failed ? -1 : n;
+    int n = uprefs_save(&PREFS, c, old);
+    ulogf("uterm: conf save %d key(s)%s\n", n < 0 ? 0 : n, n < 0 ? " (a write failed)" : "");
+    return n;
 }
 
 // --- /etc/shells ------------------------------------------------------

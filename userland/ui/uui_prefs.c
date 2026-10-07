@@ -7,14 +7,17 @@
 #include "ui/ugfx.h"
 #include "ui/utheme.h"
 #include "ui/uui_button.h"
+#include "ui/uui_checkbox.h"
 #include "ui/uui_focus.h"
 #include "ui/uui_gallery.h"
 #include "ui/uui_label.h"
 #include "ui/uui_layout.h"
 #include "ui/uui_route.h"
+#include "ui/uui_segmented.h"
 #include "ui/uui_sidebar.h"
+#include "ui/uui_spinbox.h"
 
-enum { ID_PAGES = UUI_PREFS_ID_BASE, ID_DEFAULTS, ID_OK, ID_CANCEL };
+enum { ID_PAGES = UUI_PREFS_ID_BASE, ID_DEFAULTS, ID_OK, ID_CANCEL, ID_BOUND };
 
 static struct uui_prefs_desc g_d;
 static struct uapp_window *g_win;
@@ -26,6 +29,19 @@ static struct {
     struct uui_layout row;
 } g_row[UUI_PREFS_ROWS_MAX];
 static int g_rows;
+
+// The bound rows' controls, owned here (uui_prefs.h).
+enum { B_CHECK, B_CHOICE, B_NUMBER };
+static struct {
+    int kind;
+    size_t field;
+    const int *values;
+    int count;
+    struct uui_checkbox check;
+    struct uui_segmented choice;
+    struct uui_spinbox number;
+} g_bound[UUI_PREFS_ROWS_MAX];
+static int g_nbound;
 
 static struct uui_sidebar g_pages;
 static struct uui_label g_heading, g_spacer;
@@ -46,10 +62,46 @@ static void show_page(int page) {
     for (int i = 0; i < g_rows; i++) g_page_items[1 + i].hidden = g_row[i].page != page;
 }
 
+static int *field_of(int b) { return (int *)((char *)g_d.edit + g_bound[b].field); }
+
+static void bound_to_controls(void) {
+    for (int b = 0; b < g_nbound; b++) {
+        int v = *field_of(b);
+        switch (g_bound[b].kind) {
+        case B_CHECK: g_bound[b].check.checked = v != 0; break;
+        case B_NUMBER: uui_spinbox_set_value(&g_bound[b].number, v); break;
+        case B_CHOICE:
+            g_bound[b].choice.selected = 0;
+            for (int i = 0; i < g_bound[b].count; i++)
+                if ((g_bound[b].values ? g_bound[b].values[i] : i) == v) g_bound[b].choice.selected = i;
+            break;
+        }
+    }
+}
+
+static void bound_from_controls(void) {
+    for (int b = 0; b < g_nbound; b++) {
+        switch (g_bound[b].kind) {
+        case B_CHECK: *field_of(b) = g_bound[b].check.checked; break;
+        case B_NUMBER:
+            uui_spinbox_commit(&g_bound[b].number);
+            *field_of(b) = uui_spinbox_value(&g_bound[b].number);
+            break;
+        case B_CHOICE: {
+            int i = g_bound[b].choice.selected;
+            if (i < 0 || i >= g_bound[b].count) break;   // nothing chosen: unchanged
+            *field_of(b) = g_bound[b].values ? g_bound[b].values[i] : i;
+            break;
+        }
+        }
+    }
+}
+
 void uui_prefs_begin(const struct uui_prefs_desc *d) {
     g_d = *d;
     if (g_d.page_count > UUI_PREFS_PAGES_MAX) g_d.page_count = UUI_PREFS_PAGES_MAX;
     g_rows = 0;
+    g_nbound = 0;
     g_nfocus = 3;   // [0] the pages, [1] OK, [2] Cancel -- filled at open
 }
 
@@ -79,6 +131,53 @@ int uui_prefs_row(int page, const char *caption, const struct uui_widget_ops *op
     return i;
 }
 
+static int bound(int kind, size_t field) {
+    if (!g_d.edit || g_nbound >= UUI_PREFS_ROWS_MAX) return -1;
+    int b = g_nbound++;
+    g_bound[b].kind = kind;
+    g_bound[b].field = field;
+    g_bound[b].values = 0;
+    g_bound[b].count = 0;
+    return b;
+}
+
+int uui_prefs_check(int page, const char *caption, const char *text, size_t field,
+                    const char *name) {
+    int b = bound(B_CHECK, field);
+    if (b < 0) return -1;
+    uui_checkbox_init(&g_bound[b].check, 0, 0, 0, text, UTHEME_WINDOW_BG, UTHEME_TEXT);
+    return uui_prefs_row(page, caption, &uui_checkbox_ops, &g_bound[b].check, ID_BOUND + b, name, 0);
+}
+
+int uui_prefs_choice(int page, const char *caption, const char *const *labels,
+                     const int *values, int count, size_t field, const char *name) {
+    int b = bound(B_CHOICE, field);
+    if (b < 0) return -1;
+    g_bound[b].values = values;
+    g_bound[b].count = count;
+    uui_segmented_init(&g_bound[b].choice, labels, count, 0);
+    return uui_prefs_row(page, caption, &uui_segmented_ops, &g_bound[b].choice, ID_BOUND + b, name, 0);
+}
+
+int uui_prefs_number(int page, const char *caption, int lo, int hi, int step, const char *unit,
+                     size_t field, const char *name) {
+    int b = bound(B_NUMBER, field);
+    if (b < 0) return -1;
+    uui_spinbox_init(&g_bound[b].number, lo, lo, hi, step, unit);
+    return uui_prefs_row(page, caption, &uui_spinbox_ops, &g_bound[b].number, ID_BOUND + b, name, 0);
+}
+
+void uui_prefs_also_check(int row, const char *text, size_t field, const char *name) {
+    int b = bound(B_CHECK, field);
+    if (b < 0) return;
+    uui_checkbox_init(&g_bound[b].check, 0, 0, 0, text, UTHEME_WINDOW_BG, UTHEME_TEXT);
+    uui_prefs_also(row, &uui_checkbox_ops, &g_bound[b].check, ID_BOUND + b, name);
+}
+
+void uui_prefs_widen(int row, int width) {
+    if (row >= 0 && row < g_rows) g_row[row].items[1].main_size = width;
+}
+
 void uui_prefs_also(int row, const struct uui_widget_ops *ops, void *widget, int id,
                     const char *name) {
     if (row < 0 || row >= g_rows || g_row[row].row.count >= 3) return;
@@ -90,8 +189,10 @@ void uui_prefs_also(int row, const struct uui_widget_ops *ops, void *widget, int
 int uui_prefs_is_open(void) { return g_win != 0; }
 
 void uui_prefs_close(void) {
-    if (g_win) uapp_window_close(g_win);
+    if (!g_win) return;
+    uapp_window_close(g_win);
     g_win = 0;
+    if (g_d.on_close) g_d.on_close();
 }
 
 void uui_prefs_redraw(void) {
@@ -105,6 +206,7 @@ static void on_widget(struct uapp_window *w, int id, int reason) {
 }
 
 static void keep(void) {
+    bound_from_controls();
     void (*ok)(void) = g_d.on_ok;
     uui_prefs_close();   // FIRST: what OK applies may resize or redraw the app
     if (ok) ok();
@@ -112,6 +214,10 @@ static void keep(void) {
 
 static void on_action(struct uapp_window *w, int code) {
     if (code == ID_DEFAULTS) {
+        if (g_d.edit_defaults && g_d.edit) {
+            g_d.edit_defaults(g_d.edit);
+            bound_to_controls();
+        }
         if (g_d.on_defaults) g_d.on_defaults();
     } else if (code == ID_OK) {
         keep();
@@ -139,6 +245,7 @@ static void on_close(struct uapp_window *w) {
 
 int uui_prefs_open(struct uapp *a) {
     if (g_win || g_d.page_count <= 0) return 0;
+    bound_to_controls();
 
     uui_sidebar_init(&g_pages, 0, 0, 0, 0, g_d.pages, g_d.page_count);
     g_pages.sel_bg = UTHEME_ACCENT;   // the page you are on

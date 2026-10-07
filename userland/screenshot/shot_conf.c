@@ -1,10 +1,8 @@
 // Screenshot's options file, /etc/screenshot.conf: `name=value`, booleans
-// as on/off, through lib/uconf.h -- Notepad's arrangement (np_conf.c).
-// ONE TABLE names every number-valued key, so load, save and the
-// defaults cannot disagree; the two strings are handled beside it.
+// as on/off -- one lib/uprefs.h table, Notepad's arrangement (np_conf.c),
+// the folder and the name template included, each with its own check.
 #include "screenshot.h"
 
-#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -12,111 +10,65 @@
 #include "rt/sys.h"
 #include "keycombo.h"
 #include "lib/uconf.h"
+#include "lib/uprefs.h"
 #include "lib/usetting.h"
 
 const char *const SHOT_MODE_NAME[SHOT_MODES] = { "region", "screen", "window" };
 static const char *const START_WORDS[SHOT_MODES + 1] = { "region", "screen", "window", "last" };
 
-enum { K_BOOL, K_INT, K_WORD };
-
-static const struct key {
-    const char *name;
-    size_t off;
-    int kind;
-    int lo, hi;                  // K_INT's range; K_WORD's count in `hi`
-    const char *const *words;
-} KEYS[] = {
-    { "mode",         offsetof(struct shot_conf, mode),        K_WORD, 0, SHOT_MODES, SHOT_MODE_NAME },
-    { "pointer",      offsetof(struct shot_conf, pointer),     K_BOOL, 0, 0, 0 },
-    { "copy",         offsetof(struct shot_conf, copy),        K_BOOL, 0, 0, 0 },
-    { "delay",        offsetof(struct shot_conf, delay),       K_INT,  0, 60, 0 },
-    { "start",        offsetof(struct shot_conf, start),       K_WORD, 0, SHOT_MODES + 1, START_WORDS },
-    { "last_region",  offsetof(struct shot_conf, last_region), K_BOOL, 0, 0, 0 },
-    { "size_label",   offsetof(struct shot_conf, size_label),  K_BOOL, 0, 0, 0 },
-    { "magnifier",    offsetof(struct shot_conf, magnifier),   K_BOOL, 0, 0, 0 },
-    { "shadow",       offsetof(struct shot_conf, shadow),      K_BOOL, 0, 0, 0 },
-    { "delay1",       offsetof(struct shot_conf, delays[0]),   K_INT,  1, 60, 0 },
-    { "delay2",       offsetof(struct shot_conf, delays[1]),   K_INT,  1, 60, 0 },
-    { "delay3",       offsetof(struct shot_conf, delays[2]),   K_INT,  1, 60, 0 },
-    { "region_x",     offsetof(struct shot_conf, rx),          K_INT,  0, 16384, 0 },
-    { "region_y",     offsetof(struct shot_conf, ry),          K_INT,  0, 16384, 0 },
-    { "region_w",     offsetof(struct shot_conf, rw),          K_INT,  0, 16384, 0 },
-    { "region_h",     offsetof(struct shot_conf, rh),          K_INT,  0, 16384, 0 },
-    { "region_sw",    offsetof(struct shot_conf, rsw),         K_INT,  0, 16384, 0 },
-    { "region_sh",    offsetof(struct shot_conf, rsh),         K_INT,  0, 16384, 0 },
-    { "card",         offsetof(struct shot_conf, card),        K_BOOL, 0, 0, 0 },
-    { "open",         offsetof(struct shot_conf, open),        K_BOOL, 0, 0, 0 },
-    { "flash",        offsetof(struct shot_conf, flash),       K_BOOL, 0, 0, 0 },
-    { "png",          offsetof(struct shot_conf, png),         K_BOOL, 0, 0, 0 },
-    { "ask",          offsetof(struct shot_conf, ask),         K_BOOL, 0, 0, 0 },
-};
-#define NKEYS ((int)(sizeof KEYS / sizeof KEYS[0]))
-
-static int *field(struct shot_conf *c, const struct key *k) { return (int *)((char *)c + k->off); }
-static int value(const struct shot_conf *c, const struct key *k) {
-    return *(const int *)((const char *)c + k->off);
+// A template is checked against today's values, which is all `valid` can
+// say about one that names a token no capture would fill.
+static int name_ok(const char *s) {
+    struct shot_vars sv;
+    shot_vars_now(&sv, "", 0);
+    return unametpl_valid(s, sv.v, SHOT_CHIP_COUNT);
 }
+
+#define C struct shot_conf
+static const struct upref KEYS[] = {
+    UPREF_WORD_KEY("mode",        C, mode,        SHOT_MODE_NAME, SHOT_MODES, SHOT_MODE_REGION),
+    UPREF_BOOL_KEY("pointer",     C, pointer,     0),
+    UPREF_BOOL_KEY("copy",        C, copy,        0),
+    UPREF_INT_KEY("delay",        C, delay,       0, 60, 0),
+    UPREF_WORD_KEY("start",       C, start,       START_WORDS, SHOT_MODES + 1, SHOT_START_LAST),
+    UPREF_BOOL_KEY("last_region", C, last_region, 1),
+    UPREF_BOOL_KEY("size_label",  C, size_label,  1),
+    UPREF_BOOL_KEY("magnifier",   C, magnifier,   0),
+    UPREF_BOOL_KEY("shadow",      C, shadow,      0),
+    UPREF_INT_KEY("delay1",       C, delays[0],   1, 60, 3),
+    UPREF_INT_KEY("delay2",       C, delays[1],   1, 60, 5),
+    UPREF_INT_KEY("delay3",       C, delays[2],   1, 60, 10),
+    UPREF_INT_KEY("region_x",     C, rx,          0, 16384, 0),
+    UPREF_INT_KEY("region_y",     C, ry,          0, 16384, 0),
+    UPREF_INT_KEY("region_w",     C, rw,          0, 16384, 0),
+    UPREF_INT_KEY("region_h",     C, rh,          0, 16384, 0),
+    UPREF_INT_KEY("region_sw",    C, rsw,         0, 16384, 0),
+    UPREF_INT_KEY("region_sh",    C, rsh,         0, 16384, 0),
+    UPREF_BOOL_KEY("card",        C, card,        1),
+    UPREF_BOOL_KEY("open",        C, open,        0),
+    UPREF_BOOL_KEY("flash",       C, flash,       0),
+    UPREF_BOOL_KEY("png",         C, png,         0),
+    UPREF_BOOL_KEY("ask",         C, ask,         0),
+    UPREF_TEXT_KEY("folder",      C, folder,      SHOT_DEFAULT_DIR, shot_folder_ok),
+    UPREF_TEXT_KEY("name",        C, name,        SHOT_DEFAULT_NAME, name_ok),
+};
+#undef C
+static const struct uprefs PREFS = { SHOT_CONF, KEYS, (int)(sizeof KEYS / sizeof KEYS[0]) };
 
 void shot_conf_defaults(struct shot_conf *c) {
     memset(c, 0, sizeof *c);
-    c->mode = SHOT_MODE_REGION;
-    c->start = SHOT_START_LAST;
-    c->last_region = 1;
-    c->size_label = 1;
-    c->delays[0] = 3; c->delays[1] = 5; c->delays[2] = 10;
-    c->card = 1;
-    snprintf(c->folder, sizeof c->folder, "%s", SHOT_DEFAULT_DIR);
-    snprintf(c->name, sizeof c->name, "%s", SHOT_DEFAULT_NAME);
-}
-
-// A value this cannot read leaves the default: a typo in the file is a
-// key ignored, never an option silently set to zero.
-static void parse(struct shot_conf *c, const struct key *k, const char *v) {
-    if (k->kind == K_BOOL) {
-        if (!strcmp(v, "on")) *field(c, k) = 1;
-        else if (!strcmp(v, "off")) *field(c, k) = 0;
-    } else if (k->kind == K_WORD) {
-        for (int w = 0; w < k->hi; w++)
-            if (!strcmp(v, k->words[w])) *field(c, k) = w;
-    } else {
-        int n = 0, any = 0;
-        for (const char *p = v; *p >= '0' && *p <= '9' && n < 100000; p++) { n = n * 10 + (*p - '0'); any = 1; }
-        if (any && n >= k->lo && n <= k->hi) *field(c, k) = n;
-    }
+    uprefs_defaults(&PREFS, c);
 }
 
 void shot_conf_load(struct shot_conf *c) {
-    shot_conf_defaults(c);
-    static struct etc_config_buf buf;   // 4 KiB: never on a ring-3 frame
-    if (!uconf_load(SHOT_CONF, &buf)) return;
-    for (int i = 0; i < NKEYS; i++) {
-        char v[32];
-        if (etc_config_buf_get(&buf, KEYS[i].name, v, sizeof v)) parse(c, &KEYS[i], v);
-    }
-    char s[SHOT_DIR_MAX];
-    if (etc_config_buf_get(&buf, "folder", s, sizeof s) && shot_folder_ok(s))
-        snprintf(c->folder, sizeof c->folder, "%s", s);
-    struct shot_vars sv;
-    shot_vars_now(&sv, "", 0);
-    if (etc_config_buf_get(&buf, "name", s, sizeof s) && unametpl_valid(s, sv.v, SHOT_CHIP_COUNT))
-        snprintf(c->name, sizeof c->name, "%s", s);
+    memset(c, 0, sizeof *c);
+    uprefs_load(&PREFS, c);
 }
 
 void shot_conf_save(const struct shot_conf *c) {
     struct shot_conf was;
     shot_conf_load(&was);
-    for (int i = 0; i < NKEYS; i++) {
-        const struct key *k = &KEYS[i];
-        int v = value(c, k);
-        if (v == value(&was, k)) continue;
-        char s[16];
-        if (k->kind == K_BOOL) snprintf(s, sizeof s, "%s", v ? "on" : "off");
-        else if (k->kind == K_WORD) snprintf(s, sizeof s, "%s", k->words[v]);
-        else snprintf(s, sizeof s, "%d", v);
-        uconf_set(SHOT_CONF, k->name, s);
-    }
-    if (strcmp(c->folder, was.folder)) uconf_set(SHOT_CONF, "folder", c->folder);
-    if (strcmp(c->name, was.name)) uconf_set(SHOT_CONF, "name", c->name);
+    uprefs_save(&PREFS, c, &was);
 }
 
 // --- naming -----------------------------------------------------------

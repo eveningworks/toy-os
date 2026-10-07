@@ -457,7 +457,8 @@ whenever a headline here tells you something you did not already know.
   `open_seq`**
 - **A CLOSE WHILE AN APP IS ASKING SOMETHING IS IGNORED, AND A SINGLE
   CLOSE BRINGS A MODAL FORWARD**
-- **AN APP'S OPTIONS WINDOW IS `ui/uui_prefs.h`**
+- **AN APP'S OPTIONS WINDOW IS `ui/uui_prefs.h`, AND ITS OPTIONS FILE
+  IS ONE `lib/uprefs.h` TABLE**
 - **A POPUP CHOOSES ON THE RELEASE, AND ONE CLOSED UNDER A PRESS OWES
   THAT PRESS A RELEASE**
 - **A CLIENT IS TOLD FOCUS BY `wm_focus_sync()`, NEVER BY A MUTATION
