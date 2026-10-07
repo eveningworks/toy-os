@@ -53,6 +53,7 @@ one of them whatever it does to the other.
 
 import argparse
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -316,10 +317,17 @@ def main():
         # only place the bug is visible: a KTEST on the 9 GB dev disk
         # cannot see one group over-reported (1.4% of the total), and
         # `df` on this volume said 127 MB for a 16 MiB filesystem.
+        # Against the image's OWN partition, as the kernel logged it at
+        # mount -- not a fixed 128 MiB: the image outgrew one block group
+        # once the seed tree did, and the bug this guards (a partial last
+        # group counted whole) would report a whole extra group past it.
+        log = sh.run("sh dmesg") or ""
+        m = re.search(r"mounting tfs3 from partition \d+ \(LBA \d+, (\d+) sectors\)", log)
+        part_kb = int(m.group(1)) * 512 // 1024 if m else 0
         res.check("the reported size is the image's, not a whole block group",
-                  0 < total_kb < 128 * 1024,
-                  f"df says {total_kb} KB for a live image sized from the seed "
-                  f"tree -- the last group's real span is being ignored")
+                  0 < total_kb <= part_kb,
+                  f"df says {total_kb} KB for an image partition of {part_kb} KB "
+                  f"-- the last group's real span is being ignored")
 
         # 2. shipped content is there -- the check that separates a live
         #    mount from an empty RAM filesystem
@@ -342,7 +350,7 @@ def main():
         #     "some directory is readable" is not that check.
         for d, want in (("/usr/wm/applications", ".desktop"),
                         ("/etc/services.d", "toywm"),
-                        ("/usr/wm/startup", "")):
+                        ("/usr/wm/startup", "README.md")):
             got = sh.run(f"sh ls {d}")
             ok = want in got if want else len(got.split()) > 2
             res.check(f"{d} survived the image build", ok, got.strip()[:200])
