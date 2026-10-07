@@ -2014,13 +2014,16 @@ def run(dbg, qmp, tmp, res):
     # for a binary (a NUL in its first bytes, git's rule) or a folder.
     # Its own fixture, so the rows are known: "..", prog, t.txt. The
     # count comes from the app's own `ctx` line; the labels are not
-    # logged, but 15 rows against 14 is the row.
+    # logged, but 15 rows against 14 is the row. "prog" is a LIBRARY, a
+    # binary that is not a program: a program's menu has Run in Terminal
+    # and Run in Open's place (lib/ulaunch.h), one row more, which would
+    # make it as tall as the text file's.
     dbg.key(K_ESC)
     lay = wait_layout(dbg, win, lambda l: l.ctx == 0) or lay
     EDIT = "/fmedit"
     dbg.send(f"sh rm -r {EDIT}")
     dbg.send(f"sh mkdir {EDIT}")
-    dbg.send(f"sh cp /bin/hello {EDIT}/prog")
+    dbg.send(f"sh cp /lib/libc.so {EDIT}/prog")
     dbg.send(f"sh touch {EDIT}/t.txt")
     wait_listing(dbg, EDIT, lambda names: "t.txt" in names and "prog" in names)
     dbg.key(K_CTRL_L)
