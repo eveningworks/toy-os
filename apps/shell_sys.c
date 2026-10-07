@@ -247,7 +247,7 @@ void cmd_beep(void) {
 
 // `df` -- disk usage, meminfo's sibling for fs.c's data blocks instead
 // of pmm.c's physical frames. Divides to KB (not MB) before narrowing
-// to uint32_t (vga_write_dec() takes one): a real byte count can exceed
+// to uint32_t (it prints as a %u): a real byte count can exceed
 // 32 bits on a multi-gigabyte disk, but KB doesn't need to -- even
 // FS_DISK_TOTAL_BYTES's full 9GiB is a bit over 9.4 million KB, well
 // under uint32_t's ~4.29 billion ceiling. MB looked tempting (smaller
@@ -265,11 +265,11 @@ void cmd_df(void) {
     vga_write(" (");
     vga_write(fs_is_persistent() ? "persistent, on disk" : "RAM-only -- won't survive reboot");
     vga_write(")\n");
-    vga_write("  total: "); vga_write_dec((uint32_t)(total_bytes / 1024));
+    vga_printf("  total: %u", (uint32_t)(total_bytes / 1024));
     vga_write(" KB\n");
-    vga_write("  used:  "); vga_write_dec((uint32_t)(used_bytes / 1024));
+    vga_printf("  used:  %u", (uint32_t)(used_bytes / 1024));
     vga_write(" KB\n");
-    vga_write("  free:  "); vga_write_dec((uint32_t)(free_bytes / 1024));
+    vga_printf("  free:  %u", (uint32_t)(free_bytes / 1024));
     vga_write(" KB\n");
 }
 
@@ -359,7 +359,7 @@ void cmd_sync(const char *args) {
     uint32_t wrote = 0, pending = 0;
     int ok = ata_sync(&wrote, &pending);
 
-    vga_write("sync: wrote "); vga_write_dec(wrote);
+    vga_printf("sync: wrote %u", (uint32_t)wrote);
     vga_write(wrote == 1 ? " sector" : " sectors");
     vga_write(" back to disk");
     if (wrote == 0 && ok) vga_write(" (nothing was pending)");
@@ -368,7 +368,7 @@ void cmd_sync(const char *args) {
     if (!ok) {
         // Loud, and specific about what to do: the data still exists,
         // in RAM only, and powering off is what would lose it.
-        vga_write("sync: FAILED -- "); vga_write_dec(pending);
+        vga_printf("sync: FAILED -- %u", (uint32_t)pending);
         vga_write(" sector(s) could NOT be written and are still pending.\n");
         vga_write("      Do not power off yet; that data is in memory only.\n");
     }
@@ -392,23 +392,23 @@ void cmd_fsck(const char *args) {
         return;
     }
 
-    vga_write("  records in use:        "); vga_write_dec(r.records_used); vga_putc('\n');
-    vga_write("  blocks referenced:     "); vga_write_dec(r.blocks_referenced); vga_putc('\n');
-    vga_write("  leaked (unreferenced): "); vga_write_dec(r.leaked); vga_putc('\n');
-    vga_write("  referenced but free:   "); vga_write_dec(r.referenced_but_free); vga_putc('\n');
-    vga_write("  double-allocated:      "); vga_write_dec(r.double_allocated); vga_putc('\n');
-    vga_write("  out-of-range pointers: "); vga_write_dec(r.out_of_range); vga_putc('\n');
+    vga_printf("  records in use:        %u\n", (uint32_t)r.records_used);
+    vga_printf("  blocks referenced:     %u\n", (uint32_t)r.blocks_referenced);
+    vga_printf("  leaked (unreferenced): %u\n", (uint32_t)r.leaked);
+    vga_printf("  referenced but free:   %u\n", (uint32_t)r.referenced_but_free);
+    vga_printf("  double-allocated:      %u\n", (uint32_t)r.double_allocated);
+    vga_printf("  out-of-range pointers: %u\n", (uint32_t)r.out_of_range);
 
     if (repair) {
         vga_write("  -- repaired --\n");
-        vga_write("  blocks reclaimed:      "); vga_write_dec(r.reclaimed);
-        vga_write(" ("); vga_write_dec(r.reclaimed * 4); vga_write(" KB)\n");
-        vga_write("  marked allocated:      "); vga_write_dec(r.marked_allocated); vga_putc('\n');
-        vga_write("  pointers cleared:      "); vga_write_dec(r.pointers_cleared); vga_putc('\n');
+        vga_printf("  blocks reclaimed:      %u", (uint32_t)r.reclaimed);
+        vga_printf(" (%u KB)\n", (uint32_t)(r.reclaimed * 4));
+        vga_printf("  marked allocated:      %u\n", (uint32_t)r.marked_allocated);
+        vga_printf("  pointers cleared:      %u\n", (uint32_t)r.pointers_cleared);
     } else if (r.leaked || r.referenced_but_free || r.out_of_range) {
         vga_write("Run `fsck repair` to reclaim ");
-        vga_write_dec(r.leaked); vga_write(" leaked block(s) (");
-        vga_write_dec(r.leaked * 4); vga_write(" KB) and fix the rest.\n");
+        vga_printf("%u leaked block(s) (", (uint32_t)r.leaked);
+        vga_printf("%u KB) and fix the rest.\n", (uint32_t)(r.leaked * 4));
     }
 
     if (r.double_allocated) {
@@ -506,9 +506,9 @@ static void stress_print_progress(const char *verb, uint32_t done_mb,
     vga_putc('\r');
     vga_write("  "); vga_write(verb); vga_write(" [");
     for (uint32_t i = 0; i < STRESS_BAR_WIDTH; i++) vga_putc(i < filled ? '#' : '-');
-    vga_write("] "); vga_write_dec(pct); vga_write("% ");
-    vga_write_dec(done_mb); vga_write("/"); vga_write_dec(total_mb); vga_write("MB ");
-    vga_write_dec(speed_x10 / 10); vga_write("."); vga_write_dec(speed_x10 % 10); vga_write("MB/s");
+    vga_printf("] %u%% ", (uint32_t)pct);
+    vga_printf("%u/%uMB ", (uint32_t)done_mb, (uint32_t)total_mb);
+    vga_printf("%u.%uMB/s", (uint32_t)(speed_x10 / 10), (uint32_t)(speed_x10 % 10));
     for (uint32_t i = 0; i < STRESS_BAR_PAD_SPACES; i++) vga_putc(' ');
     // Suppress the cursor block vga_putc() just repainted at end-of-
     // line -- this loop never calls vga_cursor_tick() between updates,
@@ -551,7 +551,7 @@ void cmd_stress(const char *args) {
     uint32_t chunks = mb; // 1 chunk == 1MB by construction
     uint64_t start_ticks = coarse_ticks();
 
-    vga_write("stress: writing "); vga_write_dec(mb); vga_write(" MB to ");
+    vga_printf("stress: writing %u MB to ", (uint32_t)mb);
     vga_write(STRESS_TEST_PATH); vga_write(" ...\n");
     uint64_t write_start_ticks = coarse_ticks();
     uint32_t last_pct_printed = 0;
@@ -560,8 +560,8 @@ void cmd_stress(const char *args) {
         uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
         if (!fs_write_range(STRESS_TEST_PATH, offset, g_stress_chunk, STRESS_CHUNK_BYTES)) {
             vga_write("stress: FAILED (write failed at chunk ");
-            vga_write_dec(c); vga_write(" / offset ");
-            vga_write_dec((uint32_t)(offset / (1024 * 1024))); vga_write(" MB)\n");
+            vga_printf("%u / offset ", (uint32_t)c);
+            vga_printf("%u MB)\n", (uint32_t)(offset / (1024 * 1024)));
             fs_delete(STRESS_TEST_PATH);
             return;
         }
@@ -595,7 +595,7 @@ void cmd_stress(const char *args) {
             got += n;
         if (got != STRESS_CHUNK_BYTES) {
             vga_write("stress: FAILED (short read at chunk ");
-            vga_write_dec(c); vga_write(", got "); vga_write_dec(got); vga_write(" bytes)\n");
+            vga_printf("%u, got %u bytes)\n", (uint32_t)c, (uint32_t)got);
             fs_delete(STRESS_TEST_PATH);
             return;
         }
@@ -606,8 +606,8 @@ void cmd_stress(const char *args) {
         }
         if (mismatch) {
             vga_write("stress: FAILED (data mismatch at chunk ");
-            vga_write_dec(c); vga_write(" / offset ");
-            vga_write_dec((uint32_t)(offset / (1024 * 1024))); vga_write(" MB)\n");
+            vga_printf("%u / offset ", (uint32_t)c);
+            vga_printf("%u MB)\n", (uint32_t)(offset / (1024 * 1024)));
             fs_delete(STRESS_TEST_PATH);
             return;
         }
@@ -627,13 +627,13 @@ void cmd_stress(const char *args) {
     uint64_t elapsed_ticks = coarse_ticks() - start_ticks; // 100Hz PIT -- see timer.h
     uint32_t write_speed_x10 = (uint32_t)((uint64_t)mb * 1000 / (write_ticks ? write_ticks : 1));
     uint32_t read_speed_x10 = (uint32_t)((uint64_t)mb * 1000 / (read_ticks ? read_ticks : 1));
-    vga_write("stress: PASSED -- "); vga_write_dec(mb);
+    vga_printf("stress: PASSED -- %u", (uint32_t)mb);
     vga_write(" MB written, read back, and verified byte-for-byte in ");
-    vga_write_dec((uint32_t)(elapsed_ticks / 100)); vga_write(" s (");
-    vga_write_dec(write_speed_x10 / 10); vga_write(".");
-    vga_write_dec(write_speed_x10 % 10); vga_write(" MB/s write, ");
-    vga_write_dec(read_speed_x10 / 10); vga_write(".");
-    vga_write_dec(read_speed_x10 % 10); vga_write(" MB/s read)\n");
+    vga_printf("%u s (", (uint32_t)(elapsed_ticks / 100));
+    vga_printf("%u.", (uint32_t)(write_speed_x10 / 10));
+    vga_printf("%u MB/s write, ", (uint32_t)(write_speed_x10 % 10));
+    vga_printf("%u.", (uint32_t)(read_speed_x10 / 10));
+    vga_printf("%u MB/s read)\n", (uint32_t)(read_speed_x10 % 10));
 }
 
 // Proves ata_dma_nonblocking_selftest() (Phase 1 of the async-I/O
@@ -661,14 +661,14 @@ void cmd_dmatest(const char *args) {
     uint32_t polls = 0;
     int ok = ata_dma_nonblocking_selftest(lba, &polls);
     if (!ok) {
-        vga_write("dmatest: FAILED (lba "); vga_write_dec(lba);
+        vga_printf("dmatest: FAILED (lba %u", (uint32_t)lba);
         vga_write(") -- see `debug ata on` + `dmesg` for detail\n");
         return;
     }
 
-    vga_write("dmatest: PASSED -- lba "); vga_write_dec(lba);
+    vga_printf("dmatest: PASSED -- lba %u", (uint32_t)lba);
     vga_write(" read identically via the blocking path and the new\n");
-    vga_write("  non-blocking start/poll pair ("); vga_write_dec(polls);
+    vga_printf("  non-blocking start/poll pair (%u", (uint32_t)polls);
     vga_write(" poll call"); vga_write(polls == 1 ? "" : "s");
     vga_write(" before completion)\n");
 }
@@ -709,14 +709,14 @@ void cmd_steptest(const char *args) {
     }
 
     uint32_t total_steps = 0;
-    vga_write("steptest: writing "); vga_write_dec(mb); vga_write(" MB to ");
+    vga_printf("steptest: writing %u MB to ", (uint32_t)mb);
     vga_write(STEPTEST_TEST_PATH); vga_write(" via the stepped API ...\n");
     for (uint32_t c = 0; c < mb; c++) {
         stress_fill_pattern(c);
         uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
         void *step = fs_write_range_begin(STEPTEST_TEST_PATH, offset, g_stress_chunk, STRESS_CHUNK_BYTES);
         if (!step) {
-            vga_write("steptest: FAILED (begin() failed at chunk "); vga_write_dec(c); vga_write(")\n");
+            vga_printf("steptest: FAILED (begin() failed at chunk %u)\n", (uint32_t)c);
             fs_delete(STEPTEST_TEST_PATH);
             return;
         }
@@ -724,7 +724,7 @@ void cmd_steptest(const char *args) {
         while ((r = fs_write_range_step(step)) == FS_STEP_PENDING) total_steps++;
         total_steps++; // the terminal step() call itself
         if (r != FS_STEP_DONE) {
-            vga_write("steptest: FAILED (step() failed at chunk "); vga_write_dec(c); vga_write(")\n");
+            vga_printf("steptest: FAILED (step() failed at chunk %u)\n", (uint32_t)c);
             fs_delete(STEPTEST_TEST_PATH);
             return;
         }
@@ -737,7 +737,7 @@ void cmd_steptest(const char *args) {
         uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
         void *step = fs_read_range_begin(STEPTEST_TEST_PATH, offset, readback, STRESS_CHUNK_BYTES);
         if (!step) {
-            vga_write("steptest: FAILED (read begin() failed at chunk "); vga_write_dec(c); vga_write(")\n");
+            vga_printf("steptest: FAILED (read begin() failed at chunk %u)\n", (uint32_t)c);
             fs_delete(STEPTEST_TEST_PATH);
             return;
         }
@@ -746,7 +746,7 @@ void cmd_steptest(const char *args) {
         while ((r = fs_read_range_step(step, &got)) == FS_STEP_PENDING) total_read_steps++;
         total_read_steps++; // the terminal step() call itself
         if (r != FS_STEP_DONE || got != STRESS_CHUNK_BYTES) {
-            vga_write("steptest: FAILED (short/failed read at chunk "); vga_write_dec(c); vga_write(")\n");
+            vga_printf("steptest: FAILED (short/failed read at chunk %u)\n", (uint32_t)c);
             fs_delete(STEPTEST_TEST_PATH);
             return;
         }
@@ -756,7 +756,7 @@ void cmd_steptest(const char *args) {
             if (g_stress_chunk[i] != readback[i]) { mismatch = 1; break; }
         }
         if (mismatch) {
-            vga_write("steptest: FAILED (data mismatch at chunk "); vga_write_dec(c); vga_write(")\n");
+            vga_printf("steptest: FAILED (data mismatch at chunk %u)\n", (uint32_t)c);
             fs_delete(STEPTEST_TEST_PATH);
             return;
         }
@@ -767,9 +767,9 @@ void cmd_steptest(const char *args) {
         vga_write(STEPTEST_TEST_PATH); vga_write(" (clean up manually)\n");
     }
 
-    vga_write("steptest: PASSED -- "); vga_write_dec(mb);
-    vga_write(" MB written via "); vga_write_dec(total_steps);
-    vga_write(" step() calls, read back via "); vga_write_dec(total_read_steps);
+    vga_printf("steptest: PASSED -- %u", (uint32_t)mb);
+    vga_printf(" MB written via %u", (uint32_t)total_steps);
+    vga_printf(" step() calls, read back via %u", (uint32_t)total_read_steps);
     vga_write(" step() calls and verified byte-for-byte\n");
 }
 
@@ -1078,7 +1078,7 @@ void cmd_history(void) {
         return;
     }
     for (int i = 0; i < history_count; i++) {
-        vga_write_dec((uint32_t)(i + 1));
+        vga_printf("%u", (uint32_t)(i + 1));
         vga_write("  ");
         vga_write(history[i] ? history[i] : "");
         vga_putc('\n');
@@ -1189,10 +1189,10 @@ void cmd_gfxbench(const char *args) {
     // loop skips any padding at the end of each scanline.
     uint64_t bytes = (uint64_t)w * h * (depth / 8) * (uint64_t)iterations;
 
-    vga_write("gfxbench: "); vga_write_dec((uint32_t)w);
-    vga_putc('x'); vga_write_dec((uint32_t)h);
-    vga_write(" x"); vga_write_dec((uint32_t)depth);
-    vga_write(", "); vga_write_dec((uint32_t)iterations);
+    vga_printf("gfxbench: %u", (uint32_t)((uint32_t)w));
+    vga_printf("x%u", (uint32_t)((uint32_t)h));
+    vga_printf(" x%u", (uint32_t)((uint32_t)depth));
+    vga_printf(", %u", (uint32_t)((uint32_t)iterations));
     vga_write(" full-screen fills\n");
 
     vga_write("  write-combining: ");
@@ -1203,7 +1203,7 @@ void cmd_gfxbench(const char *args) {
         // No usable clock: report raw cycles rather than a wrong
         // millisecond figure. A number in the wrong unit is worse than
         // none, because it invites comparison.
-        vga_write("  total: "); vga_write_dec((uint32_t)(cycles / 1000000));
+        vga_printf("  total: %u", (uint32_t)(cycles / 1000000));
         vga_write(" Mcycles (CPU MHz unknown -- no ms/MB-s figure)\n");
         return;
     }
@@ -1211,16 +1211,16 @@ void cmd_gfxbench(const char *args) {
     uint64_t total_us = cycles / (uint64_t)info.mhz;
     uint64_t per_us = total_us / (uint64_t)iterations;
 
-    vga_write("  per frame: "); vga_write_dec((uint32_t)(per_us / 1000));
-    vga_putc('.'); vga_write_dec((uint32_t)((per_us % 1000) / 100));
+    vga_printf("  per frame: %u", (uint32_t)(per_us / 1000));
+    vga_printf(".%u", (uint32_t)((per_us % 1000) / 100));
     vga_write(" ms (");
-    if (per_us > 0) vga_write_dec((uint32_t)(1000000 / per_us));
+    if (per_us > 0) vga_printf("%u", (uint32_t)(1000000 / per_us));
     else            vga_write("inf");
     vga_write(" fps ceiling)\n");
 
     vga_write("  throughput: ");
     if (total_us > 0) {
-        vga_write_dec((uint32_t)(bytes / total_us));   // bytes/us == MB/s
+        vga_printf("%u", (uint32_t)(bytes / total_us));   // bytes/us == MB/s
         vga_write(" MB/s\n");
     } else {
         vga_write("(too fast to measure)\n");
@@ -1238,9 +1238,9 @@ void cmd_gfxbench(const char *args) {
         return;
     }
     uint64_t scroll_us = (scroll_cycles / (uint64_t)info.mhz) / (uint64_t)iterations;
-    vga_write_dec((uint32_t)(scroll_us / 1000));
+    vga_printf("%u", (uint32_t)(scroll_us / 1000));
     vga_putc('.');
-    vga_write_dec((uint32_t)((scroll_us % 1000) / 100));
+    vga_printf("%u", (uint32_t)((scroll_us % 1000) / 100));
     vga_write(" ms per text line, ");
     vga_write(gfx_double_buffered() ? "buffered" : "DIRECT (reads the framebuffer)");
     vga_putc('\n');
@@ -1251,9 +1251,9 @@ void cmd_gfxbench(const char *args) {
     uint64_t copy_cycles = gfx_bench_scroll(1, iterations);
     uint64_t copy_us = copy_cycles ? (copy_cycles / (uint64_t)info.mhz) / (uint64_t)iterations : 0;
     vga_write("  copy: ");
-    vga_write_dec((uint32_t)(copy_us / 1000));
+    vga_printf("%u", (uint32_t)(copy_us / 1000));
     vga_putc('.');
-    vga_write_dec((uint32_t)((copy_us % 1000) / 100));
+    vga_printf("%u", (uint32_t)((copy_us % 1000) / 100));
     vga_write(" ms per full-screen move\n");
 
     // The same figures in the kernel log, so a machine with no serial
