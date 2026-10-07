@@ -10,7 +10,7 @@ vectors: MSI-X first, MSI second, its INTx pin only if neither is there.
 
 THE CHECK THAT MATTERS IS THAT INTERRUPTS ARRIVE, and it is not the
 obvious one. Enumeration cannot show it: every control transfer in this
-driver POLLS the event ring (xhci.c's wait_completion), so a controller
+driver POLLS the event ring (xhci_xfer.c's wait_completion), so a controller
 whose interrupts go nowhere still finds its devices, registers them and
 logs "running" -- the whole boot looks perfect. What only an interrupt
 can do is deliver a HID report asynchronously, so this moves the mouse

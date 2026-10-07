@@ -314,7 +314,7 @@ unsigned usb_attach_delay_ms(void);
 // lever docs/bugs.md's enumeration failure had never been given.
 void usb_shutdown(void);
 
-// Re-initialise the whole controller (kernel.usb_hcreset). See xhci.c.
+// Re-initialise the whole controller (kernel.usb_hcreset). See xhci_port.c.
 int usb_controller_reinit(void);
 
 // `system.usb_recover`: may a lost port reset the whole controller?
@@ -330,7 +330,7 @@ int usb_recover_enabled(void);
 // DOES NOT SAY WHICH PAIRS WITH WHICH**; this is derived by position
 // within the two ranges, which is Linux's fallback when ACPI `_PLD` is
 // unavailable, and it is logged at init so a wrong guess is visible.
-// See companion_port() in xhci.c.
+// See companion_port() in xhci_port.c.
 int xhci_companion_port(unsigned port);
 
 // The same rule with the ranges passed IN, so it can be checked without

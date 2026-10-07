@@ -116,7 +116,7 @@ KTEST("usb-enum", "interfaces past the cap are counted and dropped whole") {
 
 // --- one socket, two port numbers -------------------------------------
 //
-// The pairing is a HEURISTIC (xhci.c's companion_port): the controller
+// The pairing is a HEURISTIC (xhci_port.c's companion_port): the controller
 // declares two port RANGES and never says which port of one is the same
 // socket as which port of the other. These pin the arithmetic, not the
 // premise -- what would falsify the premise is the map logged at boot
