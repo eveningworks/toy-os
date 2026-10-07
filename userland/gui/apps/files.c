@@ -364,6 +364,23 @@ static void places_build(void) {
     uui_places_refresh(&g_places);
 }
 
+// A TREE ROW WHOSE FOLDER HAS GONE -- a pin to a folder deleted since
+// the tree was built, most often -- is said so, and the pane stays where
+// it was: set_dir() has already taken the path when the listing fails.
+// The rebuild drops it from Pinned (lib/upins.h keeps the pin for when
+// the folder is back).
+static void tree_goto(const char *path) {
+    char was[PATH_MAX_LEN], gone[PATH_MAX_LEN];
+    strlcpy(was, uui_fileview_dir(active()), sizeof was);
+    strlcpy(gone, path, sizeof gone);   // `path` is a tree slot the rebuild rewrites
+    if (fm_goto(g_active, gone)) return;
+    uui_fileview_set_dir(active(), was);
+    snprintf(g_stat_note, sizeof g_stat_note, "%s is not there any more -- moved or deleted",
+             k_path_basename(gone));
+    places_build();
+    tree_rebuild();
+}
+
 static void pin_selected(int pin) {
     char path[PATH_MAX_LEN];
     if (!uui_fileview_selected_is_dir(active()) ||
@@ -1215,7 +1232,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // re-entering the same directory would reset its selection.
         if (nid >= 0 && nid < g_tree_count &&
             strcmp(g_tree_path[nid], uui_fileview_dir(active())) != 0)
-            fm_goto(g_active, g_tree_path[nid]);
+            tree_goto(g_tree_path[nid]);
         // AFTER the navigation, which lists a directory: the window is
         // meant to measure the gap between the user's two clicks, not
         // the work the first one caused.

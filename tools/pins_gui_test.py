@@ -8,6 +8,9 @@ with `cat` as well as from the app.
    side column gains a row for it.
 2. **That row goes to the folder.**
 3. **"Unpin from Places" takes it out of the file and the column.**
+4. **A pin whose folder was deleted since is SAID so when clicked**, the
+   pane stays where it was, and the row leaves the column -- it used to
+   "open" a folder that was not there.
 
 The context menu's rows are the ones the app logs (`ctxmenu.item`); a
 folder's menu is Open, Open in new tab, then Pin (or Unpin) -- row 2.
@@ -24,6 +27,7 @@ from harness import Results  # noqa: E402
 
 START = "/usr/share"
 TARGET = "/usr/share/sounds"   # not a standard place: Documents IS /usr/share/doc
+GONE = "/home/pin-gone"        # pinned, then deleted under the running app
 PIN_ROW = 2
 
 
@@ -32,6 +36,9 @@ def run(dbg, qmp, res):
         return dbg.send(f"sh {cmd}") or ""
 
     sh("rm /etc/places.conf")
+    sh(f"rm -r {GONE}")
+    sh(f"mkdir {GONE}")
+    dbg.write_lines("/etc/places.conf", [GONE])
     dbg.write_lines(fm.FILES_CONF, ["panes=1", "tree=0", "left_view=details", "details_pane=0"])
     win = dbg.spawn(f"{fm.SPAWN_PATH} {START}", fm.TITLE)
     res.check("the File Manager opens", win is not None, "no window")
@@ -106,6 +113,21 @@ def run(dbg, qmp, res):
     res.check("'Unpin from Places' takes it out of the file and the column",
               m is not None and not pinned() and tree_row(lay, TARGET) is None,
               f"menu={m is not None} file={pinned()} row={tree_row(lay, TARGET)}")
+
+    # 4. a pinned folder deleted since the column was built
+    lay = fm.wait_layout(dbg, win, lambda l: tree_row(l, GONE) is not None) or fm.layout_now(dbg, win)
+    row = tree_row(lay, GONE) if lay else None
+    sh(f"rm -r {GONE}")
+    if row is not None:
+        tx, ty, tw, th, trh, _ = lay.treebox
+        fm.sure_click(dbg, qmp, lay.ox + tx + tw // 2, lay.oy + ty + row * trh + trh // 2)
+    lay = (fm.wait_layout(dbg, win, lambda l: l.note and "not there" in l.note, timeout=25.0)
+           or fm.layout_now(dbg, win) or fm.last_layout())
+    res.check("a deleted pinned folder is said so, the pane stays, and its row goes",
+              row is not None and lay is not None and lay.note and "not there" in lay.note and
+              lay.dir.get(0) == START and tree_row(lay, GONE) is None,
+              f"row={row} note={lay.note if lay else None!r} dir={lay.dir.get(0) if lay else None!r} "
+              f"still={tree_row(lay, GONE) if lay else None}")
     sh("rm /etc/places.conf")
 
 

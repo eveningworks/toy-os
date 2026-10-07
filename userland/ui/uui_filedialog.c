@@ -199,7 +199,14 @@ static void on_widget(struct uapp_window *w, int id, int reason) {
         // the directory and wipe the typed name.
         char to[UUI_FILEDIALOG_PATH_MAX];
         if (uui_places_take(&fd->places, to, sizeof to)) {
-            uui_fileview_set_dir(&fd->view, to);
+            // A pinned folder deleted since the list was built: the
+            // listing stays where it was and the list loses the row.
+            char was[UUI_FILEDIALOG_PATH_MAX];
+            snprintf(was, sizeof was, "%s", uui_fileview_dir(&fd->view));
+            if (!uui_fileview_set_dir(&fd->view, to)) {
+                uui_fileview_set_dir(&fd->view, was);
+                build_places(fd);
+            }
             uui_textbox_set_text(&fd->name, "");
             sync_places(fd);
             uui_focus_set(&fd->focus, FOCUS_PLACES);
