@@ -2524,6 +2524,30 @@ Put on the roadmap 2026-10-06 (not scheduled). `hid_parse.h` already walks repor
 a gamepad is its axes and buttons as absolute events, and DOOM maps them
 the way `doomgeneric` maps a joystick.
 
+### Root ports driven by the hub driver, through an xHCI virtual root hub -- one port state machine, as Linux's `core/hub.c`
+
+Agreed 2026-10-07 and NOT STARTED. There are two port state machines:
+`xhci_port.c` drives the root ports (forced-reset retry, warm reset of
+the USB3 companion, the Intel mux, power cycling, software replug,
+controller re-init, give-up counts, the trace dump) and `usb_hub.c`
+drives external hubs' ports (two reset attempts, no warm reset, USB2
+only). Linux has one: the host controller presents a VIRTUAL ROOT HUB
+(`xhci_hub_control()` answers GetPortStatus / Set- and ClearPortFeature
+from PORTSC) and `core/hub.c` drives every hub's ports alike.
+
+The shape: a per-hub PORT OPS table in `usb_hub.c` (status, set, clear,
+attach); external hubs implement it with class requests, the root hub
+with `xhci_hub_control()`; `usb_hub.c`'s change -> detach -> debounce ->
+attach is shared; **the root port's recovery ladder stays the root
+hub's attach op**, because every rung of it was added for a failure
+measured on the laptops (`docs/bugs.md`). What external hubs gain is the
+same vocabulary, and a place for warm reset when USB3 hubs are driven.
+
+**Why it waits**: it changes root-port behaviour, which only real
+hardware can judge -- both laptops and the G6 -- and on the ASUS USB is
+also the only network link, so a regression there leaves the machine
+unreachable until someone is at it. Do it with both laptops up.
+
 ### Bluetooth, or a written decision against it -- the Intel cards' Bluetooth half is a USB device, Linux's `btusb`
 
 Put on the roadmap 2026-10-06 (not scheduled). The Wi-Fi item's companion: the same Intel

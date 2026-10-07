@@ -957,6 +957,7 @@ run on, not by order.
 - [ ] USB mass storage (bulk-only transport) -- the first non-disk-bus storage backend
 - [ ] A USB gamepad for DOOM -- HID's generic-desktop gamepad and joystick usages, through the input core
 - [ ] Bluetooth, or a written decision against it -- the Intel cards' Bluetooth half is a USB device, Linux's `btusb`
+- [ ] Root ports driven by the hub driver, through an xHCI virtual root hub -- one port state machine, as Linux's `core/hub.c`
 - [x] ~~Hub support (devices behind a hub, not just root ports)~~ DONE 2026-08-28 -- USB2 only; the TT path is hardware-only
 - [x] ~~Hot-plug: a device plugged in after boot enumerates, an unplugged one is torn down~~ DONE 2026-08-28
 - [x] ~~Composite devices: every boot interface binds, not just the first~~ DONE 2026-08-28
