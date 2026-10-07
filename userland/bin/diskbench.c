@@ -83,8 +83,8 @@
 //
 // A FILE RATHER THAN A PIPE, and that is the point rather than a
 // shortcut: SYS_SPAWN's stdout_fd must be a pipe write end, and a pipe
-// here would re-couple the two processes -- PIPE_MAX is 8 KiB kernel
-// wide, so a GUI that was slow to drain would BLOCK the benchmark it is
+// here would re-couple the two processes -- a pipe holds 4 KiB, so a
+// GUI that was slow to drain would BLOCK the benchmark it is
 // timing, which is both a stall and a corrupted measurement. With a
 // file neither side waits for the other.
 // TO STDOUT IT STREAMS; TO A FILE IT SNAPSHOTS, and the difference is

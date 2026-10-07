@@ -493,7 +493,7 @@ static void begin_run(struct uapp *a) {
     cleanup();
 
     // THE CHILD WRITES THE REPORT ITSELF (`--out`) with no stdout: a pipe
-    // would couple the two (PIPE_MAX is 8 KiB kernel-wide), so a window
+    // would couple the two (a pipe holds 4 KiB), so a window
     // slow to drain would block the benchmark it is timing.
     static char args[200];
     snprintf(args, sizeof args, "--size %d --path %s --out %s", size_mib(), g_work, RESULT_PATH);

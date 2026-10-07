@@ -55,14 +55,15 @@ kernel stack -- so the ring-3 stack gets a different name here:
 | the stack | `kernel/net/` -- eth, ARP, IPv4 + fragment reassembly, ICMP, UDP, TCP, ~2.5k lines that parse what the wire sends |
 | the NIC drivers | `kernel/drivers/net/` behind `net_device`; a driver's ISR copies a frame into `net_rx()`'s static queue and returns |
 | what drives the stack | NO THREAD: `net_poll()` runs from `scheduler_idle()` and from the socket syscalls; TCP's timers ride the deadline of whichever process is waiting (`net_wait_deadline()`) |
-| capacity | `SOCK_MAX` 8 sockets and `TCP_MAX_CONNS` 8 connections, KERNEL-WIDE, static |
+| capacity | grown on demand since 2026-10-07 (`kernel/lib/kslots.c`); it was 8 sockets and 8 connections, kernel-wide |
 | the fd | `socket_fd_ops` in `kernel/net/net_syscalls.c`; a socket is an index, as a pipe is |
 | kernel consumers | `fd_peer_ip()` (`kernel/proc/syscall_fd.c`) asks a socket's peer so a session that arrived over the network is recognised (`remote_log.h`); `conn_log.c` records every flow from inside the stack; `kdebug_net.c` builds its own frames on a dedicated card and shares nothing |
 | the policy half | `/bin/netd` (names, DHCP leases), `ntpd`, `netheal` -- already ring 3 |
 
 The capacity row matters for the argument: eight sockets for the whole
-machine is a limit a ring-3 stack would lift with `malloc` -- but so
-would a kernel one with a dynamic table, so it is NOT a reason to move.
+machine was a limit a ring-3 stack would have lifted with `malloc` --
+and a kernel table that grows lifted it instead (2026-10-07), so it is
+NOT a reason to move.
 
 ## The choices
 
@@ -112,8 +113,7 @@ claimed.
 `socketpair()`: two fds, a byte ring between them, blocking `read` with
 the existing park/deadline machinery, EOF when the other end closes.
 **Its own callers**: `socketpair()` in tolibc, and a credential-carrying
-replacement for `PIPE_MAX`'s eight kernel-wide pipes where a daemon
-wants a long-lived one.
+replacement for a pipe where a daemon wants a long-lived one.
 
 ### Stage 3 -- `netstack` on a SECOND card
 

@@ -29,6 +29,34 @@ KTEST("pipe", "a written byte comes back out, in order") {
     pipe_close_reader(p);
 }
 
+// The ceiling was eight pipes kernel-wide, shared with every shell
+// pipeline and every daemon's channel. Twenty at once, each holding its
+// own byte, is what a fixed table of eight cannot do -- and a closed
+// pipe's slot comes back EMPTY for the next one.
+KTEST("pipe", "more than eight pipes are open at once, each its own") {
+    int p[20];
+    for (int i = 0; i < 20; i++) {
+        p[i] = pipe_create();
+        KTEST_ASSERT(p[i] >= 0);
+        char c = (char)('A' + i);
+        KTEST_ASSERT_EQ(pipe_write(p[i], &c, 1), 1);
+    }
+    for (int i = 0; i < 20; i++) {
+        char c = 0;
+        KTEST_ASSERT_EQ(pipe_read(p[i], &c, 1), 1);
+        KTEST_ASSERT_EQ(c, (char)('A' + i));
+        pipe_close_writer(p[i]);
+        pipe_close_reader(p[i]);
+        KTEST_ASSERT(!pipe_valid(p[i]));
+    }
+    int q = pipe_create();
+    KTEST_ASSERT(q >= 0);
+    char buf[4];
+    KTEST_ASSERT_EQ(pipe_read(q, buf, sizeof buf), -1);   // nothing left over
+    pipe_close_writer(q);
+    pipe_close_reader(q);
+}
+
 KTEST("pipe", "empty with a live writer is WOULD-BLOCK, without one is EOF") {
     int p = pipe_create();
     KTEST_ASSERT(p >= 0);

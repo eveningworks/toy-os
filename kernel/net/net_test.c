@@ -1866,3 +1866,29 @@ KTEST("tcp", "a full backlog drops the SYN rather than refusing it") {
     net_sock_close(lis);
     tcp_tick();
 }
+
+// The socket table and the TCP block table were eight each, machine-
+// wide. Past that both must keep working AND keep their rules: a port
+// bound by socket 15 is still taken for socket 21, which a table that
+// grew without its walks growing too would forget.
+KTEST("net", "more than eight sockets and eight TCP blocks, and ports stay exclusive") {
+    int udp[20], tcp[12];
+    for (int i = 0; i < 20; i++) {
+        udp[i] = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+        KTEST_ASSERT(udp[i] >= 0);
+        KTEST_ASSERT_EQ(net_sock_bind(udp[i], 0, (uint16_t)(7800 + i), 0), 7800 + i);
+    }
+    for (int i = 0; i < 12; i++) {
+        tcp[i] = net_sock_open(NET_AF_INET, NET_SOCK_STREAM, IP_PROTO_TCP);
+        KTEST_ASSERT(tcp[i] >= 0);
+        KTEST_ASSERT_EQ(net_sock_bind(tcp[i], 0, (uint16_t)(7900 + i), 0), 7900 + i);
+        KTEST_ASSERT_EQ(net_sock_listen(tcp[i]), 0);   // one TCP block each
+    }
+    int dup = net_sock_open(NET_AF_INET, NET_SOCK_DGRAM, IP_PROTO_UDP);
+    KTEST_ASSERT(dup >= 0);
+    int rc = net_sock_bind(dup, 0, 7815, 0);   // bound by the 16th above
+    net_sock_close(dup);
+    for (int i = 0; i < 20; i++) net_sock_close(udp[i]);
+    for (int i = 0; i < 12; i++) net_sock_close(tcp[i]);
+    KTEST_ASSERT(rc < 0);
+}

@@ -8,13 +8,9 @@
 
 #define PORT 47123
 
-// Free connection blocks right now, counted by taking them all.
-static int free_blocks(void) {
-    int got[32], n = 0;
-    while (n < 32 && (got[n] = tcp_open(0)) >= 0) n++;
-    for (int i = 0; i < n; i++) tcp_release(got[i]);
-    return n;
-}
+// Live blocks, not free ones: the table grows on demand (kslots), so
+// "allocate until it fails" no longer measures anything.
+static int live_blocks(void) { return tcp_blocks_in_use(); }
 
 static int seg(uint8_t *out, uint32_t src, uint32_t dst, uint16_t sport,
                uint32_t seq, uint8_t flags) {
@@ -46,18 +42,18 @@ KTEST("tcp", "a half-open connection that is reset gives its block back") {
     scheduler_preempt_disable();
     int lis = tcp_open(PORT);
     int ok = lis >= 0 && tcp_listen(lis) == 0;
-    int before = ok ? free_blocks() : -1;
+    int before = ok ? live_blocks() : -1;
 
     uint8_t pkt[20];
     tcp_input(dev, peer, dev->ip, pkt, (uint32_t)seg(pkt, peer, dev->ip, 40000, 1000, 0x02));
-    int during = free_blocks();
+    int during = live_blocks();
     // The reset must sit where the next byte was expected: 1000 + the SYN.
     tcp_input(dev, peer, dev->ip, pkt, (uint32_t)seg(pkt, peer, dev->ip, 40000, 1001, 0x04));
-    int after = free_blocks();
+    int after = live_blocks();
     if (lis >= 0) tcp_release(lis);
     scheduler_preempt_enable();
 
     KTEST_ASSERT(ok);
-    KTEST_ASSERT_EQ(during, before - 1);   // the SYN took a block
+    KTEST_ASSERT_EQ(during, before + 1);   // the SYN took a block
     KTEST_ASSERT_EQ(after, before);        // and the reset gave it back
 }

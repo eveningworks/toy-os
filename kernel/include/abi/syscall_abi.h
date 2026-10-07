@@ -864,10 +864,9 @@ struct spawn_msg {
     //
     // SPAWN_FD_LOG IS A SENTINEL RATHER THAN AN fd, and that is what
     // makes per-service logging cost nothing: the alternative is a pipe
-    // per service, and PIPE_MAX is 8 KERNEL-WIDE against six services --
-    // which would leave the shell unable to run `ls | grep`. A sentinel
-    // needs no resource, cannot fill, and cannot block the writer, which
-    // a pipe to a stalled reader does.
+    // per service, held for the whole boot. A sentinel needs no
+    // resource, cannot fill, and cannot block the writer, which a pipe
+    // to a stalled reader does.
     int32_t stdout_fd;
     // The child's fd 0, same rule as `stdout_fd` above. A SOCKET is
     // accepted on both because that is what a connection per child
@@ -1805,11 +1804,8 @@ struct sys_stat {
                           // $NOTIFY_SOCKET, and attributes it to a
                           // sender with SO_PASSCRED; s6 has it write a
                           // byte to an inherited fd. Neither ports:
-                          // there are no unix sockets here, PIPE_MAX is
-                          // 8 kernel-wide (shared with every shell
-                          // pipeline, so one held for a whole boot is an
-                          // eighth of the supply), and a pipe carries no
-                          // credentials -- the child would have to
+                          // there are no unix sockets here, and a pipe
+                          // carries no credentials -- the child would have to
                           // declare its own pid and be believed. Calling
                           // the manager instead is Windows' shape
                           // (SetServiceStatus(SERVICE_RUNNING), which

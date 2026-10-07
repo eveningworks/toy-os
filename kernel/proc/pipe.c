@@ -8,10 +8,10 @@
 #include "vmm.h"
 #include "signal.h"   // signal_send -- SIGPIPE on a dead pipe
 #include "syscall_abi.h" // SYS_RETRY -- the wake value blocked readers see
+#include "kslots.h"
 #include <stddef.h>
 
 struct pipe {
-    int used;
     char buf[PIPE_BUF_SIZE];
     int head;    // next byte to read
     int count;   // bytes buffered
@@ -19,16 +19,12 @@ struct pipe {
     int writers;
 };
 
-// Statically allocated, like the event queues: these are written from
-// syscall context and torn down from process teardown, and a fixed
-// table keeps both paths free of allocation failure handling.
-static struct pipe pipes[PIPE_MAX];
+// GROWN ON DEMAND (kslots.h): created from syscall context, where an
+// allocation failure is an ordinary -1, and released without freeing,
+// so process teardown never allocates and never frees.
+static struct kslots g_pipes = KSLOTS_INIT(sizeof(struct pipe));
 
-static struct pipe *at(int idx) {
-    if (idx < 0 || idx >= PIPE_MAX) return NULL;
-    struct pipe *p = &pipes[idx];
-    return p->used ? p : NULL;
-}
+static struct pipe *at(int idx) { return kslots_at(&g_pipes, idx); }
 
 int pipe_valid(int idx) { return at(idx) != NULL; }
 
@@ -38,16 +34,12 @@ int pipe_valid(int idx) { return at(idx) != NULL; }
 const void *pipe_wait_chan(int idx) { return at(idx); }
 
 int pipe_create(void) {
-    for (int i = 0; i < PIPE_MAX; i++) {
-        if (pipes[i].used) continue;
-        pipes[i].used = 1;
-        pipes[i].head = 0;
-        pipes[i].count = 0;
-        pipes[i].readers = 1;
-        pipes[i].writers = 1;
-        return i;
-    }
-    return -1;
+    int i = kslots_alloc(&g_pipes);   // zeroed: empty, head 0
+    if (i < 0) return -1;
+    struct pipe *p = at(i);
+    p->readers = 1;
+    p->writers = 1;
+    return i;
 }
 
 void pipe_add_reader(int idx) { struct pipe *p = at(idx); if (p) p->readers++; }
@@ -55,12 +47,8 @@ void pipe_add_writer(int idx) { struct pipe *p = at(idx); if (p) p->writers++; }
 
 // Frees the slot once nobody holds either end. Kept in one place so the
 // two close paths can't disagree about when that is.
-static void release_if_orphaned(struct pipe *p) {
-    if (p->readers <= 0 && p->writers <= 0) {
-        p->used = 0;
-        p->count = 0;
-        p->head = 0;
-    }
+static void release_if_orphaned(int idx, struct pipe *p) {
+    if (p->readers <= 0 && p->writers <= 0) kslots_free(&g_pipes, idx);
 }
 
 void pipe_close_reader(int idx) {
@@ -77,7 +65,7 @@ void pipe_close_reader(int idx) {
         // documents.
         scheduler_wake(p, SYS_RETRY);
     }
-    release_if_orphaned(p);
+    release_if_orphaned(idx, p);
 }
 
 void pipe_close_writer(int idx) {
@@ -90,7 +78,7 @@ void pipe_close_writer(int idx) {
         // for data that can no longer arrive.
         scheduler_wake(p, SYS_RETRY);
     }
-    release_if_orphaned(p);
+    release_if_orphaned(idx, p);
 }
 
 int64_t pipe_write(int idx, const char *src, uint32_t len) {

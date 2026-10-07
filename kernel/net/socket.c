@@ -25,8 +25,8 @@
 #include "errno.h"
 #include "heap.h"
 #include "scheduler.h"   // the queue's preemption guard
+#include "kslots.h"
 
-#define SOCK_MAX      8
 #define SOCK_MSG_MAX  SYS_NET_MSG_MAX
 #define SOCK_QUEUE    4      // datagrams held per socket, one slot unused
 // Payload bytes a socket may hold queued -- Linux's SO_RCVBUF, which
@@ -47,7 +47,6 @@ struct sock_msg {
 };
 
 struct socket {
-    uint8_t in_use;
     uint8_t proto;          // IP_PROTO_ICMP or IP_PROTO_UDP
     uint16_t id;            // ICMP: the echo identifier
     uint16_t seq;           // ICMP: the last sequence actually sent
@@ -68,7 +67,10 @@ struct socket {
     uint32_t queued;  // payload bytes in q[], against SOCK_RCVBUF
 };
 
-static struct socket g_socks[SOCK_MAX];
+// GROWN ON DEMAND (kslots.h). A closed socket's memory stays valid, so
+// net_poll() preempted while delivering to one reads a dead socket, not
+// freed memory -- the property the fixed table had for free.
+static struct kslots g_socks = KSLOTS_INIT(sizeof(struct socket));
 static uint16_t g_next_ephemeral = NET_PORT_EPHEMERAL_LO;
 
 struct icmp_echo {
@@ -78,8 +80,7 @@ struct icmp_echo {
 } __attribute__((packed));
 
 static struct socket *sock_at(int sock) {
-    if (sock < 0 || sock >= SOCK_MAX || !g_socks[sock].in_use) return 0;
-    return &g_socks[sock];
+    return kslots_at(&g_socks, sock);
 }
 
 // One datagram onto a socket's queue. Full means the NEW one is
@@ -137,11 +138,11 @@ static void queue_drain(struct socket *s) {
 // as they are everywhere. An ICMP socket has no port at all and is
 // skipped rather than compared.
 static int port_taken(uint8_t proto, uint16_t port, int except) {
-    for (int i = 0; i < SOCK_MAX; i++) {
-        if (i == except || !g_socks[i].in_use) continue;
-        if (g_socks[i].proto != proto) continue;
-        if (g_socks[i].proto == IP_PROTO_ICMP) continue;
-        if (g_socks[i].local_port == port) return 1;
+    for (int i = 0; i < kslots_cap(&g_socks); i++) {
+        struct socket *s = sock_at(i);
+        if (i == except || !s || s->proto != proto) continue;
+        if (s->proto == IP_PROTO_ICMP) continue;
+        if (s->local_port == port) return 1;
     }
     return 0;
 }
@@ -170,27 +171,26 @@ int net_sock_open(int domain, int type, int protocol) {
         return -EINVAL;
     }
 
-    for (int i = 0; i < SOCK_MAX; i++) {
-        if (g_socks[i].in_use) continue;
-        k_memset(&g_socks[i], 0, sizeof g_socks[i]);
-        g_socks[i].in_use = 1;
-        g_socks[i].proto = (uint8_t)protocol;
-        g_socks[i].id = (uint16_t)(SOCK_ID_BASE + i);
-        g_socks[i].tcp = -1;
-        return i;
-    }
-    return -ENOSPC;
+    int i = kslots_alloc(&g_socks);   // zeroed
+    if (i < 0) return -ENOMEM;
+    struct socket *s = sock_at(i);
+    s->proto = (uint8_t)protocol;
+    s->id = (uint16_t)(SOCK_ID_BASE + i);
+    s->tcp = -1;
+    return i;
 }
 
 void net_sock_close(int sock) {
-    if (sock < 0 || sock >= SOCK_MAX) return;
+    struct socket *s = sock_at(sock);
+    if (!s) return;
     // A stream is CLOSED, not abandoned: the peer is owed a FIN, and
     // tcp_close() keeps the connection block alive long enough to send
     // it and see it acknowledged.
-    if (g_socks[sock].tcp >= 0) tcp_close(g_socks[sock].tcp);
-    queue_drain(&g_socks[sock]);
-    k_memset(&g_socks[sock], 0, sizeof g_socks[sock]);
-    g_socks[sock].tcp = -1;
+    if (s->tcp >= 0) tcp_close(s->tcp);
+    queue_drain(s);
+    k_memset(s, 0, sizeof *s);
+    s->tcp = -1;
+    kslots_free(&g_socks, sock);
 }
 
 int net_sock_is_stream(int sock) {
@@ -260,14 +260,13 @@ int net_sock_accept(int sock) {
     int conn = tcp_accept(s->tcp);
     if (conn < 0) return conn;
 
-    for (int i = 0; i < SOCK_MAX; i++) {
-        if (g_socks[i].in_use) continue;
-        k_memset(&g_socks[i], 0, sizeof g_socks[i]);
-        g_socks[i].in_use = 1;
-        g_socks[i].proto = IP_PROTO_TCP;
-        g_socks[i].id = (uint16_t)(SOCK_ID_BASE + i);
-        g_socks[i].local_port = s->local_port;
-        g_socks[i].tcp = conn;
+    int i = kslots_alloc(&g_socks);   // `s` stays valid: objects never move
+    if (i >= 0) {
+        struct socket *n = sock_at(i);
+        n->proto = IP_PROTO_TCP;
+        n->id = (uint16_t)(SOCK_ID_BASE + i);
+        n->local_port = s->local_port;
+        n->tcp = conn;
 
         uint32_t peer_ip = 0;
         uint16_t peer_port = 0;
@@ -281,7 +280,7 @@ int net_sock_accept(int sock) {
     // dropped -- otherwise the client waits out its own timeout on a
     // connection this machine has silently forgotten.
     tcp_close(conn);
-    return -ENOSPC;
+    return -ENOMEM;
 }
 
 void net_sock_peer(int sock, uint32_t *out_ip, uint16_t *out_port) {
@@ -426,9 +425,9 @@ int net_sock_deliver(uint8_t proto, uint32_t src_ip, const uint8_t *data, uint32
     k_memcpy(&h, data, sizeof h);
     uint16_t id = net_ntohs(h.id);
 
-    for (int i = 0; i < SOCK_MAX; i++) {
-        struct socket *s = &g_socks[i];
-        if (!s->in_use || s->proto != IP_PROTO_ICMP || s->id != id) continue;
+    for (int i = 0; i < kslots_cap(&g_socks); i++) {
+        struct socket *s = sock_at(i);
+        if (!s || s->proto != IP_PROTO_ICMP || s->id != id) continue;
         queue_push(s, src_ip, 0, data + sizeof h, len - (uint32_t)sizeof h);
         return 1;
     }
@@ -437,9 +436,9 @@ int net_sock_deliver(uint8_t proto, uint32_t src_ip, const uint8_t *data, uint32
 
 int net_sock_deliver_udp(struct net_device *dev, uint32_t src_ip, uint16_t src_port,
                          uint16_t dst_port, const uint8_t *data, uint32_t len) {
-    for (int i = 0; i < SOCK_MAX; i++) {
-        struct socket *s = &g_socks[i];
-        if (!s->in_use || s->proto != IP_PROTO_UDP) continue;
+    for (int i = 0; i < kslots_cap(&g_socks); i++) {
+        struct socket *s = sock_at(i);
+        if (!s || s->proto != IP_PROTO_UDP) continue;
         if (s->local_port != dst_port) continue;
         // A socket bound to one card does not hear another's traffic --
         // which is the point of binding to a device, and what keeps two

@@ -120,7 +120,7 @@ a line to `/run/init.ctl` and then send `SIGHUP` to init, which is what
 wakes it out of `waitpid(-1)` to read the file. That is runit's
 `supervise/control` object plus SysV's `kill -HUP 1`; systemd's D-Bus
 and `/run/initctl`'s FIFO both need transports this system has not got
-(no unix sockets, and `PIPE_MAX` is 8 kernel-wide). See
+(no unix sockets). See
 `docs/decisions.md`.
 
 It **finds init rather than assuming pid 1** — init holds that number

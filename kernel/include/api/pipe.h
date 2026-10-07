@@ -37,10 +37,10 @@
 const void *pipe_wait_chan(int idx);
 
 #define PIPE_BUF_SIZE 4096
-#define PIPE_MAX      8 // concurrent pipes, kernel-wide
 
 // Allocates a pipe with one reader and one writer already counted.
-// Returns its index, or -1 if none are free.
+// Returns its index, or -1 when the heap is out -- there is no fixed
+// number of pipes (kslots.h).
 int pipe_create(void);
 
 // Reference counting for the two ends. A pipe's storage is released

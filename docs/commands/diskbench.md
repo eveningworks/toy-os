@@ -47,7 +47,7 @@ is bounded so it stays inside the reader's buffer, and a report that
 outgrows it ends with `diskbench: error report-truncated` rather than
 silently stopping.
 A file rather than a pipe because `SYS_SPAWN`'s `stdout_fd` must be a
-pipe write end, and `PIPE_MAX` is 8 KiB kernel-wide — a GUI slow to
+pipe write end, and a pipe holds 4 KiB — a GUI slow to
 drain would block the benchmark it is timing.
 
 **A `progress` line is `<profile> <percent> <bytes-moved>

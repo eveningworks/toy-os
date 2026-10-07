@@ -42,11 +42,11 @@
 #include "errno.h"
 #include "scheduler.h" // preemption guard -- see tcp_recv()/tcp_input()
 #include "heap.h"
+#include "kslots.h"
 
 // One listener plus several live connections. Four was enough for a
 // client and is not enough for a server that must hold a listener and
 // the connection it is serving while a second waits in the backlog.
-#define TCP_MAX_CONNS 8
 // The send ring, allocated and halved the same way as the receive one.
 #define TCP_SND_BUF   (64u * 1024u)
 #define TCP_SND_MIN   (4u * 1024u)
@@ -101,7 +101,7 @@ struct tcp_header {
 _Static_assert(sizeof(struct tcp_header) == 20, "TCP header is 20 bytes on the wire");
 
 struct tcp_conn {
-    uint8_t in_use;
+    int idx;               // its own index in g_conns
     uint8_t state;         // TCP_STATE_*
     // A connection a LISTENER produced and nobody has accepted yet. It
     // is a full connection -- handshaken, buffering whatever the client
@@ -151,7 +151,13 @@ struct tcp_conn {
     uint8_t refused;       // the RST answered our SYN: nothing is there
 };
 
-static struct tcp_conn g_conns[TCP_MAX_CONNS];
+// GROWN ON DEMAND (kslots.h). A released block's memory stays valid --
+// net_poll() may hold one across a preemption -- and is reused.
+static struct kslots g_conns = KSLOTS_INIT(sizeof(struct tcp_conn));
+
+static struct tcp_conn *conn_at(int idx) { return kslots_at(&g_conns, idx); }
+
+int tcp_blocks_in_use(void) { return kslots_live(&g_conns); }
 static uint8_t g_seg[sizeof(struct tcp_header) + TCP_MSS];
 static uint32_t g_isn_counter;
 
@@ -480,48 +486,48 @@ static void maybe_send_fin(struct tcp_conn *c) {
 // --- the public half --------------------------------------------------
 
 static int tcp_open_locked(uint16_t local_port) {
-    for (int i = 0; i < TCP_MAX_CONNS; i++) {
-        if (g_conns[i].in_use) continue;
-        k_memset(&g_conns[i], 0, sizeof g_conns[i]);
-        g_conns[i].in_use = 1;
-        g_conns[i].state = TCP_STATE_CLOSED;
-        g_conns[i].local_port = local_port;
-        return i;
-    }
-    return -ENOSPC;
+    int i = kslots_alloc(&g_conns);   // zeroed
+    if (i < 0) return -ENOMEM;
+    struct tcp_conn *c = conn_at(i);
+    c->idx = i;
+    c->state = TCP_STATE_CLOSED;
+    c->local_port = local_port;
+    return i;
 }
 
 static void tcp_release_locked(int idx) {
-    if (idx < 0 || idx >= TCP_MAX_CONNS) return;
-    if (g_conns[idx].rcv) kfree(g_conns[idx].rcv);
-    if (g_conns[idx].snd) kfree(g_conns[idx].snd);
-    k_memset(&g_conns[idx], 0, sizeof g_conns[idx]);
+    struct tcp_conn *c = conn_at(idx);
+    if (!c) return;
+    if (c->rcv) kfree(c->rcv);
+    if (c->snd) kfree(c->snd);
+    k_memset(c, 0, sizeof *c);
+    kslots_free(&g_conns, idx);
 }
 
 int tcp_state(int idx) {
-    if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return TCP_STATE_CLOSED;
-    return g_conns[idx].state;
+    if (!conn_at(idx)) return TCP_STATE_CLOSED;
+    return conn_at(idx)->state;
 }
 
 // Why a connection is not usable, or 0 while it still might be. The
 // handshake's own result: a caller polls this rather than tcp_state(),
 // because CLOSED is both "not started" and "refused".
 void tcp_peer(int idx, uint32_t *out_ip, uint16_t *out_port) {
-    if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return;
-    if (out_ip) *out_ip = g_conns[idx].remote_ip;
-    if (out_port) *out_port = g_conns[idx].remote_port;
+    if (!conn_at(idx)) return;
+    if (out_ip) *out_ip = conn_at(idx)->remote_ip;
+    if (out_port) *out_port = conn_at(idx)->remote_port;
 }
 
 int tcp_error(int idx) {
-    if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
-    if (g_conns[idx].refused) return -ECONNREFUSED;
-    if (g_conns[idx].reset) return -ECONNRESET;
+    if (!conn_at(idx)) return -EBADF;
+    if (conn_at(idx)->refused) return -ECONNREFUSED;
+    if (conn_at(idx)->reset) return -ECONNRESET;
     return 0;
 }
 
 static int tcp_connect_locked(int idx, uint32_t ip, uint16_t port) {
-    if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
-    struct tcp_conn *c = &g_conns[idx];
+    if (!conn_at(idx)) return -EBADF;
+    struct tcp_conn *c = conn_at(idx);
     if (c->state != TCP_STATE_CLOSED) return -EBUSY;
     if (!local_ip_for(ip)) return -ENODEV;
     if (!bufs_alloc(c)) return -ENOMEM;
@@ -552,8 +558,8 @@ static int tcp_connect_locked(int idx, uint32_t ip, uint16_t port) {
 }
 
 static int tcp_listen_locked(int idx) {
-    if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
-    struct tcp_conn *c = &g_conns[idx];
+    if (!conn_at(idx)) return -EBADF;
+    struct tcp_conn *c = conn_at(idx);
     if (c->state != TCP_STATE_CLOSED) return -EBUSY;
     if (!c->local_port) return -EINVAL;      // nothing to listen ON
     c->state = TCP_STATE_LISTEN;
@@ -564,13 +570,13 @@ static int tcp_listen_locked(int idx) {
 // The caller wraps it in a socket of its own; from here on the two
 // blocks are unrelated.
 static int tcp_accept_locked(int idx) {
-    if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
-    if (g_conns[idx].state != TCP_STATE_LISTEN) return -EINVAL;
+    if (!conn_at(idx)) return -EBADF;
+    if (conn_at(idx)->state != TCP_STATE_LISTEN) return -EINVAL;
 
-    for (int i = 0; i < TCP_MAX_CONNS; i++) {
-        struct tcp_conn *k = &g_conns[i];
-        if (!k->in_use || !k->pending) continue;
-        if (k->local_port != g_conns[idx].local_port) continue;
+    for (int i = 0; i < kslots_cap(&g_conns); i++) {
+        struct tcp_conn *k = conn_at(i);
+        if (!k || !k->pending) continue;
+        if (k->local_port != conn_at(idx)->local_port) continue;
         if (k->state != TCP_STATE_ESTABLISHED && k->state != TCP_STATE_CLOSE_WAIT) continue;
         k->pending = 0;      // it has an owner now
         return i;
@@ -579,8 +585,8 @@ static int tcp_accept_locked(int idx) {
 }
 
 static int tcp_send_locked(int idx, const void *buf, uint32_t len) {
-    if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
-    struct tcp_conn *c = &g_conns[idx];
+    if (!conn_at(idx)) return -EBADF;
+    struct tcp_conn *c = conn_at(idx);
     if (c->refused) return -ECONNREFUSED;
     if (c->reset) return -ECONNRESET;
     if (c->state != TCP_STATE_ESTABLISHED && c->state != TCP_STATE_CLOSE_WAIT)
@@ -597,8 +603,8 @@ static int tcp_send_locked(int idx, const void *buf, uint32_t len) {
 }
 
 static int tcp_recv_locked(int idx, void *buf, uint32_t cap) {
-    if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return -EBADF;
-    struct tcp_conn *c = &g_conns[idx];
+    if (!conn_at(idx)) return -EBADF;
+    struct tcp_conn *c = conn_at(idx);
 
     if (c->rcv_len) {
         // THE RECEIVE BUFFER IS NOT RE-ENTRANT: a tcp_input() landing
@@ -620,8 +626,8 @@ static int tcp_recv_locked(int idx, void *buf, uint32_t cap) {
 }
 
 static void tcp_close_locked(int idx) {
-    if (idx < 0 || idx >= TCP_MAX_CONNS || !g_conns[idx].in_use) return;
-    struct tcp_conn *c = &g_conns[idx];
+    if (!conn_at(idx)) return;
+    struct tcp_conn *c = conn_at(idx);
     if (c->state == TCP_STATE_SYN_SENT || c->state == TCP_STATE_CLOSED) {
         tcp_release_locked(idx);
         return;
@@ -644,11 +650,12 @@ static void tcp_close_locked(int idx) {
 // them.
 uint64_t tcp_next_deadline(void) {
     uint64_t best = 0;
-    for (int i = 0; i < TCP_MAX_CONNS; i++) {
-        if (!g_conns[i].in_use) continue;
-        uint64_t when = g_conns[i].rto_at_ns;
-        if (g_conns[i].orphan && (!when || g_conns[i].linger_at_ns < when))
-            when = g_conns[i].linger_at_ns;
+    for (int i = 0; i < kslots_cap(&g_conns); i++) {
+        const struct tcp_conn *c = conn_at(i);
+        if (!c) continue;
+        uint64_t when = c->rto_at_ns;
+        if (c->orphan && (!when || c->linger_at_ns < when))
+            when = c->linger_at_ns;
         if (!when) continue;
         if (!best || when < best) best = when;
     }
@@ -659,9 +666,9 @@ uint64_t tcp_next_deadline(void) {
 // process that woke up owes its connection.
 static void tcp_tick_locked(void) {
     uint64_t now = clocksource_now_ns();
-    for (int i = 0; i < TCP_MAX_CONNS; i++) {
-        struct tcp_conn *c = &g_conns[i];
-        if (!c->in_use) continue;
+    for (int i = 0; i < kslots_cap(&g_conns); i++) {
+        struct tcp_conn *c = conn_at(i);
+        if (!c) continue;
 
         // An abandoned connection is reclaimed as soon as it is really
         // closed, or when its linger expires -- whichever comes first.
@@ -734,9 +741,9 @@ static void tcp_tick_locked(void) {
 // checked the listener first would hand every segment of every live
 // connection to it.
 static struct tcp_conn *find_conn(uint32_t src_ip, uint16_t src_port, uint16_t dst_port) {
-    for (int i = 0; i < TCP_MAX_CONNS; i++) {
-        struct tcp_conn *c = &g_conns[i];
-        if (!c->in_use || c->state == TCP_STATE_CLOSED) continue;
+    for (int i = 0; i < kslots_cap(&g_conns); i++) {
+        struct tcp_conn *c = conn_at(i);
+        if (!c || c->state == TCP_STATE_CLOSED) continue;
         if (c->state == TCP_STATE_LISTEN) continue;
         if (c->local_port == dst_port && c->remote_port == src_port &&
             c->remote_ip == src_ip) return c;
@@ -745,9 +752,9 @@ static struct tcp_conn *find_conn(uint32_t src_ip, uint16_t src_port, uint16_t d
 }
 
 static struct tcp_conn *find_listener(uint16_t dst_port) {
-    for (int i = 0; i < TCP_MAX_CONNS; i++) {
-        struct tcp_conn *c = &g_conns[i];
-        if (c->in_use && c->state == TCP_STATE_LISTEN && c->local_port == dst_port)
+    for (int i = 0; i < kslots_cap(&g_conns); i++) {
+        struct tcp_conn *c = conn_at(i);
+        if (c && c->state == TCP_STATE_LISTEN && c->local_port == dst_port)
             return c;
     }
     return 0;
@@ -765,9 +772,9 @@ static struct tcp_conn *find_listener(uint16_t dst_port) {
 // half-finished connection needs a full block anyway.
 static int backlog_depth(uint16_t port) {
     int n = 0;
-    for (int i = 0; i < TCP_MAX_CONNS; i++) {
-        struct tcp_conn *c = &g_conns[i];
-        if (c->in_use && c->pending && c->local_port == port) n++;
+    for (int i = 0; i < kslots_cap(&g_conns); i++) {
+        struct tcp_conn *c = conn_at(i);
+        if (c && c->pending && c->local_port == port) n++;
     }
     return n;
 }
@@ -788,7 +795,7 @@ static void passive_open(struct tcp_conn *lis, uint32_t src_ip, uint16_t src_por
     int idx = tcp_open_locked(lis->local_port);
     if (idx < 0) return;    // no block: the same silence, for the same reason
 
-    struct tcp_conn *c = &g_conns[idx];
+    struct tcp_conn *c = conn_at(idx);
     if (!bufs_alloc(c)) { tcp_release_locked(idx); return; }  // silence, as above
     settle_wscale(c, peer_wscale(opt, optlen));
     c->pending = 1;
@@ -857,7 +864,7 @@ static int tcp_input_locked(struct net_device *dev, uint32_t src_ip, uint32_t ds
         c->reset = 1;
         c->state = TCP_STATE_CLOSED;
         c->rto_at_ns = 0;
-        if (c->pending) tcp_release_locked((int)(c - g_conns));   // see backlog_depth()
+        if (c->pending) tcp_release_locked(c->idx);   // see backlog_depth()
         return 1;
     }
 

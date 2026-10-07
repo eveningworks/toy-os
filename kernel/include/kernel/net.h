@@ -182,6 +182,7 @@ int udp_output(struct net_device *dev, uint32_t dst_ip, uint16_t dst_port,
 #define TCP_STATE_SYN_RCVD    8
 
 int  tcp_open(uint16_t local_port);      // a connection block, or -errno
+int  tcp_blocks_in_use(void);             // live connection blocks -- for tests
 void tcp_release(int idx);
 int  tcp_state(int idx);
 int  tcp_error(int idx);   // -ECONNREFUSED / -ECONNRESET, or 0

@@ -4742,3 +4742,20 @@ reads yet, and reports `found` 0.
 - **Ask netd through `lib/unetctl.h`** (`netctl` does), never by
   restarting it: a restart loses every card's lease. The reply is
   "accepted"; the outcome is read off the card.
+
+## A TABLE OF KERNEL OBJECTS ADDRESSED BY INDEX IS A `kslots`, NOT A FIXED ARRAY WITH AN `in_use` FLAG
+
+`kernel/lib/kslots.c` (`kernel/include/kernel/kslots.h`): `kslots_alloc()`
+hands back a ZEROED object's index, `kslots_at(i)` the live object or
+NULL, `kslots_free(i)` marks it free. Pipes, sockets and TCP blocks use
+it; a new table of the same shape does too, rather than a ninth
+`static struct x g_xs[X_MAX]`.
+
+Two things to know. **A freed slot's memory stays valid and is reused**
+-- code preempted while holding the pointer reads a dead object, never
+freed memory -- so clear what a stale holder must not act on (a socket
+sets `tcp = -1`) BEFORE `kslots_free()`. **An object never moves**, so
+holding a pointer across another `kslots_alloc()` is fine; holding the
+INDEX ARRAY is not, which is why there is no accessor for it. Walk with
+`for (i = 0; i < kslots_cap(t); i++) if ((x = kslots_at(t, i)))`.
+`docs/decisions/kernel.md` has why it never frees.

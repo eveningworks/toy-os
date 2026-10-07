@@ -253,7 +253,7 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [x] ~~Inter-process IPC (message passing)~~ DONE 2026-09-12 -- `userland/lib/uchan.c`, five callers
 - [x] ~~Connect-by-name endpoints~~ DONE 2026-09-06 -- the shm namespace is the rendezvous, `QUERY_SHM` the enumeration
 - [ ] AF_UNIX sockets, the portable spelling of the same thing -- what ported software expects
-- [ ] Raise `PIPE_MAX` above its kernel-wide 8, which bounds how many clients any daemon can have
+- [x] ~~Raise `PIPE_MAX` above its kernel-wide 8~~ DONE 2026-10-07 -- pipes, sockets and TCP blocks grow on demand (`kslots`)
 - [ ] POSIX `shm_open(3)` in tolibc, which needs `ftruncate` on an shm fd -- a size is fixed at creation today
 - [ ] `tmpfile()` and `mkstemp()` in tolibc, so a caller that does not care where scratch goes never names a path
 - [x] ~~A real C library -- staged in `docs/libc-design.md`~~ BUILT, all stages -- the proof ran twice (cJSON, then Doom)

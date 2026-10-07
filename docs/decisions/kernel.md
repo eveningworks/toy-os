@@ -9015,3 +9015,30 @@ not cosmetic: the re-modeset keeps the firmware's DDI translations,
 watermarks, DDB and CDCLK, each of which a FASTER mode could outrun.
 An eDP panel (gen8) has one timing, so all its smaller sizes are
 scaled -- the same answer i915 gives.
+
+## Pipes, sockets and TCP blocks grow on demand, and a freed one is kept
+
+Each was a fixed array of eight, machine-wide: eight pipes shared by
+every shell pipeline and daemon, eight sockets, eight TCP connections.
+Since 2026-10-07 all three live in `kslots` (`kernel/lib/kslots.c`), a
+table of separately allocated objects addressed by a small stable
+index, which an fd stores. The maintainer chose one shared helper over
+three hand-grown arrays, and no machine-wide ceiling: the heap and each
+process's fd table are the limits.
+
+**A freed slot's memory is kept and reused, never returned.** The fixed
+tables had a property nobody had written down: a closed socket's memory
+stayed valid, so `net_poll()` preempted while delivering to it read a
+dead socket rather than freed memory. Freeing on close would have turned
+that into a use-after-free with no test able to see it. So the table
+sits at its high-water mark, as a slab cache that never shrinks does --
+twenty pipes once open are 80 KiB the heap does not get back.
+
+**An object never moves**, because each is its own allocation: a pipe's
+address is its wait channel, and `net_sock_accept()` holds a listener
+across the allocation of the new socket. **The index arrays grow by
+publishing the new array before the new capacity, and the old arrays
+are not freed** (under twice the final size together), so a reader
+preempted between loading the array and indexing it never touches freed
+memory. Linux's equivalent is `idr`/`xarray` with RCU; this is the same
+shape with "never free" standing in for the grace period.
