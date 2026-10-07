@@ -998,6 +998,7 @@ run on, not by order.
 - [x] ~~Wait for carrier before the boot-time DISCOVER~~ DONE 2026-09-01 -- the boot attempt used to race a USB PHY's 4-6s link
 - [ ] An ICMP error reaching the socket that caused it -- reports are sent, and an arriving one is dropped for want of an error queue
 - [ ] Path MTU Discovery -- DF is never set, so a smaller link on the path is fragmented by a router, not found
+- [ ] The stack in ring 3 -- `docs/netstack-design.md` stages it; the maintainer picks its choices before stage 1
 - [ ] Download over a USB NIC -- ~230 Mbit/s where the onboard r8169 does ~660 and Linux ~810, same line
 - [x] ~~A log of what this machine connects to~~ DONE 2026-09-05 -- a kernel ring, `QUERY_CONNLOG`, `/bin/netlog`
 - [ ] Draining the connection log to a file, so it survives a reboot -- the ring is memory today

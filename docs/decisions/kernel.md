@@ -6115,6 +6115,10 @@ that already works -- `SYS_CLOSE` and process-exit cleanup have handled
 socket fds for free since the scaffolding landed, because neither ever
 looked at file-specific state.
 
+**RE-ARGUED 2026-10-07 in `docs/netstack-design.md`**: the channel, the
+shared memory and the wakeword this paragraph found missing exist now,
+and what is left of the objection is what a socket's fd becomes.
+
 The honest cost is that protocol parsing of hostile input runs in ring
 0. That is the same call this kernel already made for TrueType fonts,
 and it is bounded the same way: every read is length-checked against the
