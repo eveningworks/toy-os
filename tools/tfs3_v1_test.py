@@ -122,7 +122,7 @@ def main():
               "rescue mv /d1/moved /d2/moved", # cross parent: must refuse
               "rescue stat /d1/moved", "rescue stat /d2/moved",
               "rescue truncate /b.txt 4", "rescue cat /b.txt",
-              "fsck", "rescue dmesg")
+              "rescue fsck", "rescue dmesg")
 
     def section(cmd):
         """The output between `--- cmd ---` and the next `---` marker."""

@@ -150,7 +150,7 @@ def main():
         check("...and it really reformatted (the old file is gone)",
               "made-after-reformat" not in out, out[-200:])
         vm_exec("write /back.txt returned")
-        out = vm_exec("rescue cat /back.txt", "fsck")
+        out = vm_exec("rescue cat /back.txt", "rescue fsck")
         check("write works after the second reformat", "returned" in out, out[-300:])
         check("fsck is clean after the round trip", "fsck: clean." in out, out[-300:])
 
