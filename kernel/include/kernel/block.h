@@ -61,11 +61,6 @@ struct blk_io {
     void    *buf;
 };
 
-static inline int blk_ios_fit32(const struct blk_io *io, int n) {
-    for (int i = 0; i < n; i++) if (!blk_fits32(io[i].lba, io[i].count)) return 0;
-    return 1;
-}
-
 struct block_device {
     const char *name;   // "ata", "ram" -- what `df` prints
 

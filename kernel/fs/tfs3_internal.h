@@ -26,7 +26,10 @@
 // ---- format constants (docs/tfs3-design.md; tfs3_writer.py mirrors) ----
 
 #define T3_BLOCK        4096u
-#define T3_SPB          8u              // sectors per block
+// sectors per block. 64-BIT ON PURPOSE: `block * T3_SPB` is a sector
+// number, and a 32-bit product wraps at 2 TiB though a block number
+// (32 bits of 4 KiB) reaches 16 TiB.
+#define T3_SPB          8ull
 // The block layer's ADDRESSING unit, not the device's: a 4K-sector disk
 // is still eight of these per block (block.h). Sub-block I/O below goes
 // through blkdev_*_partial(), which is what keeps that true.
@@ -157,8 +160,8 @@ struct t3_vol {
     // survives because a flat volume seam is what makes a KTEST able to
     // point this backend at a slice of anything.
     const struct block_device *dev;
-    uint32_t base_lba;
-    uint32_t sector_count;
+    uint64_t base_lba;
+    uint64_t sector_count;
 };
 
 struct t3_gd { uint32_t free_blocks, free_inodes; };
@@ -412,6 +415,14 @@ struct t3_state {
 
 };
 
+// The volume's size in 4 KiB blocks, SATURATED at what a 32-bit block
+// number reaches (16 TiB): a bigger volume is formatted to that size
+// rather than wrapping.
+static inline uint32_t t3_vol_blocks(const struct t3_state *sbi) {
+    uint64_t b = sbi->vol.sector_count / T3_SPB;
+    return b > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)b;
+}
+
 // ---- little-endian field access (hand-serialized on disk) ---------------
 
 static inline uint32_t rd32(const uint8_t *p) {
@@ -434,7 +445,7 @@ int t3_block_for_index(struct t3_state *sbi, const struct t3_inode *node, uint32
                        uint32_t *out_blk);
 uint32_t t3_group_base(struct t3_state *sbi, uint32_t g);
 uint32_t t3_group_span(struct t3_state *sbi, uint32_t g);
-int t3_inode_pos(struct t3_state *sbi, uint64_t ino, uint32_t *out_lba, uint32_t *out_off);
+int t3_inode_pos(struct t3_state *sbi, uint64_t ino, uint64_t *out_lba, uint32_t *out_off);
 void t3_ncache_flush(struct t3_state *sbi);
 void t3_icache_drop(struct t3_state *sbi);              // every entry
 void t3_icache_forget(struct t3_state *sbi, uint64_t ino); // one inode
@@ -447,9 +458,9 @@ int t3_read_inode(struct t3_state *sbi, uint64_t ino, struct t3_inode *out);
 int t3_resolve(struct t3_state *sbi, const char *norm, uint64_t *out_ino);
 int t3_lock(struct t3_state *sbi, uint64_t ino, int excl);
 void t3_vol_go_readonly(struct t3_state *sbi, const char *why);
-int t3_vol_read_sectors(struct t3_state *sbi, uint32_t lba, int count, void *buf);
-int t3_vol_write_run(struct t3_state *sbi, uint32_t lba, int count, const void *buf);
-int t3_vol_write_sectors(struct t3_state *sbi, uint32_t lba, int count, const void *buf);
+int t3_vol_read_sectors(struct t3_state *sbi, uint64_t lba, int count, void *buf);
+int t3_vol_write_run(struct t3_state *sbi, uint64_t lba, int count, const void *buf);
+int t3_vol_write_sectors(struct t3_state *sbi, uint64_t lba, int count, const void *buf);
 int t3_write_block(struct t3_state *sbi, uint32_t blk, const void *buf);
 int t3_write_superblock_everywhere(struct t3_state *sbi);
 

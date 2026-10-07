@@ -204,6 +204,7 @@ TOOLS = [
     ("ahci",        "ahci_test.py",            "TFS3 on a SATA drive behind an HBA",  True,  None,                   False),
     ("sector4k",    "sector4k_test.py",        "GPT/TFS3/FAT32 on a 4K-sector disk", True,  None,                   False),
     ("nvme",        "nvme_test.py",            "root on NVMe, a 4K namespace, TRIM", True,  None,                   False),
+    ("bigdisk",     "bigdisk_test.py",         "a 2200 GiB disk on virtio, AHCI, NVMe", True, None,                 False),
     ("diskmark",    "diskmark_test.py",        "the Disk Mark GUI benchmark",        True,  None,                   True),
     # OUT OF gui_regress.py since 2026-09-29, at the maintainer's request:
     # ~150 checks and ~6 minutes, the slowest tool there by far, with two

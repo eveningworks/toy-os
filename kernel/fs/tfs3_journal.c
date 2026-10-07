@@ -230,7 +230,7 @@ static int write_targets(struct t3_state *sbi) {
     if (sbi->readonly) return 0;             // t3_vol_write_sectors()'s gate
     t3_rcache_drop(sbi);                         // ...and its cache rule
     for (int i = 0; i < sbi->txn_count; i++) {
-        uint32_t lba = sbi->txn_target[i] * T3_SPB;
+        uint64_t lba = sbi->txn_target[i] * T3_SPB;
         if (lba + T3_SPB > sbi->vol.sector_count) return 0;
         sbi->txn_io[i] = (struct blk_io){ .lba = sbi->vol.base_lba + lba, .count = T3_SPB,
                                        .write = 1, .buf = sbi->txn_img[i] };
@@ -378,10 +378,11 @@ int t3_txn_stage_inode(struct t3_state *sbi, uint64_t ino, const struct t3_inode
         if (sbi->txn_nino < T3_TXN_INO) sbi->txn_ino[sbi->txn_nino] = ino;
         if (sbi->txn_nino <= T3_TXN_INO) sbi->txn_nino++;   // one past: "too many, drop all"
     }
-    uint32_t lba, off;
+    uint64_t lba;
+    uint32_t off;
     if (!t3_inode_pos(sbi, ino, &lba, &off)) return 0;
-    uint32_t blk = lba / T3_SPB;
-    uint32_t within = (lba % T3_SPB) * T3_SECTOR + off;
+    uint32_t blk = (uint32_t)(lba / T3_SPB);
+    uint32_t within = (uint32_t)(lba % T3_SPB) * T3_SECTOR + off;
     uint8_t *img = t3_txn_stage(sbi, blk);
     if (!img) return 0;
     if (node) pack_inode_into(img + within, node);

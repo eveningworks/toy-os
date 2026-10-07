@@ -18,20 +18,20 @@ static uint64_t ns_count(const struct block_device *self) {
     return nvme_ns_sector_count(ns_of(self));
 }
 static int ns_read(const struct block_device *self, uint64_t lba, int count, void *buf) {
-    return blk_fits32(lba, (uint64_t)count) && nvme_read(ns_of(self), (uint32_t)lba, count, buf);
+    return nvme_read(ns_of(self), lba, count, buf);
 }
 static int ns_write(const struct block_device *self, uint64_t lba, int count, const void *buf) {
-    return blk_fits32(lba, (uint64_t)count) && nvme_write(ns_of(self), (uint32_t)lba, count, buf);
+    return nvme_write(ns_of(self), lba, count, buf);
 }
 static int ns_flush(const struct block_device *self) { return nvme_flush(ns_of(self)); }
 static int ns_trim(const struct block_device *self, uint64_t lba, uint32_t count) {
-    return blk_fits32(lba, count) && nvme_trim(ns_of(self), (uint32_t)lba, count);
+    return nvme_trim(ns_of(self), lba, count);
 }
 static int ns_trim_ranges(const struct block_device *self, const struct blk_range *r, int n) {
-    return blk_ranges_fit32(r, n) && nvme_trim_ranges(ns_of(self), r, n);
+    return nvme_trim_ranges(ns_of(self), r, n);
 }
 static int ns_batch(const struct block_device *self, struct blk_io *io, int n) {
-    return blk_ios_fit32(io, n) && nvme_submit_batch(ns_of(self), io, n);
+    return nvme_submit_batch(ns_of(self), io, n);
 }
 static int max_xfer(const struct block_device *self) { (void)self; return nvme_max_sectors_per_xfer(); }
 

@@ -11,25 +11,25 @@
 static uint64_t ahci_blk_sector_count(const struct block_device *self) { (void)self; return ahci_sector_count(); }
 static int ahci_blk_read(const struct block_device *self, uint64_t lba, int count, void *buf) {
     (void)self;
-    return blk_fits32(lba, (uint64_t)count) && ahci_read_sectors((uint32_t)lba, count, buf);
+    return ahci_read_sectors(lba, count, buf);
 }
 static int ahci_blk_write(const struct block_device *self, uint64_t lba, int count, const void *buf) {
     (void)self;
-    return blk_fits32(lba, (uint64_t)count) && ahci_write_sectors((uint32_t)lba, count, buf);
+    return ahci_write_sectors(lba, count, buf);
 }
 static int ahci_blk_max_xfer(const struct block_device *self) { (void)self; return ahci_max_sectors_per_xfer(); }
 static int ahci_blk_flush(const struct block_device *self) { (void)self; return ahci_flush(); }
 static int ahci_blk_trim(const struct block_device *self, uint64_t lba, uint32_t count) {
     (void)self;
-    return blk_fits32(lba, count) && ahci_trim((uint32_t)lba, count);
+    return ahci_trim(lba, count);
 }
 static int ahci_blk_trim_ranges(const struct block_device *self, const struct blk_range *r, int n) {
     (void)self;
-    return blk_ranges_fit32(r, n) && ahci_trim_ranges(r, n);
+    return ahci_trim_ranges(r, n);
 }
 static int ahci_blk_batch(const struct block_device *self, struct blk_io *io, int n) {
     (void)self;
-    return blk_ios_fit32(io, n) && ahci_submit_batch(io, n);
+    return ahci_submit_batch(io, n);
 }
 
 // FLUSH is unconditional and means a real FLUSH CACHE EXT reaching the

@@ -23,10 +23,10 @@ const struct pci_device *virtio_blk_pci(void);
 
 // Capacity in 512-byte sectors, clamped to 32 bits -- see the block
 // layer's own sector_count(), which is uint32_t.
-uint32_t virtio_blk_sector_count(void);
+uint64_t virtio_blk_sector_count(void);
 
-int virtio_blk_read_sectors(uint32_t lba, int count, void *buf);
-int virtio_blk_write_sectors(uint32_t lba, int count, const void *buf);
+int virtio_blk_read_sectors(uint64_t lba, int count, void *buf);
+int virtio_blk_write_sectors(uint64_t lba, int count, const void *buf);
 int virtio_blk_flush(void);
 
 // DISCARD -- virtio's TRIM. Tells the host `count` sectors from `lba`
@@ -37,7 +37,7 @@ int virtio_blk_flush(void);
 // max_discard_sectors comes back 0 rather than being partly done, since
 // a partial discard reporting success would leave the caller believing
 // blocks were released that were not.
-int virtio_blk_discard(uint32_t lba, uint32_t count);
+int virtio_blk_discard(uint64_t lba, uint32_t count);
 
 // Whether a discard issued right now would go out. NOT the feature bit:
 // a device may negotiate DISCARD and advertise a zero maximum, which

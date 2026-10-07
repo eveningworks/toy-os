@@ -1191,7 +1191,10 @@ static int chain_write(struct fat32_state *sbi, uint32_t *io_start, uint64_t off
 static int parse_bpb(struct fat32_state *sbi, const struct block_device *dev) {
     k_memset(&sbi->v, 0, sizeof sbi->v);
     sbi->v.dev = dev;
-    sbi->v.total_sectors = blkdev_sector_count(dev); // provisional, for vol_read's bound
+    // Provisional, for vol_read's bound -- and saturated: FAT32 counts in
+    // 32 bits, so past that the BPB's own total is what decides.
+    uint64_t dev_sectors = blkdev_sector_count(dev);
+    sbi->v.total_sectors = dev_sectors > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)dev_sectors;
     if (sbi->v.total_sectors < 8) return 0;
     if (!blkdev_read_partial(dev, 0, 1, sbi->tmpsec)) return -1;
 
@@ -1271,7 +1274,7 @@ static int fat32_probe(void *st, const struct block_device *dev) {
 static int fat32_wipe(void *st, const struct block_device *dev) {
     struct fat32_state *sbi = st;
     if (!dev) return 1;
-    uint32_t sectors = blkdev_sector_count(dev);
+    uint64_t sectors = blkdev_sector_count(dev);
     if (sectors < 1) return 1;
     k_memset(sbi->tmpsec, 0, SECTOR);
     int ok = blkdev_write_partial(dev, 0, 1, sbi->tmpsec) ? 1 : 0;
@@ -1319,7 +1322,15 @@ static int fat32_format(void *st, const struct block_device *dev) {
     // enforces), and scaled by `k` to the block layer's 512 at each write.
     uint32_t k = blkdev_block_sectors(dev);
     uint32_t bps = k * SECTOR;
-    uint32_t total = blkdev_sector_count(dev) / k;
+    uint64_t total64 = blkdev_sector_count(dev) / k;
+    // FAT32 counts its sectors in 32 bits (BPB_TotSec32): a bigger volume
+    // is refused, not formatted to a truncated size.
+    if (total64 > 0xFFFFFFFFull) {
+        klog_printf("fat32: volume too large to format (%llu %u-byte sectors; FAT32 holds 2^32)\n",
+                    (unsigned long long)total64, bps);
+        return 0;
+    }
+    uint32_t total = (uint32_t)total64;
     if (total * k < 128) {
         klog_write("fat32: volume too small to format\n");
         return 0;

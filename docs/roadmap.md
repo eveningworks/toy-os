@@ -388,6 +388,9 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~GPT/MBR partition table parsing~~ done
 - [x] ~~Mounting a filesystem from a partition, and writing a table (`mkpart`)~~ done
 - [ ] LBA48 addressing
+- [x] ~~Disks past 2 TiB~~ DONE 2026-10-07 -- 64-bit block layer, AHCI/NVMe/virtio, GPT and TFS3; `bigdisk_test.py`
+- [ ] AHCI drives only the FIRST SATA drive it finds -- a second (an 8 TB HDD beside a SATA boot disk) is invisible
+- [ ] A blank disk on a higher-precedence controller takes the root and the boot falls to ramfs -- `root=` works around it
 - [x] ~~A TFS3 test reaching double- and triple-indirect addressing~~ done -- sparse writes make it a KTEST
 - [x] ~~`root=` names the device to mount as the root~~ DONE 2026-08-27 -- every driver enumerates into a device table (`lsblk`)
 - [x] ~~A `ramfs` backend -- a real in-memory filesystem, the root wherever there is no usable drive~~ done

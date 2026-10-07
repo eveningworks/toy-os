@@ -265,7 +265,8 @@ void t3_trim_flush(struct t3_state *sbi) {
 
 void t3_trim_run(struct t3_state *sbi, uint32_t first_blk, uint32_t count) {
     if (!count || !blkdev_trim_supported(sbi->vol.dev)) return;
-    uint32_t lba = sbi->vol.base_lba + first_blk * T3_SPB, n = count * T3_SPB;
+    uint64_t lba = sbi->vol.base_lba + first_blk * T3_SPB;
+    uint32_t n = (uint32_t)(count * T3_SPB);
     for (int i = 0; i < sbi->trim_n; i++) {
         struct blk_range *q = &sbi->trim_q[i];
         if (q->lba + q->count == lba) { q->count += n; return; }

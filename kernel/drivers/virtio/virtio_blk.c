@@ -109,14 +109,7 @@ int virtio_blk_flush_supported(void) {
     return g_present && virtio_has_feature(&g_dev, VIRTIO_BLK_F_FLUSH);
 }
 
-uint32_t virtio_blk_sector_count(void) {
-    // The block layer indexes sectors with a uint32_t, so a device
-    // larger than 2 TiB is exposed truncated rather than wrapped. ATA
-    // has the same ceiling (LBA28), so this is not a new limitation --
-    // but it is one worth saying out loud rather than silently.
-    if (g_capacity > 0xFFFFFFFFull) return 0xFFFFFFFFu;
-    return (uint32_t)g_capacity;
-}
+uint64_t virtio_blk_sector_count(void) { return g_capacity; }
 
 // The one request path. `data` may be NULL for a FLUSH.
 static int request_locked(uint32_t type, uint64_t sector, void *data, uint32_t len, int device_writes);
@@ -197,12 +190,12 @@ static int request_locked(uint32_t type, uint64_t sector, void *data, uint32_t l
     return 1;
 }
 
-int virtio_blk_read_sectors(uint32_t lba, int count, void *buf) {
+int virtio_blk_read_sectors(uint64_t lba, int count, void *buf) {
     if (!buf || count <= 0 || (uint32_t)count > g_max_xfer) return 0;
     return do_request(VIRTIO_BLK_T_IN, lba, buf, (uint32_t)count * 512u, 1);
 }
 
-int virtio_blk_write_sectors(uint32_t lba, int count, const void *buf) {
+int virtio_blk_write_sectors(uint64_t lba, int count, const void *buf) {
     if (!buf || count <= 0 || (uint32_t)count > g_max_xfer) return 0;
     if (g_readonly) {
         klog_write(KLOG_ERR "virtio-blk: device is read-only, write refused\n");
@@ -224,7 +217,7 @@ int virtio_blk_discard_supported(void) {
 // device will take in one segment: a partial discard reporting success
 // would leave the caller believing blocks were released that were not,
 // and the block layer's contract is refused-never-short.
-int virtio_blk_discard(uint32_t lba, uint32_t count) {
+int virtio_blk_discard(uint64_t lba, uint32_t count) {
     if (!virtio_blk_discard_supported() || count == 0) return 0;
     if (g_readonly) return 0;
     if (lba >= g_capacity || count > g_capacity - lba) return 0;
@@ -283,10 +276,6 @@ static int virtio_blk_probe(const struct pci_device *pci) {
     virtio_driver_ok(&g_dev);
     g_present = 1;
 
-    if (g_capacity > 0xFFFFFFFFull) {
-        klog_printf("virtio-blk: capacity %llu sectors exceeds the block layer's 32-bit"
-                    " sector index -- exposing 4294967295\n", (unsigned long long)g_capacity);
-    }
     klog_printf("virtio-blk: %llu sectors, %u-byte blocks, max %u per transfer, flush %s, discard %s%s\n",
                 (unsigned long long)g_capacity, g_blk_size, g_max_xfer,
                 virtio_blk_flush_supported() ? "yes" : "no",

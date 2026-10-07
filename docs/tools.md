@@ -46,7 +46,9 @@ design, every harness here kills its guest, and the suite's first fsck
 asserts clean -- so the precondition is established rather than
 inherited from whichever tool booted the image last), `vm.py`
 (start a headless VM and run shell commands against it, getting text
-back, `--virtio-disk` likewise; `--usb xhci|xhci+mouse` attaches an
+back, `--virtio-disk` likewise -- and `--extra-disk PATH
+--extra-disk-kind virtio|ahci|nvme` puts that second disk on the
+controller a test needs; `--usb xhci|xhci+mouse` attaches an
 xHCI controller and USB HID devices, off by default because attaching a
 `usb-kbd` takes the keyboard AWAY from PS/2 — see `docs/testing.md`;
 `--usb-host VID:PID` passes a REAL device off the host's bus through to
@@ -3984,6 +3986,21 @@ window without going through it will find its layout polls timing out.
   proves MSI-X delivers: a dead vector fails no read, because a
   sleeping waiter wakes at its deadline and reaps anyway. The control
   that turned it red was a handler that never counted.
+- **`bigdisk_test.py`** -- a **sparse 2200 GiB disk past 2 TiB**,
+  attached as a second disk on virtio-blk, AHCI and NVMe in turn beside
+  the IDE root (pinned with `root=ata0p3` via `add_boot_word()`, since a
+  blank disk on a faster controller outranks IDE). The guest makes a
+  64 MiB partition 2 wholly past sector 2^32, formats it TFS3, writes and
+  reads a marker, fscks it. Three boots, on demand.
+
+  The oracle is the HOST reading the image: the kernel's reported sector
+  count, partition 2's start in the GPT, the backup header at the TRUE
+  last sector, the marker inside partition 2 -- and NOTHING written
+  where a 32-bit wrap would land (`SEEK_DATA` over the sparse file).
+  The guest reading the marker back proves nothing on its own: under a
+  wrapped write path the readback was served from cache while the data
+  reached the disk nowhere, which is what turned the wrap check from
+  "the marker is not there" into "nothing is there".
 - **`sector4k_test.py`** -- a **virtio disk with 4096-byte logical
   sectors** (`logical_block_size=4096`) beside the IDE root: `mkpart`,
   `mkfs -t fat32`, `mkfs`, mount both, copy a multi-block file onto each,

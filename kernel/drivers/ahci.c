@@ -154,7 +154,7 @@ static uint8_t *g_buf;
 static uint64_t g_clist_phys, g_fis_phys, g_ctable_phys, g_buf_phys;
 static uint32_t g_buf_frames;
 
-static uint32_t g_sectors;
+static uint64_t g_sectors;
 static int g_lba48;
 static int g_trim;                    // IDENTIFY word 169 bit 0
 static char g_model[41];
@@ -648,15 +648,7 @@ static int identify(void) {
     }
     if (!sectors) return 0;
 
-    // The block layer counts sectors in 32 bits. Clamping and SAYING SO
-    // beats wrapping: a silently truncated capacity is a filesystem
-    // that formats fine and corrupts past 2 TiB.
-    if (sectors > 0xFFFFFFFFull) {
-        klog_printf("ahci: drive reports %llu sectors -- clamped to 2 TiB (32-bit block layer)\n",
-                    (unsigned long long)sectors);
-        sectors = 0xFFFFFFFFull;
-    }
-    g_sectors = (uint32_t)sectors;
+    g_sectors = sectors;
     return 1;
 }
 
@@ -834,8 +826,8 @@ static int ahci_probe(const struct pci_device *dev) {
 
     ncq_setup();
 
-    klog_printf("ahci: port %u: \"%s\", %u sectors, LBA%s, %d sectors/transfer, %s\n",
-                g_ports[g_active].port, g_model, g_sectors, g_lba48 ? "48" : "28",
+    klog_printf("ahci: port %u: \"%s\", %llu sectors, LBA%s, %d sectors/transfer, %s\n",
+                g_ports[g_active].port, g_model, (unsigned long long)g_sectors, g_lba48 ? "48" : "28",
                 ahci_max_sectors_per_xfer(),
                 (g_irq || g_msi_vector) ? "IRQ-driven" : "polled (no interrupt line)");
     if (g_msi_vector)
@@ -848,7 +840,7 @@ static int ahci_probe(const struct pci_device *dev) {
 // ---- transfers -------------------------------------------------------
 
 int ahci_present(void) { return g_active >= 0 && g_sectors > 0; }
-uint32_t ahci_sector_count(void) { return ahci_present() ? g_sectors : 0; }
+uint64_t ahci_sector_count(void) { return ahci_present() ? g_sectors : 0; }
 int ahci_max_sectors_per_xfer(void) { return (int)(g_buf_frames * 4096 / AHCI_SECTOR_SIZE); }
 
 // A transfer is refused rather than clamped when it runs past the end
@@ -859,13 +851,13 @@ int ahci_max_sectors_per_xfer(void) { return (int)(g_buf_frames * 4096 / AHCI_SE
 // was the filesystem's lock alone, which a raw block user does not hold.
 static struct kmutex g_ahci_lock;
 
-static int bounds_ok(uint32_t lba, int count) {
+static int bounds_ok(uint64_t lba, int count) {
     if (count <= 0 || count > ahci_max_sectors_per_xfer()) return 0;
-    if (lba > g_sectors || (uint32_t)count > g_sectors - lba) return 0;
+    if (lba > g_sectors || (uint64_t)count > g_sectors - lba) return 0;
     return 1;
 }
 
-static int read_sectors(uint32_t lba, int count, void *buf) {
+static int read_sectors(uint64_t lba, int count, void *buf) {
     if (!ahci_present() || !buf || !bounds_ok(lba, count)) return 0;
     uint32_t bytes = (uint32_t)count * AHCI_SECTOR_SIZE;
     if (!run_command(ATA_READ_DMA_EX, 0, lba, (uint16_t)count, bytes, 0)) return 0;
@@ -873,21 +865,21 @@ static int read_sectors(uint32_t lba, int count, void *buf) {
     return 1;
 }
 
-int ahci_read_sectors(uint32_t lba, int count, void *buf) {
+int ahci_read_sectors(uint64_t lba, int count, void *buf) {
     kmutex_lock(&g_ahci_lock);
     int r = read_sectors(lba, count, buf);
     kmutex_unlock(&g_ahci_lock);
     return r;
 }
 
-static int write_sectors(uint32_t lba, int count, const void *buf) {
+static int write_sectors(uint64_t lba, int count, const void *buf) {
     if (!ahci_present() || !buf || !bounds_ok(lba, count)) return 0;
     uint32_t bytes = (uint32_t)count * AHCI_SECTOR_SIZE;
     k_memcpy(g_buf, buf, bytes);
     return run_command(ATA_WRITE_DMA_E, 0, lba, (uint16_t)count, bytes, 1);
 }
 
-int ahci_write_sectors(uint32_t lba, int count, const void *buf) {
+int ahci_write_sectors(uint64_t lba, int count, const void *buf) {
     kmutex_lock(&g_ahci_lock);
     int r = write_sectors(lba, count, buf);
     kmutex_unlock(&g_ahci_lock);
@@ -957,7 +949,7 @@ int ahci_trim_ranges(const struct blk_range *r, int n) {
     return ok;
 }
 
-int ahci_trim(uint32_t lba, uint32_t count) {
+int ahci_trim(uint64_t lba, uint32_t count) {
     if (count == 0) return 0;
     struct blk_range one = { lba, count };
     return ahci_trim_ranges(&one, 1);

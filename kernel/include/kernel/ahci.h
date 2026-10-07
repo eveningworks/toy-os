@@ -49,14 +49,14 @@ int ahci_present(void);
 // The drive's capacity in 512-byte sectors, 0 when there is none.
 // 32-bit like the rest of this kernel's block layer, so a drive larger
 // than 2 TiB is CLAMPED and says so at init rather than wrapping.
-uint32_t ahci_sector_count(void);
+uint64_t ahci_sector_count(void);
 
 // `count` sectors from `lba`. Both return 1 on success, 0 on failure --
 // a refused transfer, never a short one. `count` past
 // ahci_max_sectors_per_xfer() is refused rather than split, matching
 // the block layer's contract.
-int ahci_read_sectors(uint32_t lba, int count, void *buf);
-int ahci_write_sectors(uint32_t lba, int count, const void *buf);
+int ahci_read_sectors(uint64_t lba, int count, void *buf);
+int ahci_write_sectors(uint64_t lba, int count, const void *buf);
 
 // The bounce buffer's size in sectors -- what caps one command.
 int ahci_max_sectors_per_xfer(void);
@@ -68,7 +68,7 @@ int ahci_max_sectors_per_xfer(void);
 // sparse and sparseness is only ever LOST, so without this a block
 // written once stays allocated on the host forever. Whether a real SSD
 // does anything with it is between the drive and its firmware.
-int ahci_trim(uint32_t lba, uint32_t count);
+int ahci_trim(uint64_t lba, uint32_t count);
 // Every run, packed 64 to a DATA SET MANAGEMENT command.
 struct blk_range;
 int ahci_trim_ranges(const struct blk_range *r, int n);

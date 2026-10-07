@@ -20,17 +20,17 @@ struct pci_device;
 
 int nvme_ns_count(void);
 uint32_t nvme_ns_id(int ns);
-uint32_t nvme_ns_sector_count(int ns);
+uint64_t nvme_ns_sector_count(int ns);
 uint32_t nvme_ns_block_size(int ns);
 
-int nvme_read(int ns, uint32_t lba, int count, void *buf);
-int nvme_write(int ns, uint32_t lba, int count, const void *buf);
+int nvme_read(int ns, uint64_t lba, int count, void *buf);
+int nvme_write(int ns, uint64_t lba, int count, const void *buf);
 // Several transfers in flight on the I/O queue at once, each answering
 // in io[i].ok (block.h's submit_batch contract).
 int nvme_submit_batch(int ns, struct blk_io *io, int n);
 int nvme_flush(int ns);
 int nvme_trim_ranges(int ns, const struct blk_range *r, int n);
-int nvme_trim(int ns, uint32_t lba, uint32_t count);
+int nvme_trim(int ns, uint64_t lba, uint32_t count);
 int nvme_max_sectors_per_xfer(void);
 
 // Capabilities, from IDENTIFY CONTROLLER. FLUSH only when the controller

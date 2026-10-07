@@ -670,11 +670,11 @@ static int read_table(void) {
 
 static int entry_window_of(const struct partition_table *tbl,
                            const struct partition_entry *pe,
-                           uint32_t *base, uint32_t *count);
+                           uint64_t *base, uint64_t *count);
 
 // One entry's window on the disk, in sectors. 0 if the entry cannot be
 // used (an unusable GPT range, or a protective MBR slot).
-static int entry_window(const struct partition_entry *pe, uint32_t *base, uint32_t *count) {
+static int entry_window(const struct partition_entry *pe, uint64_t *base, uint64_t *count) {
     return entry_window_of(&g_tbl, pe, base, count);
 }
 
@@ -683,21 +683,15 @@ static int entry_window(const struct partition_entry *pe, uint32_t *base, uint32
 // caches the ROOT disk's table.
 static int entry_window_of(const struct partition_table *tbl,
                            const struct partition_entry *pe,
-                           uint32_t *base, uint32_t *count) {
+                           uint64_t *base, uint64_t *count) {
     if (tbl->kind == PART_TABLE_GPT) {
         // GPT's range is INCLUSIVE at both ends, so the count is
         // end - start + 1. Getting that off by one costs the last
         // sector of every volume, which a filesystem notices only when
         // it is nearly full.
         if (pe->gpt_lba_end < pe->gpt_lba_start) return 0;
-        uint64_t n = pe->gpt_lba_end - pe->gpt_lba_start + 1;
-        // This kernel addresses the disk with 32-bit LBAs (LBA28 on
-        // ATA, and block_device's own sector_count is uint32_t), so a
-        // partition past that ceiling is REFUSED rather than truncated
-        // into a window that silently aliases.
-        if (pe->gpt_lba_start + n > 0xFFFFFFFFull) return 0;
-        *base = (uint32_t)pe->gpt_lba_start;
-        *count = (uint32_t)n;
+        *base = pe->gpt_lba_start;
+        *count = pe->gpt_lba_end - pe->gpt_lba_start + 1;
         return 1;
     }
     if (pe->mbr_type == 0xEE) return 0; // protective entry, never a filesystem
@@ -710,7 +704,7 @@ const struct block_device *mount_partition_device(int number) {
     const struct block_device *disk = blk_whole_disk();
     if (!disk || !read_table()) return NULL;
     if (number < 1 || number > g_tbl.entry_count) return NULL;
-    uint32_t base, count;
+    uint64_t base, count;
     if (!entry_window(&g_tbl.entries[number - 1], &base, &count)) return NULL;
     return blk_part_create(disk, base, count, number);
 }
@@ -796,7 +790,7 @@ int mount_rescan_disk(const struct block_device *disk) {
 
     int named = 0;
     for (int n = 0; n < tbl.entry_count; n++) {
-        uint32_t base, count;
+        uint64_t base, count;
         if (!entry_window_of(&tbl, &tbl.entries[n], &base, &count)) continue;
         if (blk_part_create(disk, base, count, n + 1)) named++;
     }
@@ -916,7 +910,7 @@ static int try_partitions(void) {
 
     for (int i = 0; i < g_tbl.entry_count; i++) {
         const struct partition_entry *pe = &g_tbl.entries[i];
-        uint32_t base, count;
+        uint64_t base, count;
 
         // THE FIRMWARE'S PARTITIONS ARE NOT THE ROOT. A BIOS boot
         // partition holds GRUB's core.img with no filesystem in it, and
@@ -960,8 +954,8 @@ static int try_partitions(void) {
             int claimed = fs->probe(sc.st, dev);
             mount_scratch_end(&sc);
             if (claimed == 1) {
-                klog_printf("fs: mounting %s from partition %d (LBA %u, %u sectors)\n",
-                            fs->name, i + 1, base, count);
+                klog_printf("fs: mounting %s from partition %d (LBA %llu, %llu sectors)\n",
+                            fs->name, i + 1, (unsigned long long)base, (unsigned long long)count);
                 const char *why;
                 if (mount_add(dev, fs->name, "/", 0, 0, &why)) return 1;
                 klog_printf("fs: partition %d would not mount: %s\n", i + 1, why);
@@ -1142,7 +1136,7 @@ void mount_boot_auto(void) {
         const struct partition_entry *pe = &g_tbl.entries[i];
         if (!partition_is_esp(pe, g_tbl.kind)) continue;
 
-        uint32_t base, count;
+        uint64_t base, count;
         if (!entry_window(pe, &base, &count)) continue;
         const struct block_device *dev = blk_part_create(disk, base, count, i + 1);
         if (!dev) continue;

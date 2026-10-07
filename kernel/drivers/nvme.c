@@ -130,7 +130,7 @@ struct nvme_ns {
     uint32_t nsid;
     uint32_t block_size;    // 512 or 4096
     uint32_t spb;           // 512-byte sectors per block
-    uint32_t sectors;       // capacity in 512-byte sectors, clamped to 32 bits
+    uint64_t sectors;       // capacity in 512-byte sectors
 };
 
 static const struct pci_device *g_pci;
@@ -374,14 +374,9 @@ static void add_namespace(uint32_t nsid) {
     ns->nsid = nsid;
     ns->block_size = 1u << lbads;
     ns->spb = ns->block_size / 512;
-    uint64_t sectors = nsze * ns->spb;
-    if (sectors > 0xFFFFFFFFull) {
-        klog_printf("nvme: namespace %u clamped to 2 TiB (32-bit block layer)\n", nsid);
-        sectors = 0xFFFFFFFFull & ~(uint64_t)(ns->spb - 1);
-    }
-    ns->sectors = (uint32_t)sectors;
-    klog_printf("nvme: namespace %u: %u sectors, %u-byte blocks\n",
-                nsid, ns->sectors, ns->block_size);
+    ns->sectors = nsze * ns->spb;
+    klog_printf("nvme: namespace %u: %llu sectors, %u-byte blocks\n",
+                nsid, (unsigned long long)ns->sectors, ns->block_size);
     g_ns_count++;
 }
 
@@ -551,7 +546,7 @@ PCI_DRIVER("nvme", nvme_matches, nvme_probe);
 
 int nvme_ns_count(void) { return g_dead ? 0 : g_ns_count; }
 uint32_t nvme_ns_id(int ns) { return ns >= 0 && ns < g_ns_count ? g_ns[ns].nsid : 0; }
-uint32_t nvme_ns_sector_count(int ns) { return ns >= 0 && ns < g_ns_count ? g_ns[ns].sectors : 0; }
+uint64_t nvme_ns_sector_count(int ns) { return ns >= 0 && ns < g_ns_count ? g_ns[ns].sectors : 0; }
 uint32_t nvme_ns_block_size(int ns) { return ns >= 0 && ns < g_ns_count ? g_ns[ns].block_size : 512; }
 int nvme_max_sectors_per_xfer(void) { return (int)(g_max_bytes / 512); }
 int nvme_has_flush(void) { return g_vwc; }
@@ -565,7 +560,7 @@ const struct pci_device *nvme_pci(void) { return g_dead ? 0 : g_pci; }
 // Refused, never clamped: past the end, empty, too big, or not whole
 // blocks of this namespace (the block layer refuses that first; this is
 // the driver not trusting it).
-static int xfer_ok(int ns, uint32_t lba, uint32_t count, const void *buf) {
+static int xfer_ok(int ns, uint64_t lba, uint32_t count, const void *buf) {
     if (g_dead || ns < 0 || ns >= g_ns_count || !buf || count == 0) return 0;
     const struct nvme_ns *n = &g_ns[ns];
     if (count * 512ull > g_max_bytes) return 0;
@@ -640,14 +635,14 @@ int nvme_submit_batch(int ns, struct blk_io *io, int n) {
     return r;
 }
 
-int nvme_read(int ns, uint32_t lba, int count, void *buf) {
+int nvme_read(int ns, uint64_t lba, int count, void *buf) {
     if (count <= 0) return 0;
     struct blk_io io = { .lba = lba, .count = (uint16_t)count, .write = 0, .buf = buf };
     if ((uint32_t)count > 0xFFFF) return 0;
     return nvme_submit_batch(ns, &io, 1);
 }
 
-int nvme_write(int ns, uint32_t lba, int count, const void *buf) {
+int nvme_write(int ns, uint64_t lba, int count, const void *buf) {
     if (count <= 0) return 0;
     struct blk_io io = { .lba = lba, .count = (uint16_t)count, .write = 1, .buf = (void *)buf };
     if ((uint32_t)count > 0xFFFF) return 0;
@@ -697,7 +692,7 @@ int nvme_trim_ranges(int ns, const struct blk_range *r, int n) {
     return ok;
 }
 
-int nvme_trim(int ns, uint32_t lba, uint32_t count) {
+int nvme_trim(int ns, uint64_t lba, uint32_t count) {
     struct blk_range one = { lba, count };
     return nvme_trim_ranges(ns, &one, 1);
 }

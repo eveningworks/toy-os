@@ -3553,15 +3553,20 @@ it -- a partition slot by `offsetof` from the embedded device, an NVMe
 namespace by its index in the array. LBAs, sector counts, `struct
 blk_range` and `struct blk_io` are `uint64_t` through the block layer.
 
-**What it does not do on its own.** A driver whose own interface is
-still 32-bit refuses past 2 TiB in its adapter (`blk_fits32()`, and the
-list forms for batches and DSM ranges, which reach a driver whole)
-rather than truncating, so a large LBA is an error, never a write to the
-wrong sector. ATA stays that way -- 28-bit PIO, with LBA48 its own
-roadmap item. Widening AHCI, NVMe, virtio-blk, the GPT math and the
-filesystems' volume sizes is the step that actually reaches past 2 TiB;
-the maintainer has an 8 TB disk for the desktop, which is what it is
-for.
+**Then the drivers, the table and the filesystems.** AHCI, NVMe and
+virtio-blk read their 48/64-bit capacities and address with them (each
+had clamped to 2 TiB and said so in the log); the GPT writer and reader
+compute in 64 bits, so the backup header lands on the disk's true last
+sector; a partition window and a mount's partition range are 64-bit.
+TFS3's block numbers stay 32-bit -- 16 TiB in 4 KiB blocks -- but its
+sector arithmetic is 64-bit (`T3_SPB` is a 64-bit constant, so every
+`block * T3_SPB` is computed wide), and a volume past 16 TiB formats to
+16 TiB rather than wrapping. FAT32 counts in 32 bits by format, so a
+volume past that is REFUSED by `mkfs`, never formatted short. ATA stays
+28-bit and refuses past 2^32 in its adapter (`blk_fits32()`); LBA48 is
+its own roadmap item. `tools/bigdisk_test.py` puts a partition past
+sector 2^32 on each of the three drivers and checks the image from the
+host.
 
 The considered alternative was a `void *priv` field, Linux's
 `private_data`. It was not needed: both multi-device drivers already

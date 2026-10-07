@@ -271,13 +271,27 @@ def cmd_start(args):
     # bare `if=virtio` on pc-i440fx yields a TRANSITIONAL device
     # (1af4:1001), which the driver does handle, but the modern form is
     # what the transport is written against.
-    if getattr(args, "virtio_disk", None):
+    #
+    # --extra-disk is the same second disk on a controller of choice, for
+    # a test that must reach one driver's path specifically (bigdisk_test
+    # runs its >2 TiB disk through all three). --virtio-disk is its
+    # virtio spelling, kept for the tools that already use it.
+    extra = getattr(args, "extra_disk", None) or getattr(args, "virtio_disk", None)
+    kind = getattr(args, "extra_disk_kind", "virtio") if getattr(args, "extra_disk", None) else "virtio"
+    if extra and kind == "virtio":
         # discard=unmap for parity with the Makefile's DISK=virtio line.
         # Without it QEMU advertises max_discard_sectors as ZERO, the
         # driver correctly reports that it cannot discard, and the whole
         # TRIM path is silently untestable through this tool.
-        cmd += ["-drive", f"file={args.virtio_disk},format=raw,if=none,id=vblk,discard=unmap",
+        cmd += ["-drive", f"file={extra},format=raw,if=none,id=vblk,discard=unmap",
                 "-device", "virtio-blk-pci,drive=vblk,disable-legacy=on"]
+    elif extra and kind == "ahci":
+        cmd += ["-device", "ich9-ahci,id=ahcix",
+                "-drive", f"file={extra},format=raw,if=none,id=satax,discard=unmap",
+                "-device", "ide-hd,drive=satax,bus=ahcix.0"]
+    elif extra and kind == "nvme":
+        cmd += ["-drive", f"file={extra},format=raw,if=none,id=nvmx,discard=unmap",
+                "-device", "nvme,serial=toyos-nvmex,drive=nvmx"]
     # virtio input devices, off by default so every existing test keeps
     # the PS/2 pair it was written against. With this the guest gets a
     # keyboard, a relative mouse and an absolute tablet on the virtio
@@ -941,6 +955,10 @@ def main():
                     help="attach PATH as a virtio-blk disk. Off by default; with it "
                          "the guest gets a second disk on virtio-blk-pci, which is "
                          "what exercises the virtio transport and virtqueue.")
+    ap.add_argument("--extra-disk", default=None, metavar="PATH",
+                    help="attach PATH as a second disk, on --extra-disk-kind")
+    ap.add_argument("--extra-disk-kind", choices=("virtio", "ahci", "nvme"), default="virtio",
+                    help="the controller --extra-disk hangs off (default virtio)")
     ap.add_argument("--audio-wav", default=None, metavar="PATH",
                     help="attach an AC97 whose output records to this host wav")
     ap.add_argument("--hostfwd", action="append", metavar="SPEC",

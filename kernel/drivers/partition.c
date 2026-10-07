@@ -154,7 +154,7 @@ static __attribute__((noinline)) void parse_gpt_entries(const struct block_devic
     out->entry_count = 0;
     for (uint32_t s = 0; s < sectors_needed; s++) {
         uint8_t buf[PART_SECTOR_SIZE];
-        if (!blkdev_read_partial(dev, (uint32_t)(entry_lba * spb) + s, 1, buf)) break;
+        if (!blkdev_read_partial(dev, (uint64_t)entry_lba * spb + s, 1, buf)) break;
 
         for (uint32_t i = 0; i < entries_per_sector && out->entry_count < PART_MAX_ENTRIES; i++) {
             const uint8_t *e = buf + i * entry_size;
@@ -364,7 +364,7 @@ static void reserved_span(enum partition_table_kind kind, uint32_t spb,
 // the table is safe to write.
 int partition_validate_on(const struct block_device *dev,
                           const struct partition_table *in, const char **why) {
-    uint32_t disk = blkdev_sector_count(dev);
+    uint64_t disk = blkdev_sector_count(dev);
     if (!disk) { *why = "no disk"; return 0; }
 
     if (in->kind != PART_TABLE_MBR && in->kind != PART_TABLE_GPT) {
@@ -482,7 +482,7 @@ static __attribute__((noinline)) int write_mbr(const struct block_device *dev,
 // the real answer.
 static __attribute__((noinline)) uint32_t write_gpt_entries(const struct block_device *dev,
                                                             const struct partition_table *in,
-                                                            uint32_t lba, int *ok) {
+                                                            uint64_t lba, int *ok) {
     uint32_t spb = blkdev_block_sectors(dev);
     uint32_t crc = KCRC32_INIT;
     *ok = 1;
@@ -532,9 +532,9 @@ static __attribute__((noinline)) uint32_t write_gpt_entries(const struct block_d
 // the spec reserves the rest of the header's block as zero, and a
 // partial write would keep whatever the disk held there.
 static __attribute__((noinline)) int write_gpt_header(const struct block_device *dev,
-                                                      uint32_t self, uint32_t other,
-                                                      uint32_t entry_lba, uint32_t entries_crc,
-                                                      const uint8_t *disk_guid, uint32_t disk_blocks) {
+                                                      uint64_t self, uint64_t other,
+                                                      uint64_t entry_lba, uint32_t entries_crc,
+                                                      const uint8_t *disk_guid, uint64_t disk_blocks) {
     uint32_t spb = blkdev_block_sectors(dev);
     uint8_t *sec = kmalloc(spb * PART_SECTOR_SIZE);
     if (!sec) return 0;
@@ -568,7 +568,7 @@ int partition_write_table_of(const struct block_device *dev, const struct partit
         return 0;
     }
 
-    uint32_t disk = blkdev_sector_count(dev);
+    uint64_t disk = blkdev_sector_count(dev);
 
     if (in->kind == PART_TABLE_MBR) {
         if (!write_mbr(dev, in, 0)) { klog_write(KLOG_ERR "partition: MBR write failed\n"); return 0; }
@@ -583,9 +583,9 @@ int partition_write_table_of(const struct block_device *dev, const struct partit
     // never written -- the same publish-last discipline the virtio
     // drivers follow with their interrupt enables.
     uint32_t spb = blkdev_block_sectors(dev);
-    uint32_t disk_blocks = disk / spb;
-    uint32_t backup_hdr = disk_blocks - 1;
-    uint32_t backup_entries = backup_hdr - gpt_entry_blocks(spb);
+    uint64_t disk_blocks = disk / spb;
+    uint64_t backup_hdr = disk_blocks - 1;
+    uint64_t backup_entries = backup_hdr - gpt_entry_blocks(spb);
 
     uint8_t disk_guid[16];
     guid_generate(disk_guid);

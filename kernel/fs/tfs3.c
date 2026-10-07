@@ -72,12 +72,12 @@ void t3_ncache_flush(struct t3_state *sbi) {
 // The staged image IS the current truth; that is what an open
 // transaction means. Only the DEFERRED one is consulted -- an ordinary
 // transaction opens, stages and commits with no read in between.
-int t3_vol_read_sectors(struct t3_state *sbi, uint32_t lba, int count, void *buf) {
-    if (lba + (uint32_t)count > sbi->vol.sector_count) return 0;
+int t3_vol_read_sectors(struct t3_state *sbi, uint64_t lba, int count, void *buf) {
+    if (lba + (uint64_t)count > sbi->vol.sector_count) return 0;
     if (sbi->txn_deferred) {
         for (int i = 0; i < sbi->txn_count; i++) {
-            uint32_t base = sbi->txn_target[i] * T3_SPB;
-            if (lba < base || lba + (uint32_t)count > base + T3_SPB) continue;
+            uint64_t base = sbi->txn_target[i] * T3_SPB;
+            if (lba < base || lba + (uint64_t)count > base + T3_SPB) continue;
             k_memcpy(buf, sbi->txn_img[i] + (lba - base) * T3_SECTOR,
                      (uint32_t)count * T3_SECTOR);
             return 1;
@@ -110,11 +110,11 @@ void t3_vol_go_readonly(struct t3_state *sbi, const char *why) {
 // Everything the gap needs is copied out first; nothing per-mount is
 // touched in it. A range a deferred transaction has STAGED is read
 // from the staging instead, which is per-mount state, so under the lock.
-static int vol_read_run(struct t3_state *sbi, uint32_t lba, int count, void *buf) {
-    if (lba + (uint32_t)count > sbi->vol.sector_count) return 0;
+static int vol_read_run(struct t3_state *sbi, uint64_t lba, int count, void *buf) {
+    if (lba + (uint64_t)count > sbi->vol.sector_count) return 0;
     if (sbi->txn_deferred) {
         for (int i = 0; i < sbi->txn_count; i++) {
-            uint32_t base = sbi->txn_target[i] * T3_SPB;
+            uint64_t base = sbi->txn_target[i] * T3_SPB;
             if (lba < base + T3_SPB && lba + (uint32_t)count > base)
                 return t3_vol_read_sectors(sbi, lba, count, buf);
         }
@@ -146,9 +146,9 @@ int t3_read_block_unlocked(struct t3_state *sbi, uint32_t blk, void *buf) {
 // own tables, so none of them is a table anyone has cached. Dropping it
 // anyway cost a table re-read per 4 KiB random overwrite: 30% of the
 // ASUS's random-write rate.
-int t3_vol_write_run(struct t3_state *sbi, uint32_t lba, int count, const void *buf) {
+int t3_vol_write_run(struct t3_state *sbi, uint64_t lba, int count, const void *buf) {
     if (sbi->readonly) return 0;
-    if (lba + (uint32_t)count > sbi->vol.sector_count) return 0;
+    if (lba + (uint64_t)count > sbi->vol.sector_count) return 0;
     const struct block_device *dev = sbi->vol.dev;
     uint32_t at = sbi->vol.base_lba + lba;
     struct mount_io g;
@@ -158,9 +158,9 @@ int t3_vol_write_run(struct t3_state *sbi, uint32_t lba, int count, const void *
     return ok;
 }
 
-int t3_vol_write_sectors(struct t3_state *sbi, uint32_t lba, int count, const void *buf) {
+int t3_vol_write_sectors(struct t3_state *sbi, uint64_t lba, int count, const void *buf) {
     if (sbi->readonly) return 0;   // see t3_state.readonly -- one gate, not ten
-    if (lba + (uint32_t)count > sbi->vol.sector_count) return 0;
+    if (lba + (uint64_t)count > sbi->vol.sector_count) return 0;
     // ANY write drops the pointer-table read cache -- see rcache_get().
     // Here rather than in t3_write_block() because a coalesced data run
     // goes straight to the device, and a block that was a pointer table
@@ -327,7 +327,7 @@ static int load_superblock(struct t3_state *sbi, int loud) {
     // there are only two, both compile-time constants, and a backup
     // that parses under the wrong one is rejected by
     // parse_superblock()'s own group0 check.
-    uint32_t vol_blocks = sbi->vol.sector_count / T3_SPB;
+    uint32_t vol_blocks = t3_vol_blocks(sbi);
     for (uint32_t v = T3_VERSION; v >= T3_VERSION_MIN; v--) {
         uint32_t group0 = group0_for_version(v);
         if (vol_blocks <= group0) continue;
@@ -439,7 +439,7 @@ static void derive_geometry(struct t3_state *sbi) {
 
 // Sector (volume-relative LBA) holding inode `ino`, plus its offset
 // within that sector.
-int t3_inode_pos(struct t3_state *sbi, uint64_t ino, uint32_t *out_lba, uint32_t *out_off) {
+int t3_inode_pos(struct t3_state *sbi, uint64_t ino, uint64_t *out_lba, uint32_t *out_off) {
     uint32_t g = (uint32_t)(ino / sbi->sb.ipg);
     uint32_t idx = (uint32_t)(ino % sbi->sb.ipg);
     if (g >= sbi->sb.gc) return 0;
@@ -480,7 +480,8 @@ int t3_read_inode(struct t3_state *sbi, uint64_t ino, struct t3_inode *out) {
 }
 
 static int read_inode_uncached(struct t3_state *sbi, uint64_t ino, struct t3_inode *out) {
-    uint32_t lba, off;
+    uint64_t lba;
+    uint32_t off;
     if (!t3_inode_pos(sbi, ino, &lba, &off)) return 0;
     uint8_t sec[T3_SECTOR];
     if (!t3_vol_read_sectors(sbi, lba, 1, sec)) return 0;
@@ -872,7 +873,7 @@ static int tfs3_wipe_inner(void *st, const struct block_device *dev) {
     uint8_t zero[T3_SECTOR];
     k_memset(zero, 0, sizeof(zero));
     int ok = t3_vol_write_sectors(sbi, T3_SB_BLOCK * T3_SPB, 1, zero);
-    uint32_t vol_blocks = sbi->vol.sector_count / T3_SPB;
+    uint32_t vol_blocks = t3_vol_blocks(sbi);
     // EVERY version's backup positions, not just the mounted one's --
     // the disk being wiped may have been written by either, and this
     // runs before (or instead of) a mount, so there is nothing to ask.
@@ -908,7 +909,7 @@ static int tfs3_format_inner(void *st, const struct block_device *dev) {
     set_geometry_version(sbi, T3_VERSION);
     sbi->sb.version = T3_VERSION;
 
-    uint32_t vol_blocks = sbi->vol.sector_count / T3_SPB;
+    uint32_t vol_blocks = t3_vol_blocks(sbi);
     // The floor is the METADATA, not a whole group. A group needs its
     // two bitmaps, its inode table and somewhere to put the root
     // directory; beyond that a PARTIAL last group is fine, exactly as
@@ -1086,7 +1087,7 @@ static int tfs3_format_inner(void *st, const struct block_device *dev) {
     // Root inode (ino 1, group 0) + its dirent block (. and ..).
     {
         uint8_t sec[T3_SECTOR];
-        uint32_t table_lba = (sbi->group0 + 2) * T3_SPB;
+        uint64_t table_lba = (sbi->group0 + 2) * T3_SPB;
         if (!t3_vol_read_sectors(sbi, table_lba, 1, sec)) return 0;
         uint8_t *p = sec + T3_INO_ROOT * T3_INODE_SIZE;
         k_memset(p, 0, T3_INODE_SIZE);
