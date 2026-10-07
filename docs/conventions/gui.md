@@ -245,7 +245,7 @@ this the obvious way), not from how much history it accumulated.
   - **A BUFFER COMES BACK ONLY WHEN THE COMPOSITOR SAYS SO.** It sends
     `WIN_EV_BUF_RELEASE` for the old front as it handles the present
     that replaces it -- a single-threaded compositor has no composite in
-    flight then. `ui/uapp.c`'s `surf_back()` picks the back buffer when
+    flight then. `ui/uapp_surface.c`'s `surf_back()` picks the back buffer when
     a FRAME STARTS, not at present time (when the old front is always
     still busy), so with prompt releases two buffers alternate and the
     third is made only under contention; with none free the frame stays

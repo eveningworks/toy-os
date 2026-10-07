@@ -2865,7 +2865,7 @@ window without going through it will find its layout polls timing out.
   checks and nothing else (the menu still works in-window, so a check
   green under it was measuring the menu); a grab that delivers every
   press reddens the three "another window" checks. Run it after
-  touching `wm_client.c`'s popup path, `uapp.c`'s surface table or
+  touching `wm_client.c`'s popup path, `uapp_surface.c`'s surface table or
   `uui_menubar.c`'s open/close paths.
 - **`remote_gui.py`** -- THE GUI TOOLS, POINTED AT THE BARE-METAL
   MACHINE. Not a runner: two objects serving the interfaces a tool

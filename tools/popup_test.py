@@ -26,7 +26,7 @@ would still pass:
     widget's, since the widget cannot see the taskbar.
 
 Positive controls, each run once when this was written (2026-09-09):
-  * `popup_open()` in ui/uapp.c returning 0 (no surface granted) reddens
+  * `popup_open()` in ui/uapp_surface.c returning 0 (no surface granted) reddens
     the four surface checks -- "lists the open menu as a popup surface",
     "leaves its window", "background OUTSIDE the parent", "a row outside
     the parent commits" -- and nothing else. The menu still works

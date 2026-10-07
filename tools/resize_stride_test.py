@@ -61,9 +61,9 @@ from harness import Results  # noqa: E402
 TITLE = "Terminal"
 STEPS = 16
 
-CONTROL = """In userland/ui/uapp.c's present(), lie about the width:
+CONTROL = """In userland/ui/uapp_surface.c's surf_present(), lie about the width:
 
-    WIN_PRESENT_SIZE(a->w - 1, a->h)
+    WIN_PRESENT_SIZE(s->w - 1, s->h)
 
 then `make iso` and re-run. Every sweep step must go red -- the
 compositor adopts what the frame says, so the window it reports is one
