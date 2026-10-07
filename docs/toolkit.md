@@ -170,5 +170,6 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_tree.h` | A TREE: rows at a depth, with collapsible parents. |
 | `uui_undo.h` | uui_undo -- an edit HISTORY for editable text: what Ctrl+Z and Ctrl+Y step through, for every buffer the shared edit core (ui/uui_edit.h) drives. |
 | `uui_widget.h` | uui_widget_ops -- the ONE table a widget exports to be handled generically: laid out, drawn, hit-tested, focused. |
+| `uvterm.h` | uvterm -- ONE TERMINAL: a pty and the program on it, the reader thread that drains it, the ANSI parser, the grid, its scrollback and alternate screen, the cursor, a selection, and drawing all of th... |
 
 Private seams of a split module, not for apps: `uapp_internal.h`.

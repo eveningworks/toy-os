@@ -65,7 +65,6 @@
 // its shell is standing. The parser handles it (api/ansi.h's ANSI_OSC);
 // a session with nothing to say keeps its generated "Shell N".
 #include <stdint.h>
-#include "termkey.h"   // a keysym becomes an ANSI sequence here
 #include "lib/usetting.h"  // system.shell
 #include <stdio.h>
 #include <stdlib.h>
@@ -90,6 +89,7 @@
 #include "keyboard.h"
 #include "kpath.h"    // k_path_basename, a -e tab's name
 #include "ansi.h"   // the kernel's parser, compiled into libuapp too
+#include "ui/uvterm.h"   // one terminal: grid, scrollback, pty, selection
 #include "ui/umonofont.h"   // the grid's face at a chosen size
 #include "term/term.h"    // /etc/terminal.conf and the Preferences dialog
 
@@ -130,10 +130,9 @@ static const char *shell_path(char *buf, size_t cap) {
 // so does this. What bounds it now is the WINDOW, which the compositor
 // already clamps -- a program still cannot ask for an unbounded grid.
 //
-// ONE ALLOCATED GEOMETRY FOR EVERY SESSION (g_cap_rows x g_cap_cols):
-// there is one window, so every tab is the same size, and capacity only
-// ever grows -- shrinking the window narrows g_rows/g_cols and leaves
-// the buffers alone, exactly as the fixed grid did.
+// EACH TAB'S TERMINAL OWNS ITS GRID (ui/uvterm.h); there is one window,
+// so g_rows x g_cols is every tab's size, and size_changed() resizes them
+// all alike. A terminal's allocation only ever grows.
 // Scrollback depth, the margin and the palette are all
 // /etc/terminal.conf's now (userland/term/term.h). They are read
 // into plain globals because every one of them is asked for per row
@@ -159,100 +158,20 @@ static int g_sb_rows = 240;   // scrollback lines kept above the screen
 // opens a second tab pays for one.
 #define MAX_TABS 8
 
-// The reader's ring. Big enough that a burst of output does not make the
-// reader wait on the UI for every byte, small enough to be noise beside
-// the grid it feeds.
-#define RING_BYTES 8192
+#define TITLE_MAX UVTERM_TITLE_MAX
 
-#define TITLE_MAX 40
-
-struct cell { char ch; uint8_t fg, bg; };
-
+// ONE TAB: a terminal (ui/uvterm.h -- its grid, scrollback, pty, reader
+// thread and selection) and what only this window keeps about it.
 struct session {
-    // Slot bookkeeping. `live` means this session has a shell; `done`
-    // means its reader thread has finished and the slot may be reused.
-    int live;
-    volatile int done;
-    volatile int eof;
-    int index;                  // its slot, and what a post carries
-
-    // Heap-backed, g_cap_rows/g_cap_cols geometry, allocated at first
-    // use and REALLOCATED by grow_caps() when the window outgrows them.
-    // session_start() zeroes the whole struct on slot reuse, so it
-    // saves and restores these three pointers around the wipe.
-    struct cell *grid;          // g_cap_rows x g_cap_cols
-    struct cell *sb;            // SB_ROWS   x g_cap_cols
-    int sb_count;               // lines of scrollback held
-    int sb_view;                // how far back the reader has scrolled
-
-    // THE ALTERNATE SCREEN (ESC[?1049h/l). A second grid, plus the
-    // cursor the switch saved, so a full-screen program leaves the
-    // terminal exactly as it found it -- which is what `less` and `vim`
-    // do on every real terminal.
-    //
-    // A COPY OF THE GRID RATHER THAN A SECOND LIVE ONE. Swapping a
-    // pointer between two grids would be cheaper, but everything here
-    // indexes the grid directly. The saved copy is written once per
-    // switch, not per frame.
-    //
-    // **SCROLLBACK IS NOT SAVED, DELIBERATELY.** On a real terminal the
-    // alternate screen has no scrollback at all -- that is why you
-    // cannot scroll back through a `less` session.
-    struct cell *saved;         // g_cap_rows x g_cap_cols
-    int alt;
-    int saved_cr, saved_cc;
-
-    int cr, cc;                 // the cursor, in cells
-    int cursor_shown;
-
-    struct ansi_parser vt;
-
-    int master;                 // our end of the pty
-    int child;                  // the shell's pid, for reaping and `ps`
-
-    char title[TITLE_MAX];
-    // Where the shell last said it was standing: its OSC title when that
-    // is an absolute path, which is what tosh sends. A new tab opened
-    // "here" starts in it, and the Session panel shows it.
-    char cwd[TITLE_MAX];
-    char shell[TERM_SHELL_MAX];  // what was spawned, for a restart and the panel
-    // THE SHELL HAS EXITED AND THE TAB WAS KEPT (`on_exit=keep`): reaped,
-    // its last output still on screen, Enter starts a new shell in it.
+    struct uvterm t;
+    int index;                  // its slot, and what its reader posts
+    // THE PROGRAM HAS EXITED AND THE TAB WAS KEPT (`on_exit=keep`): reaped,
+    // its last output still on screen, Enter starts a new one in it.
     int exited;
     // A `-e` PROGRAM, not a shell: always kept when it ends, whatever
     // on_exit says -- its output is the reason the window exists -- and
-    // Enter runs it again. session_start() zeroes it; mark_cmd() sets it.
+    // Enter runs it again. session_start() clears it; mark_cmd() sets it.
     int is_cmd;
-
-    // TYPE-AHEAD IS HELD UNTIL THE SHELL FIRST SPEAKS. A pty starts with
-    // the line discipline echoing (abi/tty_abi.h), and tosh only turns
-    // that off once it has loaded -- so keys typed while it loads were
-    // echoed by the kernel ahead of the banner AND redrawn by tosh at its
-    // prompt. Held here, they arrive after the shell has set up its
-    // terminal however it likes. on_tick lets them go after a couple of
-    // seconds for a shell that never prints.
-    int spoke;
-    char held[256];
-    int nheld;
-    unsigned long long started_ns;
-    // A HAND-GIVEN TITLE OUTRANKS THE SHELL'S. Konsole's rule: once you
-    // name a tab, its shell's OSC sequences stop moving the label --
-    // otherwise the next `cd` silently undoes the rename.
-    int title_locked;
-
-    // --- the reader thread's ring ------------------------------------
-    //
-    // SINGLE PRODUCER, SINGLE CONSUMER: the reader writes at `head` and
-    // the main thread reads at `tail`, so neither ever writes the
-    // other's index and no lock is needed. The acquire/release pairs
-    // are what stop the COMPILER reordering a byte's store past the
-    // index that publishes it -- x86-64's TSO handles the CPU half
-    // (kernel/include/kernel/barrier.h says the same thing about
-    // virtqueues).
-    volatile unsigned head, tail;
-    char ring[RING_BYTES];
-    pthread_t reader;
-    int reader_started;
 };
 
 static struct session *g_slot[MAX_TABS];
@@ -568,37 +487,7 @@ static void sb_hover(int over) {
 // cursor, and the control is then usable only by catching its top edge.
 static int g_bar_grab = -1;
 
-// --- selection --------------------------------------------------------
-//
-// A POINT IS A LINE IN THE SESSION'S VIRTUAL BUFFER, not a screen row:
-// lines 0..sb_count-1 are scrollback and sb_count..sb_count+g_rows-1 are
-// the screen, so view row `r` is line `sb_count - sb_view + r` whichever
-// half it comes from. That single expression is why scrolling during a
-// drag keeps the anchor on the text it was put on rather than on the row
-// it happened to be over.
-//
-// `col` may be g_cols -- one past the last cell -- so a selection can
-// reach a line's break, which is what makes a multi-line copy end its
-// lines rather than run them together.
-struct selpoint { int line, col; };
 
-static struct selpoint g_sel_a, g_sel_b;
-static int g_selecting;   // a drag is live: motion extends g_sel_b
-static int g_sel_on;      // there is a selection to draw and copy
-
-// **THE SELECTION IS DROPPED WHEN THE TEXT MOVES UNDER IT.** vt_scroll()
-// shifts every line by one once the scrollback is full, and a program
-// clearing the screen replaces what was selected outright -- so rather
-// than tracking the text through both, the selection goes. Konsole keeps
-// it, at the cost of a line identity this terminal's scrollback (a ring
-// of evicted rows) does not carry.
-static void sel_clear(void) { g_sel_on = 0; g_selecting = 0; }
-
-// The ALLOCATED geometry every session's buffers share, and the draw
-// scratch sized to it. Grows in grow_caps(), never shrinks.
-static int g_cap_rows, g_cap_cols;
-static char *g_runbuf;   // draw_run's text scratch, g_cap_cols + 1
-static char *g_rowbuf;   // draw_row's run scratch,  g_cap_cols + 1
 
 // The 16 colours as RGB, and which two slots the default pair uses.
 // The parser resolves a sequence to an `enum vga_color`, which is an
@@ -660,375 +549,43 @@ static struct session *active(void) {
 
 // --- the screen -------------------------------------------------------
 
-// Row accessors: the buffers are flat, strided by the ALLOCATED width,
-// which is what lets one realloc change the geometry without touching
-// any of the code below.
-static struct cell *grid_row(struct session *s, int r) {
-    return s->grid + (size_t)r * g_cap_cols;
-}
-static struct cell *sb_row(struct session *s, int r) {
-    return s->sb + (size_t)r * g_cap_cols;
-}
-static struct cell *saved_row(struct session *s, int r) {
-    return s->saved + (size_t)r * g_cap_cols;
-}
 
 // --- the virtual buffer, and what is selected in it -------------------
 
-// The line a view row shows. One expression for both halves -- see the
-// note beside struct selpoint.
-static int virt_of_row(const struct session *s, int r) {
-    return s->sb_count - s->sb_view + r;
-}
 
-// The cells of a virtual line, or NULL when it is off either end.
-static const struct cell *virt_row(struct session *s, int line) {
-    if (line < 0) return 0;
-    if (line < s->sb_count) return sb_row(s, line);
-    int r = line - s->sb_count;
-    if (r >= g_rows) return 0;
-    return grid_row(s, r);
-}
 
-// Reading order: is `a` before `b`?
-static int sel_before(struct selpoint a, struct selpoint b) {
-    return a.line < b.line || (a.line == b.line && a.col < b.col);
-}
 
-// The selection, sorted. Returns 0 when there is nothing selected --
-// which includes an anchor and a cursor at the same point, the state a
-// plain click leaves behind.
-static int sel_range(struct selpoint *from, struct selpoint *to) {
-    if (!g_sel_on) return 0;
-    if (sel_before(g_sel_b, g_sel_a)) { *from = g_sel_b; *to = g_sel_a; }
-    else                              { *from = g_sel_a; *to = g_sel_b; }
-    return sel_before(*from, *to);
-}
 
-// The columns of `line` that are selected, as [*c0, *c1). Zero-width
-// when none of it is.
-static void sel_cols(int line, int *c0, int *c1) {
-    struct selpoint from, to;
-    *c0 = *c1 = 0;
-    if (!sel_range(&from, &to)) return;
-    if (line < from.line || line > to.line) return;
-    *c0 = (line == from.line) ? from.col : 0;
-    *c1 = (line == to.line)   ? to.col   : g_cols;
-    if (*c1 > g_cols) *c1 = g_cols;
-    if (*c0 > *c1) *c0 = *c1;
-}
 
-static struct cell *cells_new(int rows, int cols) {
-    size_t n = (size_t)rows * (size_t)cols;
-    struct cell *p = (struct cell *)malloc(n * sizeof *p);
-    if (!p) return 0;
-    for (size_t i = 0; i < n; i++) {
-        p[i].ch = ' '; p[i].fg = VT_FG; p[i].bg = VT_BG;
-    }
-    return p;
-}
 
-// Grows the shared geometry to hold rows x cols, migrating EVERY live
-// session's buffers (a crop-preserving copy -- xterm's behaviour; there
-// is no reflow). Two passes on purpose: allocate everything first, then
-// swap, so a failed malloc leaves no session with a stride the globals
-// do not describe. Returns 0 on failure with everything as it was --
-// the caller then clamps to the old capacity, which is exactly the old
-// fixed-grid behaviour.
-static int grow_caps(int rows, int cols) {
-    if (rows <= g_cap_rows && cols <= g_cap_cols) return 1;
-    int nr = rows > g_cap_rows ? rows : g_cap_rows;
-    int nc = cols > g_cap_cols ? cols : g_cap_cols;
-
-    struct cell *ng[MAX_TABS] = {0}, *nb[MAX_TABS] = {0}, *nv[MAX_TABS] = {0};
-    char *rb = (char *)malloc((size_t)nc + 1);
-    char *ob = (char *)malloc((size_t)nc + 1);
-    int ok = rb && ob;
-    for (int i = 0; ok && i < MAX_TABS; i++) {
-        struct session *s = g_slot[i];
-        if (!s || !s->grid) continue;
-        ng[i] = cells_new(nr, nc);
-        nb[i] = cells_new(SB_ROWS, nc);
-        nv[i] = cells_new(nr, nc);
-        if (!ng[i] || !nb[i] || !nv[i]) ok = 0;
-    }
-    if (!ok) {
-        for (int i = 0; i < MAX_TABS; i++) { free(ng[i]); free(nb[i]); free(nv[i]); }
-        free(rb); free(ob);
-        return 0;
-    }
-
-    for (int i = 0; i < MAX_TABS; i++) {
-        struct session *s = g_slot[i];
-        if (!s || !s->grid) continue;
-        for (int r = 0; r < g_cap_rows; r++)
-            for (int c = 0; c < g_cap_cols; c++) {
-                ng[i][(size_t)r * nc + c] = grid_row(s, r)[c];
-                nv[i][(size_t)r * nc + c] = saved_row(s, r)[c];
-            }
-        for (int r = 0; r < SB_ROWS; r++)
-            for (int c = 0; c < g_cap_cols; c++)
-                nb[i][(size_t)r * nc + c] = sb_row(s, r)[c];
-        free(s->grid); free(s->sb); free(s->saved);
-        s->grid = ng[i]; s->sb = nb[i]; s->saved = nv[i];
-    }
-    free(g_runbuf); g_runbuf = rb;
-    free(g_rowbuf); g_rowbuf = ob;
-    g_cap_rows = nr;
-    g_cap_cols = nc;
-    return 1;
-}
 
 // --- applying a configuration change ----------------------------------
 
-// The scheme's default pair moved, so every cell still holding the OLD
-// one has to follow it: a cell stores an INDEX and has no "this is the
-// default" bit, so switching Default (7 on 0) for Solarized Dark (12 on
-// 8) would otherwise leave the whole scrollback drawn in two colours
-// the new scheme reserves for something else.
-//
-// The two halves move independently, because `ls --color` leaves a row
-// with an explicit foreground over a default background. The
-// imprecision is a cell that explicitly asked for the old default
-// colour, which moves with the rest -- invisible in practice and the
-// only alternative is a wider cell.
-static void remap_default_pair(int old_fg, int old_bg) {
-    if (old_fg == VT_FG && old_bg == VT_BG) return;
-    for (int i = 0; i < MAX_TABS; i++) {
-        struct session *s = g_slot[i];
-        if (!s || !s->grid) continue;
-        struct cell *banks[3] = { s->grid, s->saved, s->sb };
-        int rows[3] = { g_cap_rows, g_cap_rows, g_sb_rows };
-        for (int b = 0; b < 3; b++) {
-            if (!banks[b]) continue;
-            size_t n = (size_t)rows[b] * (size_t)g_cap_cols;
-            for (size_t k = 0; k < n; k++) {
-                if (banks[b][k].fg == old_fg) banks[b][k].fg = (uint8_t)VT_FG;
-                if (banks[b][k].bg == old_bg) banks[b][k].bg = (uint8_t)VT_BG;
-            }
-        }
-        s->vt.fg = (enum vga_color)VT_FG;
-        s->vt.bg = (enum vga_color)VT_BG;
-    }
+// The scheme's default pair moved: every terminal's cells follow it
+// (uvterm_set_default_pair says why a cell cannot know on its own).
+static void remap_default_pair(void) {
+    for (int i = 0; i < MAX_TABS; i++)
+        if (g_slot[i] && g_slot[i]->t.grid) uvterm_set_default_pair(&g_slot[i]->t, VT_FG, VT_BG);
 }
 
-// Grows or shrinks every session's scrollback, KEEPING THE NEWEST
-// lines: the ones at the bottom are the ones somebody scrolling up is
-// about to look for, and dropping those instead would make "give me
-// more history" delete history. A failed malloc leaves the old depth,
-// which is a smaller scrollback and never a broken one.
+
+// Every terminal keeps its NEWEST lines (uvterm_set_scrollback).
 static void resize_scrollback(int lines) {
     if (lines == g_sb_rows || lines < 1) return;
-    struct cell *nb[MAX_TABS] = {0};
-    int ok = 1;
-    for (int i = 0; ok && i < MAX_TABS; i++) {
-        struct session *s = g_slot[i];
-        if (!s || !s->sb) continue;
-        nb[i] = cells_new(lines, g_cap_cols);
-        if (!nb[i]) ok = 0;
-    }
-    if (!ok) {
-        for (int i = 0; i < MAX_TABS; i++) free(nb[i]);
-        ulogf("uterm: no memory for a %d-line scrollback; keeping %d\n", lines, g_sb_rows);
-        return;
-    }
-    for (int i = 0; i < MAX_TABS; i++) {
-        struct session *s = g_slot[i];
-        if (!s || !s->sb) continue;
-        int keep = s->sb_count < lines ? s->sb_count : lines;
-        int from = s->sb_count - keep;
-        for (int r = 0; r < keep; r++)
-            memcpy(nb[i] + (size_t)r * g_cap_cols, sb_row(s, from + r),
-                    (size_t)g_cap_cols * sizeof(struct cell));
-        free(s->sb);
-        s->sb = nb[i];
-        s->sb_count = keep;
-        if (s->sb_view > keep) s->sb_view = keep;
-    }
+    for (int i = 0; i < MAX_TABS; i++)
+        if (g_slot[i] && g_slot[i]->t.grid) uvterm_set_scrollback(&g_slot[i]->t, lines);
     g_sb_rows = lines;
 }
 
-static void row_clear(struct cell *row, int from) {
-    for (int c = from; c < g_cap_cols; c++) {
-        row[c].ch = ' ';
-        row[c].fg = VT_FG;
-        row[c].bg = VT_BG;
-    }
-}
 
-static void vt_reset_screen(struct session *s) {
-    sel_clear();
-    for (int r = 0; r < g_cap_rows; r++) row_clear(grid_row(s, r), 0);
-    s->cr = s->cc = 0;
-}
 
-// The top line leaves the screen and becomes history. THE ONLY PLACE A
-// STREAM STILL EXISTS -- and it is the right place: scrollback is a
-// record of what went past, while the screen is a thing being drawn on.
-static void vt_scroll(struct session *s) {
-    sel_clear();
-    size_t rowbytes = (size_t)g_cap_cols * sizeof(struct cell);
-    if (s->sb_count == SB_ROWS) {
-        memmove(sb_row(s, 0), sb_row(s, 1), (size_t)(SB_ROWS - 1) * rowbytes);
-        s->sb_count--;
-    }
-    memcpy(sb_row(s, s->sb_count), grid_row(s, 0), rowbytes);
-    s->sb_count++;
 
-    memmove(grid_row(s, 0), grid_row(s, 1), (size_t)(g_rows - 1) * rowbytes);
-    row_clear(grid_row(s, g_rows - 1), 0);
-}
 
-static void vt_newline(struct session *s) {
-    s->cr++;
-    if (s->cr >= g_rows) { s->cr = g_rows - 1; vt_scroll(s); }
-}
 
-static void vt_putc_raw(struct session *s, char c) {
-    if (c == '\n') { s->cc = 0; vt_newline(s); return; } // no OPOST: LF is CRLF here
-    if (c == '\r') { s->cc = 0; return; }
-    if (c == '\b') { if (s->cc > 0) s->cc--; return; }
-    if (c == '\t') {
-        do { s->cc++; } while (s->cc % 8 && s->cc < g_cols);
-        if (s->cc >= g_cols) { s->cc = 0; vt_newline(s); }
-        return;
-    }
-    if ((unsigned char)c < 32) return; // anything else unprintable is dropped
 
-    if (s->cc >= g_cols) { s->cc = 0; vt_newline(s); }
-    struct cell *cell = &grid_row(s, s->cr)[s->cc];
-    cell->ch = c;
-    cell->fg = (uint8_t)s->vt.fg;
-    cell->bg = (uint8_t)s->vt.bg;
-    s->cc++;
-}
 
-// --- what a row-count change does to the screen ------------------------
-//
-// **SHRINKING SCROLLS; GROWING PULLS BACK.** Merely clamping the cursor
-// into the shorter window -- which is what this did -- leaves the text
-// where it was and drops the cursor on top of it, so the prompt lands
-// in the middle of old output; and growing then leaves it stranded
-// there with blank rows below, because nothing ever moved it back. That
-// is what "resize it smaller then larger and the prompt keeps the small
-// window's position" is.
-//
-// xterm's semantics, which Konsole and VTE share: rows the cursor would
-// fall past scroll off the TOP into scrollback exactly as if the
-// program had printed them, and growing takes them back out again. That
-// makes the two a ROUND TRIP, which is the property the bug was the
-// absence of.
-//
-// **THE WHOLE GRID MOVES BY THE SAME AMOUNT**, which is what keeps a
-// shell's own idea of where its paint started valid across the resize:
-// the prompt row and the cursor row shift together, so the offset
-// between them -- the only thing the shell recorded -- still holds.
-//
-// Counts are passed in rather than read from g_rows, because this runs
-// while the old and new heights are both live.
-static void rows_shrunk(struct session *s, int old_rows, int new_rows) {
-    int over = s->cr - (new_rows - 1);
-    if (over <= 0) return;              // the cursor already fits
-    if (over > old_rows) over = old_rows;
-    size_t rowbytes = (size_t)g_cap_cols * sizeof(struct cell);
-    for (int i = 0; i < over; i++) {
-        if (s->sb_count == SB_ROWS) {
-            memmove(sb_row(s, 0), sb_row(s, 1), (size_t)(SB_ROWS - 1) * rowbytes);
-            s->sb_count--;
-        }
-        memcpy(sb_row(s, s->sb_count), grid_row(s, 0), rowbytes);
-        s->sb_count++;
-        memmove(grid_row(s, 0), grid_row(s, 1),
-                (size_t)(old_rows - 1) * rowbytes);
-        row_clear(grid_row(s, old_rows - 1), 0);
-    }
-    s->cr -= over;
-}
 
-static void rows_grown(struct session *s, int old_rows, int new_rows) {
-    int want = new_rows - old_rows;
-    int have = s->sb_count < want ? s->sb_count : want;
-    if (have <= 0) return;              // nothing kept to put back
-    size_t rowbytes = (size_t)g_cap_cols * sizeof(struct cell);
-    // Down first, from the bottom, so a row is read before it is
-    // overwritten -- the grid is one array and the two ranges overlap.
-    for (int r = old_rows - 1; r >= 0; r--)
-        memcpy(grid_row(s, r + have), grid_row(s, r), rowbytes);
-    for (int i = 0; i < have; i++)
-        memcpy(grid_row(s, have - 1 - i), sb_row(s, --s->sb_count), rowbytes);
-    for (int r = old_rows + have; r < new_rows; r++) row_clear(grid_row(s, r), 0);
-    s->cr += have;
-}
 
-static void clamp_cursor(struct session *s) {
-    if (s->cr < 0) s->cr = 0;
-    if (s->cr >= g_rows) s->cr = g_rows - 1;
-    if (s->cc < 0) s->cc = 0;
-    if (s->cc >= g_cols) s->cc = g_cols - 1;
-}
-
-// One completed cursor/erase sequence. The parser has already applied
-// every default -- "a missing or zero count means 1", 1-based rows and
-// columns -- so this only has to act, which is the point of it being a
-// shared parser rather than a second reading of the spec.
-static void vt_ctrl(struct session *s) {
-    switch (s->vt.op) {
-    case ANSI_OP_MOVE_TO: s->cr = s->vt.a - 1; s->cc = s->vt.b - 1; break;
-    case ANSI_OP_UP:      s->cr -= s->vt.a; break;
-    case ANSI_OP_DOWN:    s->cr += s->vt.a; break;
-    case ANSI_OP_RIGHT:   s->cc += s->vt.a; break;
-    case ANSI_OP_LEFT:    s->cc -= s->vt.a; break;
-    case ANSI_OP_COLUMN:  s->cc = s->vt.a - 1; break;
-    case ANSI_OP_ROW:     s->cr = s->vt.a - 1; break;
-    case ANSI_OP_ERASE_LINE:
-        if (s->vt.a == 0) row_clear(grid_row(s, s->cr), s->cc);
-        else if (s->vt.a == 1)
-            for (int c = 0; c <= s->cc && c < g_cap_cols; c++)
-                grid_row(s, s->cr)[c].ch = ' ';
-        else row_clear(grid_row(s, s->cr), 0);
-        break;
-    case ANSI_OP_ERASE_DISPLAY:
-        if (s->vt.a == 0) {
-            row_clear(grid_row(s, s->cr), s->cc);
-            for (int r = s->cr + 1; r < g_rows; r++) row_clear(grid_row(s, r), 0);
-        } else if (s->vt.a == 1) {
-            for (int r = 0; r < s->cr; r++) row_clear(grid_row(s, r), 0);
-            for (int c = 0; c <= s->cc && c < g_cap_cols; c++)
-                grid_row(s, s->cr)[c].ch = ' ';
-        } else {
-            for (int r = 0; r < g_rows; r++) row_clear(grid_row(s, r), 0);
-        }
-        break;
-    case ANSI_OP_ALT_ON:
-        // Idempotent: a program that switches twice must not overwrite
-        // the screen it saved the first time with the alternate one.
-        if (!s->alt) {
-            memcpy(s->saved, s->grid,
-                   (size_t)g_cap_rows * g_cap_cols * sizeof(struct cell));
-            s->saved_cr = s->cr;
-            s->saved_cc = s->cc;
-            s->alt = 1;
-        }
-        for (int r = 0; r < g_rows; r++) row_clear(grid_row(s, r), 0);
-        s->cr = s->cc = 0;
-        break;
-    case ANSI_OP_ALT_OFF:
-        if (s->alt) {
-            memcpy(s->grid, s->saved,
-                   (size_t)g_cap_rows * g_cap_cols * sizeof(struct cell));
-            s->cr = s->saved_cr;
-            s->cc = s->saved_cc;
-            s->alt = 0;
-        }
-        break;
-    case ANSI_OP_SHOW: s->cursor_shown = 1; break;
-    case ANSI_OP_HIDE: s->cursor_shown = 0; break;
-    // SAVE/RESTORE have no users here yet, and a half-remembered
-    // position is worse than none.
-    default: break;
-    }
-    clamp_cursor(s);
-}
 
 // A title the SHELL sent. Copied rather than pointed at: the parser
 // rewrites its own buffer on the next OSC, and the tab strip holds this
@@ -1045,49 +602,7 @@ static void session_default_title(struct session *s, char *dst) {
     dst[n] = '\0';
 }
 
-static void vt_title(struct session *s) {
-    // A PATH IS ALSO WHERE THE SHELL IS -- tosh's title is its cwd. Taken
-    // before the lock test: a renamed tab still knows where its shell is.
-    if (s->vt.osc[0] == '/') strlcpy(s->cwd, s->vt.osc, sizeof s->cwd);
-    if (s->title_locked) return;
-    char want[TITLE_MAX];
-    int i = 0;
-    while (s->vt.osc[i] && i < TITLE_MAX - 1) { want[i] = s->vt.osc[i]; i++; }
-    want[i] = '\0';
-    // An EMPTY title is a request to go back to the default rather than
-    // a request for a blank tab -- a tab with no label is unreadable,
-    // and a shell clearing its title is common.
-    if (i == 0) session_default_title(s, want);
 
-    if (strcmp(want, s->title) == 0) return;   // nothing to say
-    strlcpy(s->title, want, sizeof s->title);
-
-    // ON ITS OWN LINE, and only when it CHANGED: a title is text, so a
-    // test can assert on it rather than on the pixels of a tab label,
-    // and a shell that re-announces the same directory must not fill
-    // the log. Not part of the layout line, because a title may contain
-    // spaces and that line is parsed field by field.
-    ulogf("uterm: tab %d title %s\n", s->index, s->title);
-}
-
-static void vt_write(struct session *s, const char *buf, int len) {
-    for (int i = 0; i < len; i++) {
-        switch (ansi_feed(&s->vt, buf[i])) {
-        case ANSI_PASS:  vt_putc_raw(s, buf[i]); break;
-        case ANSI_CTRL:  vt_ctrl(s); break;
-        case ANSI_OSC:   vt_title(s); break;
-        case ANSI_SGR:   break; // the colours are read off the parser per cell
-        case ANSI_EATEN: break;
-        }
-    }
-    // NEW OUTPUT PINS THE VIEW TO THE BOTTOM, which is what every
-    // terminal does: a program printing while you are reading history
-    // brings you back, because otherwise the thing you asked to run
-    // appears to have done nothing. A SETTING, because the other
-    // reading is also defensible -- a long build scrolling the page you
-    // were reading out from under you is the reason Konsole offers it.
-    if (g_conf.scroll_on_output) s->sb_view = 0;
-}
 
 // --- the reader thread ------------------------------------------------
 //
@@ -1095,55 +610,21 @@ static void vt_write(struct session *s, const char *buf, int len) {
 // Not the grid, not the parser, not a widget -- see ui/uapp.h. The main
 // thread owns everything a frame reads.
 
-static void *reader_main(void *arg) {
-    struct session *s = (struct session *)arg;
-    char buf[512];
-
-    for (;;) {
-        // BLOCKING, which is the whole point: this is the read the old
-        // 30 ms poll was standing in for.
-        int64_t n = sys_read(s->master, buf, sizeof buf);
-        if (n <= 0) break;   // the shell is gone, or the master went away
-
-        for (int64_t i = 0; i < n; i++) {
-            unsigned head = __atomic_load_n(&s->head, __ATOMIC_RELAXED);
-            unsigned next = (head + 1) % RING_BYTES;
-            // BACK-PRESSURE RATHER THAN DROPPING. A full ring means the
-            // window has not drained yet; waiting costs this thread a
-            // slice, while dropping would corrupt the screen in a way
-            // nobody could diagnose from the result.
-            while (next == __atomic_load_n(&s->tail, __ATOMIC_ACQUIRE))
-                sys_yield();
-            s->ring[head] = buf[i];
-            __atomic_store_n(&s->head, next, __ATOMIC_RELEASE);
-        }
-        uapp_post(g_app, s->index, 0);
-    }
-
-    s->eof = 1;
-    uapp_post(g_app, s->index, 1);
-    // LAST, and it is what lets the slot be reused: nothing after this
-    // touches the session, so the main thread may hand it to a new tab.
-    __atomic_store_n(&s->done, 1, __ATOMIC_RELEASE);
-    return NULL;
-}
 
 // Move whatever the reader has published into the parser. Returns 1 if
 // anything arrived, so the caller repaints only when there is something
 // new.
-static void release_held(struct session *s);
 
+// Whatever the reader has published, into the screen; 1 if anything
+// arrived. A title that moved is said on its OWN line, and only when it
+// changed: a test asserts on the text rather than a tab label's pixels,
+// and it is not in the layout line because a title may hold spaces.
 static int drain(struct session *s) {
-    int got = 0;
-    for (;;) {
-        unsigned tail = __atomic_load_n(&s->tail, __ATOMIC_RELAXED);
-        if (tail == __atomic_load_n(&s->head, __ATOMIC_ACQUIRE)) break;
-        char c = s->ring[tail];
-        __atomic_store_n(&s->tail, (tail + 1) % RING_BYTES, __ATOMIC_RELEASE);
-        vt_write(s, &c, 1);
-        got = 1;
+    int got = uvterm_drain(&s->t);
+    if (s->t.title_moved) {
+        s->t.title_moved = 0;
+        ulogf("uterm: tab %d title %s\n", s->index, s->t.title);
     }
-    if (got && !s->spoke) release_held(s);
     return got;
 }
 
@@ -1169,9 +650,9 @@ static void tabs_refresh(void) {
     for (int i = 0; i < g_ntabs; i++) {
         int slot = g_tab_slot[i];
         struct session *s = (slot >= 0 && slot < MAX_TABS) ? g_slot[slot] : 0;
-        if (!s || !s->live) continue;
+        if (!s || !s->t.live) continue;
         g_tab_slot[n] = slot;
-        g_tablabels[n].label = s->title;
+        g_tablabels[n].label = s->t.title;
         // EVERY TAB HAS A CLOSE BOX, the lone one included: the strip is
         // drawn at one tab now (chrome_h()), so hiding the box would
         // leave a control-shaped gap rather than no control.
@@ -1192,135 +673,38 @@ static void tabs_refresh(void) {
     g_strip.selected = sel;
 }
 
-// `shell` NULL means the configured one; `dir` NULL leaves the shell in
-// this process's own directory.
+// `shell` NULL means the configured one; `dir` NULL leaves it in this
+// process's own directory. A slot is REUSED once its reader is done, and
+// uvterm_init() keeps its buffers.
 static int session_start(int slot, const char *shell, const char *dir) {
     struct session *s = g_slot[slot];
     if (!s) {
-        s = (struct session *)malloc(sizeof *s);
+        s = calloc(1, sizeof *s);
         if (!s) return 0;
-        // A FRESH STRUCT HAS NO BUFFERS YET, and malloc does not zero:
-        // the pointers carried across the wipe below would otherwise be
-        // whatever last lived here -- after grow_caps() has freed the
-        // old grids, exactly them -- and the allocation would be skipped.
-        s->grid = 0; s->sb = 0; s->saved = 0;
         g_slot[slot] = s;
     }
-    // Zeroed whether it is new or reused -- a recycled session must not
-    // inherit the last shell's screen. The cell buffers are heap-backed
-    // now, so their pointers are carried across the wipe (the CONTENT
-    // is cleared by vt_reset_screen below, and scrollback by sb_count
-    // going to 0).
-    struct cell *keep_grid = s->grid, *keep_sb = s->sb, *keep_saved = s->saved;
-    char *raw = (char *)s;
-    for (unsigned i = 0; i < sizeof *s; i++) raw[i] = 0;
-    s->grid = keep_grid; s->sb = keep_sb; s->saved = keep_saved;
-    if (!grow_caps(g_rows, g_cols)) return 0;   // first call sizes the caps
-    if (!s->grid) {
-        s->grid  = cells_new(g_cap_rows, g_cap_cols);
-        s->sb    = cells_new(SB_ROWS, g_cap_cols);
-        s->saved = cells_new(g_cap_rows, g_cap_cols);
-        if (!s->grid || !s->sb || !s->saved) {
-            free(s->grid); free(s->sb); free(s->saved);
-            s->grid = 0; s->sb = 0; s->saved = 0;
-            return 0;
-        }
-    }
+    if (!uvterm_init(&s->t, g_rows, g_cols, g_sb_rows, VT_FG, VT_BG)) return 0;
     s->index = slot;
-    s->master = -1;
-    s->started_ns = sys_monotonic_ns();
-    s->cursor_shown = 1;
-    ansi_init(&s->vt, VT_FG, VT_BG);
-    vt_reset_screen(s);
-
-    session_default_title(s, s->title);
-
-    int slave = -1;
-    if (sys_openpty(&s->master, &slave) < 0) return 0;
-
-    // NO sys_set_nonblock() ANY MORE, and its absence is the change: a
-    // reader thread WANTS to block. The flag used to be needed because
-    // the drain ran on the window's tick and a blocking read there would
-    // have frozen the window rather than slowed it.
-
-    // The child's 0/1/2 are the slave. dup2 around the spawn, exactly as
-    // tosh's own redirection does -- SYS_SPAWN inherits the descriptor
-    // table, so placing them here is placing them in the child.
-    int in0 = sys_dup(0), out1 = sys_dup(1), err2 = sys_dup(2);
-    sys_dup2(slave, 0);
-    sys_dup2(slave, 1);
-    sys_dup2(slave, 2);
-    // ITS OWN GROUP, which is what makes it interruptible as a unit --
-    // and with tabs it is also what keeps one tab's Ctrl-C out of
-    // another's: the group is per session, so the signal reaches the job
-    // in the tab you are looking at.
-    // A NEW SESSION: this window's pty is its own terminal, and the
-    // shell has to own it on behalf of everything it starts -- including
-    // a second shell. See abi/syscall_abi.h's SPAWN_SETSID.
+    s->exited = 0;
+    s->is_cmd = 0;
+    s->t.app = g_app;
+    s->t.post_id = slot;
+    s->t.scroll_on_output = g_conf.scroll_on_output;
+    // **JUST "Shell", WITH NO NUMBER**: the strip numbers by position, and
+    // a recycled slot's number contradicted it (`3: Shell 1`).
+    s->t.default_title = "Shell";
+    strlcpy(s->t.title, "Shell", sizeof s->t.title);
     char shbuf[SETTING_ABI_VALUE_MAX];
     if (!shell) shell = g_conf.shell[0] ? g_conf.shell : shell_path(shbuf, sizeof shbuf);
-    strlcpy(s->shell, shell, sizeof s->shell);
-    // THE CHILD INHERITS OUR CWD, so a new tab's directory is set by
-    // standing in it for the spawn -- the same dance as the fds above.
-    char back[TITLE_MAX * 2];
-    int moved = dir && getcwd(back, sizeof back) && chdir(dir) == 0;
-    if (moved) strlcpy(s->cwd, dir, sizeof s->cwd);
-    s->child = sys_spawn_flags(s->shell, 0, -1, 0, PGID_NEW, SPAWN_SETSID);
-    if (moved) chdir(back);
-    if (in0  >= 0) { sys_dup2(in0, 0);  sys_close(in0); }
-    if (out1 >= 0) { sys_dup2(out1, 1); sys_close(out1); }
-    if (err2 >= 0) { sys_dup2(err2, 2); sys_close(err2); }
-
-    // OUR copy of the slave goes now. The child holds its own through
-    // the fds above, and keeping this one would mean the master never
-    // sees end-of-file when the shell dies.
-    sys_close(slave);
-
-    if (s->child < 0) { sys_close(s->master); s->master = -1; return 0; }
-
-    struct tty_winsize ws = { (uint16_t)g_rows, (uint16_t)g_cols };
-    sys_tcsetwinsz(s->master, &ws);
-
-    s->live = 1;
-    s->done = 0;
-    // DETACHED: nothing joins it. Joining would mean blocking the UI
-    // until a shell that may be ignoring its terminal decides to exit,
-    // and the slot is recycled on `done` instead -- which is the same
-    // information a join would have carried.
-    pthread_attr_t at;
-    pthread_attr_init(&at);
-    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&s->reader, &at, reader_main, s) != 0) {
-        ulog("uterm: could not start a reader thread\n");
-        s->live = 0;
-        sys_close(s->master);
-        s->master = -1;
+    if (!uvterm_spawn(&s->t, shell, dir)) {
+        ulogf("uterm: could not start %s\n", shell);
         return 0;
     }
-    s->reader_started = 1;
     return 1;
 }
 
-// END THE SHELL, DO NOT ORPHAN IT. Closing the master alone would give
-// it end-of-file and it would exit on its own -- but only when it NEXT
-// READS, and a shell waiting on a job does not read for as long as that
-// job runs. A tab that has gone must not leave a process on a terminal
-// nobody can type at.
-//
-// SIGTERM rather than SIGKILL: this is the polite one, and the shell is
-// not being force-quit -- the person closed its tab.
 static void session_stop(struct session *s) {
-    if (!s || !s->live) return;
-    if (s->child > 0) {
-        sys_kill(s->child, SIGTERM);
-        int status = 0;
-        sys_waitpid(s->child, &status);
-        s->child = 0;
-    }
-    s->live = 0;
-    // The master stays OPEN until the reader has finished with it --
-    // closing an fd a blocked thread is reading is not something this
-    // kernel defines. Killing the shell is what ends that read.
+    if (s) uvterm_stop(&s->t);
 }
 
 static int open_tab_with(const char *shell) {
@@ -1331,20 +715,20 @@ static int open_tab_with(const char *shell) {
         // A slot whose reader has finished is free. One whose reader is
         // still winding down is NOT -- handing it to a new tab would
         // hand two threads one ring.
-        if (!s->live && s->done) { slot = i; break; }
+        if (!s->t.live && s->t.done) { slot = i; break; }
     }
     if (slot < 0) return 0;
     if (g_ntabs >= MAX_TABS) return 0;
     // A recycled slot's master is still open: its reader has finished
     // with it, and nothing else would ever close it.
-    if (g_slot[slot] && g_slot[slot]->master >= 0) {
-        sys_close(g_slot[slot]->master);
-        g_slot[slot]->master = -1;
+    if (g_slot[slot] && g_slot[slot]->t.master >= 0) {
+        sys_close(g_slot[slot]->t.master);
+        g_slot[slot]->t.master = -1;
     }
     const char *dir = 0;
     struct session *cur = active();
     if (g_conf.newtab_dir == TERM_NEWTAB_HOME) dir = "/home";
-    else if (cur && cur->cwd[0]) dir = cur->cwd;
+    else if (cur && cur->t.cwd[0]) dir = cur->t.cwd;
     if (!session_start(slot, shell, dir)) return 0;
     // APPENDED, so a new tab is always the RIGHT-HAND one whatever slot
     // it got -- see tabs_refresh() on what walking the slots did instead.
@@ -1359,8 +743,8 @@ static int open_tab(void) { return open_tab_with(0); }
 
 static void mark_cmd(struct session *s) {
     s->is_cmd = 1;
-    strlcpy(s->title, k_path_basename(s->shell), sizeof s->title);
-    s->title_locked = 1;
+    strlcpy(s->t.title, k_path_basename(s->t.prog), sizeof s->t.title);
+    s->t.title_locked = 1;
 }
 
 // The `-e` tab: PATH, standing in its own folder, as a double-click on
@@ -1424,61 +808,12 @@ static int chrome_h(void) {
     return h + tabbar_h();
 }
 
-static void draw_run(struct ugfx_surface *s, int x, int y,
-                     const char *text, int n, uint8_t fg, uint8_t bg) {
-    if (n <= 0 || !g_runbuf) return;
-    char *buf = g_runbuf;
-    for (int i = 0; i < n; i++) buf[i] = text[i];
-    buf[n] = '\0';
 
-    // **THE BACKGROUND IS A RECTANGLE, NOT THE STRING CALL'S `bg`.**
-    // ugfx_draw_string() blends the glyph's own pixels against that
-    // colour; it does not fill the CELL. For ordinary text the two look
-    // identical, and for REVERSE VIDEO they are not: a status bar came
-    // out as dark letters on black instead of black letters on a bar --
-    // legible, and not what was asked for. Caught by reading pixel
-    // values rather than by looking at the screenshot.
-    if ((bg & 15) != VT_BG)
-        ugfx_fill_rect(s, x, y, n * cell_w(), cell_h(), VGA_RGB[bg & 15]);
-    ugfx_draw_string(s, x, y, buf, VGA_RGB[fg & 15], VGA_RGB[bg & 15]);
-}
-
-// `sc0`/`sc1` are the selected columns of this row, as a half-open
-// range; equal means none. A SELECTED CELL SWAPS ITS OWN COLOURS rather
-// than taking a highlight colour, which is what every terminal does and
-// what keeps a coloured `ls` legible inside a selection.
-static void draw_row(struct ugfx_surface *s, const struct cell *row, int y,
-                     int sc0, int sc1) {
-    int cw = cell_w();
-    int i = 0;
-    while (i < g_cols) {
-        int sel = (i >= sc0 && i < sc1);
-        // A run ends where the colours change OR where the selection
-        // starts or stops, because the two halves are drawn differently.
-        int j = i;
-        while (j < g_cols && row[j].fg == row[i].fg && row[j].bg == row[i].bg &&
-               (j >= sc0 && j < sc1) == sel) j++;
-        // TRAILING BLANKS IN THE DEFAULT COLOURS ARE NOT DRAWN -- the
-        // surface is already that colour, and drawing them would cost a
-        // full row of glyphs per line for nothing. A SELECTED blank IS
-        // drawn: it is what shows the selection reaching the line end.
-        int blank = 1;
-        for (int k = i; k < j; k++) if (row[k].ch != ' ') { blank = 0; break; }
-        if ((sel || !(blank && row[i].bg == VT_BG)) && g_rowbuf) {
-            char *run = g_rowbuf;
-            for (int k = i; k < j; k++) run[k - i] = row[k].ch;
-            draw_run(s, g_margin + i * cw, y, run, j - i,
-                      sel ? row[i].bg : row[i].fg,
-                      sel ? row[i].fg : row[i].bg);
-        }
-        i = j;
-    }
-}
 
 // --- find ---------------------------------------------------------------
 //
 // **A HIT IS A LINE IN THE VIRTUAL BUFFER**, the selection's coordinates
-// (see struct selpoint), so a hit in the scrollback and one on the screen
+// (see struct uvterm_point), so a hit in the scrollback and one on the screen
 // are found, drawn and scrolled to by the same arithmetic. Case is
 // ignored, as Konsole's and Windows Terminal's default is. Matches do not
 // overlap.
@@ -1507,9 +842,9 @@ static void find_run(struct session *s, int keep) {
     g_hit_cur = -1;
     g_find_len = n;
     if (s && n > 0 && n <= g_cols) {
-        int total = s->sb_count + g_rows;
+        int total = s->t.sb_count + g_rows;
         for (int line = 0; line < total && g_nhits < FIND_MAX; line++) {
-            const struct cell *row = virt_row(s, line);
+            const struct uvterm_cell *row = uvterm_line(&s->t, line);
             if (!row) continue;
             for (int c = 0; c + n <= g_cols && g_nhits < FIND_MAX; c++) {
                 int k = 0;
@@ -1535,12 +870,12 @@ static void find_run(struct session *s, int keep) {
 static void find_reveal(struct session *s) {
     if (!s || g_hit_cur < 0) return;
     int line = g_hits[g_hit_cur].line;
-    int top = s->sb_count - s->sb_view;
+    int top = s->t.sb_count - s->t.sb_view;
     if (line >= top && line < top + g_rows) return;
-    int want = s->sb_count - (line - g_rows / 2);
-    if (want > s->sb_count) want = s->sb_count;
+    int want = s->t.sb_count - (line - g_rows / 2);
+    if (want > s->t.sb_count) want = s->t.sb_count;
     if (want < 0) want = 0;
-    s->sb_view = want;
+    s->t.sb_view = want;
 }
 
 static void find_step(struct session *s, int delta) {
@@ -1569,11 +904,11 @@ static void find_close(void) {
 static void draw_hits(struct ugfx_surface *s, struct session *ses, int top) {
     if (!g_find_open || g_find_len <= 0) return;
     int cw = cell_w(), ch = cell_h();
-    int first = ses->sb_count - ses->sb_view;
+    int first = ses->t.sb_count - ses->t.sb_view;
     for (int i = 0; i < g_nhits; i++) {
         int r = g_hits[i].line - first;
         if (r < 0 || r >= g_rows) continue;
-        const struct cell *row = virt_row(ses, g_hits[i].line);
+        const struct uvterm_cell *row = uvterm_line(&ses->t, g_hits[i].line);
         if (!row) continue;
         int c0 = g_hits[i].col, n = g_find_len;
         if (c0 + n > g_cols) n = g_cols - c0;
@@ -1592,13 +927,13 @@ static void draw_hits(struct ugfx_surface *s, struct session *ses, int top) {
 
 static void draw_panel(struct ugfx_surface *s, struct session *ses) {
     struct term_panel_info in = {
-        .shell = ses ? ses->shell : "",
-        .cwd = ses ? ses->cwd : "",
+        .shell = ses ? ses->t.prog : "",
+        .cwd = ses ? ses->t.cwd : "",
         .scheme = g_scheme.label,
-        .pid = ses ? ses->child : 0,
+        .pid = ses ? ses->t.child : 0,
         .exited = ses ? ses->exited : 1,
         .cols = g_cols, .rows = g_rows,
-        .sb_count = ses ? ses->sb_count : 0, .sb_cap = SB_ROWS,
+        .sb_count = ses ? ses->t.sb_count : 0, .sb_cap = SB_ROWS,
     };
     term_panel_set_exited(in.exited);
     term_panel_draw(s, &in);
@@ -1651,9 +986,9 @@ static void draw_scrollbar(struct ugfx_surface *s, struct session *ses) {
     }
     int e = utween_value(&g_sb_tw, now);
     if (utween_active(&g_sb_tw) || g_sb_collapse) uui_anim_request();
-    if (bw > 0 && ses->sb_count > 0) {
+    if (bw > 0 && ses->t.sb_count > 0) {
         int ty, th;
-        uui_scrollbar_thumb_rect(by, bh, ses->sb_count + g_rows, g_rows, ses->sb_view,
+        uui_scrollbar_thumb_rect(by, bh, ses->t.sb_count + g_rows, g_rows, ses->t.sb_view,
                                  &ty, &th, bw, 0);
         uint32_t page = VGA_RGB[VT_BG];
         // Thin: a 3 px thumb on the bar's right edge. Wide: the groove and
@@ -1695,46 +1030,17 @@ static void draw(struct ugfx_surface *s, int focused) {
 
     int ch = cell_h(), cw = cell_w();
 
-    // Scrolled back: the top rows come from history, the rest from the
-    // screen, and they meet without a seam because both are the same
-    // grid of cells. That is the payoff of scrollback being made of
-    // evicted ROWS rather than of a character stream.
-    for (int r = 0; r < g_rows; r++) {
-        int line = virt_of_row(ses, r);
-        const struct cell *row = virt_row(ses, line);
-        if (!row) continue;   // before the oldest line we kept
-        int sc0, sc1;
-        sel_cols(line, &sc0, &sc1);
-        draw_row(s, row, top + g_margin + r * ch, sc0, sc1);
-    }
+    static const int SHAPE[] = { UVTERM_CURSOR_BLOCK, UVTERM_CURSOR_UNDER, UVTERM_CURSOR_BAR };
+    // The caret only while FOCUSED: an unfocused window -- or one under a
+    // modal -- drawing a caret claims input that is going somewhere else.
+    struct uvterm_look look = {
+        .cw = cw, .ch = ch, .pal = VGA_RGB, .cursor_rgb = g_scheme.cursor,
+        .cursor_shape = SHAPE[g_conf.cursor >= 0 && g_conf.cursor < 3 ? g_conf.cursor : 0],
+        .caret = focused && g_caret_on && !modal_up() && !ses->exited,
+    };
+    uvterm_draw(&ses->t, s, g_margin, top + g_margin, &look);
     draw_hits(s, ses, top);
-
-    // The caret, only while FOCUSED and only while the program wants it
-    // shown (`ESC[?25l` hides it -- a full-screen program parking the
-    // caret somewhere meaningless turns it off rather than moving it).
-    // An unfocused window -- or one under a modal -- drawing a caret
-    // claims to be taking input that is going somewhere else.
-    if (focused && ses->cursor_shown && ses->sb_view == 0 && g_caret_on
-            && !modal_up() && !ses->exited) {
-        int cx = g_margin + ses->cc * cw, cy = top + g_margin + ses->cr * ch;
-        if (g_conf.cursor == TERM_CURSOR_UNDER) {
-            int t = ch / 8 + 1;
-            ugfx_fill_rect(s, cx, cy + ch - t, cw, t, g_scheme.cursor);
-        } else if (g_conf.cursor == TERM_CURSOR_BAR) {
-            ugfx_fill_rect(s, cx, cy, cw / 8 + 1, ch, g_scheme.cursor);
-        } else {
-            // A BLOCK MUST REDRAW ITS CHARACTER, or it hides the one
-            // thing the caret is pointing at. In the BACKGROUND colour,
-            // which is what every terminal does and what keeps the
-            // glyph legible against the caret.
-            const struct cell *row = virt_row(ses, virt_of_row(ses, ses->cr));
-            ugfx_fill_rect(s, cx, cy, cw, ch, g_scheme.cursor);
-            if (row && row[ses->cc].ch != ' ') {
-                char one[2] = { row[ses->cc].ch, '\0' };
-                ugfx_draw_string(s, cx, cy, one, VGA_RGB[VT_BG], g_scheme.cursor);
-            }
-        }
-    }
+    uvterm_draw_caret(&ses->t, s, g_margin, top + g_margin, &look);
     draw_effect(s, top, gr);
     // After the effect: the scrollbar is the window's, not the tube's.
     draw_scrollbar(s, ses);
@@ -1775,7 +1081,6 @@ static int chrome_moved(void) {
     return 1;
 }
 
-static int sel_measure(struct session *s, char *out, int cap);
 
 static void log_layout(void) {
     struct session *s = active();
@@ -1800,9 +1105,9 @@ static void log_layout(void) {
              "chrome %d rename %d sbview %d sbcount %d selbytes %d "
              "find %d hits %d cur %d panel %d exited %d "
              "effect %d curve %d margin %d cell %d %d\n",
-             s->cr * g_cols + s->cc, g_rows, g_cols, g_ntabs,
+             s->t.cr * g_cols + s->t.cc, g_rows, g_cols, g_ntabs,
              g_strip.selected, g_menu_shown, chrome_h(), g_rename_open,
-             s->sb_view, s->sb_count, sel_measure(s, 0, 0),
+             s->t.sb_view, s->t.sb_count, uvterm_sel_text(&s->t, 0, 0),
              g_find_open, g_nhits, g_hit_cur + 1, g_panel_open, s->exited,
              g_effect, g_effect ? g_conf.crt.curve : 0, g_margin, cell_w(), cell_h());
     uapp_log_layout_line(b);
@@ -1874,7 +1179,7 @@ static void rename_begin(void) {
     struct session *s = active();
     if (!s) return;
     g_rename_slot = s->index;
-    uui_textbox_init(&g_rename, s->title);
+    uui_textbox_init(&g_rename, s->t.title);
     uui_textbox_set_active(&g_rename, 1);
     g_rename_open = 1;
 }
@@ -1888,16 +1193,16 @@ static void rename_commit(void) {
     struct session *s = (g_rename_slot >= 0 && g_rename_slot < MAX_TABS)
                           ? g_slot[g_rename_slot] : 0;
     g_rename_slot = -1;
-    if (!s || !s->live) return;
+    if (!s || !s->t.live) return;
     const char *want = uui_textbox_text(&g_rename);
     if (!want || !want[0]) {
-        s->title_locked = 0;
-        session_default_title(s, s->title);
+        s->t.title_locked = 0;
+        session_default_title(s, s->t.title);
     } else {
-        strlcpy(s->title, want, sizeof s->title);
-        s->title_locked = 1;
+        strlcpy(s->t.title, want, sizeof s->t.title);
+        s->t.title_locked = 1;
     }
-    ulogf("uterm: tab %d title %s\n", s->index, s->title);
+    ulogf("uterm: tab %d title %s\n", s->index, s->t.title);
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
@@ -1988,34 +1293,15 @@ static void size_changed(int w, int h) {
     int cols = (grid_right(w) - 2 * g_margin) / cw;   // the bar overlays (bar_rect)
     if (rows < 2) rows = 2;
     if (cols < 8) cols = 8;
-    // Grow the buffers to fit; on a failed malloc keep the old
-    // capacity and clamp, which is the old fixed-grid behaviour.
-    if (!grow_caps(rows, cols)) {
-        if (rows > g_cap_rows) rows = g_cap_rows;
-        if (cols > g_cap_cols) cols = g_cap_cols;
-    }
     if (rows == g_rows && cols == g_cols) return;
-
-    int old_rows = g_rows;
     g_rows = rows;
     g_cols = cols;
-    struct tty_winsize ws = { (uint16_t)rows, (uint16_t)cols };
-    for (int i = 0; i < MAX_TABS; i++) {
-        struct session *s = g_slot[i];
-        if (!s || !s->live || s->master < 0) continue;
-        // THE ALTERNATE SCREEN IS NOT SCROLLED, because it has no
-        // scrollback to scroll into -- a full-screen program owns every
-        // row and redraws them all when it hears the size changed.
-        if (!s->alt) {
-            if (rows < old_rows)      rows_shrunk(s, old_rows, rows);
-            else if (rows > old_rows) rows_grown(s, old_rows, rows);
-        }
-        clamp_cursor(s);
-        // LAST, because it raises SIGWINCH: the program on the other end
-        // repaints from where the cursor is, so the grid has to be in
-        // its final shape before it is told.
-        sys_tcsetwinsz(s->master, &ws);
-    }
+    // EVERY tab, a kept one whose program has exited included: each
+    // terminal owns its grid now, and one drawn at the old size would show
+    // its last screen cropped or short. A terminal that cannot grow clamps
+    // itself (uvterm_resize), the old fixed-grid behaviour.
+    for (int i = 0; i < MAX_TABS; i++)
+        if (g_slot[i] && g_slot[i]->t.grid) uvterm_resize(&g_slot[i]->t, rows, cols);
 }
 
 static void on_resize(struct uapp *a, int w, int h) {
@@ -2030,15 +1316,16 @@ static void on_resize(struct uapp *a, int w, int h) {
 // each feed into the grid geometry, so applying them one at a time from
 // two places is how the two paths drift.
 static void apply_conf(const struct term_conf *next) {
-    int old_fg = VT_FG, old_bg = VT_BG;
     int scheme_moved = strcmp(next->scheme, g_conf.scheme) != 0 || !g_scheme.label[0];
     g_conf = *next;
     if (scheme_moved) {
         term_scheme_load(g_conf.scheme, &g_scheme);
-        remap_default_pair(old_fg, old_bg);
+        remap_default_pair();
     }
     font_sync();
     resize_scrollback(g_conf.scrollback);
+    for (int i = 0; i < MAX_TABS; i++)
+        if (g_slot[i]) g_slot[i]->t.scroll_on_output = g_conf.scroll_on_output;
     g_caret_on = 1;
     if (g_app) {
         // LAST, and through size_changed(): the grid may have gained or
@@ -2061,8 +1348,8 @@ static int on_tick(struct uapp *a) {
     unsigned long long now = sys_monotonic_ns();
     for (int i = 0; i < MAX_TABS; i++) {
         struct session *hs = g_slot[i];
-        if (hs && hs->live && !hs->spoke && now - hs->started_ns > 2000000000ull)
-            release_held(hs);
+        if (hs && hs->t.live && !hs->t.spoke && now - hs->t.started_ns > 2000000000ull)
+            uvterm_release_held(&hs->t);
     }
     int repaint = uui_toolbar_tick(&g_tb) | g_panel_open;
     if (!g_conf.cursor_blink) {
@@ -2091,7 +1378,7 @@ static void on_wheel(struct uapp *a, int notches) {
     if (modal_up()) return;
     struct session *s = active();
     if (!s) return;
-    scroll_to(a, s->sb_view + notches * WHEEL_LINES);
+    scroll_to(a, s->t.sb_view + notches * WHEEL_LINES);
 }
 
 // Move the view and repaint only if it moved. Shared by the wheel, the
@@ -2105,114 +1392,38 @@ static void on_wheel(struct uapp *a, int notches) {
 static void scroll_to(struct uapp *a, int want) {
     struct session *s = active();
     if (!s) return;
-    if (want > s->sb_count) want = s->sb_count;
+    if (want > s->t.sb_count) want = s->t.sb_count;
     if (want < 0) want = 0;
-    if (want == s->sb_view) return;
-    s->sb_view = want;
+    if (want == s->t.sb_view) return;
+    s->t.sb_view = want;
     uapp_redraw(a);
 }
 
-// --- the pointer ------------------------------------------------------
-//
-// The cell under a pixel. Clamped rather than refused, so a drag that
-// runs off the window keeps selecting to the edge -- the pointer grab
-// (ui/uui_route.h) keeps delivering motion once the cursor has left.
-// The column may come back as g_cols, which is the "past the end of the
-// line" position a selection needs to include the break.
-static struct selpoint point_at(struct session *s, int x, int y) {
-    int cw = cell_w(), ch = cell_h();
-    // ON A CURVED SCREEN THE CELL UNDER THE POINTER IS WHERE THE GLASS
-    // SHOWS IT, not where it was drawn: ask the effect.
+// The cell under a pixel, clamped so a drag that runs off the window keeps
+// selecting to the edge. ON A CURVED SCREEN THE CELL UNDER THE POINTER IS
+// WHERE THE GLASS SHOWS IT, not where it was drawn: ask the effect.
+static struct uvterm_point point_at(struct session *s, int x, int y) {
     if (g_effect && g_conf.crt.curve) {
         int sx, sy;
         ucrt_source_point(&g_crt, x, y - chrome_h(), &sx, &sy);
         x = sx;
         y = sy + chrome_h();
     }
-    int r = (y - chrome_h() - g_margin) / ch;
-    if (r < 0) r = 0;
-    if (r >= g_rows) r = g_rows - 1;
-    // Snapped to the nearest gap, not to the cell: clicking a glyph's
-    // right half puts the caret after it, as uui_textbox_index_at_x()
-    // does for a text field.
-    int c = (x - g_margin + cw / 2) / cw;
-    if (c < 0) c = 0;
-    if (c > g_cols) c = g_cols;
-    struct selpoint p = { virt_of_row(s, r), c };
-    return p;
+    return uvterm_point_at(&s->t, x - g_margin, y - chrome_h() - g_margin, cell_w(), cell_h());
 }
 
-// What counts as one word for a double-click. Konsole's default set
-// (`:word_characters`) is letters, digits and `_-.,/`; this is the
-// conservative half of it, which is what makes double-clicking a path
-// stop at a `/` rather than swallowing the line.
-static int word_char(char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-           (c >= '0' && c <= '9') || c == '_';
-}
 
-// Grow a point out to its whole word. Returns 0 when there is no word
-// under it, which leaves the caret where the click put it.
-static int sel_word(struct session *s, struct selpoint p) {
-    const struct cell *row = virt_row(s, p.line);
-    if (!row) return 0;
-    int c = p.col;
-    if (c >= g_cols) c = g_cols - 1;
-    if (c < 0 || !word_char(row[c].ch)) return 0;
-    int a = c, b = c;
-    while (a > 0 && word_char(row[a - 1].ch)) a--;
-    while (b + 1 < g_cols && word_char(row[b + 1].ch)) b++;
-    g_sel_a.line = g_sel_b.line = p.line;
-    g_sel_a.col = a;
-    g_sel_b.col = b + 1;
-    g_sel_on = 1;
-    return 1;
-}
 
-// The whole line, break included -- so a triple-click copy of two lines
-// running together is impossible.
-static void sel_line(struct selpoint p) {
-    g_sel_a.line = p.line; g_sel_a.col = 0;
-    g_sel_b.line = p.line; g_sel_b.col = g_cols;
-    g_sel_on = 1;
-}
 
 // --- copying ----------------------------------------------------------
 
-// The selected text, laid out the way a person would retype it: trailing
-// blanks dropped from every line but the last, and a newline where the
-// selection crosses a line break.
-//
-// TWO PASSES, and the first one is what makes a refusal possible: a copy
-// that does not fit is refused rather than truncated (lib/uclip.h), and
-// half a command line pasted into a shell is worse than none.
-static int sel_measure(struct session *s, char *out, int cap) {
-    struct selpoint from, to;
-    if (!sel_range(&from, &to)) return 0;
-    int n = 0;
-    for (int line = from.line; line <= to.line; line++) {
-        const struct cell *row = virt_row(s, line);
-        int c0, c1;
-        sel_cols(line, &c0, &c1);
-        int end = c1;
-        if (row && line < to.line)          // trailing blanks are padding,
-            while (end > c0 && row[end - 1].ch == ' ') end--;   // not text
-        for (int c = c0; row && c < end; c++) {
-            if (out && n < cap) out[n] = row[c].ch;
-            n++;
-        }
-        if (line < to.line) { if (out && n < cap) out[n] = '\n'; n++; }
-    }
-    if (out && n < cap) out[n] = '\0';
-    return n;
-}
 
 // Puts the selection on the clipboard. SAYS SO EITHER WAY -- silence is
 // the one outcome a Copy must never have (lib/uclip.h).
 static void do_copy(void) {
     struct session *s = active();
-    if (!s || !g_sel_on) return;
-    int n = sel_measure(s, 0, 0);
+    if (!s || !s->t.sel_on) return;
+    int n = uvterm_sel_text(&s->t, 0, 0);
     if (n <= 0) return;
     if (n > UCLIP_TEXT_MAX) {
         ulogf("uterm: selection is %d bytes, over the clipboard's %d -- not copied\n",
@@ -2221,7 +1432,7 @@ static void do_copy(void) {
     }
     char *buf = malloc((size_t)n + 1);
     if (!buf) { ulog("uterm: out of memory copying the selection\n"); return; }
-    sel_measure(s, buf, n + 1);
+    uvterm_sel_text(&s->t, buf, n + 1);
     if (!uclip_set_text(buf, n))
         ulog("uterm: the clipboard refused the copy -- is clipboardd running?\n");
     free(buf);
@@ -2247,28 +1458,28 @@ static int drain_all(void) {
 static void reap_dead_tabs(void) {
     for (int i = 0; i < MAX_TABS; i++) {
         struct session *s = g_slot[i];
-        if (!s || !s->live || !s->eof || s->exited) continue;
+        if (!s || !s->t.live || !s->t.eof || s->exited) continue;
         // KEPT: reaped, and the tab stays with what the shell last said
         // -- GNOME Terminal's "hold the terminal open". The note is
         // written THROUGH THE PARSER, so it lands in the grid and the
         // scrollback like any other line.
         if (g_conf.keep_on_exit || s->is_cmd) {
             int status = 0;
-            if (s->child > 0) sys_waitpid(s->child, &status);
-            s->child = 0;
+            if (s->t.child > 0) sys_waitpid(s->t.child, &status);
+            s->t.child = 0;
             s->exited = 1;
             char note[TITLE_MAX + 96];
             if (s->is_cmd) {
                 snprintf(note, sizeof note,
                          "\r\n\x1b[0;2m[%s finished, exit status %d -- Enter runs it again, Ctrl+D closes]\x1b[0m\r\n",
-                         s->title, status);
-                ulogf("uterm: %s finished, status %d\n", s->shell, status);
+                         s->t.title, status);
+                ulogf("uterm: %s finished, status %d\n", s->t.prog, status);
             } else {
                 snprintf(note, sizeof note,
                          "\r\n\x1b[0;2m[shell exited with status %d -- Enter starts a new one]\x1b[0m\r\n",
                          status);
             }
-            vt_write(s, note, (int)strlen(note));
+            uvterm_write(&s->t, note, (int)strlen(note));
             continue;
         }
         session_stop(s);
@@ -2289,28 +1500,14 @@ static void reap_dead_tabs(void) {
 #define CTRL_SHIFT_F 0x06
 #define CTRL_SHIFT_E 0x05
 
-// One byte to the shell, the way a keystroke would arrive. THE MENU
-// SENDS THE SAME BYTE THE KEY DOES rather than reaching for
-// sys_kill(): Ctrl-C is interpreted by kernel/tty/ldisc.c, which is
-// what makes it reach the foreground JOB rather than the shell.
-// Every keystroke-shaped write to a shell goes through here, so type-ahead
-// held before the shell first spoke keeps its order. Past the hold buffer
-// a key is written at once: losing it would be worse than an early echo.
+// One keystroke-shaped write to the active program, held while it has
+// not yet spoken (ui/uvterm.h). THE MENU SENDS THE SAME BYTE THE KEY
+// DOES rather than reaching for sys_kill(): Ctrl-C is the line
+// discipline's to interpret, which is what makes it reach the JOB.
 static void pty_send(struct session *s, const char *buf, int n) {
-    if (!s || s->master < 0 || n <= 0) return;
-    if (!s->spoke && s->nheld + n <= (int)sizeof s->held) {
-        memcpy(s->held + s->nheld, buf, (size_t)n);
-        s->nheld += n;
-        return;
-    }
-    sys_write(s->master, buf, (size_t)n);
+    if (s) uvterm_send(&s->t, buf, n);
 }
 
-static void release_held(struct session *s) {
-    s->spoke = 1;
-    if (s->nheld > 0 && s->master >= 0) sys_write(s->master, s->held, (size_t)s->nheld);
-    s->nheld = 0;
-}
 
 static void send_byte(char b) {
     pty_send(active(), &b, 1);
@@ -2332,7 +1529,7 @@ static void clip_refresh(void) {
 
 static void do_paste(void) {
     struct session *s = active();
-    if (!s || s->master < 0) return;
+    if (!s || s->t.master < 0) return;
     clip_refresh();
     int n = 0;
     const char *txt = uclip_text(&g_clip, &n);
@@ -2352,7 +1549,7 @@ static unsigned menu_item_flags(int code) {
     case CMD_NEXT_TAB:
     case CMD_PREV_TAB:  return g_ntabs > 1 ? 0 : UUI_MI_DISABLED;
     case CMD_PASTE:     return g_clip_has_text ? 0 : UUI_MI_DISABLED;
-    case CMD_COPY:      return g_sel_on ? 0 : UUI_MI_DISABLED;
+    case CMD_COPY:      return active() && active()->t.sel_on ? 0 : UUI_MI_DISABLED;
     default:            return 0;
     }
 }
@@ -2434,54 +1631,27 @@ static void do_command(struct uapp *a, int code) {
     case CMD_EXIT:      uapp_quit(a, 0); return;
     case CMD_RENAME:    rename_begin(); break;
     case CMD_CLEAR_SCREEN:
-        // THE CURSOR'S LINE SURVIVES, moved to the top: it holds the
-        // prompt and whatever is half-typed, and the shell will not
-        // redraw them on its own -- Windows Terminal's Clear Buffer. Not
-        // on the alternate screen, whose program owns every row.
-        if (s && !s->alt) {
-            struct cell *keep = malloc((size_t)g_cap_cols * sizeof *keep);
-            if (keep) memcpy(keep, grid_row(s, s->cr), (size_t)g_cap_cols * sizeof *keep);
-            int cc = s->cc;
-            vt_reset_screen(s);
-            s->cc = cc;
-            if (keep) { memcpy(grid_row(s, 0), keep, (size_t)g_cap_cols * sizeof *keep); free(keep); }
-            s->cr = 0;
-            s->sb_view = 0;
-        }
+        if (s) uvterm_clear_screen(&s->t);
         break;
     case CMD_CLEAR_SB:
-        if (s) { s->sb_count = 0; s->sb_view = 0; }
+        if (s) uvterm_clear_scrollback(&s->t);
         break;
     case CMD_RESET:
-        // WHAT `reset` DOES: the screen, the parser's colours and modes,
-        // and the view. Not the scrollback -- `reset` on a real terminal
-        // leaves history alone, which is why Clear Scrollback is its own
-        // row rather than part of this one.
-        if (s) {
-            ansi_init(&s->vt, VT_FG, VT_BG);
-            vt_reset_screen(s);
-            s->alt = 0;
-            s->cursor_shown = 1;
-            s->sb_view = 0;
-        }
+        if (s) uvterm_reset(&s->t);
         break;
     case CMD_PASTE:     do_paste(); break;
     case CMD_COPY:      do_copy();  break;
     case CMD_SELECT_ALL: {
         struct session *ses = active();
         if (!ses) break;
-        // The whole virtual buffer -- scrollback and screen -- because
-        // that is what the window is showing you a part of.
-        g_sel_a.line = 0; g_sel_a.col = 0;
-        g_sel_b.line = ses->sb_count + g_rows - 1; g_sel_b.col = g_cols;
-        g_sel_on = 1;
+        uvterm_sel_all(&ses->t);
         do_copy();
         break;
     }
     case CMD_INTR:      send_byte(0x03); break;
     case CMD_EOF:       send_byte(0x04); break;
-    case CMD_TOP:       if (s) s->sb_view = s->sb_count; break;
-    case CMD_BOTTOM:    if (s) s->sb_view = 0; break;
+    case CMD_TOP:       if (s) s->t.sb_view = s->t.sb_count; break;
+    case CMD_BOTTOM:    if (s) s->t.sb_view = 0; break;
     case CMD_MENUBAR:   g_menu_shown = !g_menu_shown; size_changed(uapp_width(a), uapp_height(a)); break;
     case CMD_EFFECT:
         // Turned on with a look that does nothing (every slider at off),
@@ -2594,12 +1764,12 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
             uapp_redraw(a);
             return;
         }
-        if ((key == '\n' || key == '\r') && s->done) {
+        if ((key == '\n' || key == '\r') && s->t.done) {
             char shell[TERM_SHELL_MAX], dir[TITLE_MAX];
-            strlcpy(shell, s->shell, sizeof shell);
-            strlcpy(dir, s->cwd, sizeof dir);
+            strlcpy(shell, s->t.prog, sizeof shell);
+            strlcpy(dir, s->t.cwd, sizeof dir);
             int was_cmd = s->is_cmd;
-            if (s->master >= 0) { sys_close(s->master); s->master = -1; }
+            if (s->t.master >= 0) { sys_close(s->t.master); s->t.master = -1; }
             if (!session_start(s->index, shell, dir[0] ? dir : 0)) ulog("uterm: could not restart the shell\n");
             else if (was_cmd) mark_cmd(s);
             tabs_refresh();
@@ -2614,42 +1784,23 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     // This window deciding what Ctrl-A means would be the second
     // implementation kernel/lib/klineedit.c exists to prevent.
     if (key == KEY_PAGE_UP) {
-        s->sb_view += g_rows / 2;
-        if (s->sb_view > s->sb_count) s->sb_view = s->sb_count;
+        s->t.sb_view += g_rows / 2;
+        if (s->t.sb_view > s->t.sb_count) s->t.sb_view = s->t.sb_count;
         uapp_redraw(a);
         return;
     }
     if (key == KEY_PAGE_DOWN) {
-        s->sb_view -= g_rows / 2;
-        if (s->sb_view < 0) s->sb_view = 0;
+        s->t.sb_view -= g_rows / 2;
+        if (s->t.sb_view < 0) s->t.sb_view = 0;
         uapp_redraw(a);
         return;
     }
 
-    // **A TERMINAL EMULATOR TRANSLATES A KEYSYM INTO A SEQUENCE, and
-    // that is the whole job.** The toolkit delivers KEY_* -- a keysym,
-    // exactly what an X11 or Wayland client receives -- and what goes on
-    // the wire to the pty is ANSI: Up is `ESC [ A`. This is what Konsole
-    // does, and it is why a ported program can read this terminal at
-    // all; it used to write the raw 0x91, which only programs written
-    // for this system understood.
-    //
-    // An ordinary character encodes to itself, so typing costs one byte
-    // as it always did. A key with no terminal sequence (Super, a bare
-    // modifier) encodes to nothing and is correctly not sent.
-    //
-    // Ctrl and Alt arrive as bits beside the key, so they are encoded
-    // here, by the rule tty_input() applies to the console: Ctrl with a
-    // character that is not a letter has no terminal code and is not
-    // sent, and Alt is readline's meta prefix, ESC then the key. A KEY_*
-    // special is never prefixed.
-    if (IS_PRINTABLE_KEY(key) && (mods & KEY_MOD_CTRL)) return;
-    if ((mods & KEY_MOD_ALT) && !IS_SPECIAL_KEY(key) &&
-        s->master >= 0)
-        pty_send(s, "\x1b", 1);
-    char seq[TERMKEY_MAX];
-    int n = termkey_encode(key, seq, sizeof seq);
-    if (n > 0) pty_send(s, seq, n);
+    // Everything else is a key to the program, encoded the way a terminal
+    // sends it (uvterm_key): THE PROGRAM HAS THE LINE EDITOR, and this
+    // window deciding what Ctrl-A means would be the second
+    // implementation kernel/lib/klineedit.c exists to prevent.
+    uvterm_key(&s->t, key, mods);
 
     // NO DRAIN HERE ANY MORE. The echo comes back through the discipline
     // and the reader thread is already blocked waiting for it, so it
@@ -2673,10 +1824,7 @@ static int on_user(struct uapp *a, int a0, int a1) {
 
 static void tab_selected(void *ctx, int index) {
     (void)ctx; (void)index;
-    // The selection names lines in the session it was made in, and every
-    // session has its own scrollback -- so carrying it across a switch
-    // would highlight whatever happened to be at those line numbers.
-    sel_clear();
+    // Each tab keeps its OWN selection (ui/uvterm.h), as Konsole's do.
     if (g_find_open) find_run(active(), 0);
     if (g_app) uapp_redraw(g_app);
 }
@@ -2705,7 +1853,7 @@ static void on_action(struct uapp *a, int code) {
     case TERM_PANEL_EOF:  send_byte(0x04); break;
     // SIGKILL, the Task Manager's Force Quit: the shell may be
     // ignoring everything politer, which is why the button exists.
-    case TERM_PANEL_KILL: if (ps->child > 0) sys_kill(ps->child, SIGKILL); break;
+    case TERM_PANEL_KILL: if (ps->t.child > 0) sys_kill(ps->t.child, SIGKILL); break;
     }
     uapp_redraw(a);
 }
@@ -2820,48 +1968,42 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
 
     int bx, by, bw, bh;
     bar_rect(uapp_width(a), uapp_height(a), &bx, &by, &bw, &bh);
-    if (bw > 0 && ses->sb_count > 0 && x >= bx && x < bx + bw && y >= by) {
+    if (bw > 0 && ses->t.sb_count > 0 && x >= bx && x < bx + bw && y >= by) {
         sb_hover(1);
-        int total = ses->sb_count + g_rows;
+        int total = ses->t.sb_count + g_rows;
         switch (uui_scrollbar_hit(bx, by, bw, bh, total, g_rows,
-                                   ses->sb_view, x, y, 0)) {
+                                   ses->t.sb_view, x, y, 0)) {
         case UUI_SB_THUMB: {
             // WHERE IN THE THUMB the press landed, subtracted on every
             // motion -- point 1 of the scrollbar spec. Passing 0 makes
             // the thumb leap so its top sits under the cursor.
             int ty, th;
-            uui_scrollbar_thumb_rect(by, bh, total, g_rows, ses->sb_view,
+            uui_scrollbar_thumb_rect(by, bh, total, g_rows, ses->t.sb_view,
                                       &ty, &th, bw, 0);
             g_bar_grab = y - ty;
             break;
         }
         // The trough PAGES; it does not jump to the clicked position.
         // Above the thumb is further back in history, which is up.
-        case UUI_SB_ABOVE: scroll_to(a, ses->sb_view + g_rows - 1); break;
-        case UUI_SB_BELOW: scroll_to(a, ses->sb_view - g_rows + 1); break;
+        case UUI_SB_ABOVE: scroll_to(a, ses->t.sb_view + g_rows - 1); break;
+        case UUI_SB_BELOW: scroll_to(a, ses->t.sb_view - g_rows + 1); break;
         default: break;
         }
         return;
     }
 
-    struct selpoint p = point_at(ses, x, y);
+    struct uvterm_point p = point_at(ses, x, y);
     switch (click_run(x, y)) {
     case 2:
-        if (!sel_word(ses, p)) sel_clear();
+        if (!uvterm_sel_word(&ses->t, p)) uvterm_sel_clear(&ses->t);
         break;
     case 3:
-        sel_line(p);
+        uvterm_sel_line(&ses->t, p);
         break;
     default:
         // Shift EXTENDS an existing selection instead of starting one,
         // which is what every terminal and every list here does.
-        if ((WIN_MOUSE_MODS(buttons) & KEY_MOD_SHIFT) && g_sel_on) {
-            g_sel_b = p;
-        } else {
-            g_sel_a = g_sel_b = p;
-            g_sel_on = 1;   // armed but empty until the drag moves
-        }
-        g_selecting = 1;
+        uvterm_sel_start(&ses->t, p, (WIN_MOUSE_MODS(buttons) & KEY_MOD_SHIFT) != 0);
         break;
     }
     uapp_redraw(a);
@@ -2878,7 +2020,7 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     // menu is down -- its rows lie over the grid.
     int sbx, sby, sbw, sbh;
     bar_rect(uapp_width(a), uapp_height(a), &sbx, &sby, &sbw, &sbh);
-    int over_bar = sbw > 0 && ses->sb_count > 0 && x >= sbx && x < sbx + sbw
+    int over_bar = sbw > 0 && ses->t.sb_count > 0 && x >= sbx && x < sbx + sbw
                    && y >= sby && y < sby + sbh;
     if (over_bar != g_sb_want || (over_bar && g_sb_collapse)) {
         if (over_bar || g_bar_grab < 0) sb_hover(over_bar);
@@ -2894,11 +2036,11 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
         int bx, by, bw, bh;
         bar_rect(uapp_width(a), uapp_height(a), &bx, &by, &bw, &bh);
         scroll_to(a, uui_scrollbar_offset_for_drag(by, bh,
-                        ses->sb_count + g_rows, g_rows, y, g_bar_grab, bw, 0));
+                        ses->t.sb_count + g_rows, g_rows, y, g_bar_grab, bw, 0));
         return;
     }
 
-    if (!g_selecting) return;
+    if (!ses->t.selecting) return;
     // **A MOTION WITH NO BUTTON HELD IS IGNORED, NOT TREATED AS A
     // RELEASE**, and the difference is the whole of why drag-select did
     // not work at first. `docs/conventions/gui.md` says to test the
@@ -2916,11 +2058,11 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     // terminal autoscrolls on a timer while the pointer is held still at
     // the edge; this window deliberately has no tick (see uapp_desc), so
     // it scrolls while the pointer keeps moving instead.
-    if (y < chrome_h() + g_margin)                 scroll_to(a, ses->sb_view + 1);
+    if (y < chrome_h() + g_margin)                 scroll_to(a, ses->t.sb_view + 1);
     else if (y >= chrome_h() + g_margin + g_rows * cell_h())
-                                                 scroll_to(a, ses->sb_view - 1);
+                                                 scroll_to(a, ses->t.sb_view - 1);
 
-    g_sel_b = point_at(ses, x, y);
+    uvterm_sel_extend(&ses->t, point_at(ses, x, y));
     uapp_redraw(a);
 }
 
@@ -2933,8 +2075,9 @@ static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
         bar_rect(uapp_width(a), uapp_height(a), &bx, &by, &bw, &bh);
         if (!(x >= bx && x < bx + bw && y >= by && y < by + bh)) sb_hover(0);
     }
-    if (!g_selecting) return;
-    g_selecting = 0;
+    struct session *ses = active();
+    if (!ses || !ses->t.selecting) return;
+    ses->t.selecting = 0;
     // **COPY ON SELECT**, which X11 calls the PRIMARY selection and
     // Konsole offers as an option. There is one clipboard here, so this
     // does overwrite whatever was last copied -- deliberate, and the

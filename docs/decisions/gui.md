@@ -10791,3 +10791,25 @@ one that shows what the thing printed.
   Terminal without asking -- Enter meaning two things depending on the
   file was the alternative, and Explorer's rule is that Enter IS the
   double-click.
+
+## A terminal is an engine the Terminal hosts per tab
+
+**2026-10-07.** The GUI Terminal held everything in one file: its tabs and
+chrome, and also the pty, reader thread, ANSI parser, grid, scrollback,
+alternate screen, selection and row drawing -- with the geometry, the
+scrollback depth and the selection as globals every tab shared. GNOME's
+VteTerminal draws that line: it is one terminal, and GNOME Terminal,
+xfce4-terminal and Tilix are hosts that put one per tab and add the
+chrome. `ui/uvterm.h` is that line here: **each terminal owns its grid,
+scrollback, cursor, parser, pty, reader and selection**, draws itself
+into a box (rows, then a separate caret call so a host can paint between
+-- the find highlights), encodes keys the way a terminal sends them, and
+does the menu's verbs (clear, clear scrollback, reset, select all).
+`terminal.c` keeps the tabs, menus, find bar, Session panel, screen
+effect, scrollbar and window sizing. Two things followed. A tab keeps
+its OWN selection across a switch, as Konsole's do -- the old global one
+had to be cleared because it named lines in whichever tab made it. And a
+kept tab whose program has exited is resized with the rest, since its
+grid is its own. **No widget ops table yet**: nothing but Terminal hosts
+a terminal, and an ops table no host drives would be untested; a second
+host wraps the engine in one.
