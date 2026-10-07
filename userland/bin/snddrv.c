@@ -37,10 +37,8 @@
 #include "sound_abi.h"
 #include "syscall_abi.h"
 #include "query_abi.h"
-#include "lib/cmd.h"
+#include "lib/uargs.h"
 #include <sys/resource.h>
-
-#define USAGE "snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [--usb-clock ID] [--prio N] [-v]"
 
 #define PLUGIN_DIR "/lib/snd"
 #define MAX_PLUGINS 8
@@ -221,30 +219,46 @@ static int bring_up(int index, const struct snd_driver *drv,
     return 0;
 }
 
+static const char *o_dev, *o_drv, *o_usb, *o_clock, *o_prio;
+static int o_pci, o_verbose;
+
+static const struct uargs_opt OPTS[] = {
+    { "device",    'd', "INDEX",   "drive the PCI device at this lspci index", 0, &o_dev },
+    { "driver",    0,   "NAME",    "load only this plugin (hda, ac97, usbaudio)", 0, &o_drv },
+    { "pci",       0,   0,         "only a PCI card; leave USB DACs to the kernel", &o_pci, 0 },
+    { "usb-id",    0,   "VID:PID", "drive this USB DAC (or a decimal xHCI slot)", 0, &o_usb },
+    { "usb-clock", 0,   "ID",      "pin a UAC2 clock entity (a diagnostic)", 0, &o_clock },
+    { "prio",      0,   "N",       "run at this priority instead of -10 (a diagnostic)", 0, &o_prio },
+    { "verbose",   'v', 0,         "say which plugins loaded and what was declined", &o_verbose, 0 },
+    { 0 }
+};
+
+static const struct uargs_prog PROG = {
+    .name = "snddrv",
+    .usage = "[-d INDEX] [--driver NAME] [--pci] [--usb-id VID:PID] [--usb-clock ID] [--prio N] [-v]",
+    .summary = "The sound driver host: claim one sound card, drive it from ring 3\n"
+               "through a /lib/snd plugin, and register it as the sound device.",
+    .opts = OPTS,
+    .notes = "Exits 0 when there is no card to drive, so the service stays down.\n"
+             "Spawn snddrv; never `run` it -- every call needs a scheduler slot.",
+};
+
 int main(int argc, char **argv) {
-    int want_pci = -1;
-    const char *want_drv = 0;
-    const char *want_usb = 0;
-    int prio = -10;
-    for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-d") && i + 1 < argc) { want_pci = atoi(argv[++i]); continue; }
-        if (!strcmp(argv[i], "--driver") && i + 1 < argc) { want_drv = argv[++i]; continue; }
-        if (!strcmp(argv[i], "--usb-id") && i + 1 < argc) { want_usb = argv[++i]; continue; }
-        // A DIAGNOSTIC, not a tuning knob: a UAC2 clock SELECTOR's pins
-        // are different clocks (the G6 offers a DSP path and a direct
-        // one) and the device decides which it reports, so two runs can
-        // exercise different ones and sound different. This pins it so
-        // they can be compared. The plugin reads the environment, which
-        // the shell cannot set on a command line here.
-        if (!strcmp(argv[i], "--usb-clock") && i + 1 < argc) {
-            setenv("USBAUDIO_CLOCK", argv[++i], 1);
-            continue;
-        }
-        if (!strcmp(argv[i], "--prio") && i + 1 < argc) { prio = atoi(argv[++i]); continue; }
-        if (!strcmp(argv[i], "-v")) { g_verbose = 1; continue; }
-        cmd_usage(USAGE);
-        return 1;
-    }
+    struct uargs a;
+    if (uargs_parse(&a, &PROG, argc, argv)) return a.status;
+    if (a.argc) return uargs_error(&PROG, "unexpected argument '%s'", a.argv[0]);
+    int want_pci = o_dev ? atoi(o_dev) : -1;
+    const char *want_drv = o_drv;
+    const char *want_usb = o_usb;
+    int prio = o_prio ? atoi(o_prio) : -10;
+    g_verbose = o_verbose;
+    // A DIAGNOSTIC, not a tuning knob: a UAC2 clock SELECTOR's pins
+    // are different clocks (the G6 offers a DSP path and a direct
+    // one) and the device decides which it reports, so two runs can
+    // exercise different ones and sound different. This pins it so
+    // they can be compared. The plugin reads the environment, which
+    // the shell cannot set on a command line here.
+    if (o_clock) setenv("USBAUDIO_CLOCK", o_clock, 1);
 
     // A DAEMON LEAVES THE SESSION THAT STARTED IT. `spawn` reparents to
     // init but keeps the PROCESS GROUP, so the launching shell's SIGHUP
@@ -311,7 +325,7 @@ int main(int argc, char **argv) {
     // THEN THE DRIVERS THAT FIND THEIR OWN. A USB card is named by an
     // xHCI slot, not a PCI index, so the host cannot enumerate it --
     // the plugin does, and takes its own claim.
-    for (int k = 0; k < g_nplugins && index < 0 && want_pci < 0; k++) {
+    for (int k = 0; k < g_nplugins && index < 0 && want_pci < 0 && !o_pci; k++) {
         if (g_plugins[k]->match) continue;
         memset(&g_card, 0, sizeof g_card);
         g_card.pci = -1;
@@ -327,9 +341,12 @@ int main(int argc, char **argv) {
     }
 
     if (!g_drv) {
+        // NOTHING TO DRIVE IS NOT A FAILURE: a clean exit is what keeps
+        // `Restart=on-failure` from reading a machine with no card (or
+        // one left to the kernel's driver) as a crash loop.
         fprintf(stderr, "snddrv: no sound card a loaded driver can play\n");
         release_all();
-        return 1;
+        return 0;
     }
 
     struct snd_register_msg m;
@@ -382,6 +399,7 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr, "snddrv: %s serving pci %d as %s at %u-bit, priority %d\n",
             g_drv->name, index, m.name, (unsigned)m.bits, getpriority(PRIO_PROCESS, 0));
+    sys_notify_ready();   // the card is registered: soundd may open it
 
     while (!g_quit) {
         uint32_t w = g_sh->wake;

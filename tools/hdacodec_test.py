@@ -35,6 +35,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from harness import copy_disk  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -104,7 +105,17 @@ def main():
 
     try:
         want_card = not args.no_card
-        before = vm("exec", "lspci -k")
+        # THE `snddrv` SERVICE DRIVES THE CARD FROM RING 3 SINCE BOOT, and
+        # lscodec claims it off the KERNEL's driver -- so hand it back
+        # first: a polite stop releases with REBIND.
+        if want_card:
+            vm("exec", "service stop snddrv")
+        before = ""
+        for _ in range(20):
+            before = vm("exec", "lspci -k")
+            if not want_card or "kernel driver: hda" in before:
+                break
+            time.sleep(1.0)
         if not res.check("an HD Audio controller is present and bound"
                          if want_card else "no HD Audio controller is present",
                          ("kernel driver: hda" in before) == want_card):

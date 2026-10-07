@@ -216,6 +216,21 @@ def establish(dbg):
     dbg.send("sh config set volume 100")
 
 
+# THE `snddrv` SERVICE DRIVES A PCI CARD FROM RING 3 SINCE BOOT. A phase
+# about the KERNEL's driver -- its KTESTs, lscodec claiming the card from
+# it -- stops the service first: a polite stop releases with REBIND, so
+# the ring-0 driver binds again, and a clean exit is not restarted.
+def kernel_driver(dbg, devname):
+    dbg.send("sh service stop snddrv")
+    for _ in range(40):
+        for line in (dbg.send("sh lssound") or "").splitlines():
+            words = line.replace("*", " ").split()
+            if words and words[0] == devname and words[-1] != "ring3":
+                return True
+        time.sleep(0.5)
+    return False
+
+
 def restart_phase(res, boot, halt, sock, wav7_path):
     # --- EVERY PLAYBACK IS A RESTART, and none may have a hole in it ---
     #
@@ -335,6 +350,8 @@ def main():
         if not res.check("the serial console answers", dbg is not None):
             return 1
         establish(dbg)
+        res.check("the kernel's driver has the card once snddrv stops",
+                  kernel_driver(dbg, devname))
 
         dmesg = dbg.send("sh dmesg") or ""
         res.check("the driver claimed the controller",
@@ -548,6 +565,8 @@ def main():
         try:
             dbg = wait_serial(sock)
             if res.check("the serial console answers (ring-3 phase)", dbg is not None):
+                res.check("the kernel's driver has the card once snddrv stops (ring-3 phase)",
+                          kernel_driver(dbg, devname))
                 was = dbg.timeout
                 dbg.timeout = 60
                 out = dbg.send("sh lscodec --tone 2") or ""
@@ -619,16 +638,26 @@ def main():
     # --- the ring-3 driver IS the sound device (umdf, the end state) --
     #
     # The difference from the phase above, and the whole point of this
-    # one: nothing here knows the driver is a process. /bin/snddrv
-    # dlopens a driver out of /lib/snd, claims the card and registers
-    # with the sound core, then `aplay` plays a file through `soundd`
-    # exactly as it does on every other row --
-    # same mixer, same resampler, same ring. What moved is underneath
-    # all of it.
+    # one: nothing here knows the driver is a process. The `snddrv`
+    # service claims the card at boot, dlopens a driver out of /lib/snd
+    # and registers with the sound core, then `aplay` plays a file
+    # through `soundd` exactly as it does on every other row -- same
+    # mixer, same resampler, same ring. What moved is underneath all of it.
+    #
+    # THE CARD KEEPS ITS NAME across rings (`hda0` either way), so the
+    # driver COLUMN is what says which ring drives it: `ring3` or `hda`.
     #
     # THE FIXTURE IS 44.1 kHz, so the host measuring 1000 Hz says the
     # resampler ran, the mixer ran, AND a process programmed the
     # hardware. A driver pointed at the wrong buffer records silence.
+    def hda0_driver(listing):
+        """`lssound`'s driver column for hda0, and whether it is active."""
+        for line in listing.splitlines():
+            words = line.replace("*", " ").split()
+            if words and words[0] == "hda0":
+                return words[-1], line.lstrip().startswith("*")
+        return None, False
+
     snddrv_ok = False
     if card != "hda":
         pass
@@ -648,27 +677,25 @@ def main():
                 # not there".
                 res.check("the sound driver is a plugin on disk",
                           "hda.so" in (dbg.send("sh ls /lib/snd") or ""))
-                dbg.send("sh spawn /bin/snddrv")
-                # BRING-UP IS SECONDS, not milliseconds: the codec walk
-                # goes verb by verb through a polled RIRB. Polled rather
-                # than slept for, so a faster build is not waited on and
-                # a slower one is not cut off.
+                # BRING-UP IS SECONDS under TCG, not milliseconds: the
+                # codec walk goes verb by verb through a polled RIRB.
+                # Polled rather than slept for, so a faster build is not
+                # waited on and a slower one is not cut off.
                 deadline = time.time() + 45
                 listing = ""
                 while time.time() < deadline:
                     listing = dbg.send("sh lssound") or ""
-                    if "hda-ring3" in listing:
+                    if hda0_driver(listing)[0] == "ring3":
                         break
                     time.sleep(1)
-                up = res.check("A PROCESS REGISTERED AS THE SOUND DEVICE",
-                               "hda-ring3" in listing, listing.strip()[-160:])
+                drv, active = hda0_driver(listing)
+                up = res.check("THE SERVICE MADE A PROCESS THE SOUND DEVICE AT BOOT",
+                               drv == "ring3", listing.strip()[-160:])
                 # The `*` column, so this is "it is the one playing",
                 # not merely "it is listed".
                 if up:
-                    res.check("...and it is the ACTIVE one",
-                              any(l.strip().startswith("*") and "hda-ring3" in l
-                                  for l in listing.splitlines()),
-                              listing.strip()[-160:])
+                    res.check("...under the kernel's name, and it is the ACTIVE one",
+                              active, listing.strip()[-160:])
                     out = dbg.send("sh aplay /tests/sine1k.wav") or ""
                     snddrv_ok = res.check("...and aplay played through it unchanged",
                                         "sine1k" in out, out.strip()[-120:])
@@ -676,42 +703,35 @@ def main():
                     res.check("...at full scale, so the recording below is honest",
                               "volume 25%" not in log,
                               [l for l in log.splitlines() if "soundd:" in l][-3:])
-                    # THE HANDOVER. A polite kill must give the card
+                    # THE HANDOVER. A polite stop must give the card
                     # back: snddrv releases with REBIND, the kernel
                     # driver takes it, and the machine is not left mute.
-                    # Without this the only recovery is running snddrv
-                    # again, which a person whose sound just died has no
-                    # reason to guess.
-                    pid = ""
-                    for line in (dbg.send("sh ps") or "").splitlines():
-                        if line.strip().endswith("snddrv"):
-                            pid = line.split()[0]
-                    if res.check("...and snddrv is findable by pid", bool(pid), pid):
-                        dbg.send(f"sh kill {pid}")
-                        deadline = time.time() + 20
-                        back = ""
-                        while time.time() < deadline:
-                            back = dbg.send("sh lssound") or ""
-                            if "hda0" in back:
-                                break
-                            time.sleep(1)
-                        res.check("...and killing it handed the card BACK to the kernel",
-                                  "hda0" in back and "hda-ring3" not in back,
-                                  back.strip()[-160:])
-                        # PROVEN WITHOUT PLAYING ANYTHING. This boot's
-                        # recording is judged by FREQUENCY below, and a
-                        # second sound in it is measured as a wrong
-                        # pitch -- a 1 kHz fixture followed by a chime
-                        # read as 890 Hz, exactly like a driver running
-                        # at the wrong rate. That hda0 plays is what
-                        # every phase above already establishes; what
-                        # is new here is that the kernel driver BOUND
-                        # the device again, which dmesg states.
-                        log = dbg.send("sh dmesg") or ""
-                        res.check("...and the kernel driver bound it again",
-                                  "hda took" in log,
-                                  [l for l in log.splitlines()
-                                   if "hda" in l][-3:])
+                    # A clean exit is also what keeps init from
+                    # restarting it, so the card STAYS with the kernel.
+                    dbg.send("sh service stop snddrv")
+                    deadline = time.time() + 20
+                    back = ""
+                    while time.time() < deadline:
+                        back = dbg.send("sh lssound") or ""
+                        if hda0_driver(back)[0] == "hda":
+                            break
+                        time.sleep(1)
+                    res.check("...and stopping it handed the card BACK to the kernel",
+                              hda0_driver(back)[0] == "hda", back.strip()[-160:])
+                    # PROVEN WITHOUT PLAYING ANYTHING. This boot's
+                    # recording is judged by FREQUENCY below, and a
+                    # second sound in it is measured as a wrong pitch --
+                    # a 1 kHz fixture followed by a chime read as 890 Hz,
+                    # exactly like a driver running at the wrong rate.
+                    # That hda0 plays in ring 0 is what every phase above
+                    # established before the service existed; what is
+                    # new here is that the kernel driver BOUND the device
+                    # again, which dmesg states.
+                    log = dbg.send("sh dmesg") or ""
+                    res.check("...and the kernel driver bound it again",
+                              "hda took" in log,
+                              [l for l in log.splitlines()
+                               if "hda" in l][-3:])
                 dbg.close()
         finally:
             halt()

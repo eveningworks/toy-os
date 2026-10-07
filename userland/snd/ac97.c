@@ -126,6 +126,9 @@ static int ac97_match(const struct pci_device *d) {
 
 static int ac97_open(struct snd_dev *dev) {
     memset(&g_st, 0, sizeof g_st);
+    // As the kernel's driver names it: the name is the card's identity.
+    strlcpy(dev->name, "ac97", sizeof dev->name);
+    strlcpy(dev->label, "Intel AC'97", sizeof dev->label);
     g_st.pci = dev->pci;
     if (!dev->dma) return -1;
     g_st.bdl = dev->dma;

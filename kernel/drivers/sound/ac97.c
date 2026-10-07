@@ -152,6 +152,7 @@ static int ac97_format(const struct sound_device *dev, uint32_t rate, uint32_t b
 
 static struct sound_device ac97_dev = {
     .name = "ac97",
+    .label = "Intel AC'97",
     .driver = "ac97",
     // 48 kHz 16-bit is every AC97's baseline; the probe adds the rates
     // a Variable Rate Audio codec reads back exactly.

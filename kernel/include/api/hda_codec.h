@@ -250,6 +250,10 @@ uint32_t hda_codec_amp_caps(struct hda_codec *c, const struct hda_widget *w, int
 int hda_codec_find_path(struct hda_codec *c, uint8_t nid, uint8_t *path,
                         int depth, uint32_t *visited);
 
+// The codec vendor's name for a card's label ("Realtek"), from the
+// VENDOR_ID parameter's top half; "HD Audio" for one not listed.
+const char *hda_codec_vendor_name(uint32_t vendor);
+
 // How good an output pin this is: 0 for none, higher is better.
 int hda_codec_out_rank(const struct hda_widget *w);
 

@@ -116,7 +116,17 @@ def main():
         return 1
 
     try:
-        before = vm("exec", "lspci -k")
+        # THE `snddrv` SERVICE DRIVES THE CARD FROM RING 3 SINCE BOOT, and
+        # this test is about claiming it off the KERNEL's driver -- so
+        # hand it back first: a polite stop releases with REBIND.
+        if not args.no_card:
+            vm("exec", "service stop snddrv")
+        before = ""
+        for _ in range(20):
+            before = vm("exec", "lspci -k")
+            if args.no_card or "kernel driver: hda" in before:
+                break
+            time.sleep(1.0)
         want_card = not args.no_card
         if not res.check("an HD Audio controller is present and bound"
                          if want_card else "no HD Audio controller is present",

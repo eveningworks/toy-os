@@ -490,23 +490,6 @@ static int  hda_dev_start(const struct sound_device *d)  { return stream_start(d
 static void hda_dev_stop(const struct sound_device *d)   { stream_stop(d->priv); }
 static void hda_dev_volume(const struct sound_device *d, int pct) { set_volume(d->priv, pct); }
 
-static const char *vendor_name(uint32_t vendor) {
-    switch (vendor >> 16) {
-    case 0x10EC: return "Realtek";
-    case 0x8086: return "Intel";
-    case 0x1AF4: return "QEMU";
-    case 0x14F1: return "Conexant";
-    case 0x1013: return "Cirrus Logic";
-    case 0x111D: return "IDT";
-    case 0x1002: return "AMD";
-    case 0x10DE: return "NVIDIA";
-    case 0x11D4: return "Analog Devices";
-    case 0x8384: return "SigmaTel";
-    case 0x1106: return "VIA";
-    default:     return "HD Audio";
-    }
-}
-
 static void diag_tone(struct hda_ctrl *h, int32_t *ring);
 static struct hda_ctrl *test_ctrl(void);
 
@@ -693,7 +676,7 @@ static int ctrl_init(struct hda_ctrl *h, const struct pci_device *d, int index) 
     }
     mw32(h, HDA_INTCTL, INTCTL_GIE | INTCTL_CIE); // jack events from here on
 
-    k_snprintf(h->label, sizeof h->label, "%s HD Audio", vendor_name(h->codec.vendor));
+    k_snprintf(h->label, sizeof h->label, "%s HD Audio", hda_codec_vendor_name(h->codec.vendor));
     h->dev.name = h->name;
     h->dev.label = h->label;
     h->dev.driver = "hda";

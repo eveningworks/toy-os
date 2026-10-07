@@ -9,4 +9,4 @@ Exec=/bin/devctl
 Args=apply
 Restart=no
 After=tmpfs
-Before=netd soundd
+Before=netd snddrv soundd

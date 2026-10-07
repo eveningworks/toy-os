@@ -2414,7 +2414,7 @@ out.
 **Stages 3-5 are BUILT (2026-09-21), and the IOMMU decision was taken:
 TRUSTED, AND SAID SO.** The maintainer's call, on the grounds that VT-d
 is Intel's and requiring one would mean the ring-3 path silently not
-existing on much of the hardware this OS runs on. `/bin/hdad` is the
+existing on much of the hardware this OS runs on. `/bin/snddrv` is the
 end state -- a process claims the HD Audio controller, routes the
 codec, and registers as a `sound_device`, so `soundd`, `aplay` and the
 Audio Player play through it with nothing changed above it. What it
@@ -2424,15 +2424,22 @@ says so in as many words.
 **A split driver is a legitimate end state**, not a half-finished one:
 that is what DriverKit's audio drivers are. The split landed at the
 BUFFER, not the engine -- `sound.c` owns the ring and the
-consumed-chunk zeroing, `hdad` programs the card to read it and never
-touches a sample.
+consumed-chunk zeroing, `snddrv` programs the card to read it and never
+writes a sample (a 16-bit card's copy and USB's packets read the ring
+through a read-only mapping).
 
-**WHAT IS LEFT is making it the default.** Nothing starts `hdad` at
-boot, deliberately while it is new: a crash leaves the card unbound and
-the machine mute until something claims and releases it again. A
-polite `kill` is already safe (it releases with `DEV_RELEASE_REBIND`),
-so what a default needs is a supervisor that restarts it -- which is
-`init`'s job and what Windows' UMDF host reflector does.
+**IT IS THE DEFAULT SINCE 2026-10-07**: the `snddrv` service, with
+`Restart=on-failure` as the supervisor a crash needs (a dying holder
+leaves the card unbound), `--pci` so a USB DAC stays on the kernel's
+driver, and the card registered under the kernel's own name so
+`audio_device` and a remembered format survive the move.
+
+**WHAT IS LEFT is deleting the ring-0 copies.** `hda.c` and `ac97.c`
+stay as the fallback -- `service stop snddrv` hands the card back to
+them -- until the service has run on both laptops for a while; the
+kernel's Calculator went the same way once the ring-3 one was the
+default. `sound_usb.c` follows once the ring-3 USB driver plays
+44.1 kHz.
 
 ### USB
 **BUILT** for xHCI, a HID boot keyboard and a HID boot mouse; see

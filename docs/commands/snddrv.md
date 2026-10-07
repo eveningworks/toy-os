@@ -7,15 +7,18 @@
 ## Synopsis
 
 ```
-snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [--usb-clock ID] [--prio N] [-v]
+snddrv [-d INDEX] [--driver NAME] [--pci] [--usb-id VID:PID] [--usb-clock ID] [--prio N] [-v]
 ```
 
 ## Options
 
-- `-d INDEX` -- drive the PCI device at this enumeration index (the one
+- `-d INDEX`, `--device INDEX` -- drive the PCI device at this enumeration index (the one
   [`lspci`](lspci.md) counts) instead of searching every device.
 - `--driver NAME` -- load only the plugin with this name (`hda`,
   `ac97`), instead of every `.so` in `/lib/snd`.
+- `--pci` -- only a card on the PCI bus: never fall through to a
+  driver that finds its own device, so a USB DAC stays with the
+  kernel's driver. What the boot service passes.
 - `--usb-id VID:PID` -- for a driver that finds its own device on a bus
   this host cannot enumerate, drive the one with these ids, as
   [`lsusb`](lsusb.md) prints them (`--usb-id 0b05:19a8`). A bare decimal
@@ -33,7 +36,12 @@ snddrv [-d INDEX] [--driver NAME] [--usb-id VID:PID] [--usb-clock ID] [--prio N]
   process could preempt, which is the A/B that shows the difference by
   ear. At the default level a busy machine makes a USB DAC run dry and
   crackle; the serving line says which level a run used.
-- `-v` -- say which plugins loaded, and which devices were declined.
+- `-v`, `--verbose` -- say which plugins loaded, and which devices were
+  declined.
+- `-h`, `--help` -- the options.
+
+**Exits 0 when there is no card to drive**, so the boot service stays
+down quietly on a machine without one instead of being restarted.
 
 ## Aiming it at one USB DAC
 
@@ -68,13 +76,23 @@ the Audio Player and the per-application volume sliders all work against
 a driver that is not in the kernel.
 
 ```
-/$ spawn /bin/snddrv
-snddrv: hda serving pci 6 as hda-ring3, priority -10
 /$ lssound
-* hda-ring3  HD Audio (ring 3)        ring3
+* hda1       Realtek HD Audio         ring3
 
 1 device(s); -v for what each one supports
 ```
+
+**IT RUNS AT BOOT**, as the `snddrv` service
+(`/etc/services.d/snddrv`, `Args=--pci`), ordered before `soundd` and
+restarted if it crashes. `service stop snddrv` hands the card back to
+the kernel's driver -- the same row, now with `hda` in the last
+column -- and `service start snddrv` takes it again. A USB DAC stays on
+the kernel's driver until the ring-3 one plays 44.1 kHz.
+
+**THE CARD KEEPS ITS NAME.** The plugin registers under what the
+kernel's driver calls the same card -- `hda1`, `ac97` -- because
+`audio_device` and `/etc/sound-cards.conf` are kept by that name. The
+last column of `lssound` says which ring is driving it.
 
 **ADDING A SOUND CARD DOES NOT REBUILD THIS PROGRAM.** The drivers are
 `dlopen`'d plugins and this host scans the directory, so support for a
@@ -83,7 +101,7 @@ has between `WUDFHost.exe` and a driver DLL, and DriverKit between its
 host and a `.dext`. `userland/include/snd_driver.h` is the contract a
 plugin implements; `docs/umdf-design.md` is why any of it exists.
 
-**IT NEEDS `spawn`, NOT `run`**, like everything built on
+**BY HAND IT NEEDS `spawn`, NOT `run`**, like everything built on
 `SYS_DEV_CLAIM`: the legacy loader has no scheduler slot, so the claim
 comes back `EPERM`.
 
@@ -128,7 +146,8 @@ running out before the driver refilled it, which is a gap on the wire.
 **A polite kill hands the card back; a crash does not.** `snddrv`
 catches `SIGTERM`, `SIGINT` and `SIGHUP` and releases the device so the
 kernel driver can take it, because a claim dropped by a *dying* process
-deliberately leaves the device unbound. It also `setsid()`s, so closing
+deliberately leaves the device unbound -- init's restart is what claims
+it again. It also `setsid()`s, so closing
 the shell that spawned it does not take it down with the session.
 
 ## See also

@@ -90,10 +90,11 @@ struct snd_dev {
     // depends on unplug history.
     const char *select;
 
-    // Filled in by open() when one plugin can serve several devices,
-    // so each registers as its own row. Left empty, the host falls
-    // back to the driver's own name and label -- which is right for a
-    // plugin that drives exactly one chip.
+    // Filled in by open() with what the KERNEL's driver calls the same
+    // card: the name is the card's identity, and `audio_device` and
+    // /etc/sound-cards.conf are kept by it, so a card must not be
+    // renamed by which ring drives it. Left empty, the host registers
+    // `<driver>-ring3`.
     char     name[SND_DRV_NAME_MAX];
     char     label[SND_DRV_LABEL_MAX];
     // The bus device, as userland/lib/udevice.c spells it. The host fills

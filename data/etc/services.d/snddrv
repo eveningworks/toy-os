@@ -1,0 +1,15 @@
+# The PCI sound card, driven from RING 3 (docs/umdf-design.md).
+#
+# --pci: a USB DAC stays on the kernel's driver until the ring-3 one
+# plays 44.1 kHz. No card to drive exits 0, so this stays down quietly.
+# A crash leaves the card unbound; the restart is what claims it back.
+#
+# Before soundd, so the mixer opens this card and not the kernel's.
+# See docs/commands/snddrv.md.
+Name=snddrv
+Description=Drive the sound card from ring 3
+Exec=/bin/snddrv
+Args=--pci
+Restart=on-failure
+Ready=notify
+Before=soundd

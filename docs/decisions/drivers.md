@@ -2797,7 +2797,7 @@ moves", because the write half is exactly what needs stages 4 and 5.
 ## A sound driver in ring 3 is asked to start, and reporting a period is what proves it did
 
 `SYS_SND_REGISTER` lets a process implement a `sound_device`, so
-`/bin/hdad` drives the HD Audio controller and `soundd`, `aplay` and the
+`/bin/hdad` (`/bin/snddrv` since a8597d0c) drives the HD Audio controller and `soundd`, `aplay` and the
 Audio Player mix on top of it without a line changed. The `sound_device`
 contract is four function pointers the core calls synchronously, and a
 process cannot be called. Three things fall out of that.
@@ -2842,7 +2842,8 @@ catches `SIGTERM` and releases with `DEV_RELEASE_REBIND` — otherwise
 guess. Windows' UMDF host shuts its device down on the way out for the
 same reason. The crash case is left as it is on purpose: a card
 half-programmed by a driver that died is not something to hand a kernel
-driver automatically, and re-running `hdad` recovers it.
+driver automatically, and re-running the driver recovers it -- which the
+`snddrv` service's restart does since 2026-10-07.
 
 ## A sound op carries its device, so one driver can serve several cards
 
@@ -3233,3 +3234,44 @@ ASUS, whose network adapter is itself on USB. The next step Linux's
 shape implies -- root ports driven by the hub driver through a virtual
 root hub -- is on the roadmap and waits for both laptops, because it
 does change behaviour.
+
+## The ring-3 sound driver starts as a service, and a card keeps its kernel name whichever ring drives it
+
+`snddrv` became the default on 2026-10-07: a `/etc/services.d/snddrv`
+descriptor, `Restart=on-failure`, `Ready=notify` and ordered before
+`soundd`. Windows starts a UMDF host per device from the PnP manager and
+Linux runs `modprobe` from udev on each device event; toy-os has neither
+a launcher nor hotplug for PCI, so ONE SERVICE was chosen over a
+device-event launcher -- it drives the first PCI card that plays, which
+is the machine's sound device on every machine tested. A launcher is
+the shape for when a second card wants its own process.
+
+**THE NAME IS THE CARD'S, NOT THE DRIVER'S.** The plugin registers as
+`hda1` or `ac97` -- what the kernel's driver calls the same controller
+(`hda_number()`, copied into `hda.so`) -- rather than the `hda-ring3`
+it used while it was a diagnostic. `audio_device` and
+`/etc/sound-cards.conf` are keyed by that name, so a ring-3 default
+under its own name would have dropped every machine's chosen card and
+remembered format on upgrade, and every `service stop` would rename the
+card under the mixer. Linux's predictable network names make the same
+call -- `enp0s3` is the device's bus position, not its driver -- and
+ALSA is the cautionary case: its card id comes from the driver, so a
+laptop moved from `snd-hda-intel` to SOF loses its saved mixer state.
+What says WHICH RING is the
+driver column (`lssound`'s last word, `ring3` or `hda`), and the label
+comes from the shared `hda_codec_vendor_name()` so both rings show
+"Realtek HD Audio".
+
+**`--pci`: A USB DAC STAYS ON THE KERNEL'S DRIVER** until the ring-3
+one plays 44.1 kHz -- `SYS_USB_ISOCH_POST` posts a group at one packet
+length, and a DAC that was fine yesterday must not start resampling
+today. **No card is a clean exit (0)**, so init reads it as "asked to
+stop" rather than a crash loop. **A crash is the restart's job**: a
+dying holder leaves the card unbound on purpose (stage 2 of
+`docs/umdf-design.md`), and the service claims it again in about
+100 ms.
+
+**THE RING-0 DRIVERS STAY AS THE FALLBACK** -- `service stop snddrv`
+hands the card back with `DEV_RELEASE_REBIND` -- until the service has
+run on both laptops; deleting them is on the roadmap. `audio_test.py`
+stops the service before the phases that are about the kernel's driver.

@@ -94,6 +94,17 @@ static int hda_match(const struct pci_device *d) {
     return d->class_code == HDA_CLASS && d->subclass == HDA_SUBCLASS;
 }
 
+// kernel/drivers/sound/hda.c's hda_number(): the controller's place
+// among the bus's HDA functions, so this card is named as it was there.
+static int hda_number(int pci) {
+    int n = 0;
+    for (int i = 0; i < pci; i++) {
+        struct pci_device o;
+        if (sys_pci_info(i, &o) == 0 && hda_match(&o)) n++;
+    }
+    return n;
+}
+
 static int hda_open(struct snd_dev *dev) {
     memset(&g_st, 0, sizeof g_st);
     g_st.mmio = dev->bar[0];
@@ -171,6 +182,9 @@ static int hda_open(struct snd_dev *dev) {
             memset(dev->bounce, 0, SND_CHUNKS * SND_CHUNK_BYTES_S16);
         }
         hda_codec_route_output(&g_st.codec, &g_st.codec.spk, g_st.fmt, HDA_STREAM_TAG);
+        snprintf(dev->name, sizeof dev->name, "hda%d", hda_number(dev->pci));
+        snprintf(dev->label, sizeof dev->label, "%s HD Audio",
+                 hda_codec_vendor_name(g_st.codec.vendor));
         dev->priv = &g_st;
         return 0;
     }

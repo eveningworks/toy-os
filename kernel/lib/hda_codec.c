@@ -1,7 +1,7 @@
 // The HD Audio codec graph -- api/hda_codec.h.
 //
 // Compiled twice: into the kernel for kernel/drivers/sound/hda.c, and
-// into /bin/lscodec for ring 3 (docs/umdf-design.md stage 3). It names
+// into /bin/lscodec and /lib/snd/hda.so for ring 3 (docs/umdf-design.md stage 3). It names
 // nothing kernel-only and allocates nothing; the transport is the
 // caller's callback and the graph lives in the caller's struct, which
 // is the same rule ttf.c follows for the same reason.
@@ -117,6 +117,23 @@ int hda_codec_find_path(struct hda_codec *c, uint8_t nid, uint8_t *path,
         if (len) return len;
     }
     return 0;
+}
+
+const char *hda_codec_vendor_name(uint32_t vendor) {
+    switch (vendor >> 16) {
+    case 0x10EC: return "Realtek";
+    case 0x8086: return "Intel";
+    case 0x1AF4: return "QEMU";
+    case 0x14F1: return "Conexant";
+    case 0x1013: return "Cirrus Logic";
+    case 0x111D: return "IDT";
+    case 0x1002: return "AMD";
+    case 0x10DE: return "NVIDIA";
+    case 0x11D4: return "Analog Devices";
+    case 0x8384: return "SigmaTel";
+    case 0x1106: return "VIA";
+    default:     return "HD Audio";
+    }
 }
 
 int hda_codec_out_rank(const struct hda_widget *w) {

@@ -5,10 +5,11 @@ answers "what would it take to run a device driver as a process here,
 what does that actually buy, and which driver goes first?"
 
 **EVERY STAGE IS BUILT (1-2 on 2026-09-20, 3-5 on 2026-09-21). A
-process is the machine's HD Audio driver**: `/bin/hdad` claims the
+process is the machine's sound driver**: `/bin/snddrv` (`hdad` until
+a8597d0c made it a host loading one plugin per chip) claims the
 controller, routes the codec and registers as a `sound_device`, and
 `soundd`, `aplay` and the Audio Player play through it without a line
-changed. The stage
+changed. It starts at boot as the `snddrv` service since 2026-10-07. The stage
 markers are the authority, and they are on the headings -- if a stage
 ever splits, put its marker on each half (the window-server plan's
 stage 6 split and its heading kept saying "outstanding" for eleven
@@ -419,7 +420,7 @@ the IOMMU does; nothing here forecloses it.
 
 **AND THE HALF THAT MATTERS TO A USER IS BUILT TOO.** The tone was a
 DIAGNOSTIC -- a ring-3 driver claiming the card took it away from
-`soundd`, `aplay` and the Player for as long as it ran. `/bin/hdad` is
+`soundd`, `aplay` and the Player for as long as it ran. `/bin/snddrv` is
 the version the system uses: it registers as a `sound_device`
 (`SYS_SND_REGISTER`), so `soundd` mixes on top of it and nothing above
 knows. What that needed:
@@ -442,16 +443,17 @@ first period report, one chunk later, which at 48 kHz is 21 ms.
 **WHAT IS STILL IN RING 0: THE SAMPLES.** The shared ring, the
 exclusive stream and the consumed-chunk zeroing did not move, and that
 is not a shortfall -- it is what keeps the driver's exposure to one
-buffer's physical address. `hdad` never reads or writes a sample.
+buffer's physical address. The driver never WRITES a sample; a 16-bit
+card's narrowing copy and the USB plugin's packets READ the ring through
+a read-only mapping (`SYS_SND_RING_MAP`).
 
-**A CRASH LEAVES THE MACHINE MUTE, AND A POLITE KILL DOES NOT.** A
-claim dropped by a DYING process deliberately does not rebind (stage
-2), so `hdad` crashing leaves the card unbound until something claims
-and releases it again. `hdad` catches `SIGTERM` and releases with
-`DEV_RELEASE_REBIND` for exactly that reason -- Windows' UMDF host does
-the same on its way out. Nothing starts `hdad` at boot; that is
-deliberate while it is new, and `docs/roadmap.md` is where making it
-the default belongs.
+**A CRASH IS RECOVERED BY A RESTART, AND A POLITE KILL HANDS THE CARD
+BACK.** A claim dropped by a DYING process deliberately does not rebind
+(stage 2), so a crashed `snddrv` leaves the card unbound until init's
+restart claims it again (`Restart=on-failure` on the `snddrv` service).
+`snddrv` catches `SIGTERM` and releases with `DEV_RELEASE_REBIND`, so
+`service stop snddrv` gives the card to the kernel's driver -- Windows'
+UMDF host does the same on its way out.
 
 **HALF OF THE SECOND OPTION IS ALREADY BUILT, and it was not free.**
 Stage 3 needed `SYS_DEV_DMA_ALLOC` for a 4 KiB command ring, so the
@@ -464,7 +466,7 @@ the one-buffer rule are what keep stage 3's use from being read as that
 decision having been taken.
 
 The route chosen was the trusted one, so the stream moved too. What
-stayed in ring 0 is the RING, not the engine: `hdad` programs the
+stayed in ring 0 is the RING, not the engine: `snddrv` programs the
 stream descriptor and `sound.c` owns the samples. **That split is a
 legitimate end state**, not a half-finished one -- it is what
 DriverKit's audio drivers are, with the buffer behind the framework and
@@ -475,11 +477,13 @@ the policy in the driver.
 - **The PCM stream's exclusivity and the `sound_device` registry.** One
   stream, one owner, refusing the second asker is a kernel invariant;
   `soundd` already mixes above it.
-- **USB audio.** It rides the USB stack; moving it means moving xHCI,
-  which is a different project with a much worse blast radius.
-- **AC97.** Port I/O needs `ioperm`-shaped permission, a fourth
-  primitive, for a card that is 225 lines and works. It is the wrong
-  first target.
+- **The USB host controller.** USB audio did move -- `/lib/snd/usbaudio.so`
+  holds a device on a bus the kernel keeps, and every transfer is a
+  syscall the kernel performs (Linux's usbfs). xHCI itself stays: it
+  is every USB device's path, a much worse blast radius than one card.
+- **Port I/O.** AC97 moved too (`/lib/snd/ac97.so`, a8597d0c), and the
+  fourth primitive this section once said it needed was not: an I/O BAR
+  is reached through the kernel (`snd_driver.h`), not `ioperm`.
 - **The interrupt handler itself.** Interrupt context is ring 0's by
   definition.
 
