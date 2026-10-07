@@ -1190,6 +1190,10 @@ static int ic_hover(struct uui_fileview *fv, int cx, int cy) {
 static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
     struct uui_table *t = &fv->table;
     if (!uui_hit(t->x, t->y, t->w, t->h, cx, cy)) return 0;
+    // FORGOTTEN BEFORE THE SCROLLBAR, which returns early: a thumb drag
+    // read the LAST click's row as this press's and dragged that file.
+    fv->press_row = -1;
+    fv->deferred_clear = 0;
 
     if (ic_bar_visible(fv) && cx >= t->x + t->w - t->bar_w) {
         int vis = ic_view_h(fv), total = ic_content_h(fv);
@@ -1215,8 +1219,6 @@ static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
     }
 
     int view = ic_hit_view(fv, cx, cy);
-    fv->press_row = -1;
-    fv->deferred_clear = 0;
     if (view < 0) {
         fv_empty_press(fv, cx, cy, mods);
         return 1;

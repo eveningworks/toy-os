@@ -2991,7 +2991,20 @@ window without going through it will find its layout polls timing out.
   `cat` and from the side column's rows by PATH. **The target is
   `/usr/share/sounds`, not `doc`**: Documents IS `/usr/share/doc`, so a
   lookup by path finds the standard place first. Its positive control
-  stops the app listing pins: the row check reddens.
+  stops the app listing pins: the row check reddens. Check 4 pins
+  `/home/pin-gone` through `/etc/places.conf` BEFORE the app starts (a
+  pin is listed only while its folder exists), deletes it under the
+  running app and clicks the row; its control is the tree click
+  ignoring `fm_goto()`'s refusal, which lands the pane in the deleted
+  folder.
+
+- **`fm_thumb_drag_test.py`** -- the icons view's scrollbar after a
+  click: `/bin`, click the first icon after `..` (`wm`), then drag the
+  thumb. It must scroll (`layout scroll`) with no file in flight
+  (`layout drag`). **The first cell is `..`**, which no drag carries,
+  so clicking it proves nothing. Its positive control drops the
+  `press_row` reset ahead of `ic_press()`'s scrollbar branch: the
+  folder goes with the pointer and the grid stays put.
 
 - **`zip_gui_test.py`** -- a `.zip` as a folder (`fm_zip.c` over
   `lib/uzip.h`). The archive is written by Python's `zipfile` on the
