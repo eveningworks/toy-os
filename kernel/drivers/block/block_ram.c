@@ -26,7 +26,7 @@ DRIVER_DECLARE("ram", "block", "RAM-backed block device");
 // The image the bootloader handed over. Identity-mapped like everything
 // else below 4 GiB, so a physical address IS the pointer.
 static uint8_t *g_base;
-static uint32_t g_sectors;
+static uint64_t g_sectors;
 
 // One transfer's cap. Not a hardware limit here -- there is no
 // controller -- but a value the caller can plan around, and keeping it
@@ -34,30 +34,32 @@ static uint32_t g_sectors;
 // rather than memcpy'ing gigabytes.
 #define RAM_MAX_XFER 256
 
-static uint32_t ram_sector_count(void) { return g_sectors; }
+static uint64_t ram_sector_count(const struct block_device *self) { (void)self; return g_sectors; }
 
-static int ram_range_ok(uint32_t lba, int count) {
+static int ram_range_ok(uint64_t lba, int count) {
     if (!g_base || count <= 0 || count > RAM_MAX_XFER) return 0;
     // Compared in 64-bit: lba + count overflows a uint32_t for a large
     // enough lba, and an overflowed comparison passes.
     return (uint64_t)lba + (uint64_t)count <= (uint64_t)g_sectors;
 }
 
-static int ram_read(uint32_t lba, int count, void *buf) {
+static int ram_read(const struct block_device *self, uint64_t lba, int count, void *buf) {
+    (void)self;
     if (!ram_range_ok(lba, count)) return 0;
     k_memcpy(buf, g_base + (uint64_t)lba * SECTOR_SIZE,
              (size_t)count * SECTOR_SIZE);
     return 1;
 }
 
-static int ram_write(uint32_t lba, int count, const void *buf) {
+static int ram_write(const struct block_device *self, uint64_t lba, int count, const void *buf) {
+    (void)self;
     if (!ram_range_ok(lba, count)) return 0;
     k_memcpy(g_base + (uint64_t)lba * SECTOR_SIZE, buf,
              (size_t)count * SECTOR_SIZE);
     return 1;
 }
 
-static int ram_max_xfer(void) { return RAM_MAX_XFER; }
+static int ram_max_xfer(const struct block_device *self) { (void)self; return RAM_MAX_XFER; }
 
 static const struct block_device RAM_DEV = {
     .name = "ram",
@@ -76,6 +78,6 @@ int blk_ram_register(uint64_t base, uint64_t bytes) {
         return 0;
     }
     g_base = (uint8_t *)(uintptr_t)base;
-    g_sectors = (uint32_t)(bytes / SECTOR_SIZE);
+    g_sectors = bytes / SECTOR_SIZE;
     return blk_register(&RAM_DEV);
 }

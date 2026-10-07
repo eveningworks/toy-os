@@ -49,23 +49,23 @@ static uint8_t *g_img;
 // used to produce a volume this driver could not mount.
 static uint32_t g_img_sectors = TEST_SECTORS;
 
-static uint32_t img_sector_count(void) { return g_img_sectors; }
+static uint64_t img_sector_count(const struct block_device *self) { (void)self; return g_img_sectors; }
 
-static int img_read(uint32_t lba, int count, void *buf) {
+static int img_read(const struct block_device *self, uint64_t lba, int count, void *buf) { (void)self;
     if (!g_img || count <= 0) return 0;
     if ((uint64_t)lba + (uint64_t)count > g_img_sectors) return 0;
     k_memcpy(buf, g_img + (uint64_t)lba * 512, (uint32_t)count * 512);
     return 1;
 }
 
-static int img_write(uint32_t lba, int count, const void *buf) {
+static int img_write(const struct block_device *self, uint64_t lba, int count, const void *buf) { (void)self;
     if (!g_img || count <= 0) return 0;
     if ((uint64_t)lba + (uint64_t)count > g_img_sectors) return 0;
     k_memcpy(g_img + (uint64_t)lba * 512, buf, (uint32_t)count * 512);
     return 1;
 }
 
-static int img_max_xfer(void) { return 8; }
+static int img_max_xfer(const struct block_device *self) { (void)self; return 8; }
 
 // NOT persistent and NO capabilities: a RAM device has nothing that can
 // be lost independently of everything else, so claiming FLUSH would be
@@ -87,16 +87,16 @@ static const struct block_device IMG_DEV = {
 // a different (and refused) thing from two volumes.
 static uint8_t *g_img2;
 
-static uint32_t img2_sector_count(void) { return TEST_SECTORS; }
+static uint64_t img2_sector_count(const struct block_device *self) { (void)self; return TEST_SECTORS; }
 
-static int img2_read(uint32_t lba, int count, void *buf) {
+static int img2_read(const struct block_device *self, uint64_t lba, int count, void *buf) { (void)self;
     if (!g_img2 || count <= 0) return 0;
     if ((uint64_t)lba + (uint64_t)count > TEST_SECTORS) return 0;
     k_memcpy(buf, g_img2 + (uint64_t)lba * 512, (uint32_t)count * 512);
     return 1;
 }
 
-static int img2_write(uint32_t lba, int count, const void *buf) {
+static int img2_write(const struct block_device *self, uint64_t lba, int count, const void *buf) { (void)self;
     if (!g_img2 || count <= 0) return 0;
     if ((uint64_t)lba + (uint64_t)count > TEST_SECTORS) return 0;
     k_memcpy(g_img2 + (uint64_t)lba * 512, buf, (uint32_t)count * 512);

@@ -37,7 +37,7 @@ static void slot_clear(uint32_t s) { g_bitmap[s / 8] &= (uint8_t)~(1u << (s % 8)
 
 // The first sector of slot `s`. Slot 0 starts at LBA 0, so the header
 // is simply the first sector of the area.
-static uint32_t slot_lba(uint32_t slot) { return slot * SWAP_SECTORS_PER_PAGE; }
+static uint64_t slot_lba(uint32_t slot) { return (uint64_t)slot * SWAP_SECTORS_PER_PAGE; }
 
 // One page in either direction, split against the device's transfer
 // cap. A caller that ignores max_sectors_per_xfer() gets a REFUSED
@@ -49,14 +49,14 @@ static int xfer_page(uint32_t slot, uint64_t phys, int write) {
     if (cap < 1) return 0;
 
     uint8_t *buf = (uint8_t *)(uintptr_t)phys;   // identity-mapped
-    uint32_t lba = slot_lba(slot);
+    uint64_t lba = slot_lba(slot);
     int left = SWAP_SECTORS_PER_PAGE;
     while (left > 0) {
         int n = left < cap ? left : cap;
-        int ok = write ? g_dev->write_sectors(lba, n, buf)
-                       : g_dev->read_sectors(lba, n, buf);
+        int ok = write ? g_dev->write_sectors(g_dev, lba, n, buf)
+                       : g_dev->read_sectors(g_dev, lba, n, buf);
         if (!ok) return 0;
-        lba  += (uint32_t)n;
+        lba  += (uint64_t)n;
         buf  += (uint32_t)n * 512;
         left -= n;
     }
@@ -71,7 +71,8 @@ static int xfer_page(uint32_t slot, uint64_t phys, int write) {
 // have exactly one implementation of it.
 static uint32_t slots_for(const struct block_device *dev) {
     if (!dev || !dev->sector_count) return 0;
-    return dev->sector_count() / SWAP_SECTORS_PER_PAGE;
+    uint64_t pages = dev->sector_count(dev) / SWAP_SECTORS_PER_PAGE;
+    return pages > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)pages;   // a slot index is 32-bit
 }
 
 int swap_format(const struct block_device *dev, const char **why) {

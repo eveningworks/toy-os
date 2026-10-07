@@ -29,23 +29,23 @@
 static uint8_t *g_d4;
 static int g_misaligned;                 // requests that reached the device misaligned
 
-static int d4_ok(uint32_t lba, int count) {
+static int d4_ok(uint64_t lba, int count) {
     if (!g_d4 || count <= 0) return 0;
     if ((lba | (uint32_t)count) & (D4_SPB - 1)) { g_misaligned++; return 0; }
     return (uint64_t)lba + (uint64_t)count <= D4_SECTORS;
 }
-static uint32_t d4_count(void) { return D4_SECTORS; }
-static int d4_read(uint32_t lba, int count, void *buf) {
+static uint64_t d4_count(const struct block_device *self) { (void)self; return D4_SECTORS; }
+static int d4_read(const struct block_device *self, uint64_t lba, int count, void *buf) { (void)self;
     if (!d4_ok(lba, count)) return 0;
     k_memcpy(buf, g_d4 + (uint64_t)lba * 512, (uint32_t)count * 512);
     return 1;
 }
-static int d4_write(uint32_t lba, int count, const void *buf) {
+static int d4_write(const struct block_device *self, uint64_t lba, int count, const void *buf) { (void)self;
     if (!d4_ok(lba, count)) return 0;
     k_memcpy(g_d4 + (uint64_t)lba * 512, buf, (uint32_t)count * 512);
     return 1;
 }
-static int d4_xfer(void) { return 64; }
+static int d4_xfer(const struct block_device *self) { (void)self; return 64; }
 
 static const struct block_device D4_DEV = {
     .name = "d4test", .sector_count = d4_count, .read_sectors = d4_read,

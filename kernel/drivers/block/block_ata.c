@@ -8,22 +8,30 @@
 
 // driver-none: the block_device shim; ata.c is the driver
 
-static uint32_t ata_dev_sector_count(void) { return ata_sector_count(); }
+static uint64_t ata_dev_sector_count(const struct block_device *self) { (void)self; return ata_sector_count(); }
 
-static int ata_dev_read(uint32_t lba, int count, void *buf) {
-    return ata_read_sectors(lba, count, buf);
+static int ata_dev_read(const struct block_device *self, uint64_t lba, int count, void *buf) {
+    (void)self;
+    return blk_fits32(lba, (uint64_t)count) && ata_read_sectors((uint32_t)lba, count, buf);
 }
 
-static int ata_dev_write(uint32_t lba, int count, const void *buf) {
-    return ata_write_sectors(lba, count, buf);
+static int ata_dev_write(const struct block_device *self, uint64_t lba, int count, const void *buf) {
+    (void)self;
+    return blk_fits32(lba, (uint64_t)count) && ata_write_sectors((uint32_t)lba, count, buf);
 }
 
-static int ata_dev_max_xfer(void) { return ata_max_sectors_per_xfer(); }
+static int ata_dev_max_xfer(const struct block_device *self) { (void)self; return ata_max_sectors_per_xfer(); }
 
-static int ata_dev_flush(void) { return ata_flush_now(); }
+static int ata_dev_flush(const struct block_device *self) { (void)self; return ata_flush_now(); }
 
-static int ata_dev_trim(uint32_t lba, uint32_t count) { return ata_trim(lba, count); }
-static int ata_dev_trim_ranges(const struct blk_range *r, int n) { return ata_trim_ranges(r, n); }
+static int ata_dev_trim(const struct block_device *self, uint64_t lba, uint32_t count) {
+    (void)self;
+    return blk_fits32(lba, count) && ata_trim((uint32_t)lba, count);
+}
+static int ata_dev_trim_ranges(const struct block_device *self, const struct blk_range *r, int n) {
+    (void)self;
+    return blk_ranges_fit32(r, n) && ata_trim_ranges(r, n);
+}
 
 // TRIM is advertised unconditionally and refused per-call by
 // ata_trim_supported() inside ata_trim(). The alternative -- deciding

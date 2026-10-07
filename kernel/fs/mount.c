@@ -893,7 +893,8 @@ static void root_override(const char *cmdline) {
                 want, blk_present() ? blk_device_name(blk_active()) : "nothing");
     for (int i = 0; i < blk_device_count(); i++) {
         const struct blk_entry *d = blk_device_at(i);
-        klog_printf("fs:   have %s (%u sectors)\n", d->name, d->dev->sector_count());
+        klog_printf("fs:   have %s (%llu sectors)\n", d->name,
+                    (unsigned long long)d->dev->sector_count(d->dev));
     }
     g_root_disk[0] = '\0';
     g_root_part = 0;

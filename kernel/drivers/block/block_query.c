@@ -34,8 +34,8 @@ static int blkdev_fill(int index, void *out) {
     if (e->parent != e->dev)
         k_strlcpy(d->parent, blk_device_name(e->parent), sizeof d->parent);
 
-    d->sectors = (uint64_t)e->dev->sector_count();
-    d->base_lba = (uint64_t)e->base_lba;
+    d->sectors = e->dev->sector_count(e->dev);
+    d->base_lba = e->base_lba;
     d->is_root = (blk_active() == e->dev) ? 1 : 0;
     d->persistent = e->dev->persistent ? 1 : 0;
     d->block_size = blkdev_block_size(e->dev);

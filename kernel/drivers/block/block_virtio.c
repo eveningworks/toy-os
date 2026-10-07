@@ -12,12 +12,21 @@
 
 DRIVER_DECLARE("virtio-blk", "block", "virtio block device");
 
-static uint32_t vblk_sector_count(void) { return virtio_blk_sector_count(); }
-static int vblk_read(uint32_t lba, int count, void *buf) { return virtio_blk_read_sectors(lba, count, buf); }
-static int vblk_write(uint32_t lba, int count, const void *buf) { return virtio_blk_write_sectors(lba, count, buf); }
-static int vblk_max_xfer(void) { return virtio_blk_max_sectors_per_xfer(); }
-static int vblk_flush(void) { return virtio_blk_flush(); }
-static int vblk_trim(uint32_t lba, uint32_t count) { return virtio_blk_discard(lba, count); }
+static uint64_t vblk_sector_count(const struct block_device *self) { (void)self; return virtio_blk_sector_count(); }
+static int vblk_read(const struct block_device *self, uint64_t lba, int count, void *buf) {
+    (void)self;
+    return blk_fits32(lba, (uint64_t)count) && virtio_blk_read_sectors((uint32_t)lba, count, buf);
+}
+static int vblk_write(const struct block_device *self, uint64_t lba, int count, const void *buf) {
+    (void)self;
+    return blk_fits32(lba, (uint64_t)count) && virtio_blk_write_sectors((uint32_t)lba, count, buf);
+}
+static int vblk_max_xfer(const struct block_device *self) { (void)self; return virtio_blk_max_sectors_per_xfer(); }
+static int vblk_flush(const struct block_device *self) { (void)self; return virtio_blk_flush(); }
+static int vblk_trim(const struct block_device *self, uint64_t lba, uint32_t count) {
+    (void)self;
+    return blk_fits32(lba, count) && virtio_blk_discard((uint32_t)lba, count);
+}
 
 // FLUSH is decided at registration from the NEGOTIATED features, which
 // is a deliberate divergence from block_ata.c's advertise-uncondition-

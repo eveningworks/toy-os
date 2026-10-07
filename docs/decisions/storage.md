@@ -3534,3 +3534,36 @@ e2fsck's, so a boot-time report can tell "fixed" from "left".
 
 **`rescue fsck` keeps the old builtin**, root only, for a disk whose
 `/bin` will not load -- the disk most worth checking.
+
+## A block op is handed its device, and an LBA is 64 bits
+
+`struct block_device`'s ops took no argument naming the device --
+`read_sectors(lba, count, buf)` -- on the reasoning (a comment in
+`block_part.c`) that a filesystem here holds its device rather than
+being handed one per call. The cost of that showed up in every driver
+that serves more than one device: `block_part.c` generated eight copies
+of all eight ops, one set per partition slot, and `block_nvme.c` four
+copies of seven, so the number of partitions and namespaces was a count
+of hand-written thunk lines. And every LBA and sector count was 32 bits,
+capping a disk at 2 TiB with 512-byte sectors.
+
+**Changed 2026-10-07.** Every op takes `const struct block_device *self`
+first, and a driver serving several devices recovers its own state from
+it -- a partition slot by `offsetof` from the embedded device, an NVMe
+namespace by its index in the array. LBAs, sector counts, `struct
+blk_range` and `struct blk_io` are `uint64_t` through the block layer.
+
+**What it does not do on its own.** A driver whose own interface is
+still 32-bit refuses past 2 TiB in its adapter (`blk_fits32()`, and the
+list forms for batches and DSM ranges, which reach a driver whole)
+rather than truncating, so a large LBA is an error, never a write to the
+wrong sector. ATA stays that way -- 28-bit PIO, with LBA48 its own
+roadmap item. Widening AHCI, NVMe, virtio-blk, the GPT math and the
+filesystems' volume sizes is the step that actually reaches past 2 TiB;
+the maintainer has an 8 TB disk for the desktop, which is what it is
+for.
+
+The considered alternative was a `void *priv` field, Linux's
+`private_data`. It was not needed: both multi-device drivers already
+keep their devices in an array or an enclosing struct, so the pointer
+they are handed IS the key.

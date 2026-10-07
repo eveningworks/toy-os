@@ -37,18 +37,34 @@
 
 // One run of sectors to discard.
 struct pci_device;
-struct blk_range { uint32_t lba, count; };
+struct blk_range { uint64_t lba; uint32_t count; };
+
+// Whether [lba, lba + count) is addressable by a driver whose own
+// interface is 32-bit -- an adapter refuses rather than truncating.
+static inline int blk_fits32(uint64_t lba, uint64_t count) {
+    return lba + count <= 0x100000000ull;
+}
+// The same for a list that reaches such a driver whole.
+static inline int blk_ranges_fit32(const struct blk_range *r, int n) {
+    for (int i = 0; i < n; i++) if (!blk_fits32(r[i].lba, r[i].count)) return 0;
+    return 1;
+}
 
 // One transfer of a batch (blkdev_submit_batch()). `buf` is written TO
 // for a read and read FROM for a write, and belongs to the caller until
 // the batch returns. `ok` is the device's answer for this one.
 struct blk_io {
-    uint32_t lba;
+    uint64_t lba;
     uint16_t count;      // sectors, at most the device's max per transfer
     uint8_t  write;
     int8_t   ok;
     void    *buf;
 };
+
+static inline int blk_ios_fit32(const struct blk_io *io, int n) {
+    for (int i = 0; i < n; i++) if (!blk_fits32(io[i].lba, io[i].count)) return 0;
+    return 1;
+}
 
 struct block_device {
     const char *name;   // "ata", "ram" -- what `df` prints
@@ -66,18 +82,23 @@ struct block_device {
     const char *model;               // "SAMSUNG MZNLN128HAHQ-000H1"
     const struct pci_device *pci;    // its controller
 
+    // EVERY OP IS HANDED THE DEVICE IT WAS CALLED THROUGH (`self`), so
+    // one function can serve several devices -- each partition, each NVMe
+    // namespace -- and recover its own state from the pointer. LBAs are
+    // 64-bit; a driver that addresses less refuses past its end.
+
     // Total addressable sectors, 512 bytes each -- whatever `block_size`
     // says. See block_size below.
-    uint32_t (*sector_count)(void);
+    uint64_t (*sector_count)(const struct block_device *self);
 
     // Both return 1 on success, 0 on failure. `count` sectors from
     // `lba`, contiguous.
-    int (*read_sectors)(uint32_t lba, int count, void *buf);
-    int (*write_sectors)(uint32_t lba, int count, const void *buf);
+    int (*read_sectors)(const struct block_device *self, uint64_t lba, int count, void *buf);
+    int (*write_sectors)(const struct block_device *self, uint64_t lba, int count, const void *buf);
 
     // Largest `count` a single transfer may use. A caller that ignores
     // this gets a refused transfer, not a short one.
-    int (*max_sectors_per_xfer)(void);
+    int (*max_sectors_per_xfer)(const struct block_device *self);
 
     // Does what is written here SURVIVE A POWER CYCLE? A disk does; a
     // live image in RAM does not. This is where the answer belongs --
@@ -88,17 +109,17 @@ struct block_device {
     int persistent;
 
     unsigned caps;      // BLK_CAP_*
-    int (*flush)(void);                        // BLK_CAP_FLUSH, 1 = durable
-    int (*trim)(uint32_t lba, uint32_t count); // BLK_CAP_TRIM
+    int (*flush)(const struct block_device *self);   // BLK_CAP_FLUSH, 1 = durable
+    int (*trim)(const struct block_device *self, uint64_t lba, uint32_t count); // BLK_CAP_TRIM
     // OPTIONAL: many runs in as few commands as the device allows. NULL
     // is fine -- blkdev_trim_ranges() then calls trim() once per run.
-    int (*trim_ranges)(const struct blk_range *r, int n);
+    int (*trim_ranges)(const struct block_device *self, const struct blk_range *r, int n);
     // OPTIONAL: several independent transfers IN FLIGHT AT ONCE, each
     // reporting its own result in `io[i].ok`. Returns 1 only if every one
     // succeeded. NULL is fine -- blkdev_submit_batch() then issues them
     // one at a time. A device with a queue (AHCI's NCQ) is what makes it
     // worth having: the per-command latency overlaps instead of adding.
-    int (*submit_batch)(struct blk_io *io, int n);
+    int (*submit_batch)(const struct block_device *self, struct blk_io *io, int n);
 
     // THE DEVICE'S LOGICAL BLOCK, in bytes: 512 or 4096. 0 means 512.
     //
@@ -141,7 +162,7 @@ struct block_device {
 struct blk_entry {
     const struct block_device *dev;
     const struct block_device *parent; // the disk it sits on; itself for a disk
-    uint32_t base_lba;                 // where it starts on that disk
+    uint64_t base_lba;                 // where it starts on that disk
     char name[BLK_NAME_MAX];
 };
 
@@ -179,7 +200,7 @@ const char *blk_device_name(const struct block_device *dev);
 // for exactly this reason while /boot was mounted from that very
 // partition.
 int blk_track(const struct block_device *dev,
-              const struct block_device *parent, uint32_t base_lba);
+              const struct block_device *parent, uint64_t base_lba);
 
 // Makes an already-registered device the ROOT: what blk_active() and
 // every blk_*() wrapper answer for. Returns 0 for a device that is not
@@ -207,7 +228,7 @@ int blk_register(const struct block_device *dev);
 // partition table being read out of the mounted partition instead of
 // off the disk -- a wrong answer, not an error.
 int blk_register_over(const struct block_device *dev,
-                      const struct block_device *parent, uint32_t base_lba);
+                      const struct block_device *parent, uint64_t base_lba);
 
 // The active device, or NULL when nothing is registered -- which is the
 // normal state on a machine with no disk and no live image, and is what
@@ -220,13 +241,13 @@ const struct block_device *blk_active(void);
 int blk_present(void);
 int blk_persistent(void);
 const char *blk_name(void);
-uint32_t blk_sector_count(void);
-int blk_read_sectors(uint32_t lba, int count, void *buf);
-int blk_write_sectors(uint32_t lba, int count, const void *buf);
+uint64_t blk_sector_count(void);
+int blk_read_sectors(uint64_t lba, int count, void *buf);
+int blk_write_sectors(uint64_t lba, int count, const void *buf);
 int blk_max_sectors_per_xfer(void);
 int blk_flush(void);
 int blk_trim_supported(void);
-int blk_trim(uint32_t lba, uint32_t count);
+int blk_trim(uint64_t lba, uint32_t count);
 
 // Registers the ATA disk as the active device, if there is one. Called
 // at boot before the filesystem mounts.
@@ -299,7 +320,7 @@ int blk_ram_register(uint64_t base, uint64_t bytes);
 // what the boot-time scan does: the window re-points to the new
 // partition of the same underlying disk rather than nesting.
 int blk_part_register(const struct block_device *parent,
-                      uint32_t base_lba, uint32_t sectors, int index);
+                      uint64_t base_lba, uint64_t sectors, int index);
 
 // The same window WITHOUT making it active -- what a second mount
 // needs, since the mount table holds a device per mount and only one
@@ -308,7 +329,7 @@ int blk_part_register(const struct block_device *parent,
 // already mounted?"; the pool is small and bounded, and a caller that
 // exhausts it gets NULL and a logged reason.
 const struct block_device *blk_part_create(const struct block_device *parent,
-                                           uint32_t base_lba, uint32_t sectors,
+                                           uint64_t base_lba, uint64_t sectors,
                                            int index);
 
 // Releases a partition window: frees its slot and forgets its name, so
@@ -322,7 +343,7 @@ int blk_part_release(const struct block_device *dev);
 // device answer "which disk is this really on" without the active
 // device having to be it.
 const struct block_device *blk_part_parent(const struct block_device *dev,
-                                           uint32_t *out_base);
+                                           uint64_t *out_base);
 
 // The disk the partition table lives on: the active device, or its
 // PARENT when a partition is active. NULL when nothing is registered.
@@ -330,15 +351,15 @@ const struct block_device *blk_whole_disk(void);
 
 // Where the active device starts on that disk -- 0 when the active
 // device IS the whole disk.
-uint32_t blk_base_lba(void);
+uint64_t blk_base_lba(void);
 
 // Whole-disk I/O, ignoring any partition window. This is what a
 // partition-table reader or writer wants and what a filesystem must
 // never use: blk_read_sectors(0) is the volume's first sector, while
 // blk_disk_read_sectors(0) is the MBR. Same fault-injection hooks.
-uint32_t blk_disk_sector_count(void);
-int blk_disk_read_sectors(uint32_t lba, int count, void *buf);
-int blk_disk_write_sectors(uint32_t lba, int count, const void *buf);
+uint64_t blk_disk_sector_count(void);
+int blk_disk_read_sectors(uint64_t lba, int count, void *buf);
+int blk_disk_write_sectors(uint64_t lba, int count, const void *buf);
 
 // ---- I/O on a NAMED device ------------------------------------------
 //
@@ -352,12 +373,12 @@ int blk_disk_write_sectors(uint32_t lba, int count, const void *buf);
 // else reads the WRONG VOLUME and reports no error, so this pair is
 // not a convenience -- it is the whole reason fs_ops.init() takes a
 // device.
-int blkdev_read_sectors(const struct block_device *dev, uint32_t lba, int count, void *buf);
-int blkdev_write_sectors(const struct block_device *dev, uint32_t lba, int count, const void *buf);
+int blkdev_read_sectors(const struct block_device *dev, uint64_t lba, int count, void *buf);
+int blkdev_write_sectors(const struct block_device *dev, uint64_t lba, int count, const void *buf);
 int blkdev_max_sectors_per_xfer(const struct block_device *dev);
 int blkdev_flush(const struct block_device *dev);
 int blkdev_trim_supported(const struct block_device *dev);
-int blkdev_trim(const struct block_device *dev, uint32_t lba, uint32_t count);
+int blkdev_trim(const struct block_device *dev, uint64_t lba, uint32_t count);
 
 // Linux's plug: hand the device several transfers TOGETHER so it can
 // keep them all in flight, and wait for all of them. Returns 1 only if
@@ -369,7 +390,7 @@ int blkdev_submit_batch(const struct block_device *dev, struct blk_io *io, int n
 // whole list rather than paying a command per run (a 512 MiB delete was
 // 313 TRIMs and 89 ms). 1 if every run was discarded.
 int blkdev_trim_ranges(const struct block_device *dev, const struct blk_range *r, int n);
-uint32_t blkdev_sector_count(const struct block_device *dev);
+uint64_t blkdev_sector_count(const struct block_device *dev);
 
 // ---- logical block size ---------------------------------------------
 //
@@ -390,8 +411,8 @@ uint32_t blkdev_block_sectors(const struct block_device *dev);
 // partial writes to one block that race lose one of them, and a torn
 // write can damage the neighbours. A caller shares a block only with
 // data it holds the lock for.
-int blkdev_read_partial(const struct block_device *dev, uint32_t lba, int count, void *buf);
-int blkdev_write_partial(const struct block_device *dev, uint32_t lba, int count, const void *buf);
+int blkdev_read_partial(const struct block_device *dev, uint64_t lba, int count, void *buf);
+int blkdev_write_partial(const struct block_device *dev, uint64_t lba, int count, const void *buf);
 
 // ATA DATA SET MANAGEMENT's payload: 512-byte blocks of 64 eight-byte
 // entries, each a 48-bit LBA and a 16-bit count. Fills ONE block from

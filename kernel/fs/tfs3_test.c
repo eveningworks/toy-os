@@ -21,9 +21,9 @@
 
 static uint8_t *g_vol[2];
 
-static uint32_t vol_count(void) { return VOL_SECTORS; }
+static uint64_t vol_count(const struct block_device *self) { (void)self; return VOL_SECTORS; }
 
-static int vol_rw(int v, uint32_t lba, int count, void *rd, const void *wr) {
+static int vol_rw(int v, uint64_t lba, int count, void *rd, const void *wr) {
     if (!g_vol[v] || count <= 0) return 0;
     if ((uint64_t)lba + (uint64_t)count > VOL_SECTORS) return 0;
     uint8_t *at = g_vol[v] + (uint64_t)lba * 512;
@@ -31,11 +31,11 @@ static int vol_rw(int v, uint32_t lba, int count, void *rd, const void *wr) {
     else k_memcpy(at, wr, (uint32_t)count * 512);
     return 1;
 }
-static int v0_read(uint32_t lba, int n, void *b)        { return vol_rw(0, lba, n, b, 0); }
-static int v0_write(uint32_t lba, int n, const void *b) { return vol_rw(0, lba, n, 0, b); }
-static int v1_read(uint32_t lba, int n, void *b)        { return vol_rw(1, lba, n, b, 0); }
-static int v1_write(uint32_t lba, int n, const void *b) { return vol_rw(1, lba, n, 0, b); }
-static int vol_xfer(void) { return 8; }
+static int v0_read(const struct block_device *self, uint64_t lba, int n, void *b) { (void)self; return vol_rw(0, lba, n, b, 0); }
+static int v0_write(const struct block_device *self, uint64_t lba, int n, const void *b) { (void)self; return vol_rw(0, lba, n, 0, b); }
+static int v1_read(const struct block_device *self, uint64_t lba, int n, void *b) { (void)self; return vol_rw(1, lba, n, b, 0); }
+static int v1_write(const struct block_device *self, uint64_t lba, int n, const void *b) { (void)self; return vol_rw(1, lba, n, 0, b); }
+static int vol_xfer(const struct block_device *self) { (void)self; return 8; }
 
 static const struct block_device VOL_DEV[2] = {
     { .name = "t3test0", .sector_count = vol_count, .read_sectors = v0_read,
@@ -120,7 +120,7 @@ KTEST("tfs3", "a pointer table cached for one volume is not served to another") 
 
 static int g_flush_watch, g_flush_calls, g_flush_locked;
 
-static int v0_flush(void) {
+static int v0_flush(const struct block_device *self) { (void)self;
     if (g_flush_watch) {
         g_flush_calls++;
         if (fs_lock_held_at(FLUSH_POINT "/f")) g_flush_locked++;
@@ -185,7 +185,7 @@ KTEST("tfs3", "fsync and sync flush the device while its mount is locked") {
 
 static int g_gap_watch, g_gap_reads, g_gap_unlocked, g_gap_counted;
 
-static int gap_read(uint32_t lba, int n, void *b) {
+static int gap_read(const struct block_device *self, uint64_t lba, int n, void *b) { (void)self;
     if (g_gap_watch) {
         g_gap_reads++;
         if (!fs_lock_held_at(GAP_POINT "/f")) {
@@ -267,7 +267,7 @@ KTEST("tfs3", "a whole-block read drops the mount's lock, and not under exclusio
 static int g_del_watch, g_del_unlocked, g_del_nested, g_del_nested_ok;
 static uint8_t g_del_other[16 * 1024];
 
-static int del_read(uint32_t lba, int n, void *b) {
+static int del_read(const struct block_device *self, uint64_t lba, int n, void *b) { (void)self;
     int r = vol_rw(0, lba, n, b, 0);
     if (g_del_watch && !fs_lock_held_at(DEL_POINT "/f")) {
         g_del_unlocked++;
@@ -281,7 +281,7 @@ static int del_read(uint32_t lba, int n, void *b) {
     return r;
 }
 
-static int del_trim(uint32_t lba, uint32_t count) {   // a discard really loses the data
+static int del_trim(const struct block_device *self, uint64_t lba, uint32_t count) { (void)self;   // a discard really loses the data
     if ((uint64_t)lba + count > VOL_SECTORS) return 0;
     k_memset(g_vol[0] + (uint64_t)lba * 512, 0, (size_t)count * 512);
     return 1;
@@ -438,7 +438,7 @@ KTEST("tfs3", "a cached directory inode follows its link count and its size") {
 
 static int g_ow_watch, g_ow_writes, g_ow_unlocked;
 
-static int ow_write(uint32_t lba, int n, const void *b) {
+static int ow_write(const struct block_device *self, uint64_t lba, int n, const void *b) { (void)self;
     if (g_ow_watch) {
         g_ow_writes++;
         if (!fs_lock_held_at(OW_POINT "/f")) g_ow_unlocked++;
@@ -512,12 +512,12 @@ static void *l4_state(void) {
     const struct mount *m = mount_resolve(L4_POINT "/x", 0);
     return m ? m->state : 0;
 }
-static int l4_read(uint32_t lba, int n, void *b) {
+static int l4_read(const struct block_device *self, uint64_t lba, int n, void *b) { (void)self;
     if (g_l4_watch && !fs_lock_held_at(L4_POINT "/x"))
         g_l4_rd_mode = tfs3_test_lock_mode(l4_state(), g_l4_ino);
     return vol_rw(0, lba, n, b, 0);
 }
-static int l4_write(uint32_t lba, int n, const void *b) {
+static int l4_write(const struct block_device *self, uint64_t lba, int n, const void *b) { (void)self;
     if (g_l4_watch && !fs_lock_held_at(L4_POINT "/x"))
         g_l4_wr_mode = tfs3_test_lock_mode(l4_state(), g_l4_ino);
     return vol_rw(0, lba, n, 0, b);
