@@ -138,6 +138,9 @@ static const struct rescue_cmd RESCUE_CMDS[] = {
     // pager that already existed, so this is a table row rather than a
     // second copy of anything.
     { "dmesg",    rescue_dmesg,  "rescue dmesg" },
+    // fsck for the same reason as dmesg: a disk that will not load
+    // /bin is the disk most worth checking.
+    { "fsck",     cmd_fsck,      "rescue fsck [repair]" },
 };
 #define RESCUE_COUNT (sizeof(RESCUE_CMDS) / sizeof(RESCUE_CMDS[0]))
 

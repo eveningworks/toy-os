@@ -904,6 +904,11 @@ int sys_mkfs(const struct mkfs_request *req) {
     return (int)err(syscall1(SYS_MKFS, (uint64_t)(uintptr_t)req));
 }
 
+int sys_fs_check(const char *path, unsigned flags, struct fs_check_result *out) {
+    return (int)err(syscall3(SYS_FS_CHECK, (uint64_t)(uintptr_t)path, flags,
+                             (uint64_t)(uintptr_t)out));
+}
+
 int sys_install_boot(const struct install_boot_request *req) {
     return (int)err(syscall1(SYS_INSTALL_BOOT, (uint64_t)(uintptr_t)req));
 }

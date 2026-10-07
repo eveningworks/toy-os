@@ -329,6 +329,7 @@ int sys_install_boot(struct syscall_ctx *c);
 int sys_mkfs(struct syscall_ctx *c);
 int sys_mount(struct syscall_ctx *c);
 int sys_umount(struct syscall_ctx *c);
+int sys_fs_check(struct syscall_ctx *c);
 int sys_chdir(struct syscall_ctx *c);
 int sys_getcwd(struct syscall_ctx *c);
 

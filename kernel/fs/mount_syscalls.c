@@ -19,6 +19,7 @@
 #include "kfmt.h"
 #include "string.h"
 #include "vmm.h"
+#include "kpath_buf.h" // kpath_get(): a path may not be a kernel local
 
 // Turns a refusal reason into an errno. mount_add() answers in ENGLISH
 // because the string is what a person needs; this is the same fact for
@@ -190,5 +191,27 @@ int sys_umount(struct syscall_ctx *c) {
         return 0;
     }
     c->regs[14] = 0;
+    return 0;
+}
+
+// SYS_FS_CHECK -- the consistency check of the volume holding a path,
+// run here against the mounted backend (abi/mount_abi.h says why it is
+// not a ring-3 checker). Holds that mount's lock for the whole pass, so
+// every other call on the volume waits it out, as it did when `fsck`
+// was a kernel-shell builtin.
+int sys_fs_check(struct syscall_ctx *c) {
+    if (c->a1 & ~(uint64_t)FSCK_REPAIR) {
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
+    char *path = kpath_get();
+    if (!path) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
+    struct fs_check_result r;
+    k_memset(&r, 0, sizeof r);
+    int rc = resolve_user_path(c->pml4, c->a0, path);
+    if (!rc) rc = fs_check_at(path, (int)(c->a1 & FSCK_REPAIR), &r);
+    kpath_put(path);
+    if (!rc && !vmm_copy_to_user(c->pml4, c->a2, &r, sizeof r)) rc = -EFAULT;
+    c->regs[14] = (uint64_t)(int64_t)rc;
     return 0;
 }

@@ -28,7 +28,7 @@ const char *const COMPLETION_COMMANDS[] = {
     // has no dispatch case". complete_executables() offers the real one
     // off PATH, which is the point of the split.
     "cursor", "debug", "dmatest", "edit", "fontface", "fontsize",
-    "fputest", "fsck", "fsformat", "gui", "help", "ktest", "history", "keyboard",
+    "fputest", "fsformat", "gui", "help", "ktest", "history", "keyboard",
     "nano", "pwd", "rescue",
     "ring3test", "run", "schedtest", "steptest", "stress",
     "path", "write",
@@ -129,7 +129,6 @@ static enum completion_domain shell_arg_domain(struct completion_collector *c,
         }
         return COMPLETION_FILLED;
     }
-    if (k_strcmp(cmd, "fsck") == 0) { completion_add(c, "repair"); return COMPLETION_FILLED; }
     if (k_strcmp(cmd, "fsformat") == 0) {
         // Backend names only -- deliberately NOT completing "confirm",
         // which exists to be typed on purpose.

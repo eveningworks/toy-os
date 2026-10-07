@@ -3503,3 +3503,34 @@ does the two steps itself, in the order that keeps a bootable kernel
 reachable. A directory on either side is refused, and so is a
 cross-parent replace on a v1 journal (five credits, like a directory
 move).
+
+## `fsck` is a `/bin` program, and the check it prints stays in the kernel
+
+Until 2026-10-07 `fsck` was a kernel-shell builtin over `fs_check()`,
+which checked the ROOT only. It is `/bin/fsck PATH` now, over
+`SYS_FS_CHECK`, and the checker did not move.
+
+**What real systems do.** e2fsck and `fsck.vfat` are ring-3 programs
+reading the RAW device of a volume nobody is writing; the root is
+checked from the initramfs, or while it is still mounted read-only. XFS's online scrub
+and `btrfs scrub` are the other shape: the kernel walks the MOUNTED
+filesystem's live structures and repairs them, and a ring-3 tool
+(`xfs_scrub`, `btrfs scrub start`) asks for it through an ioctl.
+
+**toy-os follows the second, because the first needs an unmount it
+cannot do.** The root is never unmounted, there is no initramfs to
+check it from, and TFS3's repair writes through its journal and its
+in-memory allocation state -- which a process reading the raw device
+would race. So the program moved and the walk stayed: the same split as
+`snddrv` and the sound core, the half that faces a person in ring 3 and
+the half that owns the structure where the structure is.
+
+**What it bought besides the ring.** A PATH names the volume, as
+statfs(2) does, so `/boot` (FAT32) and `/tmp` (ramfs) can be checked for
+the first time. A repair the backend cannot do is `-ENOTSUP`, decided by
+a capability bit (`FS_CAP_REPAIR`, TFS3 only) rather than by FAT32
+logging "reporting only" and returning success. The exit status is
+e2fsck's, so a boot-time report can tell "fixed" from "left".
+
+**`rescue fsck` keeps the old builtin**, root only, for a disk whose
+`/bin` will not load -- the disk most worth checking.

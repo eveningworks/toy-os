@@ -833,6 +833,17 @@ int fs_check(int repair, struct fs_check_result *out) {
     return FS_OP(m, m->gen, check, repair, out);
 }
 
+int fs_check_at(const char *path, int repair, struct fs_check_result *out) {
+    struct resolved r;
+    if (!path || !resolve(path, &r)) return -ENOENT;
+    if (repair && (r.m->flags & MNT_RDONLY)) return -EROFS;
+    if (repair && !(r.m->fs->caps & FS_CAP_REPAIR)) return -ENOTSUP;
+    if (!FS_OP(r.m, r.gen, check, repair, out)) return -EIO;
+    k_strlcpy(out->fstype, r.m->fs->name, sizeof out->fstype);
+    k_strlcpy(out->point, r.m->point, sizeof out->point);
+    return 0;
+}
+
 int fs_link(const char *existing, const char *newpath) {
     struct resolved a, b;
     if (!resolve(existing, &a) || !resolve(newpath, &b)) return 0;

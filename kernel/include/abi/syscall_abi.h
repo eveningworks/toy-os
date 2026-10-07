@@ -2668,6 +2668,16 @@ struct usb_control_msg {
                              // -EISDIR for a directory on either side.
 #define RENAME2_REPLACE 0x1
 
+#define SYS_FS_CHECK 140     // RDI = a path on the volume, RSI = FSCK_*
+                             // flags, RDX = pointer to a `struct
+                             // fs_check_result` (abi/mount_abi.h), out.
+                             // The check runs IN THE KERNEL against the
+                             // mounted volume and holds its lock for the
+                             // whole pass. Returns 0, or -ENOENT, -EROFS
+                             // (a repair on a read-only mount), -ENOTSUP
+                             // (a repair the backend cannot do), -EIO,
+                             // -EINVAL (an unknown flag), -EFAULT.
+
 struct usb_isoch_msg {
     uint32_t slot;
     uint32_t ep;         // endpoint address, e.g. 0x01

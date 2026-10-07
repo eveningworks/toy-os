@@ -463,7 +463,7 @@ No dependency on the phases above; ordered among themselves.
 - [ ] Nothing remounts in place: changing a mount's flags is `umount` then `mount`, and there is no `mount -o remount`
 - [ ] `MOUNT_MAX` is 6 and `PART_SLOTS` is 8, both compile-time
 - [ ] A mount point deeper than one already mounted works, but nothing tests a three-level nest
-- [ ] `fs_check`/`fsck` only ever check the ROOT -- there is no way to fsck `/boot`
+- [x] ~~`fs_check`/`fsck` only ever check the ROOT -- there is no way to fsck `/boot`~~ DONE 2026-10-07 -- `/bin/fsck PATH`
 - [ ] `parttable` still reads `blk_active()`'s disk only -- `mkpart --disk` writes any of them
 - [ ] Mount a disk image FILE -- a loop block device, Linux's `losetup`; a FAT image opened on the machine itself
 

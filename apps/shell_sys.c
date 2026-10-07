@@ -202,13 +202,6 @@ static const char *const TEST_HELP_LINES[] = {
     "  sync          - write out anything the disk cache is still holding,\n"
     "                  and report how many sectors it wrote. Runs\n"
     "                  automatically at shutdown and reboot.\n",
-    "  fsck          - filesystem consistency check: walks every file's\n",
-    "                  block tree and compares it against the free-block\n",
-    "                  bitmap. Read-only, safe to run any time.\n",
-    "  fsck repair   - the same pass, but also reclaims leaked blocks and\n",
-    "                  fixes what can be fixed without guessing. Blocks\n",
-    "                  claimed by two files are always reported, never\n",
-    "                  repaired -- see fs.h's fs_check().\n",
     "  fsformat <fs> confirm - DESTROY everything on disk and reformat\n",
     "                  with the named filesystem (tfs3), then\n",
     "                  remount it live. `df` shows which one is active.\n",
@@ -337,7 +330,7 @@ void cmd_fputest(void) {
     }
 }
 
-// `fsck` / `fsck repair` -- filesystem consistency check, and the
+// `rescue fsck [repair]` -- the root's consistency check, and the
 // reclaim half of it. See fs.h's fs_check() for what a repair pass will
 // and won't fix; the interesting asymmetry is that leaked blocks are
 // reclaimed automatically while double-allocated ones are only ever
@@ -377,9 +370,9 @@ void cmd_sync(const char *args) {
 void cmd_fsck(const char *args) {
     int repair = (args && k_strcmp(args, "repair") == 0);
     if (args && k_strlen(args) > 0 && !repair) {
-        vga_write("usage: fsck [repair]\n");
-        vga_write("  fsck         check and report only, touches nothing\n");
-        vga_write("  fsck repair  also reclaim leaked blocks and fix what's safely fixable\n");
+        vga_write("usage: rescue fsck [repair]\n");
+        vga_write("  rescue fsck         check the root and report only, touches nothing\n");
+        vga_write("  rescue fsck repair  also reclaim leaked blocks and fix what's safely fixable\n");
         return;
     }
 

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "timer.h" // struct rtc_time, for fs_stat()'s timestamps below
+#include "mount_abi.h" // struct fs_check_result, shared with SYS_FS_CHECK
 
 // This is the stable, backend-agnostic filesystem API -- kapi.h's only
 // filesystem include, and the only header apps/ or the rest of the
@@ -354,6 +355,7 @@ int fs_chmod(const char *path, uint16_t mode);
 #define FS_CAP_EPOCH_TIME (1u << 3) // timestamps stored as epoch natively, not converted at stat time
 #define FS_CAP_MODE       (1u << 4) // format stores permission bits (else stat reports a default)
 #define FS_CAP_REPLACE    (1u << 5) // a rename can replace an existing file atomically (fs_rename_replace)
+#define FS_CAP_REPAIR     (1u << 6) // fs_check()'s repair pass changes the volume (else it only reports)
 
 // The active backend's short name ("tfs3") -- diagnostic, for
 // df/fsck/about-style output. Valid after fs_init(); never NULL.
@@ -458,21 +460,9 @@ int fs_mount_usage(const void *m, uint64_t *out_used_bytes, uint64_t *out_total_
 
 // ---- consistency check / repair (`fsck`) ----
 
-// What one pass over the filesystem found, and (if it was a repair
-// pass) what it changed. Counts are of BLOCKS unless noted.
-struct fs_check_result {
-    uint32_t records_used;        // in-use table slots walked
-    uint32_t blocks_referenced;   // distinct blocks reachable from those records
-    uint32_t leaked;              // marked allocated, referenced by nothing
-    uint32_t referenced_but_free; // referenced by a record, marked free
-    uint32_t double_allocated;    // referenced from more than one place
-    uint32_t out_of_range;        // pointers naming a block outside the usable range
-    // Only nonzero on a repair pass -- what was actually changed.
-    uint32_t reclaimed;           // leaked blocks returned to the free bitmap
-    uint32_t marked_allocated;    // referenced-but-free blocks marked allocated
-    uint32_t pointers_cleared;    // out-of-range pointers zeroed
-};
-
+// What one pass found and changed is `struct fs_check_result`, in
+// abi/mount_abi.h because SYS_FS_CHECK hands it to ring 3.
+//
 // Walks every in-use record's block tree (direct + indirect), compares
 // what's reachable against the free-block bitmap, and fills *out.
 //
@@ -493,6 +483,12 @@ struct fs_check_result {
 // Returns 1 on a completed pass, 0 if the filesystem isn't disk-backed
 // (nothing to check -- RAM-only mode has no persistent bitmap).
 int fs_check(int repair, struct fs_check_result *out);
+
+// fs_check() on the volume holding `path` rather than the root -- what
+// SYS_FS_CHECK runs. 0, or -ENOENT (no mount answers for it), -EROFS (a
+// repair on a read-only mount), -ENOTSUP (a repair the backend cannot
+// do, FS_CAP_REPAIR), -EIO (the backend could not complete the pass).
+int fs_check_at(const char *path, int repair, struct fs_check_result *out);
 
 // Whether a backend call is in flight on the mount answering for
 // `path`, and the pid holding it (0 for the kernel context). Per MOUNT:

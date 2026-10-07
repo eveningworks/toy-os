@@ -874,6 +874,9 @@ int sys_mount(const struct mount_request *req);
 // permission check. Refuses a volume something is mounted from; use
 // `fsformat` for the running root, which is a different operation.
 int sys_mkfs(const struct mkfs_request *req);
+// SYS_FS_CHECK: check (FSCK_REPAIR: and repair) the mounted volume
+// holding `path`, in the kernel. 0 or -1 with errno; abi/mount_abi.h.
+int sys_fs_check(const char *path, unsigned flags, struct fs_check_result *out);
 
 // Makes a disk BOOT: the boot sector at LBA 0, and the core image into
 // that disk's BIOS boot partition, with the two patches that depend on

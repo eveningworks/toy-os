@@ -124,7 +124,7 @@ arrives through a `struct completion_env`.
 What each shell offers past that is not identical, because their command
 sets are not. The **kernel shell** adds argument sets for commands that
 only exist at a `#` prompt (`run`, `color`, `debug`, `keyboard`,
-`fontsize`, `fsck`, `fsformat`, `cursor`, `help`) and its
+`fontsize`, `fsformat`, `cursor`, `help`) and its
 console app registry. **`/bin/tosh`** has six builtins and one argument
 rule: `cd` offers **directories only**, as bash and zsh do.
 
