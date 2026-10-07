@@ -12,8 +12,9 @@
 // byte for byte -- grubby's shape, not grub-mkconfig's.
 //
 // A boot line is EDITABLE only when it is `multiboot2|linux <path>
-// <plain words>`; quotes, `$`, `;` or `#` after the path make it text
-// only (`plain` is 0), never half-understood.
+// <plain words>`; quotes, `;`, `#` or a `$` other than one final `$name`
+// in a word (`bootpart=$bootpart`) make it text only (`plain` is 0),
+// never half-understood.
 
 #include "lib/ubootmenu.h"
 
@@ -82,6 +83,15 @@ int ubootcfg_copy(struct ubootcfg *c, int e, const char *title);
 // Refuses the default entry and the last one.
 int ubootcfg_remove(struct ubootcfg *c, int e);
 
+// --- bootpart= ------------------------------------------------------------
+// The kernel roots on the disk GRUB booted from when the boot line
+// carries `bootpart=$bootpart` and the entry probes it first (grub.cfg;
+// docs/boot-flags.md). How many editable entries lack it, and adding it
+// to each: the probe lines go above the boot line and the word onto it.
+// An entry that is text-only is left alone. Returns how many were
+// changed, or -1 with c->why.
+int ubootcfg_bootpart_missing(const struct ubootcfg *c);
+int ubootcfg_add_bootpart(struct ubootcfg *c);
 // --- trying an entry once ------------------------------------------------
 // The trial of `e` is a copy titled "<title> (trial)" with `words` and
 // UBOOTCFG_MARK, replaced if it exists. Returns its index, or -1. The caller saves and

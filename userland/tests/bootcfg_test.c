@@ -205,5 +205,49 @@ int main(void) {
     utest_check(ubootcfg_undo(CFG, &why) == 0 && get(CFG, back, sizeof back) == flen, "and a second undo redoes");
 
     unlink(CFG); unlink(CFG ".bak");
+
+    // bootpart=: ONE final `$name` keeps a line editable, and survives
+    // an edit of its neighbours; anything more stays text-only.
+    static const char VARS[] =
+        "menuentry \"a\" {\n    multiboot2 /boot/kernel.bin bootpart=$bootpart nokaslr\n    boot\n}\n"
+        "menuentry \"b\" {\n    multiboot2 /boot/kernel.bin x=${y}\n    boot\n}\n"
+        "menuentry \"c\" {\n    multiboot2 /boot/kernel.bin x=$y-z\n    boot\n}\n";
+    utest_check(ubootcfg_parse(&c, VARS, (int)sizeof VARS - 1) == 0, "the variables fixture parses");
+    utest_check(c.entry[0].plain && c.entry[0].nwords == 2 &&
+                !strcmp(c.entry[0].word[0], "bootpart=$bootpart"), "a final $name is a plain word");
+    utest_check(!c.entry[1].plain && !c.entry[2].plain, "${y} and $y-z are text-only");
+    const char *nk[] = { "-nokaslr", "+video=1280x720" };
+    utest_check(ubootcfg_edit_words(&c, 0, nk, 2) == 0 &&
+                strstr(c.text, "kernel.bin bootpart=$bootpart video=1280x720\n"),
+                "an edit keeps bootpart=$bootpart verbatim");
+    utest_check(ubootcfg_bootpart_missing(&c) == 0, "an entry with the word is not missing it");
+
+    // Adding it: the two editable multiboot2 entries gain the probe above
+    // the boot line and the word on it; the quoted one and a `linux` one
+    // are left as they are; a second pass changes nothing.
+    static char withlinux[sizeof FIXTURE + 128];
+    int wl = snprintf(withlinux, sizeof withlinux, "%s%s", FIXTURE,
+                      "menuentry \"other\" {\n    linux /vmlinuz root=/dev/sda2\n}\n");
+    utest_check(ubootcfg_parse(&orig, withlinux, wl) == 0, "the fixture with a linux entry parses");
+    c = orig;
+    utest_checkf(ubootcfg_bootpart_missing(&c) == 2, "two entries lack bootpart= (got %d)",
+                 ubootcfg_bootpart_missing(&c));
+    utest_checkf(ubootcfg_add_bootpart(&c) == 2, "both gain it (%s)", c.why ? c.why : "");
+    utest_check(strstr(c.text,
+                "    set bootpart=\n"
+                "    if probe --part-uuid --set=bootpart $root; then true; fi\n"
+                "    multiboot2 /boot/kernel.bin nokaslr video=1920x1080 bootpart=$bootpart\n") != 0,
+                "the probe sits above the boot line, the word at its end");
+    utest_check(strstr(c.text, "multiboot2 /boot/kernel.old bootpart=$bootpart\n") != 0,
+                "the rescue entry gains it too");
+    utest_check(strstr(c.text, "\"loglevel=7\"\n") && strstr(c.text, "linux /vmlinuz root=/dev/sda2\n"),
+                "the quoted and the linux entries are untouched");
+    utest_checkf(c.count == 4 && c.def == 1, "entries and the default are unchanged (%d, %d)",
+                 c.count, c.def);
+    int np = ubootcfg_check(&c, &orig, 0, probs, 16);
+    utest_check(!ubootcfg_has(probs, np, UBOOTCFG_BROKEN), "and the result checks out");
+    other = c;
+    utest_check(ubootcfg_add_bootpart(&c) == 0 && !strcmp(c.text, other.text),
+                "a second pass changes nothing");
     return utest_end();
 }

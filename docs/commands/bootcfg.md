@@ -99,8 +99,10 @@ asks before saving. The real file is not touched until then.
 grub.cfg from `/etc/default/grub`; here the repo's `grub.cfg` is the
 build's source and the installed one is edited in place (grubby's
 shape), so there is one file and no second source of truth.
-**It does not edit a boot line it cannot read whole** -- quotes, `$` or
-`;` after the kernel path make that entry `edit`-only. **It does not
+**It does not edit a boot line it cannot read whole** -- quotes, `;`, or
+a `$` other than one final `$name` in a word after the kernel path make
+that entry `edit`-only. `bootpart=$bootpart` is such a final `$name`:
+it is a plain word, listed and kept verbatim by every edit. **It does not
 replace atomically**: FAT32 cannot, so between keeping the `.bak` and
 renaming the new file in there is a moment with no `grub.cfg`; a power
 cut there leaves GRUB at its prompt, where `configfile

@@ -12,8 +12,9 @@
       --esp <MiB>    size of the FAT32 /boot partition (default 64)
       --mbr          write an MBR table instead of GPT, for firmware that
                      will not boot a GPT disk in legacy/CSM mode
-      --bootloader   rewrite THIS machine's bootloader in place and change
-                     nothing else -- no partitioning, no files touched
+      --bootloader   rewrite THIS machine's bootloader in place, and add
+                     bootpart= to grub.cfg's entries -- no partitioning,
+                     no other file touched
       confirm        required -- this ERASES the target disk
 
 ## Options
@@ -66,9 +67,26 @@ The layout it writes:
     install --bootloader confirm
 
 `grub-install` on a machine that is already installed: it writes the boot
-sector and GRUB's core image and **nothing else** — no partition table, no
-format, no file copied. It is the only way an installed machine can gain a
-bootloader capability it was installed without.
+sector and GRUB's core image, adds `bootpart=` to `grub.cfg`, and does
+**nothing else** — no partition table, no format, no other file touched. It is
+the only way an installed machine can gain a bootloader capability it was
+installed without.
+
+    install: this rewrites ahci0's bootloader in place (GPT layout):
+      boot sector    LBA 0, keeping this disk's partition table
+      core image     /install/core.img
+      grub.cfg       bootpart= added to 2 entries (a .bak is kept)
+
+**`bootpart=` is the newest such capability.** It tells the kernel which disk
+GRUB booted from, so a second disk cannot take the root
+(`docs/boot-flags.md`). It needs BOTH halves: a core image with GRUB's `probe`
+module, and grub.cfg lines that use it — and System Update writes neither, so
+a machine installed before it gets it from this refresh. **grub.cfg is EDITED,
+not replaced**: each toy-os (`multiboot2`) entry that can be edited as words
+gains the two probe lines above its boot line and `bootpart=$bootpart` on it,
+exactly as `bootcfg` would edit it; a `linux` entry, an entry already carrying
+the word, and anything else in the file are left as they are, and the old file
+is kept as `grub.cfg.bak`. Running it again adds nothing.
 
 That is not hypothetical. The bare-metal laptop was installed before `gzio`
 joined `install_grub.py`'s `CORE_MODULES`, so when it was later flashed with a

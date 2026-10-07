@@ -305,9 +305,12 @@ this the obvious way), not from how much history it accumulated.
   with any table, then the first. `blk_register()` is still
   last-writer-wins, which is exactly why it must not be what decides:
   a blank disk on a faster controller took the root that way.
-  **Host-seeded images share PARTUUIDs** (`seed_disk.py` derives them
-  from the index), so two copies of `disk.img` are told apart by
-  precedence, not by `bootpart=`; the in-OS `install` randomises them.
+  **COPIES of one image share PARTUUIDs** (`seed_disk.py` and the in-OS
+  `install` write random ones, `cp` copies them), so two copies are told
+  apart by precedence, not by `bootpart=` -- `mkpart_test.regenerate_guids()`
+  is `sgdisk -G` for a test. **An older install gains `bootpart=` only from
+  `install --bootloader confirm`**: it needs `probe` in the core image AND
+  the grub.cfg lines, and System Update writes neither.
   `novirtio`, `nonvme` and `noahci` still step down a rung each and keep
   the lower rungs reachable. **`noahci` is not a driver kill switch** --
   the driver still finds the HBA, brings up the ports and reports them

@@ -5542,7 +5542,11 @@ runs first**: a `doom1.wad` with one
   default), `bios` (a BIOS boot partition, where GRUB's `core.img` is
   embedded) or `esp` (an EFI System Partition, the FAT32 `/boot`). The
   kernel reads those types too, and refuses to mount or format either
-  of the last two. `--gpt --layout` also writes the BACKUP header and entry
+  of the last two. **Its GUIDs (and an MBR's disk signature) are
+  RANDOM**, as the kernel's `mkpart` writes them: a partition's GUID is
+  the PARTUUID grub.cfg passes as `bootpart=`, so two images must not
+  share one. `regenerate_guids(path)` is `sgdisk -G` for a COPY, which
+  otherwise carries the original's. `--gpt --layout` also writes the BACKUP header and entry
   array in the last 33 sectors, which the synthetic mode does not: a
   partition editor on another system reads the backup to cross-check
   the primary and "repairs" a disk that has none. This is what
@@ -6600,7 +6604,7 @@ runs first**: a `doom1.wad` with one
   demand, not in any gate.
 
 - **`rootdisk_test.py`** -- **every SATA drive, and which disk is the
-  root.** Five boots, on demand. **A**: three SATA drives on TWO
+  root.** Seven boots, on demand. **A**: three SATA drives on TWO
   `ich9-ahci` HBAs, the system disk on HBA 0 PORT 1 (booted by
   `bootindex`), a host-seeded data disk on port 0 and a blank disk on
   the second HBA -- three drives named, the root from port 1 rather than
@@ -6610,9 +6614,12 @@ runs first**: a `doom1.wad` with one
   with `bootpart=` and then with it removed from grub.cfg
   (`install_grub.drop_boot_word()`): both must root on IDE. **C**: two
   system disks, the virtio one with its partition GUIDs changed
-  (`reguid()`, both GPT headers re-CRCed) -- `bootpart=` must pick IDE
-  and removing it must flip the root to virtio, which is what proves
-  `bootpart=` decided rather than agreed.
+  (`mkpart_test.regenerate_guids()`, `sgdisk -G`: both GPT headers
+  re-CRCed) -- `bootpart=` must pick IDE and removing it must flip the
+  root to virtio, which is what proves `bootpart=` decided rather than
+  agreed. **D**: an old install's grub.cfg (no probe lines, no word):
+  `install --bootloader` must preview and then add `bootpart=` to both
+  entries, add nothing a second time, and the next boot must carry it.
 
   Its controls (`mutate.py`): AHCI stopping at one drive per HBA
   reddens every check of A; the content rule reduced to precedence

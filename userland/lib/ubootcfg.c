@@ -1,6 +1,7 @@
 // See ubootcfg.h.
 #include "lib/ubootcfg.h"
 #include "lib/ubootwords.h"
+#include <ctype.h>
 #include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -55,8 +56,27 @@ static int starts_word(const char *p, const char *end, const char *w) {
     return (size_t)(end - p) > n && !strncmp(p, w, n) && is_space(p[n]);
 }
 
+// May `len` bytes at `w` be edited as one plain word? No quoting or
+// GRUB syntax -- except ONE `$name` running to the end of the word,
+// grub.cfg's own `bootpart=$bootpart`: GRUB expands it whatever words
+// sit beside it, so keeping it verbatim is all an edit has to do.
+static int plain_word(const char *w, int len) {
+    for (int i = 0; i < len; i++) {
+        if ((unsigned char)w[i] <= ' ') return 0;
+        if (w[i] == '$') {
+            if (i + 1 >= len || !(isalpha((unsigned char)w[i + 1]) || w[i + 1] == '_')) return 0;
+            for (int j = i + 1; j < len; j++)
+                if (!(isalnum((unsigned char)w[j]) || w[j] == '_')) return 0;
+            return 1;
+        }
+        if (strchr("\"';#{}\\", w[i])) return 0;
+    }
+    return len > 0;
+}
+
 // The entry's boot line: command, path, then words. `plain` only when
-// nothing after the path needs GRUB's quoting or expansion.
+// nothing after the path needs GRUB's quoting or expansion beyond what
+// plain_word() allows.
 static void parse_boot(struct ubootcfg_entry *e, const char *p, const char *end) {
     p = skip_blank(p, end);
     while (p < end && !is_space(*p)) p++;          // the command
@@ -72,8 +92,7 @@ static void parse_boot(struct ubootcfg_entry *e, const char *p, const char *end)
         const char *w = p;
         while (p < end && !is_space(*p)) p++;
         int len = (int)(p - w);
-        for (const char *c = w; c < p; c++)
-            if (strchr("\"'$;#{}\\", *c)) e->plain = 0;
+        if (!plain_word(w, len)) e->plain = 0;
         if (!e->plain) break;
         if (e->nwords >= UBOOTCFG_WORDS || len >= UBOOTCFG_WORD) { e->plain = 0; break; }
         memcpy(e->word[e->nwords], w, (size_t)len);
@@ -247,10 +266,7 @@ static int valid_entry(struct ubootcfg *c, int e) {
 }
 
 static int word_ok(const char *w) {
-    if (!*w || strlen(w) >= UBOOTCFG_WORD) return 0;
-    for (; *w; w++)
-        if (*w <= ' ' || strchr("\"'$;#{}\\", *w)) return 0;
-    return 1;
+    return strlen(w) < UBOOTCFG_WORD && plain_word(w, (int)strlen(w));
 }
 
 static int write_boot(struct ubootcfg *c, int e, const char *kernel,
@@ -260,7 +276,7 @@ static int write_boot(struct ubootcfg *c, int e, const char *kernel,
     if (!en->plain) { c->why = "the entry's boot line uses GRUB quoting or variables -- edit it as text"; return -1; }
     if (n > UBOOTCFG_WORDS) { c->why = "too many boot words"; return -1; }
     for (int i = 0; i < n; i++)
-        if (!word_ok(words[i])) { c->why = "a boot word may not contain spaces, quotes, $ ; # { } or \\"; return -1; }
+        if (!word_ok(words[i])) { c->why = "a boot word may not contain spaces, quotes, ; # { } or \\, nor $ except a final $name"; return -1; }
     if (!*kernel || !word_ok(kernel)) { c->why = "not a kernel path"; return -1; }
 
     static char line[UBOOTCFG_WORDS * UBOOTCFG_WORD + 256];
@@ -312,7 +328,7 @@ int ubootcfg_edit_words(struct ubootcfg *c, int e, const char *const *ops, int n
         const char *op = ops[o];
         int del = op[0] == '-', add = op[0] == '+';
         const char *w = del || add ? op + 1 : op;
-        if (!word_ok(w)) { c->why = "a boot word may not contain spaces, quotes, $ ; # { } or \\"; return -1; }
+        if (!word_ok(w)) { c->why = "a boot word may not contain spaces, quotes, ; # { } or \\, nor $ except a final $name"; return -1; }
         int kept = 0, found = -1;
         for (int i = 0; i < nw; i++) {
             if (same_key(words[i], w)) {
@@ -456,6 +472,55 @@ int ubootcfg_remove(struct ubootcfg *c, int e) {
     int def = c->def;
     if (splice(c, first, last - first + 1, "") < 0) return -1;
     return renumber_default(c, def > e ? def - 1 : def);
+}
+
+// --- bootpart= --------------------------------------------------------------
+
+// What grub.cfg's own entries carry (the repo's grub.cfg, kept in step):
+// the PARTUUID of the partition GRUB loaded from, so the kernel roots on
+// that disk. `true` because a GRUB `if` needs a body.
+static const char BOOTPART_SET[]   = "set bootpart=";
+static const char BOOTPART_PROBE[] = "if probe --part-uuid --set=bootpart $root; then true; fi";
+#define BOOTPART_WORD "bootpart=$bootpart"
+
+static int has_bootpart(const struct ubootcfg_entry *en) {
+    for (int k = 0; k < en->nwords; k++)
+        if (!strncmp(en->word[k], "bootpart=", 9)) return 1;
+    return 0;
+}
+
+// An editable toy-os entry without the word. A `linux` line boots some
+// other system, whose kernel has its own idea of a boot line.
+static int wants_bootpart(const struct ubootcfg *c, int e) {
+    const struct ubootcfg_entry *en = &c->entry[e];
+    if (en->boot < 0 || !en->plain || has_bootpart(en)) return 0;
+    const char *p = c->text + c->line_at[en->boot];
+    const char *end = c->text + c->line_at[en->boot + 1];
+    return starts_word(skip_blank(p, end), end, "multiboot2");
+}
+
+int ubootcfg_bootpart_missing(const struct ubootcfg *c) {
+    int n = 0;
+    for (int e = 0; e < c->count; e++) n += wants_bootpart(c, e);
+    return n;
+}
+
+int ubootcfg_add_bootpart(struct ubootcfg *c) {
+    int added = 0;
+    for (int e = 0; e < c->count; e++) {
+        if (!wants_bootpart(c, e)) continue;
+        const char *op[] = { "+" BOOTPART_WORD };
+        if (ubootcfg_edit_words(c, e, op, 1) < 0) return -1;
+        // The probe goes ABOVE the boot line, at its indentation: the
+        // word is expanded when that line runs.
+        static char lines[256];
+        char ind[64];
+        indent_of(c, c->entry[e].boot, ind, sizeof ind);
+        snprintf(lines, sizeof lines, "%s%s\n%s%s\n", ind, BOOTPART_SET, ind, BOOTPART_PROBE);
+        if (splice(c, c->entry[e].boot, 0, lines) < 0) return -1;
+        added++;
+    }
+    return added;
 }
 
 // --- trying an entry once ------------------------------------------------

@@ -3628,11 +3628,17 @@ and nothing in the kernel can map that to a controller. Finding the ESP
 whose `kernel.bin` matches the running image: reads FAT on every disk
 at boot to answer a question the loader can just state.
 
-**The known gap.** Host-seeded images (`seed_disk.py`) derive their
-partition GUIDs from the index for reproducible builds, so every
-`disk.img` copy shares PARTUUIDs and two of them on one machine are told
-apart by precedence, not by `bootpart=` -- Linux has the same problem
-with cloned disks. The in-OS `install` writes random GUIDs. And
-System Update does not rewrite grub.cfg, so an installed machine gets
-rule 2 only after a reinstall or adding the two lines by hand; rule 3
-covers it meanwhile.
+**Getting there on a machine already installed.** System Update never
+writes the bootloader or grub.cfg -- both are the machine's own, and a
+bad write there is the one update a USB stick has to undo -- so a machine
+installed before this has neither the `probe` module nor the lines, and
+stays on rule 3. `install --bootloader confirm`, run at the machine,
+rewrites the core image and EDITS grub.cfg (grubby's shape: add what it
+owns, keep everything else, keep a `.bak`), the way `grub-install` is run
+by hand on Linux. Either half without the other still boots.
+
+**Two COPIES of one image still share PARTUUIDs** -- `seed_disk.py`
+writes random GUIDs when it partitions a blank image, but `cp disk.img`
+copies them, exactly as cloning a disk does on Linux. Precedence decides
+between such copies; `mkpart_test.regenerate_guids()` is `sgdisk -G` for
+a test that needs them distinct.

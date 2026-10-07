@@ -391,8 +391,8 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~Disks past 2 TiB~~ DONE 2026-10-07 -- 64-bit block layer, AHCI/NVMe/virtio, GPT and TFS3; `bigdisk_test.py`
 - [x] ~~AHCI drives only the FIRST SATA drive it finds~~ DONE 2026-10-07 -- every drive, every HBA; `rootdisk_test.py`
 - [x] ~~A blank disk on a higher-precedence controller takes the root~~ DONE 2026-10-07 -- `bootpart=`, else the first bootable disk
-- [ ] Host-seeded images share PARTUUIDs, so `bootpart=` cannot tell two `disk.img` copies apart -- per-image GUIDs in `seed_disk.py`
-- [ ] System Update never rewrites grub.cfg, so an installed machine gets `bootpart=` only by reinstalling or editing it
+- [x] ~~Host-seeded images share PARTUUIDs~~ DONE 2026-10-07 -- random GUIDs per image; `regenerate_guids()` for a copy
+- [x] ~~An installed machine cannot gain `bootpart=`~~ DONE 2026-10-07 -- `install --bootloader confirm` adds it
 - [x] ~~A TFS3 test reaching double- and triple-indirect addressing~~ done -- sparse writes make it a KTEST
 - [x] ~~`root=` names the device to mount as the root~~ DONE 2026-08-27 -- every driver enumerates into a device table (`lsblk`)
 - [x] ~~A `ramfs` backend -- a real in-memory filesystem, the root wherever there is no usable drive~~ done

@@ -31,25 +31,27 @@ THE BOOTS, and what a broken version would still pass
      from grub.cfg the content rule must still pick IDE. The old kernel
      mounted ramfs here.
   C. TWO system disks, the second on virtio with its partition GUIDs
-     changed. bootpart= must pick the one GRUB booted (IDE); removing it
+     changed (mkpart_test.regenerate_guids(), `sgdisk -G`). bootpart= must pick the one GRUB booted (IDE); removing it
      must flip the root to virtio -- which is what proves bootpart= is
      the thing deciding, rather than the content rule agreeing with it.
+  D. An OLD install's grub.cfg (no probe, no word): `install --bootloader`
+     must report what it will add, add it to both entries, find nothing
+     to add a second time -- and the next boot must carry bootpart=.
 
     python3 tools/rootdisk_test.py
 """
 
 import argparse
 import os
-import struct
 import subprocess
 import sys
 import time
-import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import install_grub  # noqa: E402
+import mkpart_test  # noqa: E402
 from harness import Results  # noqa: E402
 from qmp_test import guarded_boot_args  # noqa: E402
 from multidisk_test import (connect, kill, build_second_disk,  # noqa: E402
@@ -75,37 +77,6 @@ def blank_disk(tmp, name):
         os.remove(img)
     sh(f"truncate -s {BLANK_MB}M {img}")
     return img
-
-
-def reguid(img):
-    """Give every partition of a GPT image a different unique GUID, in
-    both headers, CRCs fixed -- a copy of disk.img otherwise carries the
-    same PARTUUIDs as the original, and bootpart= could not tell them
-    apart (two cloned disks cannot be told apart on Linux either)."""
-    with open(img, "r+b") as f:
-        f.seek(512)
-        primary = bytearray(f.read(512))
-        alt_lba = struct.unpack_from("<Q", primary, 32)[0]
-        for lba in (1, alt_lba):
-            f.seek(lba * 512)
-            hdr = bytearray(f.read(512))
-            assert hdr[:8] == b"EFI PART", f"no GPT header at LBA {lba}"
-            hsize, = struct.unpack_from("<I", hdr, 12)
-            ent_lba, = struct.unpack_from("<Q", hdr, 72)
-            n, esize = struct.unpack_from("<II", hdr, 80)
-            f.seek(ent_lba * 512)
-            ents = bytearray(f.read(n * esize))
-            for i in range(n):
-                e = i * esize
-                if any(ents[e:e + 16]):            # a used entry
-                    ents[e + 16] ^= 0x5A           # its unique GUID's first byte
-            struct.pack_into("<I", hdr, 88, zlib.crc32(bytes(ents)) & 0xFFFFFFFF)
-            struct.pack_into("<I", hdr, 16, 0)
-            struct.pack_into("<I", hdr, 16, zlib.crc32(bytes(hdr[:hsize])) & 0xFFFFFFFF)
-            f.seek(ent_lba * 512)
-            f.write(ents)
-            f.seek(lba * 512)
-            f.write(hdr)
 
 
 def without_bootpart(img):
@@ -242,7 +213,9 @@ def phase_two_systems(res, tmp):
     print("rootdisk_test: C -- two system disks, GRUB booting the slower one")
     boot = copy_disk(tmp, "rootdisk_c_boot.img")
     other = copy_disk(tmp, "rootdisk_c_other.img")
-    reguid(other)
+    # A copy carries the original's PARTUUIDs; bootpart= cannot tell
+    # two of those apart (nor can Linux tell cloned disks apart).
+    mkpart_test.regenerate_guids(other)
     devs = f"{ide_boot(boot)} {virtio(other)}"
 
     log = boot_to_root(boot, devs, tmp, "c1")
@@ -256,10 +229,69 @@ def phase_two_systems(res, tmp):
               "mounted at / on virtio0p3" in log, fs_lines(log))
 
 
+def as_old_install(img):
+    """grub.cfg as an install from before bootpart=: no probe, no word."""
+    def strip(cfg):
+        out = []
+        for line in cfg.splitlines(keepends=True):
+            t = line.strip()
+            if t == "set bootpart=" or t.startswith("if probe --part-uuid"):
+                continue
+            if t.startswith("multiboot2"):
+                line = " ".join(w for w in line.rstrip("\n").split(" ")
+                                if not w.startswith("bootpart=")) + "\n"
+            out.append(line)
+        return "".join(out)
+    ok, why = install_grub.patch_grub_cfg(img, strip, "old")
+    if not ok:
+        sys.exit(f"rootdisk_test: {why}")
+
+
+def phase_refresh(res, tmp):
+    print("rootdisk_test: D -- `install --bootloader` brings an old install up to bootpart=")
+    boot = copy_disk(tmp, "rootdisk_d_boot.img")
+    as_old_install(boot)
+    sock = os.path.abspath(os.path.join(tmp, "rootdisk_d.serial"))
+    pidfile = os.path.abspath(os.path.join(tmp, "rootdisk_d.pid"))
+    for p in (sock, pidfile):
+        if os.path.exists(p):
+            os.remove(p)
+    sh(f"qemu-system-x86_64 {' '.join(guarded_boot_args(boot, check_disk=False))}"
+       f" {ide_boot(boot)} -m 512 -display none -no-reboot"
+       f" -serial unix:{sock},server,nowait -daemonize -pidfile {pidfile}")
+    shell = None
+    try:
+        shell = connect(sock)
+        if shell is None:
+            res.check("the old install booted", False, "no serial console")
+            return
+        log = shell.run("dmesg")
+        res.check("the old grub.cfg passes no bootpart=", "bootpart=" not in log, fs_lines(log))
+        dry = shell.run("install --bootloader")
+        res.check("the dry run says grub.cfg would gain it",
+                  "bootpart= added to 2 entries" in dry, dry.strip()[-400:])
+        out = shell.run("install --bootloader confirm")
+        res.check("`install --bootloader confirm` adds it to both entries",
+                  "2 grub.cfg entries now pass bootpart=" in out and "FAILED" not in out,
+                  out.strip()[-400:])
+        again = shell.run("install --bootloader")
+        res.check("...and a second run has nothing to add",
+                  "already passes bootpart=" in again, again.strip()[-300:])
+        shell.run("sync")
+    finally:
+        if shell:
+            shell.close()
+        kill(pidfile)
+    log = boot_to_root(boot, ide_boot(boot), tmp, "d2")
+    res.check("the next boot gets bootpart= and roots on that disk",
+              "is on ata0 -- the boot disk" in log and "mounted at / on ata0p3" in log,
+              fs_lines(log))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--tmp", default="/tmp")
-    ap.add_argument("--phase", choices=("sata", "blank", "two", "all"), default="all")
+    ap.add_argument("--phase", choices=("sata", "blank", "two", "refresh", "all"), default="all")
     args = ap.parse_args()
 
     res = Results()
@@ -269,6 +301,8 @@ def main():
         phase_blank(res, args.tmp)
     if args.phase in ("two", "all"):
         phase_two_systems(res, args.tmp)
+    if args.phase in ("refresh", "all"):
+        phase_refresh(res, args.tmp)
 
     print("\n" + res.summary("rootdisk_test"))
     return 1 if res.fails else 0

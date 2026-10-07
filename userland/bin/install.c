@@ -53,6 +53,7 @@
 #include "lib/human.h"
 #include "lib/dirsort.h"
 #include "lib/ufile.h"
+#include "lib/ubootcfg.h" // --bootloader also brings grub.cfg up to bootpart=
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -64,8 +65,9 @@
     "  --esp <MiB>    size of the FAT32 /boot partition (default 64)\n" \
     "  --mbr          write an MBR table instead of GPT, for firmware that\n" \
     "                 will not boot a GPT disk in legacy/CSM mode\n" \
-    "  --bootloader   rewrite THIS machine's bootloader in place and change\n" \
-    "                 nothing else -- no partitioning, no files touched\n" \
+    "  --bootloader   rewrite THIS machine's bootloader in place, and add\n" \
+    "                 bootpart= to grub.cfg's entries -- no partitioning,\n" \
+    "                 no other file touched\n" \
     "  confirm        required -- this ERASES the target disk"
 
 #define SECTOR_BYTES 512
@@ -370,10 +372,10 @@ static int write_bootloader(const char *disk, int mbr, int in_use) {
 }
 
 // THE BOOTLOADER, REWRITTEN IN PLACE -- `grub-install` on a machine
-// that is already installed, and nothing else. No table is written, no
-// partition is formatted and no file is copied: the 185 KiB core image
-// goes into the embed area it already occupies and the boot sector is
-// re-patched to point at it.
+// that is already installed, plus the bootpart= lines grub.cfg needs
+// from it. No table is written, no partition is formatted and no other
+// file is touched: the 185 KiB core image goes into the embed area it
+// already occupies and the boot sector is re-patched to point at it.
 //
 // IT EXISTS BECAUSE AN INSTALLED MACHINE COULD NOT OTHERWISE GAIN A
 // BOOTLOADER IT DOES NOT ALREADY HAVE. A laptop installed before
@@ -387,6 +389,42 @@ static int write_bootloader(const char *disk, int mbr, int in_use) {
 // the prefix baked into each staged core image (`(hd0,gpt2)` against
 // `(hd0,msdos1)`) has to match it or GRUB comes up at a rescue prompt
 // having found no config. Another disk is the full installer's job.
+// grub.cfg's half of a refresh: every toy-os entry gains the bootpart=
+// lines the payload's grub.cfg has, so the kernel roots on the disk GRUB
+// booted from (docs/boot-flags.md). EDITED, never replaced -- the file
+// is the machine's own, bootcfg and the Boot Manager write it, and
+// grubby's rule is that a tool adds what it owns and leaves the rest.
+// After the core image, because only a core with `probe` can answer it;
+// either half without the other still boots. Returns entries changed,
+// or -1.
+static struct ubootcfg g_cfg, g_cfg_before;
+
+static int refresh_grub_cfg(int confirmed) {
+    if (ubootcfg_load(&g_cfg, UBOOTMENU_CFG) < 0) {
+        printf("install: could not read %s -- left as it is.\n", UBOOTMENU_CFG);
+        return -1;
+    }
+    int n = ubootcfg_bootpart_missing(&g_cfg);
+    if (!confirmed || !n) return n;
+    g_cfg_before = g_cfg;
+    if (ubootcfg_add_bootpart(&g_cfg) < 0) {
+        printf("install: grub.cfg not changed: %s\n", g_cfg.why);
+        return -1;
+    }
+    static struct ubootcfg_problem probs[8];
+    int np = ubootcfg_check(&g_cfg, &g_cfg_before, UBOOTCFG_CHECK_FILES, probs, 8);
+    if (ubootcfg_has(probs, np, UBOOTCFG_BROKEN)) {
+        printf("install: grub.cfg not changed -- the edit would not parse: %s\n", probs[0].msg);
+        return -1;
+    }
+    const char *why = 0;
+    if (ubootcfg_save(&g_cfg, UBOOTMENU_CFG, &why) < 0) {
+        printf("install: grub.cfg not changed: %s\n", why ? why : "the save failed");
+        return -1;
+    }
+    return n;
+}
+
 static int refresh_bootloader(int confirmed) {
     char disk[16] = "";
     if (!root_disk(disk, sizeof disk)) {
@@ -407,12 +445,18 @@ static int refresh_bootloader(int confirmed) {
     if (!payload_present(mbr)) return 1;
 
     if (!confirmed) {
+        int missing = refresh_grub_cfg(0);
         printf("install: this rewrites %s's bootloader in place (%s layout):\n",
                disk, mbr ? "MBR" : "GPT");
         printf("  boot sector    LBA 0, keeping this disk's partition table\n");
         printf("  core image     %s\n",
                mbr ? PAYLOAD "/core-msdos.img" : PAYLOAD "/core.img");
-        printf("install: partitions, filesystems and files are untouched. "
+        if (missing > 0)
+            printf("  grub.cfg       bootpart= added to %d entr%s (a .bak is kept)\n",
+                   missing, missing == 1 ? "y" : "ies");
+        else if (missing == 0)
+            printf("  grub.cfg       already passes bootpart= -- unchanged\n");
+        printf("install: partitions, filesystems and other files are untouched. "
                "The core image is\n");
         printf("install: read back before the boot sector is written, so a "
                "bad write leaves the\n");
@@ -446,8 +490,16 @@ static int refresh_bootloader(int confirmed) {
         free(mods);
     }
 
-    printf("install: done. %s boots the newly written GRUB from now on; "
-           "nothing else changed.\n", disk);
+    step("adding bootpart= to grub.cfg");
+    int added = refresh_grub_cfg(1);
+    if (added > 0)
+        printf("install: %d grub.cfg entr%s now pass%s bootpart= (the old file is %s.bak)\n",
+               added, added == 1 ? "y" : "ies", added == 1 ? "es" : "", UBOOTMENU_CFG);
+    else if (added == 0)
+        printf("install: grub.cfg already passes bootpart=\n");
+
+    printf("install: done. %s boots the newly written GRUB from now on%s.\n", disk,
+           added < 0 ? "; grub.cfg is as it was" : "");
     return 0;
 }
 

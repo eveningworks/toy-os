@@ -111,6 +111,25 @@ GPT_NUM_ENTRIES = 128  # spec-typical count -- most slots stay zeroed/unused
 
 # Well-known GUIDs (Microsoft mixed-endian encoding, see partition.c's
 # top comment) -- Linux filesystem and EFI System Partition.
+def random_guid() -> bytes:
+    """A version-4 GUID in GPT's on-disk byte order -- as random as the
+    kernel's guid_generate(), so two images partitioned here are never
+    mistaken for each other by PARTUUID (`bootpart=`)."""
+    b = bytearray(os.urandom(16))
+    b[7] = (b[7] & 0x0F) | 0x40      # version 4 -- data3's high nibble, little-endian
+    b[8] = (b[8] & 0x3F) | 0x80      # RFC 4122 variant
+    return bytes(b)
+
+
+def random_disk_signature(buf: bytearray):
+    """An MBR's NT disk signature (bytes 440-443) -- what an MBR
+    partition's PARTUUID is built from -- if it has none yet."""
+    if not any(buf[440:444]):
+        buf[440:444] = os.urandom(4)
+        if not any(buf[440:444]):
+            buf[440] = 1
+
+
 def guid_bytes(text: str) -> bytes:
     parts = text.split("-")
     d1 = struct.pack("<I", int(parts[0], 16))
@@ -308,6 +327,7 @@ def real_mbr(path, spec):
     with open(path, "r+b") as f:
         buf = read_sector(f, 0)
         patch_mbr(buf, entries)
+        random_disk_signature(buf)
         write_sector(f, 0, bytes(buf))
     return [(start, n) for start, n, _kind in planned]
 
@@ -325,14 +345,13 @@ def real_gpt(path, spec):
     planned = plan(path, spec, gpt=True)
     parts = [(start, n) for start, n, _kind in planned]
 
-    # Per-partition unique GUIDs derived from the index, not random:
-    # `make iso` should produce a byte-identical image from the same
-    # inputs, and a random GUID would make every rebuild differ. The
-    # KERNEL randomises them (partition.c's guid_generate) because a
-    # disk written on a running machine has no such reproducibility
-    # requirement and collision-avoidance is the point there.
-    entries = [gpt_entry(PART_KINDS[kind][0],
-                         guid_bytes("70796F73-0000-4000-8000-%012X" % (i + 1)),
+    # RANDOM unique GUIDs, as the kernel's mkpart writes: a partition's
+    # GUID is its PARTUUID, which grub.cfg passes as `bootpart=` to say
+    # which disk booted, so two images must not share one. This runs
+    # only on a BLANK image -- `make iso` syncs an existing one and
+    # keeps its table -- so an image's IDs are fixed for its life.
+    disk_guid = random_guid()
+    entries = [gpt_entry(PART_KINDS[kind][0], random_guid(),
                          start, start + n - 1,
                          PART_KINDS[kind][2] if kind != "data" else "toyos%d" % (i + 1))
                for i, (start, n, kind) in enumerate(planned)]
@@ -352,7 +371,7 @@ def real_gpt(path, spec):
         struct.pack_into("<Q", h, 32, other_lba)
         struct.pack_into("<Q", h, 40, GPT_ENTRIES_LBA + entry_sectors)   # first usable = 34
         struct.pack_into("<Q", h, 48, backup_entries - 1)                # last usable
-        h[56:72] = DISK_GUID
+        h[56:72] = disk_guid
         struct.pack_into("<Q", h, 72, entry_lba)
         struct.pack_into("<I", h, 80, GPT_NUM_ENTRIES)
         struct.pack_into("<I", h, 84, GPT_ENTRY_SIZE)
@@ -378,6 +397,37 @@ def real_gpt(path, spec):
         patch_mbr(mbr_buf, [mbr_entry(0x00, 0xEE, 1, min(total - 1, 0xFFFFFFFF))])
         write_sector(f, 0, bytes(mbr_buf))
     return parts
+
+
+def regenerate_guids(path):
+    """`sgdisk -G`: new random disk and partition GUIDs on a GPT image, in
+    both headers, CRCs redone -- for a COPY of an image, which otherwise
+    carries the original's PARTUUIDs. Partitions and data are untouched."""
+    disk_guid = random_guid()
+    with open(path, "r+b") as f:
+        primary = bytearray(read_sector(f, 1))
+        if primary[:8] != b"EFI PART":
+            raise SystemExit(f"mkpart_test: {path} has no GPT")
+        alt = struct.unpack_from("<Q", primary, 32)[0]
+        new_ids = {}
+        for lba in (1, alt):
+            hdr = bytearray(read_sector(f, lba))
+            ent_lba, = struct.unpack_from("<Q", hdr, 72)
+            n, esize = struct.unpack_from("<II", hdr, 80)
+            f.seek(ent_lba * SECTOR)
+            ents = bytearray(f.read(n * esize))
+            for i in range(n):
+                e = i * esize
+                if any(ents[e:e + 16]):                 # a used entry
+                    ents[e + 16:e + 32] = new_ids.setdefault(i, random_guid())
+            hdr[56:72] = disk_guid
+            struct.pack_into("<I", hdr, 88, crc32(bytes(ents)))
+            hsize, = struct.unpack_from("<I", hdr, 12)
+            struct.pack_into("<I", hdr, 16, 0)
+            struct.pack_into("<I", hdr, 16, crc32(bytes(hdr[:hsize])))
+            f.seek(ent_lba * SECTOR)
+            f.write(ents)
+            write_sector(f, lba, bytes(hdr))
 
 
 # ---- reading a table -----------------------------------------------
