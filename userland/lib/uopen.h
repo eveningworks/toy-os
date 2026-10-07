@@ -1,6 +1,8 @@
 #ifndef UOPEN_H
 #define UOPEN_H
 
+#include "lib/ulaunch.h"
+
 // uopen -- which program opens this file?
 //
 // FREEDESKTOP'S SPLIT, WITHOUT THE DAEMON. Two layers, asked in order:
@@ -51,6 +53,38 @@ int uopen_ext_matches(const char *list, const char *ext);
 // declarations rather than failing -- a stale choice must not make a
 // type unopenable.
 int uopen_resolve(const char *path, char *exec, int cap);
+
+// --- the decision a double-click makes -----------------------------------
+//
+// ONE ANSWER to "what happens when this is opened", which the File
+// Manager, the desktop (through /bin/open) and `open` all act on, so the
+// three cannot drift: a program or script is RUN (lib/ulaunch.h) -- an
+// app at once, the rest by the user's policy, asking when there is none
+// or it cannot run as it is; a folder opens in the File Manager; anything
+// else opens with the app its extension resolves to. Only the ACTING
+// differs per caller: one with a window shows the card itself.
+
+enum uopen_how {
+    UOPEN_NOTHING = 0,  // nothing opens it
+    UOPEN_WITH,         // `exec` opens it
+    UOPEN_RUN,          // run it: `act` is an ULAUNCH_* act
+    UOPEN_ASK,          // a program or script to ask about (uui_runask)
+    UOPEN_FOLDER,       // a directory: the File Manager
+};
+
+struct uopen_decision {
+    int how;                   // enum uopen_how
+    int act;                   // UOPEN_RUN's ULAUNCH_* act
+    char exec[256];            // UOPEN_WITH's program
+    struct ulaunch_info info;  // UOPEN_RUN / UOPEN_ASK: what it is
+};
+
+// Fills `d` and returns d->how. Reads the file's first bytes.
+int uopen_decide(const char *path, struct uopen_decision *d);
+
+// The argv that carries `d` out for `path`, into `argv` (5 slots); an ASK
+// becomes /bin/wm/system/runask's. 0 for UOPEN_NOTHING.
+int uopen_decision_argv(const char *path, const struct uopen_decision *d, char **argv);
 
 // Resolve and spawn, NOT waited for -- an opener that waited would
 // freeze its caller for as long as the editor stays open. A DIRECTORY

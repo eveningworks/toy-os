@@ -1676,26 +1676,20 @@ void launch_ask(const char *path, const struct ulaunch_info *li) {
         set_note("could not ask");
 }
 
-// An app opens at once; a program or script runs by the policy, asking
-// unless the user chose -- and always asking when it CANNOT run as it is
-// (no execute bit, no interpreter), so the card can say why.
-static int launch(const char *path) {
-    struct ulaunch_info li;
-    if (!ulaunch_classify(path, &li) || li.kind == ULAUNCH_NONE) return 0;
-    if (li.kind == ULAUNCH_APP && li.runnable) {
-        launch_start(path, li.kind, ULAUNCH_RUN);
-        return 1;
-    }
-    int act = li.runnable && li.interp_found ? ulaunch_policy(li.kind) : ULAUNCH_ASK;
-    if (act == ULAUNCH_ASK) launch_ask(path, &li);
-    else launch_start(path, li.kind, act);
-    return 1;
-}
-
+// By lib/uopen.h's decision, the same one the desktop and `open` make;
+// what is done HERE is only the asking, in this window, and the tracking.
 void open_path(const char *path) {
-    if (launch(path)) return;
-    char exec[PATH_MAX_LEN];
-    if (!uopen_resolve(path, exec, sizeof exec)) {
+    struct uopen_decision d;
+    switch (uopen_decide(path, &d)) {
+    case UOPEN_ASK:
+        launch_ask(path, &d.info);
+        return;
+    case UOPEN_RUN:
+        launch_start(path, d.info.kind, d.act);
+        return;
+    case UOPEN_WITH:
+        break;
+    default:
         // Said out loud rather than doing nothing: a double click that
         // produces silence reads as a broken app.
         snprintf(g_stat_note, sizeof g_stat_note, "no app for %s",
@@ -1703,6 +1697,7 @@ void open_path(const char *path) {
         ulogf("files: open %s -- no handler\n", path);
         return;
     }
+    const char *exec = d.exec;
     // NOT a tracked JOB -- this is a launch, not an operation on files,
     // and waiting for a text editor to exit would freeze the manager
     // for as long as somebody was editing. It IS a tracked CHILD, which

@@ -115,49 +115,58 @@ int uopen_resolve(const char *path, char *exec, int cap) {
     return declared_exec(ext, exec, cap);
 }
 
-// The path as ONE argument: the string form of a spawn splits on
-// whitespace, which cut "my notes.txt" to "my".
-static int spawn_with(const char *exec, const char *path) {
-    char *const argv[] = { (char *)exec, (char *)path, 0 };
-    return sys_spawn_argv(exec, argv);
+int uopen_decide(const char *path, struct uopen_decision *d) {
+    memset(d, 0, sizeof *d);
+    if (ulaunch_classify(path, &d->info) && d->info.kind != ULAUNCH_NONE) {
+        // An app opens at once; anything that cannot run AS IT IS (no
+        // execute bit, no interpreter) is asked about, so the card can
+        // say why.
+        int act = !d->info.runnable || !d->info.interp_found ? ULAUNCH_ASK
+                  : d->info.kind == ULAUNCH_APP ? ULAUNCH_RUN : ulaunch_policy(d->info.kind);
+        d->act = act;
+        return d->how = act == ULAUNCH_ASK ? UOPEN_ASK : UOPEN_RUN;
+    }
+    if (uopen_resolve(path, d->exec, sizeof d->exec)) return d->how = UOPEN_WITH;
+    // A directory opens where directories live -- Explorer's rule.
+    struct sys_dirent probe;
+    if (sys_listdir(path, &probe, 1) >= 0) return d->how = UOPEN_FOLDER;
+    return d->how = UOPEN_NOTHING;
 }
 
-// A program or a script is RUN, not opened (lib/ulaunch.h): an app at
-// once, the rest by the policy -- and asking is /bin/wm/system/runask's
-// card, since this caller may have no window to put it on.
-static int launch(const char *path) {
-    struct ulaunch_info li;
-    if (!ulaunch_classify(path, &li) || li.kind == ULAUNCH_NONE) return -2;
-    int act = li.runnable && li.interp_found ? ulaunch_policy(li.kind) : ULAUNCH_ASK;
-    char *argv[5];
-    if (act == ULAUNCH_ASK) {
+// The path is always ONE argument: the string form of a spawn splits on
+// whitespace, which cut "my notes.txt" to "my".
+int uopen_decision_argv(const char *path, const struct uopen_decision *d, char **argv) {
+    switch (d->how) {
+    case UOPEN_RUN:
+        return ulaunch_argv(path, d->info.kind, d->act, argv);
+    case UOPEN_ASK:
         argv[0] = ULAUNCH_ASK_EXEC;
-        argv[1] = (char *)path;
-        argv[2] = 0;
-    } else if (!ulaunch_argv(path, li.kind, act, argv)) {
-        return -1;
+        break;
+    case UOPEN_WITH:
+        argv[0] = (char *)d->exec;
+        break;
+    case UOPEN_FOLDER:
+        argv[0] = "/bin/wm/apps/files";
+        break;
+    default:
+        return 0;
     }
-    return sys_spawn_argv(argv[0], argv);
+    argv[1] = (char *)path;
+    argv[2] = 0;
+    return 1;
 }
 
 int uopen_spawn(const char *path) {
-    int pid = launch(path);
-    if (pid != -2) return pid;
-    char exec[UOPEN_PATH_MAX];
-    if (uopen_resolve(path, exec, sizeof exec)) {
-        int pid = spawn_with(exec, path);
-        if (pid >= 0) {   // a file opened for a person: Recent's (lib/urecent.h)
-            char app[URECENT_APP];
-            urecent_app_of_exec(exec, app, sizeof app);
-            urecent_add(path, app);
-        }
-        return pid;
+    struct uopen_decision d;
+    char *argv[5];
+    if (!uopen_decide(path, &d) || !uopen_decision_argv(path, &d, argv)) return -1;
+    int pid = sys_spawn_argv(argv[0], argv);
+    if (pid >= 0 && d.how == UOPEN_WITH) {   // a file opened for a person: Recent's (lib/urecent.h)
+        char app[URECENT_APP];
+        urecent_app_of_exec(d.exec, app, sizeof app);
+        urecent_add(path, app);
     }
-    // A directory opens where directories live -- Explorer's rule.
-    struct sys_dirent probe;
-    if (sys_listdir(path, &probe, 1) >= 0)
-        return spawn_with("/bin/wm/apps/files", path);
-    return -1;
+    return pid;
 }
 
 // The extension, lowercased, as the override file keys it. 0 for none.
