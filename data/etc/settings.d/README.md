@@ -102,7 +102,7 @@ existing ones without renumbering.
 | `Category` / `Group` | Where it lands in System Settings: the sidebar section, then the page. `General` when no category is named. |
 | `Default` | What it reads as when the key is absent from `File`. |
 | `Choices` | `enum`: a comma-separated list of legal values. |
-| `ChoiceDir` | `enum`: the options are the entries of this directory — so dropping a screensaver in gives it a row with no edit anywhere. |
+| `ChoiceDir` | `enum`: the options are the entries of this directory -- or of several, comma-separated, in that order (the live wallpapers: programs, then animated pictures) — so dropping a screensaver in gives it a row with no edit anywhere. |
 | `ChoiceDirMode` | `name` (default), `stem` (the filename without its extension — the wallpapers) or `subdir` (directories only — the cursor themes). |
 | `Min` / `Max` / `Step` / `Unit` | `int`: the inclusive range, the stepper increment, and what the number means (`px`, `min`, `%`). |
 | `Requires` | `<qualified name>=<value>`: the setting only applies while that OTHER DECLARED setting has that value. Meanwhile it is UNAVAILABLE -- a UI greys it and shows `RequiresReason`, and a write is refused (an unset is not). Naming a kernel setting does nothing: `/etc` cannot disable what the kernel owns. |

@@ -3526,8 +3526,8 @@ window without going through it will find its layout polls timing out.
   screensaver (`gui idle start`) must stop the frame counter and its
   stop must restart it, because a counter that never moved would pass
   "stopped" on its own. It also kills the client to check the fallback
-  to the picture and the restart, plays `rain.gif` through the GIF
-  player, reads a plain colour back from pixels, and shows that the same
+  to the picture and the restart, plays `rain.gif` (a Live choice) through the
+  GIF player, reads a plain colour back from pixels, and shows that the same
   program started by hand is an ordinary window. Every setting it
   touches is restored. In `gui_regress.py` as `livewall`.
 - **`wallpaper_mode_test.py`** -- `desktop.wallpaper_mode`, at a screen

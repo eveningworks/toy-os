@@ -410,7 +410,6 @@ static struct uui_image wallpaper_view;  // placement, and the scaled cache
 static char wallpaper_name[SETTING_ABI_VALUE_MAX];
 static char wallpaper_mode[16];
 static int wallpaper_loaded;
-static int wallpaper_animated;      // a GIF with more than one frame: wm_background.c plays it
 static uint32_t g_background_gen;   // desktop_background_gen()
 // `desktop.wallpaper_type` is colour: the picture stays loaded (a switch
 // back costs no decode) but is not drawn.
@@ -488,7 +487,6 @@ static void wallpaper_reload(void) {
     if (!name_changed && wallpaper_loaded) return;
 
     uui_image_set(&wallpaper_view, NULL);
-    wallpaper_animated = 0;
     if (wallpaper_loaded) {
         uimg_free(&wallpaper_src);
         wallpaper_loaded = 0;
@@ -508,16 +506,7 @@ static void wallpaper_reload(void) {
     int rc = -1;
     for (unsigned e = 0; e < sizeof EXT / sizeof EXT[0] && rc < 0; e++) {
         k_snprintf(path, sizeof path, "%s/%s.%s", WALLPAPER_DIR, name, EXT[e]);
-        rc = uimg_load(path, &wallpaper_src);
-        // Frame 0 is what this draws; more than one frame is what the
-        // background client is started for.
-        if (rc == 0 && k_strcmp(EXT[e], "gif") == 0) {
-            struct uimg_anim an;
-            if (uimg_anim_load(path, &an) == 0) {
-                wallpaper_animated = an.frames > 1;
-                uimg_anim_close(&an);
-            }
-        }
+        rc = uimg_load(path, &wallpaper_src);   // a GIF's first frame: a picture is a still
     }
     if (rc < 0) {
         // NOT fatal and NOT silent: the desktop falls back to its plain
@@ -612,9 +601,6 @@ void desktop_background_changed(void) {
     redraw_pending = 1;
     wm_damage_rect(0, 0, screen_w, screen_h);
 }
-
-const char *desktop_wallpaper_name(void) { return wallpaper_name; }
-int desktop_wallpaper_animated(void) { return wallpaper_loaded && wallpaper_animated; }
 
 // The rect a press or a band tests against: the centred icon box plus
 // its label lines. One function, so drawing, hit-testing and the debug

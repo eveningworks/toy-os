@@ -120,7 +120,7 @@ int main(void) {
                 strcmp(now, "48") == 0, "so the declared default answers");
 
     // --- the schema half is reachable directly -----------------------
-    struct uschema s;
+    static struct uschema s;   // past the 2 KB ring-3 frame cap
     utest_check(uschema_find("desktop.wallpaper", &s), "the wallpaper is declared");
     int n = uschema_choice_count(&s), aurora = 0;
     utest_check(n > 1, "and its choices come from a directory");

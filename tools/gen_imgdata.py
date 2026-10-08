@@ -28,7 +28,7 @@ same encoder settings to keep in step.
                 both lives in tools/uimg_codec_hostcheck.py; these few
                 are what proves the codecs in ring 3.
 
-  --wallpapers  data/wallpapers/*.jpg and rain.gif -- the desktop backgrounds, drawn
+  --wallpapers  data/wallpapers/*.jpg and animated/rain.gif -- the backgrounds, drawn
                 here rather than committed as somebody's photograph so
                 the repo carries no image it does not own.
 
@@ -502,8 +502,8 @@ def wallpaper_tide(w, h):
 
 
 def wallpaper_rain(w=320, h=180, n=16):
-    """An ANIMATED picture -- a GIF in /usr/share/wallpapers plays as the
-    background (gui/wallpapers/players/gif.c). Low resolution and a loop
+    """An ANIMATED picture -- a live wallpaper, listed beside the effects
+    from /usr/share/wallpapers/animated (gui/wallpapers/players/gif.c). Low resolution and a loop
     of streaks over a night gradient: what a GIF wallpaper usually is, and
     small enough to ship. The loop is seamless because every streak falls
     a whole number of screen heights per cycle."""
@@ -537,7 +537,8 @@ def build_wallpapers():
         print("wrote %s (%d bytes)" % (os.path.relpath(path, ROOT),
                                        os.path.getsize(path)))
     frames = wallpaper_rain()
-    path = os.path.join(WALLPAPER_DIR, "rain.gif")
+    os.makedirs(os.path.join(WALLPAPER_DIR, "animated"), exist_ok=True)
+    path = os.path.join(WALLPAPER_DIR, "animated", "rain.gif")
     frames[0].save(path, save_all=True, append_images=frames[1:], duration=80, loop=0,
                    optimize=False)
     print("wrote %s (%d bytes)" % (os.path.relpath(path, ROOT), os.path.getsize(path)))

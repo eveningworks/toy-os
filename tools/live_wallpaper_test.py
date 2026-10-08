@@ -20,7 +20,7 @@ THE CHECKS, and what a broken version would still pass:
      after. The resume half is the positive control: a counter that never
      moved would pass "stopped".
   5. a crashed client falls back to the picture and is restarted.
-  6. an animated GIF picture runs the player; a still one does not.
+  6. an animated picture is a Live choice and plays; Picture stops it.
   7. Plain colour paints the chosen colour, read back from pixels.
   8. the same program started by someone else is an ORDINARY window, and
      takes nothing from the background (the role is the spawned pid's).
@@ -154,15 +154,18 @@ def run(dbg, qmp, shot):
     for p in dbg.processes_named("drift"):
         dbg.send(f"sh kill {p['pid']}")
 
-    # --- 6. an animated picture runs the player -------------------------
-    set_setting(dbg, "desktop.wallpaper_type", "picture")
-    set_setting(dbg, "desktop.wallpaper", "rain")
-    st = wait_bg(dbg, lambda s: s.get("shown") == 1)
-    check("an animated GIF picture plays through the player",
+    # --- 6. an animated picture is a LIVE choice, played by the player ---
+    set_setting(dbg, "desktop.wallpaper_live", "rain")
+    st = wait_bg(dbg, lambda s: s.get("shown") == 1 and "players/gif" in s.get("program", ""))
+    check("Live `rain` (a GIF in /usr/share/wallpapers/animated) plays through the player",
           st.get("program") == "/bin/wm/wallpapers/players/gif" and st.get("shown") == 1, f"{st}")
-    set_setting(dbg, "desktop.wallpaper", "aurora")
+    a = raw(qmp, shot, "lw_gif_a.png", sample)
+    time.sleep(0.5)
+    b = raw(qmp, shot, "lw_gif_b.png", sample)
+    check("...and it moves", a != b)
+    set_setting(dbg, "desktop.wallpaper_type", "picture")
     st = wait_bg(dbg, lambda s: s.get("pid") == 0)
-    check("...and a still picture stops it", st.get("pid") == 0, f"{st}")
+    check("...and Picture stops it", st.get("pid") == 0, f"{st}")
 
     # --- 7. plain colour ----------------------------------------------
     # THE TYPE FIRST: a colour written while the type is not colour is

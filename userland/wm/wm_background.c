@@ -20,7 +20,7 @@ static int g_pid;                 // the client we spawned, or 0
 static int g_have_frame;          // a frame at the screen's size is mapped
 static char g_want[96];           // the program the settings ask for, "" for none
 static char g_running[96];        // the program g_pid is
-static char g_picture[64];        // the animated picture the player was started for
+static char g_arg[64];            // its argument: the animated picture's name, or ""
 static int g_pause_on = 1;        // `desktop.wallpaper_pause`
 static int g_paused;
 static unsigned g_frames;
@@ -51,7 +51,7 @@ static void stop(void) {
 }
 
 static void start(void) {
-    int pid = sys_spawn(g_want, 0, -1);
+    int pid = sys_spawn(g_want, g_arg[0] ? g_arg : 0, -1);
     if (pid <= 0) {
         wm_logf("wm: background %s FAILED to start\n", g_want);
         g_failures = FAILURES_MAX;   // a missing program will not appear by retrying
@@ -63,21 +63,32 @@ static void start(void) {
     wm_logf("wm: background %s started as pid %d\n", g_running, pid);
 }
 
-// What the settings ask for: a live effect, the player for an animated
-// picture, or nothing.
+// What the settings ask for: an effect's program, the player and the
+// animated picture it plays, or nothing.
 static void read_settings(void) {
     char type[16] = "picture", v[64];
     usetting_get("desktop.wallpaper_type", type, sizeof type);
     g_want[0] = '\0';
-    if (!strcmp(type, "live")) {
-        k_strlcpy(v, LIVEWALL_DEFAULT, sizeof v);
-        usetting_get("desktop.wallpaper_live", v, sizeof v);
-        // A NAME, never a path: a value with a slash would reach outside
-        // the directory whose programs are trusted with the role.
-        if (v[0] && !strchr(v, '/') && v[0] != '.')
-            snprintf(g_want, sizeof g_want, "%s/%s", LIVEWALL_DIR, v);
-    } else if (!strcmp(type, "picture") && desktop_wallpaper_animated()) {
-        k_strlcpy(g_want, LIVEWALL_GIF_PLAYER, sizeof g_want);
+    g_arg[0] = '\0';
+    k_strlcpy(v, LIVEWALL_DEFAULT, sizeof v);
+    usetting_get("desktop.wallpaper_live", v, sizeof v);
+    // A NAME, never a path: a value with a slash would reach outside the
+    // directories whose contents are trusted with the role.
+    if (!strcmp(type, "live") && v[0] && !strchr(v, '/') && v[0] != '.') {
+        // An EFFECT when there is a program by that name, else an
+        // animated picture -- the choice list is both directories.
+        char path[128];
+        struct sys_stat st;
+        snprintf(path, sizeof path, "%s/%s", LIVEWALL_DIR, v);
+        if (sys_stat(path, &st) == 0) {
+            k_strlcpy(g_want, path, sizeof g_want);
+        } else {
+            snprintf(path, sizeof path, "%s/%s.gif", LIVEWALL_ANIMATED_DIR, v);
+            if (sys_stat(path, &st) == 0) {
+                k_strlcpy(g_want, LIVEWALL_GIF_PLAYER, sizeof g_want);
+                k_strlcpy(g_arg, v, sizeof g_arg);
+            }
+        }
     }
     g_pause_on = !(usetting_get("desktop.wallpaper_pause", v, sizeof v) && !strcmp(v, "off"));
 }
@@ -89,19 +100,17 @@ void wm_bg_poll(void) {
     if (!primed || gen != seen) {
         primed = 1;
         seen = gen;
-        char was[sizeof g_want];
+        char was[sizeof g_want], was_arg[sizeof g_arg];
         k_strlcpy(was, g_want, sizeof was);
+        k_strlcpy(was_arg, g_arg, sizeof was_arg);
         read_settings();
         // ONLY A DIFFERENT PROGRAM REPLACES THE CLIENT. An option of the
         // same one is re-read by the client itself (ulivewall_main), and
         // the generation moves for every write anywhere -- restarting on
         // it would blank the background whenever anything saved a file.
-        // An animated PICTURE is the exception: the player is the same
-        // program for every GIF, so a new picture is a new client.
-        int picture_changed = !strcmp(g_want, LIVEWALL_GIF_PLAYER) &&
-                              strcmp(g_picture, desktop_wallpaper_name());
-        k_strlcpy(g_picture, desktop_wallpaper_name(), sizeof g_picture);
-        if (strcmp(was, g_want) || picture_changed || (!g_pid && g_want[0])) {
+        // The player is one program for every animated picture, so a
+        // different picture is a different client too.
+        if (strcmp(was, g_want) || strcmp(was_arg, g_arg) || (!g_pid && g_want[0])) {
             stop();
             g_failures = 0;
             g_retry_at = 0;

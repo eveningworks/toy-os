@@ -53,10 +53,6 @@ uint32_t desktop_background_gen(void);
 // The background changed under it -- a live frame arrived or went away
 // (wm_background.c): moves the counter above and repaints.
 void desktop_background_changed(void);
-// The chosen picture's name, and whether it has more than one frame --
-// what wm_background.c runs the GIF player for.
-const char *desktop_wallpaper_name(void);
-int desktop_wallpaper_animated(void);
 
 // Re-reads /etc/desktop.conf when the filesystem generation moves, which
 // is how the wallpaper Image Viewer just set appears without either

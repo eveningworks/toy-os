@@ -1,26 +1,25 @@
 // AN ANIMATED PICTURE AS THE DESKTOP BACKGROUND. The compositor runs this
-// as its background client when the chosen picture has more than one
-// frame (wm_background.c); a still is drawn by the desktop itself.
+// as its background client when the chosen live wallpaper is a GIF in
+// LIVEWALL_ANIMATED_DIR (wm_background.c), its name as argv[1]. Scaled
+// to cover the screen, as "Fill the screen" places a still.
 //
 // The decoder runs HERE, in a process that can die, rather than in the
 // compositor: it is a parser over a file anyone can drop into
-// /usr/share/wallpapers, stepped for as long as the desktop is up.
+// /usr/share/wallpapers/animated, stepped for as long as the desktop is up.
 //
 // Scaled NEAREST-neighbour, every frame. An animated picture is small and
 // usually pixel art, and a smooth rescale of the screen per frame is the
 // cost this is avoiding.
 #include "lib/uimg.h"
-#include "lib/usetting.h"
+#include "lib/ulivewall.h"
 #include "ui/uapp.h"
 
 #include <stdio.h>
 #include <string.h>
 
-#define WALLPAPER_DIR "/usr/share/wallpapers"
-#define DESKTOP_BG 0x183c5a   // desktop.c's plain colour, behind a letterbox
+#define DESKTOP_BG 0x183c5a   // desktop.c's plain colour, under a transparent pixel
 
 static struct uimg_anim g_anim;
-static int g_fit;   // 1: the whole picture, letterboxed; 0: cover and crop
 
 static int on_tick(struct uapp *a) {
     int delay = 100;
@@ -39,10 +38,9 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     // The scale as a 16.16 ratio of screen to picture, the larger of the
     // two for cover and the smaller for fit.
     int64_t sx = ((int64_t)s->w << 16) / f->w, sy = ((int64_t)s->h << 16) / f->h;
-    int64_t k = g_fit ? (sx < sy ? sx : sy) : (sx > sy ? sx : sy);
+    int64_t k = sx > sy ? sx : sy;
     int dw = (int)((f->w * k) >> 16), dh = (int)((f->h * k) >> 16);
     int ox = (s->w - dw) / 2, oy = (s->h - dh) / 2;
-    if (g_fit) ugfx_fill(s, DESKTOP_BG);
     for (int y = 0; y < s->h; y++) {
         int py = (int)(((int64_t)(y - oy) << 16) / k);
         if (py < 0 || py >= f->h) continue;
@@ -57,14 +55,12 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     }
 }
 
-int main(void) {
-    char name[64] = "", mode[16] = "";
-    usetting_get("desktop.wallpaper", name, sizeof name);
-    usetting_get("desktop.wallpaper_mode", mode, sizeof mode);
-    g_fit = !strcmp(mode, "fit");
+int main(int argc, char **argv) {
+    const char *name = argc > 1 ? argv[1] : "";
     char path[128];
-    snprintf(path, sizeof path, "%s/%s.gif", WALLPAPER_DIR, name);
-    if (!name[0] || uimg_anim_load(path, &g_anim) < 0) {
+    snprintf(path, sizeof path, "%s/%s.gif", LIVEWALL_ANIMATED_DIR, name);
+    // A NAME, as the compositor passes it: never a path out of the directory.
+    if (!name[0] || strchr(name, '/') || uimg_anim_load(path, &g_anim) < 0) {
         fprintf(stderr, "gif: cannot play %s\n", path);
         return 1;
     }

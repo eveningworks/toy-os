@@ -75,70 +75,96 @@ static void cursor_tile(struct ugfx_surface *s, int i, int x, int y, int w, int 
     }
 }
 
-// --- wallpaper: the picture, decoded and scaled once per page ----------
+// --- wallpaper tiles: drawn ONCE per page, then blitted ----------------
+//
+// A gallery repaints on every hover, so a tile drawn per paint was a
+// decode per hover -- and a live effect rendered afresh each time came out
+// different (Fireflies and Ember are seeded at random), so the tiles
+// twitched under the pointer. Cached per choice and per tile size.
 
-#define PREVIEW_PICTURES 16
-static struct uimg g_pv_pic[PREVIEW_PICTURES];
-static char g_pv_pic_name[PREVIEW_PICTURES][SETTING_ABI_VALUE_MAX];
+#define PREVIEW_TILES 16
+struct tile_cache {
+    struct uimg img[PREVIEW_TILES];
+    char name[PREVIEW_TILES][SETTING_ABI_VALUE_MAX];
+};
+static struct tile_cache g_pv_pic, g_pv_live;
 
-static void pictures_reset(void) {
-    for (int i = 0; i < PREVIEW_PICTURES; i++) {
-        uimg_free(&g_pv_pic[i]);
-        g_pv_pic_name[i][0] = '\0';
+static void cache_reset(struct tile_cache *c) {
+    for (int i = 0; i < PREVIEW_TILES; i++) {
+        uimg_free(&c->img[i]);
+        c->name[i][0] = '\0';
     }
 }
 
-// Scaled to cover the tile, so a picture of another shape is cropped
-// the way "Fill the screen" crops it rather than squashed.
-static void picture_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h, void *ctx) {
-    const struct slot *sl = ctx;
+static void pictures_reset(void) {
+    cache_reset(&g_pv_pic);
+    cache_reset(&g_pv_live);
+}
+
+// `dir/stem.<ext>` for the first extension that decodes, scaled to COVER
+// w x h -- cropped the way "Fill the screen" crops, not squashed.
+static int load_cover(const char *dir, const char *stem, int w, int h, struct uimg *out) {
+    static const char *const EXT[] = { "jpg", "gif", "png", "qoi" };
+    struct uimg full;
+    memset(&full, 0, sizeof full);
+    char path[128];
+    for (unsigned e = 0; e < sizeof EXT / sizeof EXT[0]; e++) {
+        snprintf(path, sizeof path, "%s/%s.%s", dir, stem, EXT[e]);
+        if (uimg_load(path, &full) == 0) break;
+    }
+    int ok = 0;
+    if (full.px && full.w > 0 && full.h > 0) {
+        int sw = w, sh = (int)((int64_t)full.h * w / full.w);
+        if (sh < h) { sh = h; sw = (int)((int64_t)full.w * h / full.h); }
+        ok = uimg_scale(&full, sw, sh, out) == 0;
+    }
+    uimg_free(&full);
+    return ok;
+}
+
+// One still frame of an effect, from the effect's own code
+// (lib/ulivewall.c), a fixed distance into its clock so it shows what it
+// looks like moving rather than its first instant.
+static int render_effect(const char *name, int w, int h, struct uimg *out) {
+    static struct ulivewall fx;
+    if (!ulivewall_open(&fx, name)) return 0;
+    ulivewall_step(&fx, 20000);
+    out->px = malloc((size_t)w * (size_t)h * 4);
+    if (out->px) {
+        out->w = w;
+        out->h = h;
+        struct ugfx_surface t = ugfx_surface_for_pixels(out->px, w, h);
+        ulivewall_render(&fx, &t, 4);
+    }
+    ulivewall_close(&fx);
+    return out->px != 0;
+}
+
+static void draw_cached(struct ugfx_surface *s, struct tile_cache *c, const struct slot *sl,
+                        int i, int x, int y, int w, int h, int live) {
     uui_fill_round_rect(s, x, y, w, h, ugfx_char_h() / 3, PREVIEW_DARK);
-    if (i < 0 || i >= PREVIEW_PICTURES || i >= sl->choice_count) return;
-    struct uimg *p = &g_pv_pic[i];
-    if (strcmp(g_pv_pic_name[i], sl->choice_raw[i]) != 0) {
+    if (i < 0 || i >= PREVIEW_TILES || i >= sl->choice_count || w <= 0 || h <= 0) return;
+    struct uimg *p = &c->img[i];
+    const char *name = sl->choice_raw[i];
+    if (strcmp(c->name[i], name) != 0 || p->w < w || p->h < h) {
         uimg_free(p);
-        strlcpy(g_pv_pic_name[i], sl->choice_raw[i], sizeof g_pv_pic_name[i]);
-        char path[128];
-        struct uimg full;
-        memset(&full, 0, sizeof full);
-        // The stem is the value; the file is whichever of these it is.
-        static const char *const EXT[] = { "jpg", "gif", "png", "qoi" };
-        for (unsigned e = 0; e < sizeof EXT / sizeof EXT[0]; e++) {
-            snprintf(path, sizeof path, "/usr/share/wallpapers/%s.%s", sl->choice_raw[i], EXT[e]);
-            if (uimg_load(path, &full) == 0) break;
-        }
-        if (full.px && full.w > 0 && full.h > 0) {
-            int sw = w, sh = (int)((int64_t)full.h * w / full.w);
-            if (sh < h) { sh = h; sw = (int)((int64_t)full.w * h / full.h); }
-            uimg_scale(&full, sw, sh, p);
-        }
-        uimg_free(&full);
+        strlcpy(c->name[i], name, sizeof c->name[i]);
+        // A LIVE CHOICE is an effect, or else an animated picture, whose
+        // first frame stands for it.
+        if (!live || !render_effect(name, w, h, p))
+            load_cover(live ? LIVEWALL_ANIMATED_DIR : "/usr/share/wallpapers", name, w, h, p);
     }
     if (!p->px) return;
     int ox = (p->w - w) / 2, oy = (p->h - h) / 2;
     ugfx_blit(s, x, y, w, h, p->px + (size_t)oy * (size_t)p->w + ox, p->w);
 }
 
-// --- live: one still frame of the effect, from the same code -----------
+static void picture_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h, void *ctx) {
+    draw_cached(s, &g_pv_pic, ctx, i, x, y, w, h, 0);
+}
 
-// A FRAME FROM THE EFFECT ITSELF (lib/ulivewall.c), a fixed distance into
-// its clock so it shows what it looks like moving, not its first instant.
-// Re-rendered on every paint: a tile is a few thousand grid points.
 static void live_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h, void *ctx) {
-    const struct slot *sl = ctx;
-    uui_fill_round_rect(s, x, y, w, h, ugfx_char_h() / 3, PREVIEW_DARK);
-    if (i < 0 || i >= sl->choice_count || w <= 0 || h <= 0) return;
-    static struct ulivewall fx;
-    if (!ulivewall_open(&fx, sl->choice_raw[i])) return;
-    ulivewall_step(&fx, 20000);
-    uint32_t *px = malloc((size_t)w * (size_t)h * 4);
-    if (px) {
-        struct ugfx_surface tile = ugfx_surface_for_pixels(px, w, h);
-        ulivewall_render(&fx, &tile, 4);
-        ugfx_blit(s, x, y, w, h, px, w);
-        free(px);
-    }
-    ulivewall_close(&fx);
+    draw_cached(s, &g_pv_live, ctx, i, x, y, w, h, 1);
 }
 
 // --- colour: the swatch -------------------------------------------------

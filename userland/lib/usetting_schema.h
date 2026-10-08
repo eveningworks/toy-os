@@ -68,7 +68,10 @@ struct uschema {
     // in the choice list, so `Choices=none` beside a ChoiceDir is how
     // the wallpaper offers "none" ahead of the pictures.
     char choices[SETTING_ABI_VALUE_MAX * 4];
-    char choice_dir[SETTING_ABI_FILE_MAX];
+    // ONE OR MORE directories, comma-separated, listed in that order --
+    // the live wallpapers are programs and animated pictures. Wider than
+    // the ABI's path because it is a list; it never crosses the ABI.
+    char choice_dir[SETTING_ABI_FILE_MAX * 3];
     uint32_t type;      // SETTING_ABI_TYPE_*
     uint8_t  dir_mode;  // USCHEMA_DIR_*
     int32_t  min, max, step;

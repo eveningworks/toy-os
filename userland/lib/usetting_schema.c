@@ -229,12 +229,14 @@ static void put_stem(char *s) {
     if (dot && dot != s) *dot = '\0';
 }
 
-static int dir_at(const struct uschema *s, int index, char *out, uint32_t cap) {
-    if (!s->choice_dir[0]) return 0;
-    DIR *d = opendir(s->choice_dir);
-    if (!d) return 0; // a directory with nothing in it yet is normal
+// Entry `index` of ONE directory, or -1 with `*count` its entries.
+static int one_dir_at(const struct uschema *s, const char *dir, int index, char *out,
+                      uint32_t cap, int *count) {
+    DIR *d = opendir(dir);
+    *count = 0;
+    if (!d) return -1; // a directory with nothing in it yet is normal
     struct dirent *e;
-    int seen = 0, rc = 0;
+    int seen = 0, rc = -1;
     while ((e = readdir(d))) {
         int is_dir = e->d_type == DT_DIR;
         // A CHOICE IS A NAME A VALUE CAN BE, so a mode reading files
@@ -248,7 +250,27 @@ static int dir_at(const struct uschema *s, int index, char *out, uint32_t cap) {
         break;
     }
     closedir(d);
+    *count = seen;
     return rc;
+}
+
+// Entry `index` across the comma-separated directories, in order.
+static int dir_at(const struct uschema *s, int index, char *out, uint32_t cap) {
+    const char *p = s->choice_dir;
+    while (*p) {
+        char dir[sizeof s->choice_dir];
+        size_t n = strcspn(p, ",");
+        if (n >= sizeof dir) return 0;
+        memcpy(dir, p, n);
+        dir[n] = '\0';
+        int count;
+        int rc = one_dir_at(s, dir, index, out, cap, &count);
+        if (rc >= 0) return rc;
+        index -= count;
+        p += n;
+        if (*p == ',') p++;
+    }
+    return 0;
 }
 
 static int dir_count(const struct uschema *s) {

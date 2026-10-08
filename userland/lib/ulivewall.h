@@ -30,9 +30,11 @@
 #define LIVEWALL_DESC_DIR  "/usr/wm/wallpapers"
 #define LIVEWALL_CONF_DIR  "/etc/wallpapers"
 #define LIVEWALL_DEFAULT   "aurora"
-// Plays an animated picture from /usr/share/wallpapers. In a
-// SUBDIRECTORY so it is not one of `desktop.wallpaper_live`'s choices
-// (a ChoiceDir lists files only).
+// ANIMATED PICTURES are live wallpapers too: `desktop.wallpaper_live`
+// lists this directory's GIFs beside the effects, and the player plays
+// one (argv[1], its name). The player is in a SUBDIRECTORY so it is not
+// a choice itself -- a ChoiceDir lists files only.
+#define LIVEWALL_ANIMATED_DIR "/usr/share/wallpapers/animated"
 #define LIVEWALL_GIF_PLAYER LIVEWALL_DIR "/players/gif"
 
 // The grid pitch on the desktop, in pixels. A preview passes a smaller
