@@ -1309,6 +1309,12 @@ struct win_popup_pos {
 // the check.
 #define WIN_SHOT_DAMAGE  0x10
 #define WIN_SHOT_RESIZED 1   // a positive REPLY `a`, not an error
+// With DAMAGE, for a client that draws the pointer itself: REPLY `b`/`c`
+// is where the pointer's hotspot is (not `shot`, which shares its bytes
+// with the reply's `damage`), and the client is
+// sent WIN_CAST_POINTER when it moves -- RFB's PointerPos, the viewer
+// shown where the machine's own mouse went.
+#define WIN_SHOT_POINTER_POS 0x20
 #define WIN_SHOT_CURSOR  4  // a MODE: the pointer's current shape, tightly
                             // packed 0xAARRGGBB, `w` x `h`; REPLY shot.x/y
                             // is its hotspot. RFB's Cursor pseudo-encoding.
@@ -1326,6 +1332,7 @@ struct win_popup_pos {
 #define WIN_REMOTE_ALLOW 2
 #define WIN_CAST_DAMAGE 0x1   // pixels: capture with WIN_SHOT_DAMAGE
 #define WIN_CAST_CURSOR 0x2   // the pointer's shape: capture WIN_SHOT_CURSOR
+#define WIN_CAST_POINTER 0x4  // where it is (WIN_SHOT_POINTER_POS): capture again
 
 // The object the compositor copies INTO: the client creates it, grants
 // it (SYS_SHM_GRANT), and fills in the name from its own pid. A format

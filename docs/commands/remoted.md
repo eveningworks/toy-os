@@ -41,11 +41,16 @@ at once at most.
 **The picture follows the compositor's damage**: the session asks toywm
 for only what it repainted since the last update, compares that with
 what the viewer has in 64x64 tiles, and sends the tiles that changed, as
-Raw or ZRLE (the viewer picks). A viewer that offers RFB's Cursor
-pseudo-encoding -- every current one does -- draws the pointer itself,
-so moving the mouse sends nothing; for one that does not, the pointer is
-drawn into the picture. `dmesg | grep remoted` shows each session's
-update count and what capture, encoding and sending cost.
+Raw, ZRLE or Tight (the viewer picks). Tight sends each tile as a fill,
+a palette or zlib -- and, only when the viewer asks for a JPEG quality
+level (Remmina's "Good" and below, TigerVNC's default), its
+many-coloured tiles as JPEG, which is what a slow link wants. A viewer
+that offers RFB's Cursor pseudo-encoding -- every current one does --
+draws the pointer itself, so moving the mouse sends nothing, and is
+told where this machine's own mouse goes (PointerPos, or VMware's for
+TigerVNC); for one that does not, the pointer is drawn into the
+picture. `dmesg | grep remoted` shows each session's encoding, update
+count and what capture, encoding and sending cost.
 
 **A resolution change follows through**: the viewer is told the new
 size (RFB's DesktopSize) and gets the whole screen again. A viewer that

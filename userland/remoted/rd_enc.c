@@ -140,7 +140,7 @@ static int cpixel_bytes(const struct rd_pixfmt *pf, int *skip) {
 
 // --- the rectangles -------------------------------------------------------
 
-static void rect_header(struct rd_buf *out, int x, int y, int w, int h, int32_t enc) {
+void rd_rect_header(struct rd_buf *out, int x, int y, int w, int h, int32_t enc) {
     rd_buf_u16(out, (uint16_t)x);
     rd_buf_u16(out, (uint16_t)y);
     rd_buf_u16(out, (uint16_t)w);
@@ -150,7 +150,7 @@ static void rect_header(struct rd_buf *out, int x, int y, int w, int h, int32_t 
 
 static void enc_raw(struct rd_enc *e, const uint32_t *px, int stride, int x, int y,
                     int w, int h, struct rd_buf *out) {
-    rect_header(out, x, y, w, h, RD_ENC_RAW);
+    rd_rect_header(out, x, y, w, h, RD_ENC_RAW);
     uint8_t row[4 * 64];
     for (int j = 0; j < h; j++) {
         const uint32_t *src = px + (size_t)(y + j) * stride + x;
@@ -347,21 +347,25 @@ static void enc_zrle(struct rd_enc *e, const uint32_t *px, int stride, int x, in
         return;
     }
     e->zrle_started = st.started;
-    rect_header(out, x, y, w, h, RD_ENC_ZRLE);
+    rd_rect_header(out, x, y, w, h, RD_ENC_ZRLE);
     rd_buf_u32(out, (uint32_t)zlen);
     rd_buf_put(out, z, zlen);
     free(z);
 }
 
-void rd_enc_rect(struct rd_enc *e, const uint32_t *px, int stride,
-                 int x, int y, int w, int h, struct rd_buf *out) {
-    if (e->encoding == RD_ENC_ZRLE) enc_zrle(e, px, stride, x, y, w, h, out);
-    else                            enc_raw(e, px, stride, x, y, w, h, out);
+int rd_enc_rect(struct rd_enc *e, const uint32_t *px, int stride,
+                int x, int y, int w, int h, struct rd_buf *out) {
+    int enc = e->encoding;
+    if (enc == RD_ENC_TIGHT && !rd_tight_ok(&e->pf)) enc = e->fallback;
+    if (enc == RD_ENC_TIGHT) return rd_enc_tight(e, px, stride, x, y, w, h, out);
+    if (enc == RD_ENC_ZRLE) enc_zrle(e, px, stride, x, y, w, h, out);
+    else                    enc_raw(e, px, stride, x, y, w, h, out);
+    return 1;
 }
 
 void rd_enc_cursor(struct rd_enc *e, const uint32_t *argb, int w, int h,
                    int hot_x, int hot_y, struct rd_buf *out) {
-    rect_header(out, hot_x, hot_y, w, h, -239);
+    rd_rect_header(out, hot_x, hot_y, w, h, -239);
     uint8_t px[4];
     for (int i = 0; i < w * h; i++)
         rd_buf_put(out, px, (size_t)pixel_bytes(&e->pf, to_pixel(&e->pf, argb[i]), px));

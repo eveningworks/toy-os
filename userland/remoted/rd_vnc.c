@@ -63,6 +63,9 @@ struct vnc {
     int ux, uy, uw, uh;       // the requested region
     int desktop_size;         // the viewer understands DesktopSize
     int cursor_enc;           // ...and draws the pointer itself
+    int32_t pointer_pos;      // ...and is told where it is: PointerPos, VMware's, or 0
+    int pos_x, pos_y;         // where the viewer was last told, or put it itself
+    int pos_pending;
     int damage_pending;       // the compositor says pixels changed
     int cursor_dirty;         // ...or the pointer's shape did
     int tx, ty;               // the tile grid's size
@@ -472,6 +475,8 @@ static void pointer_event(struct vnc *v, uint8_t mask, int x, int y) {
     if (pressed & 8)  ev[n++] = (struct input_inject){ INPUT_INJECT_WHEEL, 0, 1, 0 };
     if (pressed & 16) ev[n++] = (struct input_inject){ INPUT_INJECT_WHEEL, 0, -1, 0 };
     v->buttons = mask;
+    v->pos_x = x;
+    v->pos_y = y;
     inject(ev, n);
 }
 
@@ -504,9 +509,18 @@ static int tile_h(const struct vnc *v, int ty) {
 // change outside the region a viewer asked for is not forgotten.
 static int take_damage(struct vnc *v) {
     struct win_damage d;
-    int rc = ushot_damage(&v->shot, v->cursor_enc ? 0 : WIN_SHOT_POINTER, &d);
+    unsigned flags = v->cursor_enc ? (v->pointer_pos ? WIN_SHOT_POINTER_POS : 0) : WIN_SHOT_POINTER;
+    int rc = ushot_damage(&v->shot, flags, &d);
     if (rc != 0) return rc;   // an error, or USHOT_RESIZED
     v->damage_pending = 0;
+    // The machine's own mouse moved -- not the viewer's, which it drew
+    // where it already is.
+    if ((flags & WIN_SHOT_POINTER_POS) &&
+        (v->shot.pointer_x != v->pos_x || v->shot.pointer_y != v->pos_y)) {
+        v->pos_x = v->shot.pointer_x;
+        v->pos_y = v->shot.pointer_y;
+        v->pos_pending = 1;
+    }
     for (int k = 0; k < d.n; k++) {
         int x0 = d.r[k].x / CMP_TILE, y0 = d.r[k].y / CMP_TILE;
         int x1 = (d.r[k].x + d.r[k].w + CMP_TILE - 1) / CMP_TILE;
@@ -537,9 +551,17 @@ static void cursor_rect(struct vnc *v, int *nrects) {
 // while busy, and once at the end.
 static void stats_line(struct vnc *v, unsigned long long now) {
     int u = v->st_updates;
+    const struct rd_enc *e = &v->enc;
+    char enc[24];
+    if (e->encoding == RD_ENC_TIGHT && rd_tight_ok(&e->pf) && e->jpeg_level >= 0)
+        snprintf(enc, sizeof enc, "Tight, JPEG level %d", e->jpeg_level);
+    else
+        snprintf(enc, sizeof enc, "%s", e->encoding == RD_ENC_TIGHT && rd_tight_ok(&e->pf) ? "Tight"
+                 : (e->encoding == RD_ENC_TIGHT ? e->fallback : e->encoding) == RD_ENC_ZRLE ? "ZRLE"
+                 : "Raw");
     if (u)
-        rd_log("remoted: vnc: %d updates in %llu s: capture %llu, encode %llu, send %llu us each, "
-               "%llu KB\n", u, (now - v->st_t0) / 1000000000ull, v->st_cap / 1000 / u,
+        rd_log("remoted: vnc: %d updates in %llu s (%s): capture %llu, encode %llu, send %llu us "
+               "each, %llu KB\n", u, (now - v->st_t0) / 1000000000ull, enc, v->st_cap / 1000 / u,
                v->st_enc / 1000 / u, v->st_send / 1000 / u, v->st_bytes / 1024);
     v->st_t0 = now;
     v->st_updates = 0;
@@ -611,6 +633,11 @@ static int send_update(struct vnc *v) {
     rd_buf_u16(&v->out, 0);
     int n = 0;
     if (v->cursor_enc && v->cursor_dirty) cursor_rect(v, &n);
+    if (v->pos_pending) {
+        rd_rect_header(&v->out, v->pos_x, v->pos_y, 0, 0, v->pointer_pos);
+        v->pos_pending = 0;
+        n++;
+    }
     for (int ty = y0; ty < y1; ty++) {
         for (int tx = x0; tx < x1;) {
             if (!v->dirty[ty][tx]) { tx++; continue; }
@@ -618,9 +645,8 @@ static int send_update(struct vnc *v) {
             while (tx < x1 && v->dirty[ty][tx]) v->dirty[ty][tx++] = 0;
             int px = run * CMP_TILE, py = ty * CMP_TILE;
             int pw = (tx == v->tx ? v->w : tx * CMP_TILE) - px, ph = tile_h(v, ty);
-            rd_enc_rect(&v->enc, v->shot.px, v->w, px, py, pw, ph, &v->out);
+            n += rd_enc_rect(&v->enc, v->shot.px, v->w, px, py, pw, ph, &v->out);
             copy_rect(v, px, py, pw, ph);
-            n++;
         }
     }
     if (!n) return 0;
@@ -647,17 +673,30 @@ static int set_encodings(struct vnc *v) {
     uint8_t h[3];
     if (!read_full(h, 3)) return 0;
     int n = be16(h + 1);
-    int chosen = -1;
+    int chosen = -1, fallback = -1;
+    v->enc.jpeg_level = -1;
+    v->pointer_pos = 0;
     for (int i = 0; i < n; i++) {
         uint8_t e[4];
         if (!read_full(e, 4)) return 0;
         int32_t enc = (int32_t)be32(e);
-        // The viewer lists them by preference; the first one known wins.
-        if (chosen < 0 && (enc == RD_ENC_ZRLE || enc == RD_ENC_RAW)) chosen = enc;
+        // The viewer lists them by preference; the first one known wins,
+        // and the first after it that is not Tight is for a pixel format
+        // Tight cannot send.
+        if (enc == RD_ENC_ZRLE || enc == RD_ENC_RAW || enc == RD_ENC_TIGHT) {
+            if (chosen < 0) chosen = enc;
+            else if (fallback < 0 && enc != RD_ENC_TIGHT) fallback = enc;
+        }
+        if (enc >= RD_ENC_QUALITY_0 && enc <= RD_ENC_QUALITY_0 + 9)
+            v->enc.jpeg_level = enc - RD_ENC_QUALITY_0;
+        if (enc == RD_ENC_POINTER_POS) v->pointer_pos = RD_ENC_POINTER_POS;
+        else if (enc == (int32_t)RD_ENC_VMWARE_POS && !v->pointer_pos)
+            v->pointer_pos = (int32_t)RD_ENC_VMWARE_POS;
         if (enc == RD_ENC_DESKTOP_SIZE) v->desktop_size = 1;
         if (enc == RD_ENC_CURSOR) v->cursor_enc = 1;
     }
     v->enc.encoding = chosen < 0 ? RD_ENC_RAW : chosen;
+    v->enc.fallback = fallback < 0 ? RD_ENC_RAW : fallback;
     return 1;
 }
 
@@ -833,6 +872,7 @@ int rd_vnc_session(const struct uremote_conf *c, uint32_t peer) {
         int bits = ushot_events(&v.shot);
         if (bits & WIN_CAST_DAMAGE) v.damage_pending = 1;
         if (bits & WIN_CAST_CURSOR) v.cursor_dirty = 1;
+        if (bits & WIN_CAST_POINTER) v.damage_pending = 1;   // the capture says where
         if (v.want_update && (v.damage_pending || v.want_full || v.cursor_dirty) &&
             send_update(&v) < 0)
             break;

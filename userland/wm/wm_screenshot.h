@@ -26,6 +26,11 @@ int wm_screenshot_capture(int from, int mode, unsigned flags,
 
 // WIN_SHOT_DAMAGE (abi/win_proto.h): the caster's damage since its last
 // capture, copied into its screen-sized mirror. `out` lists the rects.
+// Where the pointer's hotspot is now, every frame: a caster that asked
+// (WIN_SHOT_POINTER_POS) is told when it moved.
+void wm_screenshot_pointer_at(int x, int y);
+void wm_screenshot_pointer(int32_t *x, int32_t *y);   // ...and where that is
+
 int wm_screenshot_damage(int from, unsigned flags, int capacity_px, struct win_shot *size,
                          struct win_damage *out);
 

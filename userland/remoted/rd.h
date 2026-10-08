@@ -47,23 +47,39 @@ void rd_buf_u16(struct rd_buf *b, uint16_t v);
 void rd_buf_u32(struct rd_buf *b, uint32_t v);
 void rd_buf_free(struct rd_buf *b);
 
-#define RD_ENC_RAW  0
-#define RD_ENC_ZRLE 16
+#define RD_ENC_RAW   0
+#define RD_ENC_TIGHT 7
+#define RD_ENC_ZRLE  16
 #define RD_ENC_DESKTOP_SIZE (-223)   // pseudo-encodings: what a viewer can be told
 #define RD_ENC_CURSOR       (-239)
+#define RD_ENC_POINTER_POS  (-232)
+#define RD_ENC_VMWARE_POS   0x574D5666   // VMware's PointerPos, what TigerVNC reads
+#define RD_ENC_QUALITY_0    (-32)        // ...to -23: Tight's JPEG quality level 0-9
 
-// The encoder's state for one connection: ZRLE's single zlib stream.
+// The encoder's state for one connection: the zlib streams ZRLE and
+// Tight keep for the whole session, as the viewer keeps its inflaters.
 struct rd_enc {
     struct rd_pixfmt pf;
-    int encoding;              // RD_ENC_RAW or RD_ENC_ZRLE
+    int encoding;              // RD_ENC_RAW, RD_ENC_ZRLE or RD_ENC_TIGHT
+    int fallback;              // the viewer's next choice, for a format Tight cannot send
+    int jpeg_level;            // Tight's quality level 0-9, or -1: never lossy
     int zrle_started;
+    int tight_started[4];
     struct rd_buf scratch;     // ZRLE's uncompressed tile data
 };
 
-// Appends one rectangle -- header and data -- of `px` (a `stride`-wide
-// 0x??RRGGBB image) at (x, y, w, h) to `out`.
-void rd_enc_rect(struct rd_enc *e, const uint32_t *px, int stride,
-                 int x, int y, int w, int h, struct rd_buf *out);
+// Appends `px` (a `stride`-wide 0x??RRGGBB image) at (x, y, w, h) to
+// `out`, header and data. Returns how many rectangles that took: Tight
+// cuts a large one up.
+int rd_enc_rect(struct rd_enc *e, const uint32_t *px, int stride,
+                int x, int y, int w, int h, struct rd_buf *out);
+
+void rd_rect_header(struct rd_buf *out, int x, int y, int w, int h, int32_t enc);
+
+// --- Tight (rd_tight.c) ------------------------------------------------
+int rd_tight_ok(const struct rd_pixfmt *pf);   // a format Tight's 3-byte pixels fit
+int rd_enc_tight(struct rd_enc *e, const uint32_t *px, int stride, int x, int y,
+                 int w, int h, struct rd_buf *out);
 
 // RFB's Cursor pseudo-encoding: the shape (0xAARRGGBB, `w` x `h`) and
 // its hotspot as one rectangle -- pixels in the viewer's format, then a

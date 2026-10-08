@@ -2339,6 +2339,7 @@ uint32_t wm_scene_frames(void) { return g_scene_frames; }
 static int g_cast_box[4];
 
 static void cast_pointer_moved(int mx, int my) {
+    wm_screenshot_pointer_at(mx, my);
     if (!wm_screenshot_casting_pointer()) return;   // nobody shares the screen that way
     int box[4];
     cursor_rect(resolve_cursor_kind(mx, my), mx, my, &box[0], &box[1], &box[2], &box[3]);

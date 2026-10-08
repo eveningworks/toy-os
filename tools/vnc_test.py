@@ -158,6 +158,8 @@ class Viewer:
         self.fb = bytearray(self.w * self.h * 3)
         self.cursor = None
         self.cuts = []
+        self.tz = [zlib.decompressobj() for _ in range(4)]
+        self.tight_kinds = {"fill": 0, "jpeg": 0, "palette": 0, "copy": 0}
 
     def recv(self, n):
         out = b""
@@ -263,6 +265,10 @@ class Viewer:
             elif enc == 16:
                 ln = struct.unpack(">I", self.recv(4))[0]
                 self.zrle(x, y, w, h, self.z.decompress(self.recv(ln)))
+            elif enc == 7:
+                self.tight(x, y, w, h)
+            elif enc in (-232, 0x574D5666):   # PointerPos: x, y, and no data
+                pass
             elif enc == -223:   # DesktopSize: the screen is now w x h
                 self.w, self.h = w, h
                 self.fb = bytearray(w * h * 3)
@@ -272,6 +278,73 @@ class Viewer:
             else:
                 raise RuntimeError(f"encoding {enc} was not asked for")
         return rects
+
+    # --- Tight (RFB 7.7.6), decoded here with Python's zlib and PIL's JPEG,
+    # neither of which shares a line with the server's encoders ---------
+
+    def compact_len(self):
+        n, shift = 0, 0
+        for _ in range(3):
+            b = self.recv(1)[0]
+            n |= (b & 0x7F) << shift
+            shift += 7
+            if not b & 0x80:
+                break
+        return n
+
+    def tight(self, x, y, w, h):
+        if self.bpp != 32:
+            raise RuntimeError("Tight is only decoded here at 32 bits")
+        cc = self.recv(1)[0]
+        for i in range(4):
+            if cc & (1 << i):
+                self.tz[i] = zlib.decompressobj()
+        kind = cc >> 4
+        if kind == 8:                                   # fill
+            rgb = tuple(self.recv(3))
+            for j in range(h):
+                for i in range(w):
+                    self.put(x + i, y + j, rgb)
+            self.tight_kinds["fill"] += 1
+            return
+        if kind == 9:                                   # JPEG
+            from io import BytesIO
+            from PIL import Image
+            im = Image.open(BytesIO(self.recv(self.compact_len()))).convert("RGB")
+            if im.size != (w, h):
+                raise RuntimeError(f"JPEG is {im.size}, the rect {w}x{h}")
+            data = im.tobytes()
+            for j in range(h):
+                o = (y + j) * self.w + x
+                self.fb[o * 3:(o + w) * 3] = data[j * w * 3:(j + 1) * w * 3]
+            self.tight_kinds["jpeg"] += 1
+            return
+        if kind > 9:
+            raise RuntimeError(f"bad Tight compression control {cc:#x}")
+        stream, filt = kind & 3, self.recv(1)[0] if kind & 4 else 0
+        if filt == 1:
+            n = self.recv(1)[0] + 1
+            pal = [tuple(self.recv(3)) for _ in range(n)]
+            size = ((w + 7) // 8 if n == 2 else w) * h
+        elif filt == 0:
+            size = w * h * 3
+        else:
+            raise RuntimeError(f"Tight filter {filt} was not expected")
+        data = self.recv(size) if size < 12 else \
+            self.tz[stream].decompress(self.recv(self.compact_len()))
+        if len(data) != size:
+            raise RuntimeError(f"Tight data is {len(data)} bytes, wanted {size}")
+        for j in range(h):
+            for i in range(w):
+                if filt == 0:
+                    o = (j * w + i) * 3
+                    self.put(x + i, y + j, tuple(data[o:o + 3]))
+                elif n == 2:
+                    bit = data[j * ((w + 7) // 8) + i // 8] >> (7 - i % 8) & 1
+                    self.put(x + i, y + j, pal[bit])
+                else:
+                    self.put(x + i, y + j, pal[data[j * w + i]])
+        self.tight_kinds["palette" if filt else "copy"] += 1
 
     def cpixel(self, d, o):
         if self.bpp == 32:
@@ -393,6 +466,27 @@ def same_fraction(a, b, quant=None):
             pb = tuple(v >> s for v, s in zip(pb, quant))
         same += pa == pb
     return same / n
+
+
+def pos_rects(v, secs):
+    """Every PointerPos rectangle in `secs` of incremental updates."""
+    out, end = [], time.time() + secs
+    while time.time() < end:
+        try:
+            v.request(True)
+            out += [rc for rc in v.read_update() if rc[4] == -232]
+        except socket.timeout:
+            pass
+    return out
+
+
+def close_fraction(a, b, tol):
+    """The share of pixels whose every channel is within `tol`: a lossy
+    frame's bar, where same_fraction() would fail every JPEG pixel."""
+    n = len(a) // 3
+    near = sum(1 for i in range(0, len(a), 3)
+               if max(abs(a[i] - b[i]), abs(a[i + 1] - b[i + 1]), abs(a[i + 2] - b[i + 2])) <= tol)
+    return near / n
 
 
 def connect(args, password=PASSWORD, wait=60, security="vnc"):
@@ -832,6 +926,25 @@ def main():
         if frame(r, v, "a ZRLE frame decodes to the Raw one") is not None:
             frac = same_fraction(bytes(v.fb), raw)
             r.check("a ZRLE frame decodes to the Raw one", frac >= 0.999, f"{frac:.4%}")
+
+        # 3b. Tight: lossless without a quality level, as TightVNC's rule
+        # is; with one, JPEG for what has too many colours for a palette.
+        v.set_encodings([7, 0])
+        if frame(r, v, "a Tight frame without a quality level is the Raw one") is not None:
+            frac = same_fraction(bytes(v.fb), raw)
+            r.check("a Tight frame without a quality level is the Raw one", frac >= 0.999,
+                    f"{frac:.4%} {v.tight_kinds}")
+            k = v.tight_kinds
+            r.check("...through fill, palette and zlib, and no JPEG",
+                    not k["jpeg"] and k["fill"] and k["palette"], str(k))
+        v.tight_kinds = dict.fromkeys(v.tight_kinds, 0)
+        v.set_encodings([7, 0, -27])   # quality level 5
+        if frame(r, v, "Tight with JPEG is close to the Raw frame") is not None:
+            close = close_fraction(bytes(v.fb), raw, 24)
+            r.check("Tight with JPEG is close to the Raw frame", close >= 0.99,
+                    f"{close:.4%} within 24 levels, {v.tight_kinds}")
+            r.check("...and used JPEG for the many-coloured parts", v.tight_kinds["jpeg"] > 0,
+                    str(v.tight_kinds))
         v.close()
 
         v = connect(args)
@@ -894,6 +1007,23 @@ def main():
         except socket.timeout:
             r.check("with it, a pointer move sends no pixels", True)
         v.s.settimeout(30)
+
+        # PointerPos: a viewer drawing the pointer itself is told where
+        # the machine's OWN mouse went -- and not where it put it itself.
+        pv = connect(args)
+        pv.set_encodings([0, -239, -232])
+        pv.s.settimeout(1.5)
+        pos_rects(pv, 3)                       # the first frame, and the start position
+        pv.pointer(v.w // 3, v.h // 3)
+        echo = pos_rects(pv, 2)
+        r.check("a viewer's own pointer move is not sent back as PointerPos", not echo, str(echo))
+        q.move_rel(60, 40)                     # the machine's mouse, not the viewer's
+        time.sleep(1.0)
+        want = dc.cursor()
+        got = pos_rects(pv, 3)
+        r.check("the machine's own mouse reaches the viewer as PointerPos",
+                bool(got) and got[-1][:2] == want, f"{got} vs the cursor at {want}")
+        pv.close()
 
         # A SESSION THAT DIES WITH A NUDGE PENDING FREES ITS SLOT. Each of
         # these takes a frame with the pointer drawn in, moves the pointer

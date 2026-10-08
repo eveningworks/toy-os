@@ -127,6 +127,8 @@ int ushot_damage(struct ushot *s, unsigned flags, struct win_damage *out) {
     }
     *out = r.damage;
     if (out->n > WIN_DAMAGE_MAX) out->n = WIN_DAMAGE_MAX;
+    s->pointer_x = r.b;
+    s->pointer_y = r.c;
     s->x = s->y = 0;
     s->w = s->screen_w;
     s->h = s->screen_h;

@@ -155,6 +155,8 @@ own reader, which this TCP stack's retransmission timers need.
   One that did is sent the new size and then the whole screen
   (`WIN_SHOT_RESIZED`: the compositor copies nothing into a mirror laid
   out for the old size).
-- **With the Cursor encoding the viewer does not see the LOCAL mouse
-  move** -- it draws its own pointer where its own mouse is. Real servers
-  add the PointerPos pseudo-encoding for that; not yet here.
+- **A tile sent as JPEG stays lossy until it changes.** TigerVNC's
+  server re-sends a lossy area losslessly once it has been still a
+  while; not yet here (roadmap).
+- **Tight is sent only at 24-bit colour**, as its three-byte pixels
+  need; a viewer at 16 bits gets its next choice (ZRLE or Raw).

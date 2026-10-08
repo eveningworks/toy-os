@@ -170,6 +170,11 @@ void uimg_free(struct uimg *im);
 int uimg_encode(const struct uimg *im, const char *format,
                 uint8_t **out, size_t *out_len);
 
+// JPEG at a chosen quality, 1-100 (the IJG scale); uimg_encode(im,
+// "jpeg") is this at 85. For a caller that trades fidelity for bytes on
+// every frame -- a VNC viewer's Tight quality level.
+int uimg_encode_jpeg(const struct uimg *im, int quality, uint8_t **out, size_t *out_len);
+
 // The same, straight to a path. `format` may be NULL, which takes it
 // from the extension; an unknown extension is -ENOTSUP rather than a
 // guess, for the reason a parser here never guesses.

@@ -12,11 +12,9 @@
 //     an option and leaves it off by default.
 //   * PROGRESSIVE OUTPUT. The decoder reads it now; nothing here has a
 //     reason to write it, since nothing serves images over a link.
-//   * A QUALITY KNOB. uimg_encode() takes a format and no options, and
-//     inventing an options struct for one integer is the wrong shape
-//     for an API where QOI and PNG take none either. J_ENC_QUALITY is
-//     the one number; a second real caller that needs to vary it is
-//     what should force the knob, not a plausible one.
+//   * A QUALITY KNOB IN uimg_encode(), which takes a format and no
+//     options -- QOI and PNG take none either. uimg_encode_jpeg() takes
+//     the one number, for remoted's Tight; J_ENC_QUALITY is the default.
 //   * 4:4:4 or grayscale output. 4:2:0 halves the chroma and is what
 //     every camera and every export dialog produces.
 //
@@ -406,16 +404,22 @@ static inline uint32_t j_at(const struct uimg *im, int x, int y) {
 }
 
 int uimg_jpeg_encode(const struct uimg *im, uint8_t **out, size_t *out_len) {
+    return uimg_encode_jpeg(im, J_ENC_QUALITY, out, out_len);
+}
+
+int uimg_encode_jpeg(const struct uimg *im, int quality, uint8_t **out, size_t *out_len) {
     *out = NULL;
     *out_len = 0;
+    if (quality < 1) quality = 1;
+    if (quality > 100) quality = 100;
     if (im->w > 65535 || im->h > 65535)
         FAIL(-EINVAL, "a JPEG cannot be larger than 65535 pixels on a side");
 
     struct jenc *e = calloc(1, sizeof *e);
     if (!e) FAIL(-ENOMEM, "not enough memory to encode this image");
 
-    j_scale_qt(e->qt[0], j_qt_lum, J_ENC_QUALITY);
-    j_scale_qt(e->qt[1], j_qt_chr, J_ENC_QUALITY);
+    j_scale_qt(e->qt[0], j_qt_lum, quality);
+    j_scale_qt(e->qt[1], j_qt_chr, quality);
     j_build_enc_huff(&e->dc[0], j_dc_lum_bits, j_dc_vals);
     j_build_enc_huff(&e->ac[0], j_ac_lum_bits, j_ac_lum_vals);
     j_build_enc_huff(&e->dc[1], j_dc_chr_bits, j_dc_vals);

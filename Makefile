@@ -1179,7 +1179,7 @@ EXTRA_OBJS_taskmgr = taskmgr/tm_procs taskmgr/tm_perf taskmgr/tm_services
 # System Update: one engine behind the command and the window.
 EXTRA_OBJS_update    = update/upd
 # The remote desktop server: userland/remoted/ is its parts.
-EXTRA_OBJS_remoted   = remoted/rd_vnc remoted/rd_enc
+EXTRA_OBJS_remoted   = remoted/rd_vnc remoted/rd_enc remoted/rd_tight
 EXTRA_OBJS_sysupdate = update/upd
 
 EXTRA_OBJS_cjson_test = ports/cjson/cJSON

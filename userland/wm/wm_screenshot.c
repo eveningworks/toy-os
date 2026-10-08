@@ -87,8 +87,11 @@ static struct caster {
     // moment the pointer changed shape (dragging a window on the ASUS).
     int notified;
     int cursor_dirty;
+    int want_pos;   // WIN_SHOT_POINTER_POS: told when the pointer moves
     struct win_damage d;
 } g_cast[CASTERS];
+
+static int g_ptr_x = -1, g_ptr_y = -1;   // the pointer's hotspot, every frame
 
 static struct caster *caster_of(int pid) {
     for (int i = 0; i < CASTERS; i++) if (g_cast[i].pid == pid) return &g_cast[i];
@@ -170,6 +173,19 @@ int wm_screenshot_casting_pointer(void) {
 }
 void wm_screenshot_pointer_damage(int x, int y, int w, int h) { cast_rect(1, x, y, w, h); }
 
+void wm_screenshot_pointer(int32_t *x, int32_t *y) {
+    *x = g_ptr_x;
+    *y = g_ptr_y;
+}
+
+void wm_screenshot_pointer_at(int x, int y) {
+    if (x == g_ptr_x && y == g_ptr_y) return;
+    g_ptr_x = x;
+    g_ptr_y = y;
+    for (int i = 0; i < CASTERS; i++)
+        if (g_cast[i].pid && g_cast[i].want_pos) notify(&g_cast[i], WIN_CAST_POINTER);
+}
+
 void wm_screenshot_cursor_changed(void) {
     for (int i = 0; i < CASTERS; i++) {
         if (!g_cast[i].pid) continue;
@@ -201,6 +217,8 @@ static int capture_damage(int from, unsigned flags, int capacity_px, struct win_
         c->cursor_dirty = 1;
     }
     c->pointer = (flags & WIN_SHOT_POINTER) != 0;
+    c->want_pos = (flags & WIN_SHOT_POINTER_POS) != 0;
+    c->notified &= ~WIN_CAST_POINTER;
     if (size->w && (size->w != screen_w || size->h != screen_h)) {
         c->full = 1;   // the re-made mirror is filled whole
         c->notified &= ~WIN_CAST_DAMAGE;

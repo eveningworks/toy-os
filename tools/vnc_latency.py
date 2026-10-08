@@ -86,6 +86,8 @@ class Probe:
                 ln = struct.unpack(">I", self.recv(4))[0]
                 self.z.decompress(self.recv(ln))   # keeps the stream in step
                 total += 4 + ln
+            elif enc == 7:
+                total += self.tight_len(w, h)
             elif enc == CURSOR:
                 total += len(self.recv(w * h * 4 + ((w + 7) // 8) * h))
             elif enc == -223:
@@ -94,6 +96,39 @@ class Probe:
                 raise RuntimeError(f"encoding {enc}")
         return total, n
 
+    def compact(self):
+        n, shift, used = 0, 0, 0
+        for _ in range(3):
+            b = self.recv(1)[0]
+            used += 1
+            n |= (b & 0x7F) << shift
+            shift += 7
+            if not b & 0x80:
+                break
+        return n, used
+
+    def tight_len(self, w, h):
+        """Reads past one Tight rectangle (32 bits a pixel); its bytes."""
+        kind = self.recv(1)[0] >> 4
+        if kind == 8:
+            return 1 + len(self.recv(3))
+        if kind == 9:
+            n, used = self.compact()
+            return 1 + used + len(self.recv(n))
+        total, filt = 1, 0
+        if kind & 4:
+            filt = self.recv(1)[0]
+            total += 1
+        size = w * h * 3
+        if filt == 1:
+            colours = self.recv(1)[0] + 1
+            total += 1 + len(self.recv(colours * 3))
+            size = ((w + 7) // 8 if colours == 2 else w) * h
+        if size < 12:
+            return total + len(self.recv(size))
+        n, used = self.compact()
+        return total + used + len(self.recv(n))
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -101,7 +136,8 @@ def main():
     ap.add_argument("--port", type=int, default=5900)
     ap.add_argument("--password", required=True)
     ap.add_argument("--rounds", type=int, default=30)
-    ap.add_argument("--encoding", choices=("zrle", "raw"), default="zrle")
+    ap.add_argument("--encoding", choices=("zrle", "raw", "tight", "tight-jpeg"), default="zrle",
+                    help="tight-jpeg: Tight with quality level 5, as Remmina's default asks")
     ap.add_argument("--no-cursor", action="store_true", help="do not offer the Cursor pseudo-encoding")
     ap.add_argument("--tls", action="store_true", help="VeNCrypt (X509Vnc), as an encrypting viewer")
     args = ap.parse_args()
@@ -109,7 +145,7 @@ def main():
     p = Probe(args.host, args.port, args.password, tls=args.tls)
     if args.tls:
         print(f"encrypted: {p.tls_version}")
-    encs = [16 if args.encoding == "zrle" else 0]
+    encs = {"zrle": [16], "raw": [0], "tight": [7], "tight-jpeg": [7, -27]}[args.encoding]
     if not args.no_cursor:
         encs.append(CURSOR)
     p.encodings(encs)

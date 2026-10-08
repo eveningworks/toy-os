@@ -35,6 +35,9 @@ struct ushot {
     uint64_t map_bytes;
     int cap_px;
     int screen_w, screen_h;
+    // Where the pointer's hotspot was at the last ushot_damage() made
+    // with WIN_SHOT_POINTER_POS.
+    int pointer_x, pointer_y;
     struct uchan_client own;   // used only when this opened its own
     struct uchan_client *chan;
     int chan_owned;

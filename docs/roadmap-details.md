@@ -2765,17 +2765,25 @@ the session sends DesktopSize and then the whole screen.
 
 ### Remote desktop: the machine's own mouse shown to a VNC viewer that draws the pointer (PointerPos)
 
-With the Cursor pseudo-encoding the viewer draws its pointer where ITS
-mouse is, so a move of the machine's own mouse is invisible remotely.
-The PointerPos pseudo-encoding (-232) sends the position when the
-compositor moves the pointer for anyone else. Approved 2026-10-08.
+DONE 2026-10-09: `WIN_SHOT_POINTER_POS` -- the compositor tells a caster
+when the pointer moves (`WIN_CAST_POINTER`) and where (the damage
+reply's `b`/`c`); the session sends PointerPos (-232) or VMware's cursor
+position (TigerVNC), never echoing the viewer's own moves.
 
 ### Remote desktop: Tight encoding with JPEG, for a VNC viewer on a slow link
 
-Tight (7) with its JPEG sub-encoding for photographic tiles and its
-zlib streams for the rest, through the existing JPEG encoder; the
-quality and compression levels come from the viewer's pseudo-encodings.
-ZRLE stays the choice on a LAN. Approved 2026-10-08.
+DONE 2026-10-09: `userland/remoted/rd_tight.c` -- each 64x64 tile a
+fill, a palette (1 bit for two colours) or zlib, many-coloured runs as
+JPEG when the viewer sent a quality level (TigerVNC's level-to-quality
+table), through `uimg_encode_jpeg()`.
+
+### Remote desktop: a JPEG-sent VNC tile re-sent losslessly once the screen is still (TigerVNC's refresh)
+
+A tile sent as JPEG keeps its artefacts until it changes. TigerVNC's
+server keeps a "lossy region" and, once nothing has changed for a
+moment, sends it again through a lossless encoding. Here: a per-tile
+lossy flag in the session, cleared by sending the tile through Tight's
+zlib path when the damage has been quiet for ~1 s.
 
 ### Remote desktop, stage 4: an RDP server -- X.224/MCS/GCC, bitmap updates and NLA, over stage 3's TLS
 
