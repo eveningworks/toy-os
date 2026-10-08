@@ -19,6 +19,8 @@
 #include "net_abi.h"
 #include "lib/uargs.h"
 #include "remoted/rd.h"
+#include "lib/uconf.h"
+#include "utls.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -86,6 +88,52 @@ static void reconcile(struct listener *l, int want, const char *proto) {
     rd_log("remoted: %s: listening on port %d\n", proto, want);
 }
 
+// VeNCrypt's key and certificate, made HERE rather than in a session so
+// no viewer waits on it, and the fingerprint recorded in /etc/remote.conf
+// for System Settings to show. A viewer checks the certificate against
+// what it DIALLED, so the certificate names this machine's addresses and
+// is re-made when they change (a DHCP lease, a cable).
+static void identity(const struct uremote_conf *c) {
+    static char last[UTLS_NAMES_MAX * 16], key[sizeof last];   // static: serve()'s frame
+    static char fp[100];
+    static char ips[UTLS_NAMES_MAX][16];
+    const char *names[UTLS_NAMES_MAX];
+    int n = 0;
+    names[n++] = "toy-os";
+    struct query_netdev d;
+    QUERY_FOREACH(QUERY_NETDEV, d, i) {
+        if (!d.ip || n >= UTLS_NAMES_MAX - 1) continue;
+        uremote_fmt_ip((uint32_t)d.ip, ips[n], sizeof ips[n]);
+        names[n] = ips[n];
+        n++;
+    }
+    // No address yet (DHCP still asking): nobody can dial in, and a
+    // certificate made now would change again in a second.
+    if (n == 1) return;
+    names[n++] = "127.0.0.1";   // a viewer reaching it through a port forward
+    key[0] = 0;
+    for (int i = 0; i < n; i++) {
+        strncat(key, names[i], sizeof key - strlen(key) - 1);
+        strncat(key, " ", sizeof key - strlen(key) - 1);
+    }
+    if (strcmp(key, last) != 0) {
+        k_strlcpy(last, key, sizeof last);
+        char err[160];
+        fp[0] = 0;
+        if (utls_server_identity(RD_TLS_KEY, RD_TLS_CRT, names, n, fp, sizeof fp, err,
+                                 sizeof err)) {
+            rd_log("remoted: vnc: no encryption: %s\n", err);
+            fp[0] = 0;
+            return;
+        }
+        rd_log("remoted: vnc: certificate for %s-- %s\n", key, fp);
+    }
+    // Checked every pass, not only when made: a file written whole (a
+    // restore, an editor) loses the key until remoted puts it back.
+    if (fp[0] && strcmp(fp, c->vnc.fingerprint) != 0)
+        uconf_set_in(UREMOTE_CONF, "vnc", "fingerprint", fp);
+}
+
 static int serve(void) {
     struct listener vnc = { -1, 0 };
     int live = 0;
@@ -93,9 +141,10 @@ static int serve(void) {
         int code;
         while (sys_waitpid_nohang(-1, &code) > 0) if (live > 0) live--;
 
-        struct uremote_conf c;
+        static struct uremote_conf c;   // static: kilobytes, and one loop
         uremote_load(&c);
         reconcile(&vnc, c.vnc.enabled ? c.vnc.port : 0, "vnc");
+        if (c.vnc.enabled && c.vnc.encryption != UREMOTE_ENC_OFF) identity(&c);
         if (vnc.fd < 0) {
             sys_sleep_ms(SLICE_MS * 2);
             continue;
@@ -114,6 +163,15 @@ static int serve(void) {
             rd_log("remoted: vnc: %s is not on this network -- refused\n", ip);
             close(s);
             continue;
+        }
+        // REAPED HERE TOO, not only at the top: the loop sat in accept()
+        // while a session ended, and a viewer arriving just after one left
+        // would be refused on the stale count. A session that is still
+        // finishing (sending TLS's close_notify) gets a second.
+        for (int i = 0; i < 20; i++) {
+            while (sys_waitpid_nohang(-1, &code) > 0) if (live > 0) live--;
+            if (live < SESSIONS_MAX) break;
+            sys_sleep_ms(50);
         }
         if (live >= SESSIONS_MAX) {
             rd_log("remoted: vnc: %s refused -- %d viewers already\n", ip, live);
@@ -144,8 +202,11 @@ static int status(void) {
     struct uremote_conf c;
     uremote_load(&c);
     static const char *const WHEN[] = { "ask", "ask unless trusted", "always allow" };
+    static const char *const ENC[] = { "offered (VeNCrypt), plain accepted", "required", "off" };
     printf("VNC   %s, port %d, password %s\n", c.vnc.enabled ? "on" : "off", c.vnc.port,
            c.vnc.password[0] ? "set" : "NOT SET (viewers are refused)");
+    printf("      encryption %s%s%s\n", ENC[c.vnc.encryption],
+           c.vnc.fingerprint[0] ? "; certificate " : "", c.vnc.fingerprint);
     printf("RDP   %s, port %d\n", c.rdp.enabled ? "on" : "off", c.rdp.port);
     printf("When someone connects: %s; from %s%s\n", WHEN[c.when],
            c.from == UREMOTE_FROM_ANYWHERE ? "anywhere" : "this network only",

@@ -560,15 +560,28 @@ manual steps to be worth automating:
   Cursor pseudo-encoding offered -- the default -- a pointer move sends
   NOTHING, and the rounds report as "no update within 1 s": that is the
   result, not a fault; `--no-cursor` measures the pointer drawn into the
-  picture. Against a machine you name; changes nothing there but the
+  picture; `--tls` connects through VeNCrypt, to price the encryption.
+  Against a machine you name; changes nothing there but the
   pointer. A measurement, so in no runner (`ondemand_sweep.py` says why).
   The ASUS, 1920x1080, 2026-10-08: pointer move 62 ms -> 12 ms median
   once remoted followed the compositor's damage, and a full
   ZRLE frame 168 -> 68 ms.
 
+- **`libvnc_check.py`** -- `/bin/remoted` against a FOREIGN client: a
+  probe built on Debian's libvncclient (what Remmina uses) in Docker,
+  connected to a guest that is already up (a `vm.py` one with
+  `--hostfwd tcp::15903-:5900`, or `--host` a laptop). It logs in, takes
+  frames and prints `RESULT size=... updates=N tls=0|1`. `--tls` demands
+  VeNCrypt; `--ca remote.crt` (fetched with `remote.py get
+  /etc/remote.crt`) pins the server's certificate, which GnuTLS then
+  checks against the address dialled -- the case Remmina hits. A
+  different certificate as `--ca` must FAIL ("hasn't got a known
+  issuer"), and did. Needs Docker and, the first time, deb.debian.org;
+  in no runner (`ondemand_sweep.py`'s exclusions).
+
 - **`vnc_test.py`** -- `/bin/remoted`'s VNC server, from an RFB client
   written in the tool (DES through `openssl`, ZRLE through Python's
-  `zlib`, so neither shares code with the server). Twenty-eight checks: a wrong
+  `zlib`, so neither shares code with the server). The checks: a wrong
   password refused and the right one let in; a Raw frame against QEMU's
   screendump; ZRLE at 32 and 16 bits against the Raw frame; a
   PointerEvent landing exactly where the compositor reports the pointer;
@@ -584,9 +597,18 @@ manual steps to be worth automating:
   `/etc/remote.conf`, the next connection then unasked -- the session
   listed live with the tray icon lit, the flyout's View only stopping the
   viewer's mouse and its Disconnect ending the session, and the Settings
-  page's VNC switch writing the file -- the capitals
-  and Shift punctuation are the point, since they need the kernel to
-  press Shift around the key. On demand: it boots its own guest on a
+  page's VNC switch writing the file; then VeNCrypt, through Python's
+  own `ssl` (sharing nothing with mbedTLS): X509Vnc in, plain listed
+  first, the certificate's SHA-256 the fingerprint in
+  `/etc/remote.conf`, a Raw frame over TLS against the screendump, a
+  VERIFYING connection (the certificate as CA, `127.0.0.1` checked
+  against its names), X509Plain refusing a wrong password and taking
+  the right one; under `encryption = require` VeNCrypt alone offered and
+  an RFB 3.3 viewer told why it is refused; and two silent connections
+  holding both sessions until the handshake deadline drops them. It
+  boots with `--cpu max`, since without RDRAND no key is made. In the
+  typing check the capitals and Shift punctuation are the point, since
+  they need the kernel to press Shift around the key. On demand: it boots its own guest on a
   COPY of `disk.img`, guest port 5900 on host 15900+N.
 
   **The 99.5% bar is the pointer**: remoted draws it into the picture and

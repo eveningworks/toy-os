@@ -13,6 +13,7 @@ timeout as `none`.
 
   python3 tools/vnc_latency.py --host <machine-ip> --password PW
   python3 tools/vnc_latency.py --host 127.0.0.1 --port 15903 --rounds 50
+  python3 tools/vnc_latency.py --host <machine-ip> --password PW --tls
 
 On demand, against a machine you name; it changes nothing there but the
 pointer's position.
@@ -27,19 +28,23 @@ import time
 import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from vnc_test import des_response   # noqa: E402
+from vnc_test import des_response, vencrypt   # noqa: E402
 
 CURSOR = -239
 
 
 class Probe:
-    def __init__(self, host, port, password):
+    def __init__(self, host, port, password, tls=False):
         self.s = socket.create_connection((host, port), timeout=10)
         if self.recv(12)[:8] != b"RFB 003.":
             raise RuntimeError("not an RFB server")
         self.s.sendall(b"RFB 003.008\n")
-        self.recv(self.recv(1)[0])
-        self.s.sendall(b"\x02")
+        types = self.recv(self.recv(1)[0])
+        if tls and 19 not in types:
+            raise RuntimeError(f"no VeNCrypt offered: {list(types)}")
+        self.s.sendall(b"\x13" if tls else b"\x02")
+        if tls:
+            vencrypt(self, "tls-vnc", password)
         self.s.sendall(des_response(password, self.recv(16)))
         if struct.unpack(">I", self.recv(4))[0]:
             raise PermissionError("refused")
@@ -98,9 +103,12 @@ def main():
     ap.add_argument("--rounds", type=int, default=30)
     ap.add_argument("--encoding", choices=("zrle", "raw"), default="zrle")
     ap.add_argument("--no-cursor", action="store_true", help="do not offer the Cursor pseudo-encoding")
+    ap.add_argument("--tls", action="store_true", help="VeNCrypt (X509Vnc), as an encrypting viewer")
     args = ap.parse_args()
 
-    p = Probe(args.host, args.port, args.password)
+    p = Probe(args.host, args.port, args.password, tls=args.tls)
+    if args.tls:
+        print(f"encrypted: {p.tls_version}")
     encs = [16 if args.encoding == "zrle" else 0]
     if not args.no_cursor:
         encs.append(CURSOR)

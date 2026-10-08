@@ -2734,15 +2734,42 @@ tray item lights for a desktop session; the record is the kernel's,
 taken from the SOCKET's peer as telnet sessions' are, so no program can
 claim one.
 
-### Remote desktop, stage 3: TLS on the server side, and VeNCrypt for VNC -- shares the key decision with the line above
+### Remote desktop, stage 3: TLS on the server side, and VeNCrypt for VNC
 
-mbedtls built with `MBEDTLS_SSL_SRV_C` (and the key generation and
-X.509 writing it does not carry today), a key and self-signed
-certificate made on first start and kept under `/etc`, its fingerprint
-shown on the Settings card. VNC offers VeNCrypt X509Plain/TLSPlain;
-TigerVNC and Remmina use it, macOS Screen Sharing does not and keeps the
-plain password. The same key answers "A TLS *server*, so `httpd` can
-speak https".
+DONE 2026-10-08: VeNCrypt X509Vnc and X509Plain over `utls_accept()`, an
+ECDSA key made once in `/etc/remote.key` and a certificate naming the
+machine's addresses, fingerprint on the Settings card;
+`docs/remote-desktop-design.md`, stage 3. The same key could answer "A
+TLS *server*, so `httpd` can speak https" -- `utls_accept()` is
+general, the certificate's names are remoted's.
+
+### Remote desktop: the clipboard both ways between a VNC viewer and the machine (cut text)
+
+RFB's ClientCutText (read and dropped today) into the system clipboard
+(`lib/uclip.h`, text only), and ServerCutText when the clipboard's
+serial moves while a viewer is connected. Latin-1 both ways, as RFB 3.8
+says; the Extended Clipboard pseudo-encoding (UTF-8, formats) is the
+larger follow-on. Approved 2026-10-08 with stage 3.
+
+### Remote desktop: a resolution change keeps the VNC viewer (DesktopSize) instead of ending it
+
+The viewer's DesktopSize pseudo-encoding (-223) is recorded already; on
+WIN_EV_SCREEN the session reopens its capture at the new size, sends a
+DesktopSize rectangle and then a full frame. Approved 2026-10-08.
+
+### Remote desktop: the machine's own mouse shown to a VNC viewer that draws the pointer (PointerPos)
+
+With the Cursor pseudo-encoding the viewer draws its pointer where ITS
+mouse is, so a move of the machine's own mouse is invisible remotely.
+The PointerPos pseudo-encoding (-232) sends the position when the
+compositor moves the pointer for anyone else. Approved 2026-10-08.
+
+### Remote desktop: Tight encoding with JPEG, for a VNC viewer on a slow link
+
+Tight (7) with its JPEG sub-encoding for photographic tiles and its
+zlib streams for the rest, through the existing JPEG encoder; the
+quality and compression levels come from the viewer's pseudo-encodings.
+ZRLE stays the choice on a LAN. Approved 2026-10-08.
 
 ### Remote desktop, stage 4: an RDP server -- X.224/MCS/GCC, bitmap updates and NLA, over stage 3's TLS
 

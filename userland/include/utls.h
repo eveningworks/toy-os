@@ -1,7 +1,8 @@
 #ifndef ULIB_UTLS_H
 #define ULIB_UTLS_H
 
-// A TLS client session over a connected socket.
+// A TLS session over a connected socket -- a client's, or (below) a
+// remote desktop server's.
 //
 // **THIS HEADER NAMES NO ENGINE.** It is implemented today by mbedTLS
 // (`userland/backends/mbedtls/utls_mbedtls.c`, built into
@@ -77,6 +78,37 @@ long utls_write(struct utls *t, const void *buf, size_t n);
 // omitting it makes a truncation attack indistinguishable from a peer
 // hanging up.
 void utls_close(struct utls *t);
+
+// --- the server side ---------------------------------------------------
+//
+// For a remote desktop server (/bin/remoted's VeNCrypt). Its identity is a
+// key and a SELF-SIGNED certificate made on this machine once and kept, so
+// a viewer that remembered the fingerprint sees the same one next time.
+// Making them is refused on weak randomness, as utls_connect() refuses to
+// key a connection: a server key from TSC jitter is not secret.
+
+// Makes the key if it is missing or will not parse, rebuilds the
+// certificate for `names` (IPv4 addresses and DNS names, the first is the
+// CN; at most UTLS_NAMES_MAX) and writes it only when it changed -- the same
+// key and names give the same bytes, so the fingerprint survives reboots.
+// Writes its SHA-256 fingerprint ("AB:CD:...") into `fp`, what a viewer
+// shows and a person compares. 0, or -1 with a sentence in `err`.
+#define UTLS_NAMES_MAX 12
+int utls_server_identity(const char *key_path, const char *crt_path,
+                         const char *const *names, int nnames,
+                         char *fp, size_t fpcap, char *err, size_t errcap);
+
+// Wraps an ACCEPTED socket as the TLS server with that identity, and
+// runs the handshake -- given up after UTLS_ACCEPT_TIMEOUT_MS without a
+// byte from the peer. NULL on failure, with a sentence in `err`.
+#define UTLS_ACCEPT_TIMEOUT_MS 20000
+struct utls *utls_accept(int fd, const char *key_path, const char *crt_path,
+                         char *err, size_t errcap);
+
+// utls_read() that waits at most `timeout_ms` for a record: bytes, 0 at
+// a clean end, UTLS_TIMEOUT when nothing came, negative on error.
+#define UTLS_TIMEOUT (-0x7f02)
+long utls_read_timeout(struct utls *t, void *buf, size_t n, int timeout_ms);
 
 // "TLSv1.3" / "TLSv1.2", and the negotiated suite. Never NULL.
 const char *utls_version(struct utls *t);

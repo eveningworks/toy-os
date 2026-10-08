@@ -1200,6 +1200,8 @@ ULIB_SO_properties = $(BUILD)/lib/libhash.so
 # libhttp NEEDS libhash (uhttp_download's SHA-256), and a program's link
 # must name it too for ld to resolve libhttp's references.
 ULIB_SO_wget = $(LIBHTTP_SO) $(LIBSSL_SO) $(BUILD)/lib/libhash.so
+# VeNCrypt: the remote desktop server's TLS.
+ULIB_SO_remoted = $(LIBSSL_SO)
 ULIB_SO_speedtest = $(LIBHTTP_SO) $(LIBSSL_SO) $(BUILD)/lib/libhash.so
 ULIB_SO_hwdata = $(LIBHTTP_SO) $(LIBSSL_SO) $(BUILD)/lib/libhash.so
 ULIB_SO_update = $(LIBHTTP_SO) $(LIBSSL_SO) $(BUILD)/lib/libhash.so

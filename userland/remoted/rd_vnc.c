@@ -36,6 +36,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include "lib/uwmchan.h"
+#include "utls.h"
 #include "query_abi.h"   // QUERY_REMOTE_STATUS
 
 #define POLL_MS 10              // the read deadline: how often the compositor's
@@ -66,6 +67,8 @@ struct vnc {
     uint8_t dirty[TILES_Y_MAX][TILES_X_MAX];   // differs from what the viewer has
     uint8_t buttons;
     int view_only;
+    int tls_ready;            // this machine has a key to offer VeNCrypt with
+    int encrypted;            // ...and this viewer took it
     struct rd_buf out;
     // What the summary line reports.
     unsigned long long st_t0, st_cap, st_enc, st_send, st_bytes;
@@ -75,14 +78,53 @@ struct vnc {
 static unsigned long long now_ns(void) { return sys_monotonic_ns(); }
 
 // --- the socket -----------------------------------------------------------
+//
+// ONE PAIR OF FUNCTIONS FOR EVERY BYTE: the socket until VeNCrypt's
+// handshake, the TLS session after it. Nothing above this section knows
+// which, so the protocol is written once.
+static struct utls *g_tls;
 
-// Reads exactly `n` bytes, waiting as long as it takes. 0 when the
-// viewer went away.
+static long io_read(void *buf, size_t n) {
+    return g_tls ? utls_read(g_tls, buf, n) : read(0, buf, n);
+}
+
+static long io_write(const void *buf, size_t n) {
+    return g_tls ? utls_write(g_tls, buf, n) : write(1, buf, n);
+}
+
+// THE HANDSHAKE'S DEADLINE (OpenSSH's LoginGraceTime): while it is set,
+// a read that would outlast it fails. Without one a viewer that connects
+// and says nothing holds one of SESSIONS_MAX slots for ever, and two of
+// them lock everybody out. Not set across the question at the screen --
+// that wait is the person's, not the viewer's.
+#define HANDSHAKE_S 30
+static unsigned long long g_deadline_ns;
+
+static void deadline(int s) {
+    g_deadline_ns = s ? sys_monotonic_ns() + (unsigned long long)s * 1000000000ull : 0;
+}
+
+// Reads exactly `n` bytes: as long as it takes, or until the deadline.
+// 0 when the viewer went away or ran out of time.
 static int read_full(void *buf, size_t n) {
     uint8_t *p = buf;
     while (n) {
-        int64_t r = read(0, p, n);
-        if (r <= 0) return 0;
+        long r;
+        if (g_deadline_ns) {
+            unsigned long long now = sys_monotonic_ns();
+            if (now >= g_deadline_ns) return 0;
+            int ms = (int)((g_deadline_ns - now) / 1000000ull) + 1;
+            if (g_tls) {
+                r = utls_read_timeout(g_tls, p, n, ms);
+            } else {
+                uint32_t src;
+                uint16_t port;
+                r = (long)sys_recvfrom(0, p, n, &src, &port, ms);
+            }
+        } else {
+            r = io_read(p, n);
+        }
+        if (r <= 0) return 0;   // a close, a timeout and an error alike
         p += r;
         n -= (size_t)r;
     }
@@ -94,6 +136,10 @@ static int read_full(void *buf, size_t n) {
 // close; the clock tells them apart, because a timeout comes back only
 // once the deadline has passed and a close comes back at once.
 static int read_first(uint8_t *b) {
+    if (g_tls) {
+        long r = utls_read_timeout(g_tls, b, 1, POLL_MS);
+        return r == 1 ? 1 : r == UTLS_TIMEOUT ? 0 : -1;
+    }
     unsigned long long t0 = sys_monotonic_ns();
     uint32_t src;
     uint16_t port;
@@ -106,7 +152,7 @@ static int read_first(uint8_t *b) {
 static int write_full(const void *buf, size_t n) {
     const uint8_t *p = buf;
     while (n) {
-        int64_t r = write(1, p, n);
+        long r = io_write(p, n);
         if (r <= 0) return 0;
         p += r;
         n -= (size_t)r;
@@ -156,11 +202,71 @@ static int vnc_auth(const char *password) {
     return diff == 0;
 }
 
+#define RFB_SEC_VNC        2
+#define RFB_SEC_VENCRYPT  19
+#define VENCRYPT_X509VNC  261   // TLS with our certificate, then VNC Authentication
+#define VENCRYPT_X509PLAIN 262  // TLS with our certificate, then a user name and password
+
+// VeNCrypt (TigerVNC's, RFB security type 19): agree version 0.2, offer
+// the two X509 subtypes, take the viewer's pick, run the TLS handshake,
+// then the inner check over TLS. 1 the password was right, 0 wrong, -1
+// the negotiation failed. From here every byte is encrypted (g_tls).
+//
+// X509PLAIN SENDS THE WHOLE PASSWORD, inside TLS, and it is compared
+// whole -- unlike VNC Authentication's 8-character DES key. There is no
+// user on this machine, so the name is read and ignored.
+static int vencrypt(struct vnc *v, const char *pw) {
+    char ip[16];
+    uremote_fmt_ip(v->peer, ip, sizeof ip);
+    uint8_t ver[2] = { 0, 2 }, cver[2], ack = 0;
+    if (!write_full(ver, 2) || !read_full(cver, 2)) return -1;
+    if (cver[0] != 0 || cver[1] != 2) {
+        ack = 0xFF;   // "cannot do that version", VeNCrypt's word for it
+        write_full(&ack, 1);
+        return -1;
+    }
+    uint8_t sub[9] = { 2, 0, 0, VENCRYPT_X509VNC >> 8, VENCRYPT_X509VNC & 0xFF,
+                       0, 0, VENCRYPT_X509PLAIN >> 8, VENCRYPT_X509PLAIN & 0xFF };
+    uint8_t pick[4];
+    if (!write_full(&ack, 1) || !write_full(sub, sizeof sub) || !read_full(pick, 4)) return -1;
+    uint32_t st = be32(pick);
+    uint8_t yes = st == VENCRYPT_X509VNC || st == VENCRYPT_X509PLAIN;
+    if (!write_full(&yes, 1) || !yes) return -1;
+
+    char err[160];
+    g_tls = utls_accept(0, RD_TLS_KEY, RD_TLS_CRT, err, sizeof err);
+    if (!g_tls) {
+        rd_log("remoted: vnc: %s: TLS failed: %s\n", ip, err);
+        return -1;
+    }
+    v->encrypted = 1;
+    rd_log("remoted: vnc: %s: encrypted (%s, %s)\n", ip, utls_version(g_tls),
+           utls_ciphersuite(g_tls));
+    if (st == VENCRYPT_X509VNC) return vnc_auth(pw);
+
+    uint8_t len[8];
+    if (!read_full(len, 8)) return -1;
+    uint32_t ul = be32(len), pl = be32(len + 4);
+    if (ul > 255 || pl > 255) return -1;
+    char user[256], pass[256];
+    if (!read_full(user, ul) || !read_full(pass, pl)) return -1;
+    pass[pl] = 0;
+    // Constant time over the longer of the two, so the length of the
+    // right password is not on the wire's clock either.
+    size_t a = strlen(pw), n = a > pl ? a : pl;
+    uint8_t diff = (uint8_t)(a != pl);
+    for (size_t i = 0; i < n; i++)
+        diff |= (uint8_t)((i < a ? pw[i] : 0) ^ (i < pl ? pass[i] : 0));
+    memset(pass, 0, sizeof pass);
+    return diff == 0;
+}
+
 static int admitted(struct vnc *v);
 
 // The version exchange, security and authentication. 1 when the viewer
 // is in.
 static int handshake(struct vnc *v, int *minor) {
+    deadline(HANDSHAKE_S);
     if (!write_full("RFB 003.008\n", 12)) return 0;
     char ver[13] = { 0 };
     if (!read_full(ver, 12)) return 0;
@@ -178,18 +284,54 @@ static int handshake(struct vnc *v, int *minor) {
         send_reason("No password is set on this machine.");
         return 0;
     }
+    // WHICH SECURITY: VeNCrypt (TLS) when this machine can make a key and
+    // the setting allows it, VNC Authentication when the setting allows
+    // that. RFB 3.3 has no negotiation at all, so it gets the plain kind
+    // or nothing.
+    int tls_ok = v->tls_ready && v->conf->vnc.encryption != UREMOTE_ENC_OFF;
+    int plain_ok = v->conf->vnc.encryption != UREMOTE_ENC_REQUIRE;
+    if (!plain_ok && (!tls_ok || *minor == 3)) {
+        rd_log("remoted: vnc: refused -- encryption is required and %s\n",
+               *minor == 3 ? "this viewer speaks RFB 3.3" : "TLS is not available here");
+        if (*minor == 3) { uint8_t z[4] = { 0 }; write_full(z, 4); }
+        else             { uint8_t z = 0; write_full(&z, 1); }
+        send_reason("This machine requires an encrypted connection (VeNCrypt).");
+        return 0;
+    }
+    int ok;
     if (*minor == 3) {
         uint8_t t[4] = { 0, 0, 0, 2 };
         if (!write_full(t, 4)) return 0;
+        ok = vnc_auth(pw);
     } else {
-        uint8_t t[2] = { 1, 2 };   // one type: VNC Authentication
+        // THE ORDER IS A DECISION: plain VNC Authentication FIRST when
+        // both are offered. libvncclient (Remmina) takes the first type it
+        // knows in the SERVER's list, and for VeNCrypt's X509 subtypes it
+        // demands a CA file -- with a self-signed certificate and none
+        // configured it gives up ("No CA certificate provided") rather
+        // than fall back. TigerVNC picks by its OWN preference, VeNCrypt
+        // first, so it still encrypts. TigerVNC's server dodges this with
+        // anonymous TLS (TLSVnc), which mbedTLS does not do.
+        uint8_t t[3], n = 0;
+        if (plain_ok) t[1 + n++] = RFB_SEC_VNC;
+        if (tls_ok) t[1 + n++] = RFB_SEC_VENCRYPT;
+        t[0] = n;
         uint8_t pick;
-        if (!write_full(t, 2) || !read_full(&pick, 1) || pick != 2) return 0;
+        if (!write_full(t, 1 + n) || !read_full(&pick, 1)) return 0;
+        if (pick == RFB_SEC_VENCRYPT && tls_ok) {
+            int r = vencrypt(v, pw);
+            if (r < 0) return 0;
+            ok = r;
+        } else if (pick == RFB_SEC_VNC && plain_ok) {
+            ok = vnc_auth(pw);
+        } else {
+            return 0;
+        }
     }
-    int ok = vnc_auth(pw);
     // THE SECOND QUESTION BEFORE THE ANSWER: the password is right, but
     // the result is not sent until "When someone connects" says yes too
     // -- so a viewer that is turned away hears why, in RFB's own words.
+    deadline(0);
     int refused = ok && !admitted(v);
     uint8_t res[4] = { 0, 0, 0, ok && !refused ? 0 : 1 };
     write_full(res, 4);
@@ -269,7 +411,10 @@ static int admitted(struct vnc *v) {
 // What QUERY_REMOTESESS shows for this session -- the tray flyout's and
 // System Settings' line.
 static void set_status(const struct vnc *v) {
-    sys_remote_log(QUERY_REMOTE_STATUS, 0, v->view_only ? "VNC, view only" : "VNC, full control");
+    char s[QUERY_REMOTESESS_STATUS_MAX];
+    snprintf(s, sizeof s, "VNC, %s%s", v->view_only ? "view only" : "full control",
+             v->encrypted ? ", encrypted" : "");
+    sys_remote_log(QUERY_REMOTE_STATUS, 0, s);
 }
 
 // SIGUSR1: view only; SIGUSR2: control back (lib/uremote.h). The handler
@@ -556,13 +701,20 @@ int rd_vnc_session(const struct uremote_conf *c, uint32_t peer) {
     v.prev = calloc((size_t)v.w * v.h, 4);
     if (!v.prev) { ushot_close(&v.shot); return 1; }
 
+    // TLS ONLY WITH A KEY ALREADY MADE: the listener makes it (remoted.c),
+    // so a session never stalls a viewer on key generation.
+    v.tls_ready = c->vnc.encryption != UREMOTE_ENC_OFF && access(RD_TLS_KEY, R_OK) == 0 &&
+                  access(RD_TLS_CRT, R_OK) == 0;
     int minor = 8;
     if (!handshake(&v, &minor)) {   // the password, then "When someone connects"
         ushot_close(&v.shot);
         return 1;
     }
     uint8_t shared;
-    if (!read_full(&shared, 1) || !server_init(&v)) {
+    deadline(HANDSHAKE_S);
+    int in = read_full(&shared, 1) && server_init(&v);
+    deadline(0);
+    if (!in) {
         ushot_close(&v.shot);
         return 1;
     }
@@ -611,5 +763,7 @@ int rd_vnc_session(const struct uremote_conf *c, uint32_t peer) {
     rd_buf_free(&v.enc.scratch);
     free(v.prev);
     ushot_close(&v.shot);
+    if (g_tls) utls_close(g_tls);
+    g_tls = 0;
     return 0;
 }

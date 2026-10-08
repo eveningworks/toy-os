@@ -21,8 +21,12 @@ static struct uui_button g_vnc_pw_save;
 static struct uui_item g_pw_items[2];
 static struct uui_layout g_pw_row;
 static struct uui_setting_row g_vnc_port_row, g_vnc_pw_row;
+static const char *const ENC[] = { "When the viewer offers it", "Required", "Off" };
+static struct uui_dropdown g_enc_dd;
+static struct uui_setting_row g_enc_row;
+static char g_enc_desc[200];
 static struct uui_label g_vnc_note;
-static struct uui_item g_vnc_body[3];
+static struct uui_item g_vnc_body[4];
 static struct uui_card g_vnc;
 static char g_vnc_sub[96], g_vnc_badge[24];
 
@@ -151,20 +155,28 @@ void remote_init(void) {
                                             .flags = UUI_FILL_W, .name = "rd_vnc_pw_row" });
     g_vnc_port_row.flat = g_vnc_pw_row.flat = 1;
     g_vnc_pw_row.stacked = 1;
+    uui_dropdown_init(&g_enc_dd, 0, 0, 0, 0, ENC, 3);
+    uui_setting_row_init(&g_enc_row, "Encryption", g_enc_desc,
+                         (struct uui_item){ .ops = &uui_dropdown_ops, .widget = &g_enc_dd,
+                                            .id = ID_RD_ENC, .name = "rd_enc" });
+    g_enc_row.flat = 1;
+    g_enc_row.stacked = 1;
     uui_label_init(&g_vnc_note, "For TigerVNC, RealVNC, Remmina and macOS Screen Sharing. "
-                                "VNC checks only the first 8 characters of the password, "
-                                "and the session is not encrypted.");
+                                "Without encryption VNC checks only the first 8 characters of "
+                                "the password, and the picture crosses the network as it is.");
     uui_label_set_wrap(&g_vnc_note, 4);
     g_vnc_body[0] = (struct uui_item){ .ops = &uui_setting_row_ops, .widget = &g_vnc_port_row,
                                        .flags = UUI_FILL_W, .name = "rd_vnc_port_row" };
     g_vnc_body[1] = (struct uui_item){ .ops = &uui_setting_row_ops, .widget = &g_vnc_pw_row,
                                        .flags = UUI_FILL_W, .name = "rd_vnc_pw_row" };
-    g_vnc_body[2] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_vnc_note,
+    g_vnc_body[2] = (struct uui_item){ .ops = &uui_setting_row_ops, .widget = &g_enc_row,
+                                       .flags = UUI_FILL_W, .name = "rd_enc_row" };
+    g_vnc_body[3] = (struct uui_item){ .ops = &uui_label_ops, .widget = &g_vnc_note,
                                        .flags = UUI_FILL_W, .name = "rd_vnc_note" };
     uui_card_init(&g_vnc, "VNC", g_vnc_sub,
                   (struct uui_item){ .ops = &uui_switch_ops, .widget = &g_vnc_sw, .id = ID_RD_VNC,
                                      .name = "rd_vnc" },
-                  g_vnc_body, 3);
+                  g_vnc_body, 4);
 
     uui_switch_init(&g_rdp_sw, 0);
     g_rdp_sw.disabled = 1;
@@ -231,6 +243,15 @@ void remote_load(void) {
     uui_spinbox_set_value(&g_vnc_port, g_rc.vnc.port);
     uui_textbox_set_text(&g_vnc_pw, g_rc.vnc.password);
     uui_dropdown_set_selected(&g_when_dd, (int)g_rc.when);
+    uui_dropdown_set_selected(&g_enc_dd, (int)g_rc.vnc.encryption);
+    // The fingerprint a viewer shows when it first meets this machine:
+    // comparing the two is how a person knows nobody is in between.
+    if (g_rc.vnc.fingerprint[0])
+        snprintf(g_enc_desc, sizeof g_enc_desc, "TLS (VeNCrypt). Certificate SHA-256: %s",
+                 g_rc.vnc.fingerprint);
+    else
+        snprintf(g_enc_desc, sizeof g_enc_desc, "TLS (VeNCrypt). The certificate is made when "
+                 "VNC is first switched on.");
     uui_dropdown_set_selected(&g_from_dd, (int)g_rc.from);
     build_trusted();
     build_sessions();
@@ -244,6 +265,7 @@ int remote_emit(struct uui_item *out, int n, struct uui_focusable *focus, int *n
     focus[(*nfocus)++] = (struct uui_focusable){ &g_vnc_port, &uui_spinbox_ops };
     focus[(*nfocus)++] = (struct uui_focusable){ &g_vnc_pw, &uui_textbox_focus_ops };
     focus[(*nfocus)++] = (struct uui_focusable){ &g_vnc_pw_save, &uui_button_ops };
+    focus[(*nfocus)++] = (struct uui_focusable){ &g_enc_dd, &uui_dropdown_ops };
     out[n++] = (struct uui_item){ .ops = &uui_setting_row_ops, .widget = &g_when_row,
                                   .flags = UUI_FILL_W, .name = "rd_when_row" };
     focus[(*nfocus)++] = (struct uui_focusable){ &g_when_dd, &uui_dropdown_ops };
@@ -270,6 +292,7 @@ int remote_fit(void) {
     int changed = 0;
     if (uui_setting_row_fit(&g_vnc_port_row)) changed = 1;
     if (uui_setting_row_fit(&g_vnc_pw_row)) changed = 1;
+    if (uui_setting_row_fit(&g_enc_row)) changed = 1;
     if (uui_setting_row_fit(&g_when_row)) changed = 1;
     if (uui_setting_row_fit(&g_from_row)) changed = 1;
     if (uui_setting_row_fit(&g_add_row)) changed = 1;
@@ -291,6 +314,11 @@ int remote_on_widget(int id) {
     case ID_RD_PORT:
         status("The port", uremote_set_port("vnc", uui_spinbox_value(&g_vnc_port)));
         break;
+    case ID_RD_ENC: {
+        int sel = uui_dropdown_selected(&g_enc_dd);
+        if (sel >= 0 && sel < 3) status("Encryption", uremote_set_encryption("vnc", (enum uremote_enc)sel));
+        break;
+    }
     case ID_RD_WHEN: {
         int sel = uui_dropdown_selected(&g_when_dd);
         if (sel >= 0 && sel < 3) status("When someone connects", uremote_set_when((enum uremote_when)sel));

@@ -57,6 +57,13 @@ static void proto(const struct etc_config_buf *b, const char *sect, struct uremo
     }
     p->password[0] = 0;
     etc_config_buf_get_in(b, sect, "password", p->password, sizeof p->password);
+    p->encryption = UREMOTE_ENC_PREFER;
+    if (etc_config_buf_get_in(b, sect, "encryption", v, sizeof v)) {
+        if (!strcmp(v, "require")) p->encryption = UREMOTE_ENC_REQUIRE;
+        else if (!strcmp(v, "off")) p->encryption = UREMOTE_ENC_OFF;
+    }
+    p->fingerprint[0] = 0;
+    etc_config_buf_get_in(b, sect, "fingerprint", p->fingerprint, sizeof p->fingerprint);
     snprintf(p->user, sizeof p->user, "toy");
     etc_config_buf_get_in(b, sect, "user", p->user, sizeof p->user);
 }
@@ -113,6 +120,11 @@ int uremote_set_port(const char *p, int port) {
 
 int uremote_set_password(const char *p, const char *pw) {
     return ok(uconf_set_in(UREMOTE_CONF, p, "password", pw));
+}
+
+int uremote_set_encryption(const char *p, enum uremote_enc e) {
+    static const char *const E[] = { "prefer", "require", "off" };
+    return ok(uconf_set_in(UREMOTE_CONF, p, "encryption", E[e]));
 }
 
 int uremote_set_when(enum uremote_when w) {

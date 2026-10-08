@@ -31,8 +31,14 @@ struct uremote_net {                 // one trusted address or subnet
     char label[UREMOTE_LABEL_MAX];   // "" when it has none
 };
 
+// VNC's encryption (VeNCrypt): offered first and the plain password still
+// accepted; required; or not offered.
+enum uremote_enc { UREMOTE_ENC_PREFER, UREMOTE_ENC_REQUIRE, UREMOTE_ENC_OFF };
+
 struct uremote_proto {
     int enabled;
+    enum uremote_enc encryption;
+    char fingerprint[100];           // the certificate's, as remoted last recorded it
     int port;
     char user[32];                   // RDP's; VNC has no user name
     char password[UREMOTE_PASSWORD_MAX];
@@ -55,6 +61,7 @@ void uremote_load(struct uremote_conf *c);
 int uremote_set_enabled(const char *proto, int on);
 int uremote_set_port(const char *proto, int port);
 int uremote_set_password(const char *proto, const char *pw);
+int uremote_set_encryption(const char *proto, enum uremote_enc e);
 int uremote_set_when(enum uremote_when w);
 int uremote_set_from(enum uremote_from f);
 // Adds `addr` ("a.b.c.d" or "a.b.c.d/bits") with an optional label, or

@@ -452,6 +452,9 @@ DIRTIES_IMAGE = {"console_bleed"}
 #   pixel_probe.py -- a library with a CLI, not a test.
 #   vnc_latency.py -- a MEASUREMENT against a machine you name (--host,
 #                     --password), with numbers and no verdict.
+#   libvnc_check.py -- needs Docker and pulls an image, and boots nothing:
+#                     it connects the real libvncclient to a guest you
+#                     started (--port, --password, --ca).
 #   mkpart_test.py -- despite the name, a WRITER: it takes a disk image
 #                     argument and patches a table onto it. Running it
 #                     bare is an argparse error, not a result. Its

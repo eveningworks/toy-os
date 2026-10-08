@@ -136,6 +136,18 @@
 // about where it lives, which is a separate piece of work.
 #define MBEDTLS_SSL_TLS_C
 #define MBEDTLS_SSL_CLI_C
+// THE SERVER HALF, for /bin/remoted's VeNCrypt: a key and a self-signed
+// certificate made on this machine (utls_server_identity()).
+#define MBEDTLS_SSL_SRV_C
+#define MBEDTLS_PK_WRITE_C
+#define MBEDTLS_PEM_WRITE_C
+#define MBEDTLS_X509_CREATE_C
+#define MBEDTLS_X509_CRT_WRITE_C
+// DETERMINISTIC SIGNATURES (RFC 6979), so the same key and the same names
+// make the same certificate byte for byte -- the fingerprint a viewer
+// remembered survives every reboot.
+#define MBEDTLS_HMAC_DRBG_C
+#define MBEDTLS_ECDSA_DETERMINISTIC
 #define MBEDTLS_SSL_PROTO_TLS1_2
 #define MBEDTLS_SSL_PROTO_TLS1_3
 #define MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_EPHEMERAL_ENABLED

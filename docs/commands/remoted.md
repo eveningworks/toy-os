@@ -15,7 +15,7 @@
 | Command | Notes |
 |---|---|
 | `remoted` / `remoted serve` | Listen for viewers. What the `remoted` service runs; idle until a protocol is switched on. |
-| `remoted status` | What `/etc/remote.conf` switches on: each protocol, its port, whether a password is set, who is trusted. |
+| `remoted status` | What `/etc/remote.conf` switches on: each protocol, its port, whether a password is set, the encryption and certificate fingerprint, who is trusted. |
 | `remoted session PROTOCOL PEER` | Serve one viewer on fd 0 and fd 1. The listener runs this for each connection; it is not for typing. |
 
 ## Description
@@ -63,6 +63,8 @@ the layout has no key for is dropped.
 | `[vnc] enabled` | `no` | listen for VNC viewers |
 | `[vnc] port` | `5900` | |
 | `[vnc] password` | (none) | **required**: with none, every viewer is refused |
+| `[vnc] encryption` | `prefer` | `prefer`: offer VeNCrypt (TLS) beside plain VNC; `require`: VeNCrypt only; `off`: plain only |
+| `[vnc] fingerprint` | (written) | the certificate's SHA-256, written by `remoted` for Settings to show; not read back |
 
 Trusted addresses may carry a name, kept under `[labels]` by address:
 `192.168.1.20 = my laptop`.
@@ -93,12 +95,40 @@ and work from a shell as well:
 | `SIGUSR1` | `kill -USR1 PID` | view only: the viewer's keys and mouse are ignored |
 | `SIGUSR2` | `kill -USR2 PID` | gives the viewer control back |
 
+## Encryption
+
+**VeNCrypt** (RFB security type 19) wraps the session in TLS -- 1.3, or
+1.2 for an older viewer -- before the password is sent, and is offered
+whenever this machine's randomness is good enough to make a key
+(RDRAND/RDSEED or virtio-rng; `random` says which). The key (`/etc/remote.key`, ECDSA P-256) is made once; the
+certificate (`/etc/remote.crt`, self-signed) names this machine's IPv4
+addresses, `127.0.0.1` and `toy-os`, and is remade when an address
+changes -- with the same key, so a viewer that remembered it is asked
+again only if the addresses differ. Its SHA-256 fingerprint is under
+Encryption in System Settings and in `remoted status`; compare it with
+what the viewer shows the first time.
+
+Both VeNCrypt kinds are offered: X509Vnc (the VNC password inside the
+TLS session) and X509Plain (a user name, ignored, and the full
+password -- not cut to 8 characters).
+
+**Plain VNC is listed first** under `prefer`. TigerVNC picks by its own
+preference and encrypts; Remmina takes the first kind the server lists,
+and for VeNCrypt it insists on a CA file -- so it connects in plain VNC
+unless the certificate is given to it as one (`remote.crt`, fetched
+with `remote.py get` or a USB stick). Under `require` only VeNCrypt is
+offered: a viewer that cannot do it, macOS Screen Sharing included, is
+told "This machine requires an encrypted connection (VeNCrypt)."
+
 ## Security
 
-**VNC's password check uses only the first 8 characters, and the session
-is not encrypted** -- RFB's VNC Authentication is DES over a challenge,
-from 1998. Use it on a network you trust. A wrong password costs the
-viewer two seconds before it may try again on that connection.
+**Plain VNC's password check uses only the first 8 characters, and that
+session is not encrypted** -- RFB's VNC Authentication is DES over a
+challenge, from 1998. Use it on a network you trust, or require
+encryption. A wrong password costs the viewer two seconds before it may
+try again on that connection, and a viewer has 30 seconds to finish
+logging in (not counting the question at the screen), so silent
+connections cannot hold both sessions.
 
 **A trusted address is only an address.** VNC tells a server nothing
 else about who is connecting, so the trusted list cannot be more than

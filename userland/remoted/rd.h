@@ -11,6 +11,11 @@
 #include <stddef.h>
 #include "lib/uremote.h"   // the config, who may connect
 
+// VeNCrypt's identity: made by the listener on first need, kept, and
+// trusted by viewers by its fingerprint (utls.h).
+#define RD_TLS_KEY "/etc/remote.key"
+#define RD_TLS_CRT "/etc/remote.crt"
+
 // Logs to fd 2 -- the kernel log. NEVER stdout: in a session fd 1 is
 // the viewer's socket.
 void rd_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));

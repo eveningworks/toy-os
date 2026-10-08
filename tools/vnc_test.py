@@ -28,8 +28,10 @@ disk.img, about two minutes under TCG.
   python3 tools/vnc_test.py --instance 3 --keep    # leave the guest up
 """
 import argparse
+import hashlib
 import os
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -80,20 +82,70 @@ def des_response(password, challenge):
     return r.stdout
 
 
+def vencrypt(conn, security, password, ca=None):
+    """VeNCrypt 0.2 after security type 19 was picked: the subtype
+    ("tls-vnc" = X509Vnc, "tls-plain" = X509Plain), the TLS handshake
+    -- verifying against `ca` (a PEM, checked for 127.0.0.1) or taking
+    any certificate -- and, for X509Plain, the credentials. `conn` has
+    .s and .recv(); .s becomes the TLS socket, and .cert_der and
+    .tls_version are set. X509Vnc's DES challenge is the caller's."""
+    if conn.recv(2) != b"\x00\x02":
+        raise RuntimeError("not VeNCrypt 0.2")
+    conn.s.sendall(b"\x00\x02")
+    if conn.recv(1) != b"\x00":
+        raise RuntimeError("VeNCrypt version refused")
+    n = conn.recv(1)[0]
+    conn.subtypes = list(struct.unpack(f">{n}I", conn.recv(4 * n)))
+    sub = 261 if security == "tls-vnc" else 262
+    conn.s.sendall(struct.pack(">I", sub))
+    if conn.recv(1) != b"\x01":
+        raise RuntimeError(f"subtype {sub} refused (offered {conn.subtypes})")
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    if ca:
+        ctx.load_verify_locations(cadata=ca)   # check_hostname stays on
+    else:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    conn.s = ctx.wrap_socket(conn.s, server_hostname="127.0.0.1")
+    conn.cert_der = conn.s.getpeercert(binary_form=True)
+    conn.tls_version = conn.s.version()
+    if sub == 262:
+        u, p = b"toy", password.encode()
+        conn.s.sendall(struct.pack(">II", len(u), len(p)) + u + p)
+
+
 class Viewer:
-    def __init__(self, port, password, timeout=30):
+    def __init__(self, port, password, timeout=30, security="vnc", ca=None):
+        """`security`: "vnc" (type 2), or VeNCrypt's "tls-vnc" (X509Vnc)
+        or "tls-plain" (X509Plain). `ca`: a PEM to verify the server's
+        certificate against, for 127.0.0.1, as a careful viewer does;
+        without one the certificate is taken and kept in self.cert_der."""
         self.s = socket.create_connection(("127.0.0.1", port), timeout=timeout)
         self.z = zlib.decompressobj()
         self.bpp = 32
+        self.cert_der = None
+        try:
+            self.login(password, security, ca)
+        except BaseException:
+            self.s.close()   # a refused attempt must not hold a server slot
+            raise
+
+    def login(self, password, security, ca):
         if self.recv(12) != b"RFB 003.008\n":
             raise RuntimeError("no RFB 3.8 banner")
         self.s.sendall(b"RFB 003.008\n")
         n = self.recv(1)[0]
-        types = self.recv(n)
-        if 2 not in types:
-            raise RuntimeError(f"no VNC auth offered: {types!r}")
-        self.s.sendall(b"\x02")
-        self.s.sendall(des_response(password, self.recv(16)))
+        if n == 0:
+            raise PermissionError(self.recv(struct.unpack(">I", self.recv(4))[0]).decode())
+        self.types = list(self.recv(n))
+        want = 2 if security == "vnc" else 19
+        if want not in self.types:
+            raise RuntimeError(f"security type {want} not offered: {self.types}")
+        self.s.sendall(bytes([want]))
+        if want == 19:
+            vencrypt(self, security, password, ca)
+        if security != "tls-plain":
+            self.s.sendall(des_response(password, self.recv(16)))
         res = struct.unpack(">I", self.recv(4))[0]
         if res != 0:
             ln = struct.unpack(">I", self.recv(4))[0]
@@ -288,13 +340,13 @@ def same_fraction(a, b, quant=None):
     return same / n
 
 
-def connect(args, password=PASSWORD, wait=60):
+def connect(args, password=PASSWORD, wait=60, security="vnc"):
     """The server comes up when remoted next reads its config."""
     end = time.time() + wait
     last = None
     while time.time() < end:
         try:
-            return Viewer(args.port, password)
+            return Viewer(args.port, password, security=security)
         except PermissionError:
             raise   # an answer, not a server still starting
         except (OSError, EOFError, RuntimeError) as e:
@@ -483,6 +535,112 @@ def stage2(args, r, tmp, conf):
             "enabled = no" in after or "enabled=no" in after, after[-300:])
 
 
+# --- stage 3: VeNCrypt --------------------------------------------------------
+
+def stage3(args, r, q, tmp, conf):
+    put_conf(args, conf, CONF)   # stage 2 left the server switched off
+    try:
+        v = connect(args, security="tls-vnc")
+    except (PermissionError, RuntimeError) as e:
+        r.check("VeNCrypt (X509Vnc) lets a viewer in over TLS", False, repr(e))
+        return
+    r.check("VeNCrypt (X509Vnc) lets a viewer in over TLS", v.name == "toy-os",
+            f"{v.name} {v.tls_version}")
+    r.check("...plain VNC is listed first, for viewers with no CA to give",
+            v.types == [2, 19], str(v.types))
+    fp = ":".join(f"{b:02X}" for b in hashlib.sha256(v.cert_der).digest())
+    saved = vm(args, "exec", "cat /etc/remote.conf").stdout
+    r.check("the certificate is the one whose fingerprint Settings shows", fp in saved,
+            f"{fp}\n{saved[-300:]}")
+    v.pointer(v.w - 1, v.h - 1)
+    time.sleep(1.0)
+    v.set_encodings([0])
+    if frame(r, v, "a Raw frame over TLS is the screen") is not None:
+        size, ref = dump(q, tmp)
+        frac = same_fraction(bytes(v.fb), ref) if size == (v.w, v.h) else 0
+        r.check("a Raw frame over TLS is the screen", frac >= 0.995, f"{frac:.4%} identical")
+    v.close()
+
+    # A viewer that VERIFIES: the certificate as its trust anchor, and
+    # the address it dialled checked against the names in it.
+    pem = ssl.DER_cert_to_PEM_cert(v.cert_der)
+    try:
+        Viewer(args.port, PASSWORD, security="tls-vnc", ca=pem).close()
+        r.check("the certificate names the address a viewer dialled", True)
+    except (ssl.SSLError, OSError, RuntimeError) as e:
+        r.check("the certificate names the address a viewer dialled", False, repr(e))
+    try:
+        Viewer(args.port, "wrongpw!", security="tls-plain").close()
+        r.check("X509Plain refuses a wrong password", False, "it was let in")
+    except PermissionError:
+        r.check("X509Plain refuses a wrong password", True)
+    except (OSError, EOFError, RuntimeError) as e:
+        r.check("X509Plain refuses a wrong password", False, repr(e))
+    try:
+        Viewer(args.port, PASSWORD, security="tls-plain").close()
+        r.check("...and lets the right one in", True)
+    except (PermissionError, OSError, EOFError, RuntimeError) as e:
+        r.check("...and lets the right one in", False, repr(e))
+
+    # Required: VeNCrypt alone is offered, and RFB 3.3 -- which cannot
+    # negotiate -- is told why it is refused.
+    put_conf(args, conf, CONF + "encryption = require\n")
+    end = time.time() + 30
+    types = None
+    while time.time() < end and types != [19]:   # until remoted rereads the file
+        time.sleep(2)
+        try:
+            Viewer(args.port, PASSWORD).close()
+            types = "plain VNC still let in"
+        except RuntimeError as e:
+            types = [19] if str(e).endswith("[19]") else str(e)
+        except (PermissionError, OSError, EOFError) as e:
+            types = repr(e)
+    r.check("\"Required\" offers VeNCrypt alone", types == [19], str(types))
+    try:
+        Viewer(args.port, PASSWORD, security="tls-vnc").close()
+        r.check("...which still lets a viewer in", True)
+    except (PermissionError, OSError, EOFError, RuntimeError) as e:
+        r.check("...which still lets a viewer in", False, repr(e))
+    s = socket.create_connection(("127.0.0.1", args.port), timeout=20)
+    s.recv(12)
+    s.sendall(b"RFB 003.003\n")
+    got = b""
+    while True:
+        c = s.recv(4096)
+        if not c:
+            break
+        got += c
+    s.close()
+    r.check("...and an RFB 3.3 viewer is told why it is refused",
+            got[:4] == b"\0\0\0\0" and b"ncrypt" in got, repr(got[:120]))
+
+    # Viewers that connect and say nothing hold the sessions -- and are
+    # dropped at the handshake's deadline rather than locking everyone out.
+    silent = [socket.create_connection(("127.0.0.1", args.port), timeout=60) for _ in range(2)]
+    time.sleep(3)
+    try:
+        Viewer(args.port, PASSWORD, security="tls-vnc").close()
+        held = False
+    except (PermissionError, OSError, EOFError, RuntimeError):
+        held = True
+    r.check("two silent viewers hold both sessions", held)
+    t0 = time.time()
+    for c in silent:
+        try:
+            while c.recv(4096):   # the banner, then the close
+                pass
+        except OSError:
+            pass
+        c.close()
+    waited = time.time() - t0
+    try:
+        Viewer(args.port, PASSWORD, security="tls-vnc").close()
+        r.check("...until the handshake's deadline drops them", waited < 45, f"{waited:.0f} s")
+    except (PermissionError, OSError, EOFError, RuntimeError) as e:
+        r.check("...until the handshake's deadline drops them", False, f"{waited:.0f} s, {e!r}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--instance", type=int, default=0)
@@ -496,7 +654,8 @@ def main():
 
     print(f"vnc_test: booting slot {args.instance}, guest 5900 on host {args.port}")
     vm(args, "stop")
-    boot = vm(args, "--hostfwd", f"tcp::{args.port}-:5900", "start", timeout=400)
+    # --cpu max: RDRAND, without which remoted refuses to make a TLS key.
+    boot = vm(args, "--cpu", "max", "--hostfwd", f"tcp::{args.port}-:5900", "start", timeout=400)
     if "ready" not in boot.stdout:
         print(f"vnc_test: guest did not boot\n{boot.stdout}\n{boot.stderr}")
         return 1
@@ -694,6 +853,7 @@ def main():
                 line in hist, hist[-300:])
         v.close()
         stage2(args, r, tmp, conf)
+        stage3(args, r, q, tmp, conf)
         q.close()
     finally:
         if not args.keep:
