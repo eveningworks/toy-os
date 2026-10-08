@@ -70,6 +70,12 @@
 #define MBEDTLS_POLY1305_C
 #define MBEDTLS_CHACHAPOLY_C
 #define MBEDTLS_CIPHER_C
+// AES-NI and PCLMULQDQ through mbedTLS's own inline assembly, chosen at
+// run time by CPUID, so a CPU without them (QEMU's default model) keeps
+// the C tables. Without it a VNC frame over TLS cost twice the plain one
+// on the ASUS. HAVE_ASM also gives bignum its x86-64 multiply.
+#define MBEDTLS_HAVE_ASM
+#define MBEDTLS_AESNI_C
 
 // --- hashes ---------------------------------------------------------
 //
