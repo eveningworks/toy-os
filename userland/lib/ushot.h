@@ -88,6 +88,24 @@ int ushot_crop(struct ushot *s, int x, int y, int w, int h);
 // from the path's extension. Returns 0 or a negative errno.
 int ushot_save(const struct ushot *s, const char *path, const char *format);
 
+// SHARING THE SCREEN (abi/win_proto.h's WIN_SHOT_DAMAGE). `px` becomes a
+// MIRROR of the screen (screen_w per row) and only what the compositor
+// repainted since the last call is copied into it; `out` lists those
+// rects, n = 0 when nothing changed. The first call copies everything.
+// WIN_SHOT_POINTER in `flags` draws the pointer in, and then its moves
+// count as changes. 0 or a negative errno (-EBUSY: a fullscreen program
+// has the display, or four screens are shared already).
+int ushot_damage(struct ushot *s, unsigned flags, struct win_damage *out);
+
+// The pointer's shape, 0xAARRGGBB, copied into `out` (at most `cap`
+// pixels, 64x64 at most), with its size and hotspot. The capture
+// buffer -- a ushot_damage() mirror included -- is left as it was.
+int ushot_cursor(struct ushot *s, uint32_t *out, int cap, int *w, int *h, int *hot_x, int *hot_y);
+
+// Drains the compositor's events; returns the WIN_CAST_* bits seen (what
+// changed since the last damage or cursor capture). Never blocks.
+int ushot_events(struct ushot *s);
+
 void ushot_close(struct ushot *s);
 
 // A sentence for a return code from any of the above -- including the

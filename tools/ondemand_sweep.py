@@ -450,6 +450,8 @@ DIRTIES_IMAGE = {"console_bleed"}
 #   damage_*.py    -- analysis passes over a running desktop, not
 #                     pass/fail tools.
 #   pixel_probe.py -- a library with a CLI, not a test.
+#   vnc_latency.py -- a MEASUREMENT against a machine you name (--host,
+#                     --password), with numbers and no verdict.
 #   mkpart_test.py -- despite the name, a WRITER: it takes a disk image
 #                     argument and patches a table onto it. Running it
 #                     bare is an argparse error, not a result. Its

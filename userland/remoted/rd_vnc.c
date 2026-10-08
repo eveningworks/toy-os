@@ -1,13 +1,19 @@
 // One VNC viewer: RFB 3.8 (RFC 6143) on fd 0 and fd 1. See rd.h.
 //
-// THE SCREEN IS PULLED, NOT PUSHED. RFB lets the server sit on an
-// incremental update request until something changes, so the loop reads
-// the viewer with a short deadline and, while a request is pending,
-// captures the screen through the compositor (lib/ushot.h -- the same
-// request `screenshot` uses) and compares it with the last frame sent in
-// 64x64 tiles. Only changed tiles go out. TigerVNC's server does this
-// comparison too ("comparing update tracker"); a compositor damage hint
-// would save the compare and is the obvious next step.
+// THE SCREEN IS WHAT THE COMPOSITOR SAYS CHANGED. A session is a
+// CASTER (lib/ushot.h's ushot_damage()): toywm keeps the rectangles it
+// repainted since the last capture, sends WIN_EV_CAST when there are new
+// ones, and copies only those into this process's mirror of the screen.
+// The rectangles are merged, so each is still compared with the frame
+// the viewer has in 64x64 tiles, and only tiles that really differ go
+// out. Grabbing and comparing the whole screen 30 times a second was the
+// first version; it made a viewer feel late (62 ms per pointer move on
+// the ASUS, a full repaint per grab in the compositor).
+//
+// THE VIEWER DRAWS THE POINTER when it offers RFB's Cursor
+// pseudo-encoding (every current viewer does): its shape is sent when it
+// changes, and moving the mouse sends no pixels at all. A viewer without
+// it gets the pointer drawn into the picture, and a move is damage.
 //
 // INPUT GOES IN THROUGH THE KERNEL (SYS_INPUT_INJECT), where a keyboard's
 // and a mouse's do, so a viewer's keys meet the same layout, shortcuts
@@ -28,9 +34,16 @@
 #include <string.h>
 #include <unistd.h>
 
-#define POLL_MS 33              // the read deadline: ~30 checks a second
+#define POLL_MS 10              // the read deadline: how often the compositor's
+                                // nudge is looked for while the viewer is quiet
 #define CUT_TEXT_MAX (1 << 20)  // a clipboard the viewer sends; skipped
 #define ENCODINGS_MAX 64
+
+#define CMP_TILE 64
+#define TILES_X_MAX (8192 / CMP_TILE)
+#define TILES_Y_MAX (8192 / CMP_TILE)
+#define CURSOR_MAX 64
+#define STATS_NS 10000000000ull    // a summary line this often, while busy
 
 struct vnc {
     const struct rd_conf *conf;
@@ -42,10 +55,20 @@ struct vnc {
     int want_update, want_full;
     int ux, uy, uw, uh;       // the requested region
     int desktop_size;         // the viewer understands DesktopSize
+    int cursor_enc;           // ...and draws the pointer itself
+    int damage_pending;       // the compositor says pixels changed
+    int cursor_dirty;         // ...or the pointer's shape did
+    int tx, ty;               // the tile grid's size
+    uint8_t dirty[TILES_Y_MAX][TILES_X_MAX];   // differs from what the viewer has
     uint8_t buttons;
     int view_only;
     struct rd_buf out;
+    // What the summary line reports.
+    unsigned long long st_t0, st_cap, st_enc, st_send, st_bytes;
+    int st_updates;
 };
+
+static unsigned long long now_ns(void) { return sys_monotonic_ns(); }
 
 // --- the socket -----------------------------------------------------------
 
@@ -239,11 +262,6 @@ static void pointer_event(struct vnc *v, uint8_t mask, int x, int y) {
 
 // --- the screen ------------------------------------------------------------
 
-#define CMP_TILE 64
-// More changed runs than this in one update wait for the next one: they
-// are still different from `prev`, so the next compare finds them.
-#define RECTS_MAX 512
-
 static int tile_changed(const struct vnc *v, int x, int y, int w, int h) {
     for (int j = 0; j < h; j++) {
         size_t o = (size_t)(y + j) * v->w + x;
@@ -259,52 +277,115 @@ static void copy_rect(struct vnc *v, int x, int y, int w, int h) {
     }
 }
 
-// One FramebufferUpdate with every changed tile in the requested region,
-// tiles merged along a row into one rectangle. 1 sent, 0 nothing to
-// send, -1 the connection failed.
-static int send_update(struct vnc *v) {
-    int rc = ushot_take(&v->shot, WIN_SHOT_SCREEN, WIN_SHOT_POINTER, 0, 0, 0, 0);
-    if (rc == -EBUSY) return 0;   // a fullscreen program has the display
-    if (rc < 0) return -1;
-    if (v->shot.w != v->w || v->shot.h != v->h) return -1;   // the mode changed
+static int tile_w(const struct vnc *v, int tx) {
+    return v->w - tx * CMP_TILE < CMP_TILE ? v->w - tx * CMP_TILE : CMP_TILE;
+}
+static int tile_h(const struct vnc *v, int ty) {
+    return v->h - ty * CMP_TILE < CMP_TILE ? v->h - ty * CMP_TILE : CMP_TILE;
+}
 
-    int x0 = v->ux, y0 = v->uy, x1 = v->ux + v->uw, y1 = v->uy + v->uh;
-    static struct { uint16_t x, y, w, h; } rects[RECTS_MAX];
+// Asks the compositor for what changed and marks the tiles that differ
+// from what the viewer has. A tile stays marked until it is SENT, so a
+// change outside the region a viewer asked for is not forgotten.
+static int take_damage(struct vnc *v) {
+    struct win_damage d;
+    int rc = ushot_damage(&v->shot, v->cursor_enc ? 0 : WIN_SHOT_POINTER, &d);
+    if (rc < 0) return rc;
+    v->damage_pending = 0;
+    for (int k = 0; k < d.n; k++) {
+        int x0 = d.r[k].x / CMP_TILE, y0 = d.r[k].y / CMP_TILE;
+        int x1 = (d.r[k].x + d.r[k].w + CMP_TILE - 1) / CMP_TILE;
+        int y1 = (d.r[k].y + d.r[k].h + CMP_TILE - 1) / CMP_TILE;
+        if (x1 > v->tx) x1 = v->tx;
+        if (y1 > v->ty) y1 = v->ty;
+        for (int ty = y0; ty < y1; ty++)
+            for (int tx = x0; tx < x1; tx++)
+                if (!v->dirty[ty][tx] &&
+                    tile_changed(v, tx * CMP_TILE, ty * CMP_TILE, tile_w(v, tx), tile_h(v, ty)))
+                    v->dirty[ty][tx] = 1;
+    }
+    return 0;
+}
+
+// RFB's Cursor pseudo-encoding (7.8.1): the shape in the viewer's pixel
+// format, then a bitmask, 1 = drawn, rows padded to a byte.
+static void cursor_rect(struct vnc *v, int *nrects) {
+    static uint32_t img[CURSOR_MAX * CURSOR_MAX];
+    int w, h, hx, hy;
+    if (ushot_cursor(&v->shot, img, CURSOR_MAX * CURSOR_MAX, &w, &h, &hx, &hy) < 0) return;
+    v->cursor_dirty = 0;
+    rd_enc_cursor(&v->enc, img, w, h, hx, hy, &v->out);
+    (*nrects)++;
+}
+
+// What the session's updates cost, as one log line: every STATS_NS
+// while busy, and once at the end.
+static void stats_line(struct vnc *v, unsigned long long now) {
+    int u = v->st_updates;
+    if (u)
+        rd_log("remoted: vnc: %d updates in %llu s: capture %llu, encode %llu, send %llu us each, "
+               "%llu KB\n", u, (now - v->st_t0) / 1000000000ull, v->st_cap / 1000 / u,
+               v->st_enc / 1000 / u, v->st_send / 1000 / u, v->st_bytes / 1024);
+    v->st_t0 = now;
+    v->st_updates = 0;
+    v->st_cap = v->st_enc = v->st_send = v->st_bytes = 0;
+}
+
+// One FramebufferUpdate: the pointer's shape if it changed, then the
+// marked tiles in the requested region, merged along each row of tiles.
+// 1 sent, 0 nothing to send yet, -1 the connection failed.
+static int send_update(struct vnc *v) {
+    unsigned long long t0 = now_ns();
+    if (v->damage_pending || v->want_full) {
+        int rc = take_damage(v);
+        if (rc == -EBUSY) return 0;   // a fullscreen program has the display
+        if (rc < 0) return -1;
+    }
+    unsigned long long t1 = now_ns();
+    int x0 = v->ux / CMP_TILE, y0 = v->uy / CMP_TILE;
+    int x1 = (v->ux + v->uw + CMP_TILE - 1) / CMP_TILE;
+    int y1 = (v->uy + v->uh + CMP_TILE - 1) / CMP_TILE;
+    if (x1 > v->tx) x1 = v->tx;
+    if (y1 > v->ty) y1 = v->ty;
+    if (v->want_full)
+        for (int ty = y0; ty < y1; ty++)
+            for (int tx = x0; tx < x1; tx++) v->dirty[ty][tx] = 1;
+
+    // The header goes first with a placeholder count, patched below.
+    v->out.len = 0;
+    rd_buf_u8(&v->out, 0);
+    rd_buf_u8(&v->out, 0);
+    rd_buf_u16(&v->out, 0);
     int n = 0;
-    for (int ty = y0; ty < y1 && n < RECTS_MAX; ty += CMP_TILE) {
-        int th = y1 - ty < CMP_TILE ? y1 - ty : CMP_TILE;
-        int run = -1;
-        // One step past the last tile, so a run reaching the right edge
-        // is closed like any other.
-        for (int tx = x0;; tx += CMP_TILE) {
-            int end = tx >= x1;
-            int tw = x1 - tx < CMP_TILE ? x1 - tx : CMP_TILE;
-            int ch = !end && (v->want_full || tile_changed(v, tx, ty, tw, th));
-            if (ch && run < 0) run = tx;
-            if (!ch && run >= 0 && n < RECTS_MAX) {
-                int stop = end ? x1 : tx;
-                rects[n].x = (uint16_t)run;
-                rects[n].y = (uint16_t)ty;
-                rects[n].w = (uint16_t)(stop - run);
-                rects[n].h = (uint16_t)th;
-                n++;
-                run = -1;
-            }
-            if (end) break;
+    if (v->cursor_enc && v->cursor_dirty) cursor_rect(v, &n);
+    for (int ty = y0; ty < y1; ty++) {
+        for (int tx = x0; tx < x1;) {
+            if (!v->dirty[ty][tx]) { tx++; continue; }
+            int run = tx;
+            while (tx < x1 && v->dirty[ty][tx]) v->dirty[ty][tx++] = 0;
+            int px = run * CMP_TILE, py = ty * CMP_TILE;
+            int pw = (tx == v->tx ? v->w : tx * CMP_TILE) - px, ph = tile_h(v, ty);
+            rd_enc_rect(&v->enc, v->shot.px, v->w, px, py, pw, ph, &v->out);
+            copy_rect(v, px, py, pw, ph);
+            n++;
         }
     }
     if (!n) return 0;
-
-    rd_buf_u8(&v->out, 0);   // FramebufferUpdate
-    rd_buf_u8(&v->out, 0);
-    rd_buf_u16(&v->out, (uint16_t)n);
-    for (int i = 0; i < n; i++) {
-        rd_enc_rect(&v->enc, v->shot.px, v->w, rects[i].x, rects[i].y, rects[i].w,
-                    rects[i].h, &v->out);
-        copy_rect(v, rects[i].x, rects[i].y, rects[i].w, rects[i].h);
-    }
+    v->out.p[2] = (uint8_t)(n >> 8);
+    v->out.p[3] = (uint8_t)n;
     v->want_update = v->want_full = 0;
-    return flush(v) ? 1 : -1;
+    unsigned long long t2 = now_ns();
+    size_t bytes = v->out.len;
+    int ok = flush(v);
+    unsigned long long t3 = now_ns();
+
+    v->st_updates++;
+    v->st_cap += t1 - t0;
+    v->st_enc += t2 - t1;
+    v->st_send += t3 - t2;
+    v->st_bytes += bytes;
+    if (t3 - v->st_t0 >= STATS_NS) stats_line(v, t3);
+    return ok ? 1 : -1;
 }
 
 // --- messages --------------------------------------------------------------
@@ -321,6 +402,7 @@ static int set_encodings(struct vnc *v) {
         // The viewer lists them by preference; the first one known wins.
         if (chosen < 0 && (enc == RD_ENC_ZRLE || enc == RD_ENC_RAW)) chosen = enc;
         if (enc == -223) v->desktop_size = 1;
+        if (enc == -239) v->cursor_enc = 1;
     }
     v->enc.encoding = chosen < 0 ? RD_ENC_RAW : chosen;
     return 1;
@@ -349,6 +431,7 @@ static int message(struct vnc *v, uint8_t type) {
         }
         v->enc.pf = pf;
         v->want_full = 1;
+        v->cursor_dirty = 1;
         return 1;
     }
     case 2:                                          // SetEncodings
@@ -418,6 +501,10 @@ int rd_vnc_session(const struct rd_conf *c, uint32_t peer) {
     }
     rd_log("remoted: vnc: %s connected (%dx%d)\n", ip, v.w, v.h);
 
+    v.tx = (v.w + CMP_TILE - 1) / CMP_TILE;
+    v.ty = (v.h + CMP_TILE - 1) / CMP_TILE;
+    v.damage_pending = v.cursor_dirty = 1;
+    v.st_t0 = now_ns();
     int ok = 1;
     while (ok) {
         uint8_t type;
@@ -427,11 +514,17 @@ int rd_vnc_session(const struct rd_conf *c, uint32_t peer) {
             ok = message(&v, type);
             continue;   // drain what the viewer sent before drawing
         }
-        if (v.want_update && send_update(&v) < 0) break;
+        int bits = ushot_events(&v.shot);
+        if (bits & WIN_CAST_DAMAGE) v.damage_pending = 1;
+        if (bits & WIN_CAST_CURSOR) v.cursor_dirty = 1;
+        if (v.want_update && (v.damage_pending || v.want_full || v.cursor_dirty) &&
+            send_update(&v) < 0)
+            break;
     }
 
     struct input_inject rel = { INPUT_INJECT_RELEASE, 0, 0, 0 };
     if (!v.view_only) inject(&rel, 1);
+    stats_line(&v, now_ns());
     rd_log("remoted: vnc: %s disconnected\n", ip);
     rd_buf_free(&v.out);
     rd_buf_free(&v.enc.scratch);

@@ -89,6 +89,11 @@ int rd_pixfmt_check(const struct rd_pixfmt *pf) {
 
 static uint32_t to_pixel(const struct rd_pixfmt *pf, uint32_t rgb) {
     uint32_t r = (rgb >> 16) & 0xFF, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
+    // Eight bits a channel is what nearly every viewer asks for, and the
+    // scaling below -- a divide per channel per pixel -- was the
+    // encoder's hottest line.
+    if ((pf->rmax & pf->gmax & pf->bmax) == 255)
+        return (r << pf->rshift) | (g << pf->gshift) | (b << pf->bshift);
     if (pf->rmax != 255) r = (r * pf->rmax + 127) / 255;
     if (pf->gmax != 255) g = (g * pf->gmax + 127) / 255;
     if (pf->bmax != 255) b = (b * pf->bmax + 127) / 255;
@@ -162,6 +167,10 @@ static void enc_raw(struct rd_enc *e, const uint32_t *px, int stride, int x, int
 #define TILE 64
 #define PAL_MAX 127
 
+// The palette is found through a small open-addressed hash: a linear
+// search of up to 127 entries per pixel was most of the encoder's time.
+#define PAL_HASH 512
+
 struct tile {
     uint32_t v[TILE * TILE];   // pixel values in the viewer's format
     int n, w, h;
@@ -170,12 +179,31 @@ struct tile {
     int runs;
     size_t run_bytes;          // the run lengths' own bytes, summed
     int singles;               // runs of length 1
+    uint32_t hkey[PAL_HASH];
+    int16_t hidx[PAL_HASH];    // -1 empty
 };
 
+static unsigned pal_slot(uint32_t v) { return (v * 2654435761u) >> 23; }   // 9 bits
+
 static int pal_index(const struct tile *t, uint32_t v) {
-    for (int i = 0; i < t->npal && i < PAL_MAX; i++)
-        if (t->pal[i] == v) return i;
-    return -1;
+    for (unsigned h = pal_slot(v);; h = (h + 1) & (PAL_HASH - 1)) {
+        if (t->hidx[h] < 0) return -1;
+        if (t->hkey[h] == v) return t->hidx[h];
+    }
+}
+
+static void pal_add(struct tile *t, uint32_t v) {
+    unsigned h = pal_slot(v);
+    while (t->hidx[h] >= 0) {
+        if (t->hkey[h] == v) return;
+        h = (h + 1) & (PAL_HASH - 1);
+    }
+    if (t->npal < PAL_MAX) {
+        t->hkey[h] = v;
+        t->hidx[h] = (int16_t)t->npal;
+        t->pal[t->npal] = v;
+    }
+    t->npal++;   // counts past PAL_MAX: "too many", without storing them
 }
 
 static void analyse(struct tile *t) {
@@ -183,6 +211,7 @@ static void analyse(struct tile *t) {
     t->runs = 0;
     t->run_bytes = 0;
     t->singles = 0;
+    for (int i = 0; i < PAL_HASH; i++) t->hidx[i] = -1;
     for (int i = 0; i < t->n;) {
         uint32_t v = t->v[i];
         int len = 1;
@@ -190,10 +219,7 @@ static void analyse(struct tile *t) {
         t->runs++;
         t->run_bytes += (size_t)(len - 1) / 255 + 1;
         if (len == 1) t->singles++;
-        if (t->npal <= PAL_MAX && pal_index(t, v) < 0) {
-            if (t->npal < PAL_MAX) t->pal[t->npal] = v;
-            t->npal++;
-        }
+        if (t->npal <= PAL_MAX) pal_add(t, v);
         i += len;
     }
 }
@@ -297,9 +323,13 @@ static void enc_zrle(struct rd_enc *e, const uint32_t *px, int stride, int x, in
             t.w = w - tx < TILE ? w - tx : TILE;
             t.h = h - ty < TILE ? h - ty : TILE;
             t.n = t.w * t.h;
+            int native = e->pf.rshift == 16 && e->pf.gshift == 8 && e->pf.bshift == 0 &&
+                         (e->pf.rmax & e->pf.gmax & e->pf.bmax) == 255;
             for (int j = 0; j < t.h; j++) {
                 const uint32_t *src = px + (size_t)(y + ty + j) * stride + x + tx;
-                for (int i = 0; i < t.w; i++) t.v[j * t.w + i] = to_pixel(&e->pf, src[i]);
+                uint32_t *dst = t.v + j * t.w;
+                if (native) for (int i = 0; i < t.w; i++) dst[i] = src[i] & 0xFFFFFF;
+                else        for (int i = 0; i < t.w; i++) dst[i] = to_pixel(&e->pf, src[i]);
             }
             zrle_tile(e, &t, cp, skip, s);
         }
@@ -327,4 +357,23 @@ void rd_enc_rect(struct rd_enc *e, const uint32_t *px, int stride,
                  int x, int y, int w, int h, struct rd_buf *out) {
     if (e->encoding == RD_ENC_ZRLE) enc_zrle(e, px, stride, x, y, w, h, out);
     else                            enc_raw(e, px, stride, x, y, w, h, out);
+}
+
+void rd_enc_cursor(struct rd_enc *e, const uint32_t *argb, int w, int h,
+                   int hot_x, int hot_y, struct rd_buf *out) {
+    rect_header(out, hot_x, hot_y, w, h, -239);
+    uint8_t px[4];
+    for (int i = 0; i < w * h; i++)
+        rd_buf_put(out, px, (size_t)pixel_bytes(&e->pf, to_pixel(&e->pf, argb[i]), px));
+    // Drawn where at least half covers: the mask is one bit, so a soft
+    // edge rounds to whichever side it is nearer.
+    for (int y = 0; y < h; y++) {
+        uint8_t acc = 0;
+        int nb = 0;
+        for (int x = 0; x < w; x++) {
+            acc = (uint8_t)(acc << 1 | ((argb[y * w + x] >> 24) >= 128));
+            if (++nb == 8) { rd_buf_u8(out, acc); acc = 0; nb = 0; }
+        }
+        if (nb) rd_buf_u8(out, (uint8_t)(acc << (8 - nb)));
+    }
 }

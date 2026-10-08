@@ -1273,6 +1273,37 @@ struct win_popup_pos {
                            // screenshot. A capture that does not ask
                            // gets the screen exactly as it stands.
 
+// SHARING THE SCREEN: WHAT CHANGED, NOT THE WHOLE OF IT. A remote desktop
+// server asks with this flag (SCREEN mode) and gets only what the
+// compositor REPAINTED since its last such capture -- wlr-screencopy's
+// copy_with_damage, XDamage's job for x11vnc. The first one a client
+// makes is the whole screen; from then on the compositor keeps that
+// client's damage and sends it WIN_EV_CAST when something new is
+// repainted, so it waits instead of polling.
+//
+// **THE BUFFER IS A MIRROR OF THE SCREEN** under this flag -- `screen_w`
+// pixels per row, each rect copied where it sits -- not the tight
+// rectangle below, so what was copied before stays valid around what is
+// copied now. REPLY: `damage` (WIN_DAMAGE_LIST, up to WIN_DAMAGE_MAX
+// rects, n = 0 when nothing changed) instead of `shot`. Merged, so a rect
+// may cover pixels that did not change: the client still compares.
+//
+// WIN_SHOT_POINTER asks for the pointer in the copy, and then a pointer
+// move IS damage; without it the client is expected to draw the pointer
+// itself (WIN_SHOT_CURSOR), and a move changes nothing it was sent.
+#define WIN_SHOT_DAMAGE  0x10
+#define WIN_SHOT_CURSOR  4  // a MODE: the pointer's current shape, tightly
+                            // packed 0xAARRGGBB, `w` x `h`; REPLY shot.x/y
+                            // is its hotspot. RFB's Cursor pseudo-encoding.
+
+// The compositor to a client that has made a DAMAGE capture: something
+// it has not been sent changed. a: WIN_CAST_* bits. Sent once per change
+// of state -- not again until the client captures -- so a busy screen
+// costs one event, not one per frame.
+#define WIN_EV_CAST 44
+#define WIN_CAST_DAMAGE 0x1   // pixels: capture with WIN_SHOT_DAMAGE
+#define WIN_CAST_CURSOR 0x2   // the pointer's shape: capture WIN_SHOT_CURSOR
+
 // The object the compositor copies INTO: the client creates it, grants
 // it (SYS_SHM_GRANT), and fills in the name from its own pid. A format
 // rather than a function for the reason WIN_BUF_NAME_FMT gives -- the

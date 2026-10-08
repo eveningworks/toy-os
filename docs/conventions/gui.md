@@ -2733,6 +2733,25 @@ real scanout hardware does. Do not write a pixel assertion for one.
   window visibly goes away and comes back, which is what GNOME
   Screenshot and Spectacle look like.
 
+- **A SHARED SCREEN FOLLOWS THE COMPOSITOR'S DAMAGE: `WIN_SHOT_DAMAGE`,
+  `WIN_EV_CAST`, `WIN_SHOT_CURSOR`.** A remote desktop session captures
+  only what toywm repainted since its last capture, into a screen-sized
+  MIRROR (not the tight rectangle a screenshot gets), and waits for
+  `WIN_EV_CAST` instead of polling. Four things this rests on. **The
+  damage capture does NOT render first**, unlike a screenshot: a frame
+  with no reported damage is a full repaint, so rendering per capture
+  repainted the whole screen at the viewer's rate -- the caster is told
+  from inside the frame that drew the change, so the back buffer already
+  holds it. **Every frame reports its damage to the casters**
+  (`wm_screenshot_frame_damage()` at the end of `wm_render_frame()`, the
+  whole screen for a full frame), and a new render path must too.
+  **Pointer moves are damage only for a caster that asked for the pointer
+  drawn in**, and they are found from the pointer's own box, never
+  `prev_cursor_box_*`, which is zero while the hardware plane shows the
+  pointer (the ASUS sent no updates at all until that was fixed). **The
+  cursor image lands at the start of the shared buffer** -- the mirror's
+  top rows -- so `ushot_cursor()` keeps those pixels aside.
+
 - **A PICKER ASKS WHAT IT WOULD GET BEFORE IT ASKS FOR IT:
   `WIN_SHOT_WINDOW_AT` + `WIN_SHOT_PROBE`.** Pointing at a window to
   capture it needs the window's rectangle on every pointer move, so

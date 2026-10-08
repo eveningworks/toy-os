@@ -201,6 +201,10 @@ int  wm_render_hidden_pid(void);
 
 void wm_render_cursor_into(struct ugfx_surface *dst, int ox, int oy);
 int  wm_render_cursor_erase(struct ugfx_surface *dst, int ox, int oy);
+// The pointer's current shape on its own, 0xAARRGGBB into `px` (at most
+// `cap` pixels), with its hotspot: what a remote viewer draws itself.
+// 0 if it does not fit.
+int  wm_render_cursor_image(uint32_t *px, int cap, int *w, int *h, int *hx, int *hy);
 
 extern int screen_w, screen_h;
 extern int taskbar_h;

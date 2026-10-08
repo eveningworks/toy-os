@@ -7,6 +7,7 @@
 // this file only draws the taskbar Start BUTTON that opens it, a
 // separate piece of chrome.
 #include "wm_internal.h"
+#include "wm_screenshot.h"   // a shared screen is told what changed
 #include "wm_idle.h"
 #include "wm_dnd.h"
 #include "wm_rawin.h"
@@ -953,6 +954,7 @@ static void draw_cursor_at(int x, int y) {
         return;
     }
     enum wm_cursor_kind kind = resolve_cursor_kind(x, y);
+    if ((int)kind != drawn_cursor_kind) wm_screenshot_cursor_changed();
     if (wm_hwcursor_sync(kind)) {
         // The plane shows the pointer: nothing saved, nothing drawn.
         // drawn_cursor_kind still tracks, so a shape change is still
@@ -963,6 +965,44 @@ static void draw_cursor_at(int x, int y) {
     save_cursor_under(x, y, kind);
     draw_cursor(x, y, kind);
     drawn_cursor_kind = (int)kind;
+}
+
+int wm_render_cursor_image(uint32_t *px, int cap, int *w, int *h, int *hx, int *hy) {
+    int mx, my;
+    uint8_t buttons;
+    wm_rawin_mouse(&mx, &my, &buttons);
+    enum wm_cursor_kind kind = resolve_cursor_kind(mx, my);
+    int ox, oy, cw, ch;
+    cursor_rect(kind, mx, my, &ox, &oy, &cw, &ch);
+    if (cw <= 0 || ch <= 0 || cw * ch > cap || cw > CURSOR_UNDER_MAX || ch > CURSOR_UNDER_MAX)
+        return 0;
+    // Drawn twice, on black and on white: what differs between the two
+    // is how much of the background shows through, which is the alpha,
+    // and the drawing on black is the colour premultiplied by it.
+    static uint32_t on_black[CURSOR_UNDER_MAX * CURSOR_UNDER_MAX];
+    static uint32_t on_white[CURSOR_UNDER_MAX * CURSOR_UNDER_MAX];
+    for (int i = 0; i < cw * ch; i++) { on_black[i] = 0; on_white[i] = 0xFFFFFF; }
+    struct ugfx_surface sb = ugfx_surface_for_pixels(on_black, cw, ch);
+    struct ugfx_surface sw = ugfx_surface_for_pixels(on_white, cw, ch);
+    g_cursor_dst = &sb;
+    draw_cursor(mx - ox, my - oy, kind);
+    g_cursor_dst = &sw;
+    draw_cursor(mx - ox, my - oy, kind);
+    g_cursor_dst = NULL;
+    for (int i = 0; i < cw * ch; i++) {
+        int a = 255 - (int)(((on_white[i] >> 8) & 0xFF) - ((on_black[i] >> 8) & 0xFF));
+        if (a <= 0) { px[i] = 0; continue; }
+        if (a > 255) a = 255;
+        uint32_t c = 0;
+        for (int sh = 0; sh <= 16; sh += 8) {
+            int v = (int)((on_black[i] >> sh) & 0xFF) * 255 / a;
+            c |= (uint32_t)(v > 255 ? 255 : v) << sh;
+        }
+        px[i] = (uint32_t)a << 24 | c;
+    }
+    *w = cw; *h = ch;
+    *hx = mx - ox; *hy = my - oy;
+    return 1;
 }
 
 int wm_cursor_shape_changed(int mx, int my) {
@@ -2292,6 +2332,22 @@ void wm_frame_stats_reset(void) {
 
 uint32_t wm_scene_frames(void) { return g_scene_frames; }
 
+// A SHARED SCREEN WHOSE VIEWER GETS THE POINTER IN THE PICTURE: the
+// sprite left one box and entered another. Its own record, not
+// prev_cursor_box_*, which is zero while the hardware plane shows the
+// pointer -- and a capture draws the pointer in either way.
+static int g_cast_box[4];
+
+static void cast_pointer_moved(int mx, int my) {
+    if (!wm_screenshot_casting_pointer()) return;   // nobody shares the screen that way
+    int box[4];
+    cursor_rect(resolve_cursor_kind(mx, my), mx, my, &box[0], &box[1], &box[2], &box[3]);
+    if (!k_memcmp(box, g_cast_box, sizeof box)) return;   // it did not move
+    wm_screenshot_pointer_damage(g_cast_box[0], g_cast_box[1], g_cast_box[2], g_cast_box[3]);
+    k_memcpy(g_cast_box, box, sizeof box);
+    wm_screenshot_pointer_damage(box[0], box[1], box[2], box[3]);
+}
+
 void wm_render_frame(int mx, int my) {
     // The lease decision first: while a client holds the display's
     // buffers this compositor's frame is not on screen, so it is not
@@ -2487,6 +2543,14 @@ void wm_render_frame(int mx, int my) {
                      (sys_monotonic_ns() - t0_ns) / 1000,
                      __builtin_ia32_rdtsc() - t0_cyc);
     }
+    // A SCREEN BEING SHARED is told what this frame repainted -- the
+    // damage box, or everything for a full frame (wm_screenshot.c) --
+    // and where the pointer went, if a frame moved it.
+    cast_pointer_moved(mx, my);
+    if (has_damage && damage_x1 > damage_x0)
+        wm_screenshot_frame_damage(damage_x0, damage_y0, damage_x1 - damage_x0, damage_y1 - damage_y0);
+    else
+        wm_screenshot_frame_damage(0, 0, screen_w, screen_h);
     damage_reset();
     if (g_damage_shrink > 0) g_damage_shrink--;   // the lever counts rendered frames
 }
@@ -2499,6 +2563,7 @@ void wm_render_cursor_move(int mx, int my) {
     int had_sprite = cursor_under_valid;
     restore_cursor_under();
     draw_cursor_at(mx, my);
+    cast_pointer_moved(mx, my);
 
     // This path DREW the cursor, so it has to say where -- prev_cursor_*
     // is "where the sprite actually is", and the next damage-limited
@@ -2528,6 +2593,5 @@ void wm_render_cursor_move(int mx, int my) {
                      &prev_cursor_box_x, &prev_cursor_box_y,
                      &prev_cursor_box_w, &prev_cursor_box_h);
     }
-
     ugfx_screen_present(&g_wm_screen);
 }

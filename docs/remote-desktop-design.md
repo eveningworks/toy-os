@@ -35,8 +35,8 @@ compositor. It differs on INPUT -- next section.
    remoted session vnc PEER ------- one per viewer: RFB, DES, ZRLE
       |  screen                  |  keys + pointer
       v                          v
-   toywm: WIN_REQ_SCREENSHOT   SYS_INPUT_INJECT  [new]
-   (lib/ushot.h, unchanged)      |
+   toywm: WIN_SHOT_DAMAGE,     SYS_INPUT_INJECT  [new]
+   WIN_EV_CAST, WIN_SHOT_CURSOR  |
                                  v
                         kernel input core (kernel/input.h)
                         keyboard_key_event / mouse  -- as a device
@@ -64,13 +64,24 @@ character on the active layout, Shift and AltGr pressed around it when
 the level needs them -- x11vnc's approach. RDP sends scancodes
 (`INPUT_INJECT_SCANCODE`) and needs no lookup.
 
-**The screen is pulled and compared, not damage-tracked.** A session
-captures through the existing screenshot request and compares 64x64
-tiles with the frame the viewer has -- TigerVNC's comparing update
-tracker. One request, no new compositor protocol; the cost is a
-full-screen copy and compare per check (~30 a second while a viewer
-waits). A damage hint from the compositor is the optimisation if it is
-ever measured to matter.
+**The screen follows the compositor's damage; the viewer draws the
+pointer.** A session is a CASTER: toywm keeps the rectangles it
+repainted since the caster's last capture (`WIN_SHOT_DAMAGE`), sends it
+`WIN_EV_CAST` when there are new ones, and copies only those into the
+session's mirror of the screen -- wlr-screencopy's copy_with_damage,
+XDamage for x11vnc, PipeWire's damage metadata for krfb. The rectangles
+are merged (three at most), so the session still compares them with the
+viewer's frame in 64x64 tiles and sends only tiles that differ. The
+pointer's SHAPE goes out as RFB's Cursor pseudo-encoding when it changes
+and the viewer draws it, so a mouse move sends nothing.
+
+The first version grabbed the whole screen and compared it ~30 times a
+second, with the pointer drawn in; the maintainer found it sluggish and
+it measured so on the ASUS: 62 ms from a pointer move to its update, and
+each grab cost the compositor a FULL repaint (a frame with no reported
+damage is drawn whole, and a screenshot renders one first). Following
+the damage took the same move to 12 ms with the pointer drawn in, and to
+nothing at all with the Cursor encoding (`tools/vnc_latency.py`).
 
 **One process per viewer**, inetd's model: the stranger's bytes are
 parsed in a process that holds nothing else, and each connection has its
@@ -112,3 +123,6 @@ own reader, which this TCP stack's retransmission timers need.
   frame.
 - **A resolution change ends the session**; DesktopSize is read from the
   viewer but not yet sent.
+- **With the Cursor encoding the viewer does not see the LOCAL mouse
+  move** -- it draws its own pointer where its own mouse is. Real servers
+  add the PointerPos pseudo-encoding for that; not yet here.

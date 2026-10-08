@@ -105,6 +105,61 @@ int ushot_take(struct ushot *s, int mode, unsigned flags,
     return 0;
 }
 
+int ushot_damage(struct ushot *s, unsigned flags, struct win_damage *out) {
+    if (!s->chan || !s->map) return -EINVAL;
+    struct wmchan_msg m;
+    memset(&m, 0, sizeof m);
+    m.type = WIN_REQ_SCREENSHOT;
+    m.a = WIN_SHOT_SCREEN;
+    m.b = (int32_t)(flags | WIN_SHOT_DAMAGE);
+    m.c = s->cap_px;
+    struct wmchan_msg r;
+    memset(&r, 0, sizeof r);
+    if (uchan_call(s->chan, &m, sizeof m, &r, sizeof r, USHOT_TIMEOUT_MS) != 0) return -EAGAIN;
+    if (r.a < 0) return r.a;
+    *out = r.damage;
+    if (out->n > WIN_DAMAGE_MAX) out->n = WIN_DAMAGE_MAX;
+    s->x = s->y = 0;
+    s->w = s->screen_w;
+    s->h = s->screen_h;
+    return 0;
+}
+
+int ushot_cursor(struct ushot *s, uint32_t *out, int cap, int *w, int *h, int *hot_x, int *hot_y) {
+    // THE SHAPE LANDS AT THE START OF THE SHARED BUFFER, which under
+    // ushot_damage() is the top rows of the screen mirror -- so those
+    // pixels are kept aside and put back, or the next compare would see
+    // a cursor where the desktop is.
+    static uint32_t keep[64 * 64];
+    int n = (int)(sizeof keep / sizeof keep[0]);
+    if (n > s->cap_px) n = s->cap_px;
+    memcpy(keep, s->px, (size_t)n * 4);
+    int rc = ushot_take(s, WIN_SHOT_CURSOR, 0, 0, 0, 0, 0);
+    if (rc == 0 && s->w * s->h <= cap && s->w * s->h <= n) {
+        memcpy(out, s->px, (size_t)(s->w * s->h) * 4);
+        *w = s->w;
+        *h = s->h;
+        // ushot_take() put the hotspot where a capture's position goes.
+        *hot_x = s->x;
+        *hot_y = s->y;
+    } else if (rc == 0) {
+        rc = -ENOSPC;
+    }
+    memcpy(s->px, keep, (size_t)n * 4);
+    s->x = s->y = 0;
+    s->w = s->screen_w;
+    s->h = s->screen_h;
+    return rc;
+}
+
+int ushot_events(struct ushot *s) {
+    int bits = 0;
+    struct win_event ev;
+    while (s->chan && uchan_client_recv(s->chan, &ev, sizeof ev) == 1)
+        if (ev.type == WIN_EV_CAST) bits |= ev.a;
+    return bits;
+}
+
 int ushot_probe(struct ushot *s, int mode, unsigned flags, int x, int y, struct win_shot *out) {
     if (!s->chan) return -EINVAL;
 

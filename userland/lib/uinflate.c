@@ -460,6 +460,9 @@ static void bw_match(struct bitw *b, int len, int dist) {
 #define DEF_MINLEN 3
 #define DEF_MAXLEN 258
 #define DEF_PROBES 32   // chain depth: the whole speed/ratio dial here
+// A LIVE stream's (udeflate_sync()): a frame is sent once, and late is
+// worse than large. On a 1080p desktop's ZRLE tiles, 8 cost 1% in size.
+#define DEF_PROBES_LIVE 8
 
 static uint32_t def_hash(const uint8_t *p) {
     return (((uint32_t)p[0] << 10) ^ ((uint32_t)p[1] << 5) ^ (uint32_t)p[2])
@@ -471,7 +474,7 @@ size_t udeflate_bound(size_t n) { return n + n / 8 + 128; }
 // One fixed-Huffman block of `src` into `b`: greedy LZ77 over this
 // input alone, so a block never reaches back into an earlier one -- which
 // is what lets a stream be cut into independently made pieces.
-static int deflate_block(const uint8_t *src, size_t n, struct bitw *b, int final) {
+static int deflate_block(const uint8_t *src, size_t n, struct bitw *b, int final, int probes_max) {
     int32_t *head_tbl = malloc((size_t)DEF_HSIZE * sizeof *head_tbl);
     int32_t *prev = malloc((size_t)WSIZE * sizeof *prev);
     if (!head_tbl || !prev) {
@@ -490,7 +493,7 @@ static int deflate_block(const uint8_t *src, size_t n, struct bitw *b, int final
         if (pos + DEF_MINLEN <= n) {
             uint32_t h = def_hash(src + pos);
             int32_t cand = head_tbl[h];
-            int probes = DEF_PROBES;
+            int probes = probes_max;
             while (cand >= 0 && probes-- > 0) {
                 size_t distance = pos - (size_t)cand;
                 if (distance == 0 || distance > WSIZE) break;
@@ -557,7 +560,7 @@ int udeflate_into(const void *src_v, size_t n, enum uinflate_wrap wrap,
 
     size_t tail = (wrap == UINFLATE_RAW) ? 0 : (wrap == UINFLATE_ZLIB ? 4 : 8);
     struct bitw b = { dst + head, cap > head + tail ? cap - head - tail : 0, 0, 0, 0, 0 };
-    int rc = deflate_block(src, n, &b, 1);
+    int rc = deflate_block(src, n, &b, 1, DEF_PROBES);
     if (rc) return rc;
     bw_flush(&b);
     if (b.full) ZFAIL(-ENOMEM, "the compressed result did not fit");
@@ -592,7 +595,7 @@ int udeflate_sync(struct udeflate_stream *st, const void *src, size_t n,
         head = 2;
     }
     struct bitw b = { dst + head, cap > head ? cap - head : 0, 0, 0, 0, 0 };
-    int rc = deflate_block(src, n, &b, 0);
+    int rc = deflate_block(src, n, &b, 0, DEF_PROBES_LIVE);
     if (rc) return rc;
     // THE SYNC FLUSH: an empty stored block, which byte-aligns the stream
     // (zlib's Z_SYNC_FLUSH). The reader can then decode everything sent

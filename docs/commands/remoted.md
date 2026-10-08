@@ -37,10 +37,14 @@ socket on fd 0 and fd 1, as `inetd` does. Everything the viewer sends is
 parsed there, so a malformed message ends that one session. Two viewers
 at once at most.
 
-**The picture** is the compositor's: the session asks for the screen the
-way `screenshot` does and sends the 64x64 tiles that changed since the
-last frame, as Raw or ZRLE (the viewer picks). The pointer is drawn into
-the picture.
+**The picture follows the compositor's damage**: the session asks toywm
+for only what it repainted since the last update, compares that with
+what the viewer has in 64x64 tiles, and sends the tiles that changed, as
+Raw or ZRLE (the viewer picks). A viewer that offers RFB's Cursor
+pseudo-encoding -- every current one does -- draws the pointer itself,
+so moving the mouse sends nothing; for one that does not, the pointer is
+drawn into the picture. `dmesg | grep remoted` shows each session's
+update count and what capture, encoding and sending cost.
 
 **Keyboard and mouse** enter the kernel where a real keyboard's and
 mouse's do (`SYS_INPUT_INJECT`), so a viewer types on this machine's

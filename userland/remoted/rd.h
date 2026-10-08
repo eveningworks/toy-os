@@ -92,4 +92,10 @@ struct rd_enc {
 void rd_enc_rect(struct rd_enc *e, const uint32_t *px, int stride,
                  int x, int y, int w, int h, struct rd_buf *out);
 
+// RFB's Cursor pseudo-encoding: the shape (0xAARRGGBB, `w` x `h`) and
+// its hotspot as one rectangle -- pixels in the viewer's format, then a
+// 1-bit mask of what is drawn.
+void rd_enc_cursor(struct rd_enc *e, const uint32_t *argb, int w, int h,
+                   int hot_x, int hot_y, struct rd_buf *out);
+
 #endif

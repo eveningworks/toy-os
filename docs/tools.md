@@ -553,15 +553,31 @@ manual steps to be worth automating:
   twice. `/tests/bootcfg_test` (in `usertest_run.py`) covers the model
   itself on fixtures.
 
+- **`vnc_latency.py`** -- how long a VNC viewer waits: each round moves
+  the pointer, asks for an incremental update and times it; the full
+  frame's size and time first. Pixels are not decoded (only lengths are
+  read), so the client costs nothing beside what it measures. With the
+  Cursor pseudo-encoding offered -- the default -- a pointer move sends
+  NOTHING, and the rounds report as "no update within 1 s": that is the
+  result, not a fault; `--no-cursor` measures the pointer drawn into the
+  picture. Against a machine you name; changes nothing there but the
+  pointer. A measurement, so in no runner (`ondemand_sweep.py` says why).
+  The ASUS, 1920x1080, 2026-10-08: pointer move 62 ms -> 12 ms median
+  once remoted followed the compositor's damage, and a full
+  ZRLE frame 168 -> 68 ms.
+
 - **`vnc_test.py`** -- `/bin/remoted`'s VNC server, from an RFB client
   written in the tool (DES through `openssl`, ZRLE through Python's
-  `zlib`, so neither shares code with the server). Twelve checks: a wrong
+  `zlib`, so neither shares code with the server). Fourteen checks: a wrong
   password refused and the right one let in; a Raw frame against QEMU's
   screendump; ZRLE at 32 and 16 bits against the Raw frame; a
   PointerEvent landing exactly where the compositor reports the pointer;
   Super opening the Start menu; an incremental update smaller than the
   screen that patches back to the screendump; and `echo VNC_typed-42!`
-  typed into a Terminal arriving in `/etc/tosh_history` -- the capitals
+  typed into a Terminal arriving in `/etc/tosh_history`; with the Cursor
+  pseudo-encoding, the shape arriving and a pointer move sending no
+  pixels near the pointer (not "none at all": the taskbar clock may
+  tick in the same second, and did once) -- the capitals
   and Shift punctuation are the point, since they need the kernel to
   press Shift around the key. On demand: it boots its own guest on a
   COPY of `disk.img`, guest port 5900 on host 15900+N.

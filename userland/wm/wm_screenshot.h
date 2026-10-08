@@ -24,4 +24,18 @@
 int wm_screenshot_capture(int from, int mode, unsigned flags,
                           int capacity_px, struct win_shot *rect);
 
+// WIN_SHOT_DAMAGE (abi/win_proto.h): the caster's damage since its last
+// capture, copied into its screen-sized mirror. `out` lists the rects.
+int wm_screenshot_damage(int from, unsigned flags, int capacity_px, struct win_damage *out);
+
+// The render paths' hooks: what a frame repainted, where a moving
+// pointer was and is (for a caster that asked for the pointer drawn
+// in), and that the pointer's shape changed.
+void wm_screenshot_frame_damage(int x, int y, int w, int h);
+void wm_screenshot_pointer_damage(int x, int y, int w, int h);
+void wm_screenshot_cursor_changed(void);
+// Is any caster sharing the screen with the pointer drawn in? The render
+// paths ask before working out where the pointer's box is.
+int wm_screenshot_casting_pointer(void);
+
 #endif // WM_SCREENSHOT_H

@@ -102,6 +102,7 @@ class Viewer:
         self.recv(16)
         self.name = self.recv(struct.unpack(">I", self.recv(4))[0]).decode()
         self.fb = bytearray(self.w * self.h * 3)
+        self.cursor = None
 
     def recv(self, n):
         out = b""
@@ -170,6 +171,9 @@ class Viewer:
             elif enc == 16:
                 ln = struct.unpack(">I", self.recv(4))[0]
                 self.zrle(x, y, w, h, self.z.decompress(self.recv(ln)))
+            elif enc == -239:   # the pointer's shape: pixels, then a 1-bit mask
+                bp = self.bpp // 8
+                self.cursor = (x, y, w, h, self.recv(w * h * bp), self.recv((w + 7) // 8 * h))
             else:
                 raise RuntimeError(f"encoding {enc} was not asked for")
         return rects
@@ -395,6 +399,32 @@ def main():
         r.check("...and the patched frame is the screen again", frac >= 0.995, f"{frac:.4%}")
         v.tap(0xFF1B)                       # Esc closes the menu
         time.sleep(1.0)
+
+        # The Cursor pseudo-encoding: the shape arrives, and a move over
+        # plain desktop then costs no pixels at all.
+        v.close()
+        v = connect(args)
+        v.set_encodings([0, -239])
+        frame(r, v, "the pointer's shape arrives as a Cursor rectangle")
+        cur = v.cursor
+        ok = cur is not None and 0 < cur[2] <= 64 and 0 < cur[3] <= 64 and any(cur[5])
+        r.check("the pointer's shape arrives as a Cursor rectangle", ok, str(cur and cur[:4]))
+        v.pointer(v.w // 2, v.h // 2)
+        time.sleep(0.3)
+        v.pointer(v.w // 2 + 40, v.h // 2 + 30)
+        v.request(True)
+        v.s.settimeout(1.5)
+        # NEAR THE POINTER, not anywhere: the taskbar clock may tick in
+        # the same second and is a real change (it failed once on that).
+        px0, py0, px1, py1 = v.w // 2 - 64, v.h // 2 - 64, v.w // 2 + 40 + 64, v.h // 2 + 30 + 64
+        try:
+            rects = v.read_update()
+            moved = [rc for rc in rects if rc[4] != -239 and rc[0] < px1 and rc[0] + rc[2] > px0
+                     and rc[1] < py1 and rc[1] + rc[3] > py0]
+            r.check("with it, a pointer move sends no pixels", not moved, str(rects))
+        except socket.timeout:
+            r.check("with it, a pointer move sends no pixels", True)
+        v.s.settimeout(30)
 
         # Ctrl+Alt+T opens a Terminal; type into it.
         for k in (0xFFE3, 0xFFE9):
