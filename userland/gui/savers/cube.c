@@ -12,7 +12,8 @@
 // to fold.
 //
 // **IT TAKES DAMAGE** (the `damage` option, mockup D3, 2026-10-08): a hit
-// chips the corner that struck -- on each face that meets there -- and
+// SLICES OFF the part that struck -- a cube's or pyramid's corner, a flat
+// facet on the ball -- showing the broken inside (usolid_slice), and
 // throws debris that falls into a pile at the bottom (lib/upile.h). Each
 // hit wears the solid a little smaller; at half size it shatters and a
 // fresh one folds in. The pile is painted into the backdrop, so it costs
@@ -74,16 +75,20 @@ static int g_debris = DEBRIS_CRUMBLE;
 #define WEAR_PER_HIT 965     // the size kept per hit, of 1000
 #define SHATTER_AT   500     // ...and below this it bursts
 #define GONE_MS     1600     // between the burst and the next fold
-#define CHIPS_MAX     48
+#define INTERIOR_ROWS  8    // under the face texture: what a cut corner shows
 static int g_scale = 1000;   // of 1000
 static uint64_t g_gone_until;
 static struct upile g_pile;
 static int g_pile_ready;
 static unsigned g_hits;
-// A chip: a corner of the cube (signs), the face it is on (its axis), and
-// how big and how it is shaped.
-static struct chip { int8_t sx, sy, sz, axis; uint8_t r, seed; } g_chips[CHIPS_MAX];
-static int g_nchips;
+// The cuts: a direction from the centre and how deep, in model units (a
+// cube's half-edge is FX_ONE); and whether the mesh has caught up.
+#define CUTS_MAX 20
+#define CUT_DEEPEST (FX_ONE / 2)
+static struct cut { struct geom_pt3 n; fx_t depth; } g_cuts[CUTS_MAX];
+static int g_ncuts;
+static int g_cut_dirty;
+static struct ugfx_texture g_tex_solid;   // g_tex plus the interior rows
 
 static struct ushot g_shot;
 static int g_have_shot;
@@ -124,6 +129,32 @@ static int lerpi(int a, int b, fx_t k) { return a + (int)(((int64_t)(b - a) * k)
 
 // --- the pictures -------------------------------------------------------
 
+// WHAT A CUT CORNER SHOWS: the rows under the face texture, a rough grey
+// that is the desktop's own average darkened -- the inside of the same
+// stuff, not a colour from nowhere. g_tex keeps its height for the
+// backdrop; the solid is drawn from g_tex_solid, which includes these.
+static void make_interior(uint32_t *px) {
+    uint64_t r = 0, g = 0, b = 0, n = (uint64_t)g_tex.w * g_tex.h;
+    for (uint64_t i = 0; i < n; i += 7) {
+        uint32_t c = g_tex.pixels[i];
+        r += (c >> 16) & 255; g += (c >> 8) & 255; b += c & 255;
+    }
+    n = (n + 6) / 7;
+    int br = (int)(r / n) * 2 / 5 + 30, bg = (int)(g / n) * 2 / 5 + 30, bb = (int)(b / n) * 2 / 5 + 30;
+    uint32_t seed = 0x1234567u;
+    for (int y = 0; y < INTERIOR_ROWS; y++)
+        for (int x = 0; x < g_tex.w; x++) {
+            seed = seed * 1664525u + 1013904223u;
+            int k = (int)(seed >> 27) - 16;   // -16..15: the grain of a broken surface
+            int cr = br + k, cg = bg + k, cb = bb + k;
+            cr = cr < 0 ? 0 : cr > 255 ? 255 : cr;
+            cg = cg < 0 ? 0 : cg > 255 ? 255 : cg;
+            cb = cb < 0 ? 0 : cb > 255 ? 255 : cb;
+            px[(size_t)(g_tex.h + y) * g_tex.w + x] = ((uint32_t)cr << 16) | ((uint32_t)cg << 8) | (uint32_t)cb;
+        }
+    g_tex_solid = (struct ugfx_texture){ g_tex.pixels, g_tex.w, g_tex.h + INTERIOR_ROWS };
+}
+
 // The face texture: the capture box-filtered down to about 512 wide. A
 // face is a few hundred pixels across, and point-sampling a 1920-wide
 // capture into it shimmers as it turns.
@@ -131,7 +162,7 @@ static int make_texture(void) {
     int f = (g_sw + 511) / 512;
     if (f < 1) f = 1;
     int tw = g_sw / f, th = g_sh / f;
-    uint32_t *px = malloc((size_t)tw * th * 4);
+    uint32_t *px = malloc((size_t)tw * (th + INTERIOR_ROWS) * 4);
     if (!px) return 0;
     for (int y = 0; y < th; y++)
         for (int x = 0; x < tw; x++) {
@@ -148,6 +179,7 @@ static int make_texture(void) {
     g_tex.pixels = px;
     g_tex.w = tw;
     g_tex.h = th;
+    make_interior(px);
     return 1;
 }
 
@@ -202,11 +234,12 @@ static void make_backdrop_rows(int rows) {
 }
 
 static void use_fallback(void) {
-    static uint32_t px[256 * 144];
+    static uint32_t px[256 * (144 + INTERIOR_ROWS)];
     ugfx_texture_checker(px, 256, 144, 16, 0x5A5F66, 0x3A3E44);
     g_tex.pixels = px;
     g_tex.w = 256;
     g_tex.h = 144;
+    make_interior(px);
     g_intro = 0;
     g_dimmed = 0;
 }
@@ -335,70 +368,41 @@ static int contact_vertex(int hit) {
     return best;
 }
 
-// A CHIP ON EACH FACE THAT MEETS AT THE CORNER, so the corner reads as
-// broken. A corner hit again deepens its chips rather than adding more.
-static void add_chips(struct geom_pt3 p) {
-    if (g_shape != USOLID_CUBE) return;   // the cube's faces are what a chip is clipped to
-    int8_t sx = p.x > 0 ? 1 : -1, sy = p.y > 0 ? 1 : -1, sz = p.z > 0 ? 1 : -1;
-    for (int axis = 0; axis < 3; axis++) {
-        int i;
-        for (i = 0; i < g_nchips; i++) {
-            struct chip *c = &g_chips[i];
-            if (c->sx == sx && c->sy == sy && c->sz == sz && c->axis == axis) {
-                if (c->r < 60) c->r = (uint8_t)(c->r + 6);
-                break;
+// THE PART THAT STRUCK IS CUT DEEPER: a slice off the solid there, so its
+// outline changes and the next bounce comes off what is left. A hit in
+// about the same direction as an earlier one deepens that cut rather than
+// starting a sliver beside it.
+static void cut_at(struct geom_pt3 p) {
+    struct geom_pt3 n = usolid_unit(p);
+    fx_t more = (fx_t)(FX_ONE * rnd_in(7, 12) / 100);
+    for (int i = 0; i < g_ncuts; i++) {
+        struct geom_pt3 m = g_cuts[i].n;
+        int64_t d = ((int64_t)m.x * n.x + (int64_t)m.y * n.y + (int64_t)m.z * n.z) >> FX_SHIFT;
+        if (d > FX_ONE * 9 / 10) {
+            if (g_cuts[i].depth < CUT_DEEPEST) {
+                g_cuts[i].depth += more;
+                if (g_cuts[i].depth > CUT_DEEPEST) g_cuts[i].depth = CUT_DEEPEST;
+                g_cut_dirty = 1;
             }
+            return;
         }
-        if (i < g_nchips || g_nchips >= CHIPS_MAX) continue;
-        g_chips[g_nchips++] = (struct chip){ sx, sy, sz, (int8_t)axis,
-                                             (uint8_t)rnd_in(16, 30), (uint8_t)rnd() };
     }
+    if (g_ncuts >= CUTS_MAX) return;
+    g_cuts[g_ncuts++] = (struct cut){ n, more };
+    g_cut_dirty = 1;
 }
 
-static fx_t *axis_of(struct geom_pt3 *p, int a) { return a == 0 ? &p->x : a == 1 ? &p->y : &p->z; }
-
-// Each chip a jagged dark crater with a lit rim, laid ON ITS FACE -- so it
-// turns and foreshortens with it -- and clipped to the face's square. A
-// face turned away hides its chips, which is all the occlusion a convex
-// solid needs.
-static void draw_chips(struct ugfx_surface *s, const struct usolid_view *v, int cx, int cy,
-                       fx_t sx, fx_t sy) {
-    for (int i = 0; i < g_nchips; i++) {
-        const struct chip *c = &g_chips[i];
-        int8_t sign[3] = { c->sx, c->sy, c->sz };
-        int a = c->axis, b = (a + 1) % 3, d = (a + 2) % 3;
-        fx_t r = (fx_t)((int64_t)FX_ONE * c->r / 100);
-        fx_t off = r * 45 / 100;
-        struct geom_pt3 ctr = { 0, 0, 0 }, out;
-        *axis_of(&ctr, a) = sign[a] * FX_ONE;
-        *axis_of(&ctr, b) = sign[b] * (FX_ONE - off);
-        *axis_of(&ctr, d) = sign[d] * (FX_ONE - off);
-        out = ctr;
-        *axis_of(&out, a) = sign[a] * (FX_ONE + FX_ONE / 4);
-        if (usolid_project_pt(v, out).z >= usolid_project_pt(v, ctr).z) continue;   // faces away
-        int xs[10], ys[10];
-        for (int k = 0; k < 10; k++) {
-            fx_t t = (fx_t)(FX_ONE * k / 10);
-            fx_t rr = fx_mul(r, FX_ONE * 65 / 100 +
-                                fx_mul(FX_ONE * 35 / 100, fx_sin((fx_t)(c->seed * 257 + k * 9800))));
-            struct geom_pt3 q = ctr;
-            fx_t *qb = axis_of(&q, b), *qd = axis_of(&q, d);
-            *qb += fx_mul(rr, fx_cos(t));
-            *qd += fx_mul(rr, fx_sin(t));
-            if (*qb > FX_ONE) *qb = FX_ONE;
-            if (*qb < -FX_ONE) *qb = -FX_ONE;
-            if (*qd > FX_ONE) *qd = FX_ONE;
-            if (*qd < -FX_ONE) *qd = -FX_ONE;
-            struct usolid_proj pp = usolid_project_pt(v, q);
-            xs[k] = cx + fx_mul(pp.x, sx);
-            ys[k] = cy + fx_mul(pp.y, sy);
-        }
-        ugfx_fill_polygon(s, xs, ys, 10, 0x121418);
-        ugfx_draw_polyline(s, xs, ys, 10, 1, 0x7d838e, GEOM_AA);
-    }
+// The closed solid, then every cut, each measured from the UNCUT
+// surface so a deeper cut is deeper and not a second slice of a slice.
+static void build_cut(void) {
+    usolid_build(&g_solid, g_shape, NULL, g_tex.w, g_tex.h);
+    fx_t at[CUTS_MAX];
+    for (int i = 0; i < g_ncuts; i++) at[i] = usolid_support(&g_solid, g_cuts[i].n);
+    for (int i = 0; i < g_ncuts; i++)
+        usolid_slice(&g_solid, g_cuts[i].n, at[i] - g_cuts[i].depth, g_tex.h, g_tex.w);
 }
 
-// Debris from the corner that struck, thrown back off the wall.
+// Debris from where it struck, thrown back off the wall.
 static void throw_debris(int hit, int vi, int cx, int cy) {
     const struct usolid_proj *p = &g_solid.pv[vi];
     int x = cx + p->x, y = cy + p->y;
@@ -428,7 +432,8 @@ static void shatter(const struct usolid_box *box, int cx, int cy, uint64_t now) 
                   texel(rnd_in(0, g_tex.w - 1), rnd_in(0, g_tex.h - 1)));
     }
     g_gone_until = now + GONE_MS;
-    g_nchips = 0;
+    g_ncuts = 0;
+    g_cut_dirty = 1;
     g_scale = 1000;
     ulogf("cube: shattered after %u hits\n", g_hits);
 }
@@ -437,11 +442,11 @@ static void shatter(const struct usolid_box *box, int cx, int cy, uint64_t now) 
 static void take_hit(int hit, const struct usolid_box *box, int cx, int cy, uint64_t now) {
     g_hits++;
     int vi = contact_vertex(hit);
-    add_chips(g_solid.v[vi].p);
+    cut_at(g_solid.v[vi].p);
     throw_debris(hit, vi, cx, cy);
     g_scale = g_scale * WEAR_PER_HIT / 1000;
     if (g_hits <= 3 || g_hits % 10 == 0)
-        ulogf("cube: hit %u chips %d debris %d scale %d\n", g_hits, g_nchips, g_pile.n, g_scale);
+        ulogf("cube: hit %u cuts %d debris %d scale %d\n", g_hits, g_ncuts, g_pile.n, g_scale);
     if (g_scale < SHATTER_AT) shatter(box, cx, cy, now);
 }
 
@@ -453,10 +458,11 @@ static void draw_solid(struct ugfx_surface *s, int t, int dt, struct usolid_box 
             stage[i] = ease(t, FOLD[g_shape][i].t0, FOLD[g_shape][i].t1);
         usolid_build(&g_solid, g_shape, stage, g_tex.w, g_tex.h);
         g_closed_built = 0;
-    } else if (!g_closed_built) {
+    } else if (!g_closed_built || g_cut_dirty) {
         say_once(3, "closed, bouncing");
-        usolid_build(&g_solid, g_shape, NULL, g_tex.w, g_tex.h);
+        build_cut();
         g_closed_built = 1;
+        g_cut_dirty = 0;
     }
     struct usolid_view v = view_at(t);
     struct usolid_box box;
@@ -492,8 +498,7 @@ static void draw_solid(struct ugfx_surface *s, int t, int dt, struct usolid_box 
         if (g_sq_hit & USOLID_HIT_TOP)    cy += fx_mul(box.y0, FX_ONE - sy);
         if (g_sq_hit & USOLID_HIT_BOTTOM) cy += fx_mul(box.y1, FX_ONE - sy);
     }
-    usolid_draw(s, &g_solid, &g_tex, cx, cy, sx, sy);
-    if (g_nchips) draw_chips(s, &v, cx, cy, sx, sy);
+    usolid_draw(s, &g_solid, &g_tex_solid, cx, cy, sx, sy);
     // A pixel either side: the rasteriser's edges round outward of the
     // projected corners by up to one.
     out->x0 = cx + fx_mul(box.x0, sx) - 2;

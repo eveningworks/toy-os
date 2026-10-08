@@ -730,8 +730,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 
 ### Screensavers
 
-- [x] ~~Desktop cube takes damage~~ DONE 2026-10-08 -- chipped corners, debris piling up (`lib/upile.h`), wear, shatter, refold
-- [ ] Chips on the pyramid's and the ball's faces -- the cube's are clipped to its square faces
+- [x] ~~Desktop cube takes damage~~ DONE 2026-10-08 -- cut corners and facets (`usolid_slice`), a debris pile (`lib/upile.h`), wear, refold
 - [ ] Tumbling solid and gfxdemo's cube onto `lib/usolid.h`, which Desktop cube introduced
 - [ ] Fullscreen savers draw on the display's own buffers (`UAPP_SCANOUT`), skipping the compositor's copy
 - [ ] A saver can animate out on wake -- asked to end with a deadline instead of killed, so Desktop cube can unfold

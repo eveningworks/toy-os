@@ -6054,6 +6054,14 @@ runs first**: a `doom1.wad` with one
   in the tree -- a vector load written that way made the effect twice as
   SLOW on the ASUS while a plain host build showed it 3x faster.
 
+- **`usolid_hostcheck.py`** -- `usolid_slice()`, the Desktop cube's
+  damage, on the cube, the pyramid and the ball, with the host gcc. After
+  four cuts each solid must be closed and wound one way. Every directed
+  edge needs its reverse, matched by position, which a missing cap, a cap
+  wound backwards, or faces meeting a rounding apart would all break.
+  Each cut must sit at its depth as it is made, and the cap must show the
+  interior rows. `--positive-control` breaks each of those in turn and
+  requires the finding aimed at it. In `ondemand_sweep.py`.
 - **`teapot_hostcheck.py`** -- compiles Shapes' teapot mesh
   (`userland/shapes/teapot.c`) and `ugfx_tri3d()` (`userland/ui/ugfx_tex.c`)
   with the host gcc. The mesh is judged against a FLOAT evaluation of

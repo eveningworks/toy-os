@@ -10889,9 +10889,13 @@ the sandpile rule falling-sand games are built on, cut down to a single
 row of cells. It is then painted into the saver's backdrop. A settled
 pile therefore costs nothing per frame, and the saver's "repaint only
 what moved" rule (cube.c) carries on unchanged. Only pieces still in
-the air are drawn. **Chips are not painted into the texture**, because
-all six faces share it and a chip would appear on every face. A chip is
-a point on the solid in model space, drawn after it and clipped to its
-face's square, so it turns and foreshortens with the face. That is why
-only the cube shape chips: a pyramid's or a ball's faces are not that
-square.
+the air are drawn. **A hit cuts the solid itself**
+(`usolid_slice()`): a plane across the part that struck, with every face
+clipped and the hole capped with the inside's texture. The first version
+painted dark chips onto the faces instead. Those changed nothing about
+the outline, and the maintainer asked for corners that are really
+damaged. A plane cut works on any convex solid, so the pyramid loses its
+tips and the ball gets flat facets with the same code. Each cut is kept
+as a direction and a depth, and the solid is rebuilt from its uncut
+form when one deepens. A hit in about the same direction as an earlier
+one deepens that cut, so slivers do not pile up beside each other.

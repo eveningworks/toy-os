@@ -29,8 +29,8 @@
 enum usolid_shape { USOLID_CUBE = 0, USOLID_PYRAMID, USOLID_BALL, USOLID_SHAPES };
 
 // The ball's grid, which is the largest mesh: 24 x 12 cells.
-#define USOLID_VERT_MAX 325
-#define USOLID_TRI_MAX  576
+#define USOLID_VERT_MAX 1536  // the ball's 325, and what slicing it adds
+#define USOLID_TRI_MAX  2048  // the ball's 576, and what slicing it adds
 #define USOLID_STAGE_MAX 5
 
 // One corner. `p` is in model units, the solid about the origin with a
@@ -77,6 +77,20 @@ void usolid_build(struct usolid *s, int shape, const fx_t *stage, int tw, int th
 // apex is TL and TR both. The same coordinates usolid_build() gives that
 // face, so a flat picture shrunk onto it hands over without a seam.
 void usolid_front(int shape, int tw, int th, struct usolid_vert q[4]);
+
+// SLICES AWAY everything beyond a plane -- dot(n, p) > off, `n` a unit
+// normal in model space -- and closes the hole with a cap whose texels are
+// rows `interior_v` to `interior_v + 6`, so the caller says what the
+// inside looks like. Any shape: a cube's corner comes off, a ball gets a
+// flat chipped facet. Convex in, convex out, so the cap is one polygon.
+// Corners are shared, and the ones cut away are dropped, so the mesh
+// grows by the edges cut rather than by its faces.
+void usolid_slice(struct usolid *s, struct geom_pt3 n, fx_t off, int interior_v, int tw);
+// The furthest the mesh reaches along `n`: a slice `depth` in from the
+// surface there has off = usolid_support(s, n) - depth.
+fx_t usolid_support(const struct usolid *s, struct geom_pt3 n);
+// `p` scaled to unit length.
+struct geom_pt3 usolid_unit(struct geom_pt3 p);
 
 struct usolid_view {
     fx_t yaw, pitch, roll;

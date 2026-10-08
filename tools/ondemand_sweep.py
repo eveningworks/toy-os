@@ -104,6 +104,10 @@ TOOLS = [
     # tested triangle it is drawn with. Host-only, gcc alone.
     ("teapot_host", "teapot_hostcheck.py",     "the teapot mesh and the depth-tested triangle", False,
      None,                                                                                   False),
+    # usolid_slice(), the Desktop cube's damage: every shape stays closed
+    # and wound one way, each cut lands at its depth. Host-only, gcc alone.
+    ("usolid_host", "usolid_hostcheck.py",     "slicing a solid: closed, wound, cut where asked", False,
+     None,                                                                                   False),
     # The two image harnesses, both host-only. The codec one runs the QOI
     # and PNG codecs BOTH WAYS against Pillow and zlib, and the BMP and
     # GIF decoders over files Pillow and ImageMagick wrote; the other is
