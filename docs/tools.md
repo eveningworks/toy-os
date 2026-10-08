@@ -4873,6 +4873,21 @@ window without going through it will find its layout polls timing out.
   shell. A row that went away is seen as no ink where it was; Device
   Manager's own `format 0|1` on its `selected` line says whether the
   panel is up.
+- **`netadapter_test.py`** -- a network card's ADAPTER SETTINGS end to
+  end on QEMU's e1000: `netctl link` refuses a setting the driver lacks
+  (EEE) and changes nothing, applies and saves interrupt moderation, and
+  `defaults` takes the key back out; then System Settings opened on
+  Network > Adapters (`settings adapters`) shows the one row the e1000
+  offers and NOT the other three, choosing High there applies and saves
+  it, and Restore defaults undoes it. **Judged through the kernel log's
+  `net: <card>: ... moderation N` line (what the core accepted) and the
+  bytes of `/etc/net.conf`, never the app's own report.** The e1000 is
+  the useful fixture precisely because it offers one setting of four: a
+  panel that drew every row for every card fails here (the positive
+  control: showing the EEE row unconditionally turns it red). Device
+  Manager's half of the same panel is checked in `devmgr_test.py`: only
+  the offered row, and a notch of scroll CUTS the panel (ui/uui_clip.h)
+  rather than hiding it -- red with the old whole-slot rule.
 - **`devmgr_test.py`** -- the Device Manager (`userland/gui/system/devmgr.c`
   over `lib/udevice.c`): the tree is DRAWN with its icons, "By connection"
   keeps the selection, and Disable/Enable on the network card round-trip

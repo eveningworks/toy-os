@@ -167,6 +167,7 @@ TOOLS = [
     ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
     ("devmgr", "devmgr_test.py", "the device tree and its icons, disable/enable through the dialog"),
+    ("netadapter", "netadapter_test.py", "a network card's adapter settings: netctl link, Settings > Adapters, saved and restored"),
     ("sndformat", "sndformat_test.py", "a sound card's Format panel, in Settings and Device Manager"),
     ("bootmgr", "bootmgr_test.py", "Boot Manager and Settings > Boot menu write grub.cfg; a broken file is refused"),
     ("logview", "logview_test.py", "Log Viewer: severity colours, Errors, repeats, Only this, a kept Mute"),

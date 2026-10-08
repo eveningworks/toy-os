@@ -44,6 +44,8 @@
 #include "lib/udevice.h"
 #include "lib/uclip.h"
 #include "ui/uui_sndformat.h"
+#include "ui/uui_netadapter.h"
+#include "ui/uui_clip.h"
 
 #define ID_MENU    1
 #define ID_VIEW    2
@@ -60,10 +62,12 @@
 #define ID_LOAD    13
 #define ID_UNLOAD  14
 #define ID_SNDFMT  32   // .. + UUI_SNDFORMAT_IDS: a sound device's Format
+#define ID_NETADP  64   // .. + UUI_NETADAPTER_IDS: a network card's adapter settings
 
 // The controls the pane holds in its sections (uui_props slots).
 #define SLOT_FORMAT 1
 #define SLOT_DRIVER 2
+#define SLOT_NET 3
 
 enum {
     CMD_REFRESH = 1, CMD_EXIT, CMD_BY_TYPE, CMD_BY_CONN, CMD_EXPAND, CMD_COLLAPSE,
@@ -122,6 +126,17 @@ static int g_drv_mode;          // 0 nothing, 1 load, 2 unload
 static struct uui_sndformat g_fmt;
 static char g_fmt_card[16];
 
+// A NETWORK CARD'S ADAPTER SETTINGS, the same way: the card whose
+// `device_id` is the selected device's (QUERY_NETDEV), with the panel
+// System Settings' Adapters page uses. Keyed by MAC, which a rename by
+// netd does not change.
+static struct uui_netadapter g_net;
+static uint64_t g_net_mac;
+
+// Each panel inside a clip to the pane: it scrolls with the pane and is
+// cut at its edges, rather than hidden until all of it fits.
+static struct uui_clip g_fmt_clip, g_net_clip;
+
 static char g_st_count[32], g_st_problem[48], g_st_note[96];
 static char g_ask_line[2][112];
 static const char *g_ask_rows[2];
@@ -168,7 +183,8 @@ static struct uui_item g_widgets[] = {
     { .ops = &uui_tree_ops,      .widget = &g_tree,    .id = ID_TREE,    .name = "tree" },
     { .ops = &uui_splitter_ops,  .widget = &g_split,   .id = ID_SPLIT,   .name = "split" },
     { .ops = &uui_props_ops,     .widget = &g_props,   .id = ID_PROPS,   .name = "props" },
-    { .ops = &uui_layout_ops,    .widget = &g_fmt.col, .name = "sndfmt", .hidden = 1 },
+    { .ops = &uui_clip_ops,      .widget = &g_fmt_clip, .name = "sndfmt_clip", .hidden = 1 },
+    { .ops = &uui_clip_ops,      .widget = &g_net_clip, .name = "netadapter_clip", .hidden = 1 },
     { .ops = &uui_dropdown_ops,  .widget = &g_mods,    .id = ID_MODS,    .name = "mods",   .hidden = 1 },
     { .ops = &uui_button_ops,    .widget = &g_load,    .id = ID_LOAD,    .name = "load",   .hidden = 1 },
     { .ops = &uui_button_ops,    .widget = &g_unload,  .id = ID_UNLOAD,  .name = "unload", .hidden = 1 },
@@ -182,7 +198,7 @@ static struct uui_item g_widgets[] = {
 // The ring is REBUILT when the pane's controls come and go: the Format
 // panel and the driver's buttons sit between the tree and the buttons
 // only while they are shown.
-static struct uui_focusable g_focusables[10 + UUI_SNDFORMAT_IDS];
+static struct uui_focusable g_focusables[10 + UUI_SNDFORMAT_IDS + UUI_NETADAPTER_IDS];
 static struct uui_focus g_focus;
 
 static struct uui_item *item_of(const void *widget) {
@@ -196,8 +212,10 @@ static void build_focus(void) {
     g_focusables[n++] = (struct uui_focusable){ &g_filter, &uui_textbox_ops };
     g_focusables[n++] = (struct uui_focusable){ &g_view, &uui_segmented_ops };
     g_focusables[n++] = (struct uui_focusable){ &g_tree, &uui_tree_ops };
-    if (!item_of(&g_fmt.col)->hidden)
+    if (!item_of(&g_fmt_clip)->hidden)
         n += uui_sndformat_focusables(&g_fmt, g_focusables + n, UUI_SNDFORMAT_IDS);
+    if (!item_of(&g_net_clip)->hidden)
+        n += uui_netadapter_focusables(&g_net, g_focusables + n, UUI_NETADAPTER_IDS);
     if (!item_of(&g_mods)->hidden) {
         g_focusables[n++] = (struct uui_focusable){ &g_mods, &uui_dropdown_ops };
         g_focusables[n++] = (struct uui_focusable){ &g_load, &uui_button_ops };
@@ -223,6 +241,20 @@ static void update_format(const struct udevice *d) {
         strlcpy(g_fmt_card, q.name, sizeof g_fmt_card);
     }
     if (!found) g_fmt_card[0] = 0;
+}
+
+// Is the selected device a network card the stack knows? Then its
+// adapter settings are shown -- a card with none says so in the panel.
+static void update_net(const struct udevice *d) {
+    struct query_netdev q;
+    int found = 0;
+    if (d && d->id[0]) QUERY_FOREACH(QUERY_NETDEV, q, qi)
+        if (!strcmp(q.device_id, d->id)) { found = 1; break; }
+    if (found && q.mac != g_net_mac) {
+        uui_netadapter_load(&g_net, &q);
+        g_net_mac = q.mac;
+    }
+    if (!found) g_net_mac = 0;
 }
 
 // --- the filter --------------------------------------------------------
@@ -411,7 +443,7 @@ static void build_props(const struct udevice *d) {
     }
 
     const char *cur = 0;
-    int fmt_done = !g_fmt_card[0];
+    int fmt_done = !g_fmt_card[0], net_done = !g_net_mac;
     for (int k = 0; k < np; k++) {
         if (!cur || strcmp(cur, g_p[k].section) != 0) {
             cur = g_p[k].section;
@@ -424,6 +456,13 @@ static void build_props(const struct udevice *d) {
                 uui_props_slot(&g_props, uui_props_section(&g_props, "Format", UUI_PROPS_PLAIN),
                                SLOT_FORMAT, h);
                 fmt_done = 1;
+            }
+            if (!notice && !net_done) {
+                int w, h;
+                uui_layout_natural_size(&g_net.col, &w, &h);
+                uui_props_slot(&g_props, uui_props_section(&g_props, "Adapter settings", UUI_PROPS_PLAIN),
+                               SLOT_NET, h);
+                net_done = 1;
             }
             int sec = uui_props_section(&g_props, cur, notice ? UUI_PROPS_NOTICE : UUI_PROPS_PLAIN);
             if (!strcmp(cur, "Device")) uui_props_set_action(&g_props, sec, "Copy details");
@@ -442,6 +481,7 @@ static void update_controls(void) {
     g_keep.disabled = !can;
     g_keep.checked = d ? d->persisted : 0;
     update_format(d);
+    update_net(d);
     build_props(d);
 
     int problems = 0, off = 0;
@@ -690,20 +730,40 @@ static void layout_all(int cw, int ch) {
     uui_dialog_set_bounds(&g_ask, 0, 0, cw, ch);
 }
 
-// THE SLOTS' CONTROLS FOLLOW THE PANE'S SCROLL: shown where their slot
-// is wholly in view, hidden otherwise -- never drawn over the header or
-// the buttons -- and the focus ring is rebuilt when that changes.
+// Places a panel at its slot wherever the scroll has put it, cut to the
+// pane by its clip; hidden only when none of it is in view. A top-level
+// layout takes the window-edge margin and this one sits in the pane's
+// own, so it is placed that far out to line up.
+static int place_panel(struct uui_clip *c, struct uui_layout *col, int slot) {
+    int x, y, w, h;
+    if (!uui_props_slot_place(&g_props, slot, &x, &y, &w, &h)) return 0;
+    int m = uui_layout_margin(col);
+    uui_layout_run(col, x - m, y - m, w + 2 * m, h + m);
+    c->x = x; c->y = y; c->w = w; c->h = h;
+    uui_clip_set_viewport(c, g_props.x, g_props.y, g_props.w, g_props.h);
+    return uui_clip_visible(c);
+}
+
+// THE SLOTS' CONTROLS FOLLOW THE PANE'S SCROLL. The two panels scroll
+// with it, clipped; the driver's buttons, one row, are shown only where
+// wholly in view. The focus ring is rebuilt when what shows changes.
 static void place_slot_controls(void) {
     int x, y, w, h, changed = 0;
-    struct uui_item *fmt = item_of(&g_fmt.col);
-    int fmt_on = g_fmt_card[0] && uui_props_slot_rect(&g_props, SLOT_FORMAT, &x, &y, &w, &h);
+    struct uui_item *fmt = item_of(&g_fmt_clip);
+    int fmt_on = g_fmt_card[0] && place_panel(&g_fmt_clip, &g_fmt.col, SLOT_FORMAT);
     if (fmt->hidden == fmt_on) { fmt->hidden = !fmt_on; changed = 1; }
-    if (fmt_on) {
-        // A top-level layout takes the window-edge margin; this one sits in
-        // the pane's own, so it is placed that far out to line up.
-        int m = uui_layout_margin(&g_fmt.col);
-        uui_layout_run(&g_fmt.col, x - m, y - m, w + 2 * m, h + m);
+    // The adapter panel's rows wrap with the pane's width, which is known
+    // only now: a fit that changes a row's height re-sizes its slot,
+    // once -- the width does not move, so the second pass settles.
+    struct uui_item *net = item_of(&g_net_clip);
+    int net_on = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        net_on = g_net_mac && place_panel(&g_net_clip, &g_net.col, SLOT_NET);
+        if (!g_net_mac || !uui_netadapter_fit(&g_net) || pass) break;
+        build_props(selected());
     }
+    if (net->hidden == net_on) { net->hidden = !net_on; changed = 1; }
+
     int drv = uui_props_slot_rect(&g_props, SLOT_DRIVER, &x, &y, &w, &h);
     int load_on = drv && g_drv_mode == 1, unload_on = drv && g_drv_mode == 2;
     struct uui_item *mods = item_of(&g_mods), *load = item_of(&g_load), *unl = item_of(&g_unload);
@@ -785,7 +845,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     uapp_log_layout(a, "devmgr");
     const struct udevice *sel = selected();
     uapp_logf_layout("devmgr: selected %s view %s format %d\n", sel ? sel->id : "-",
-                     g_by_conn ? "connection" : "type", !item_of(&g_fmt.col)->hidden);
+                     g_by_conn ? "connection" : "type", !item_of(&g_fmt_clip)->hidden);
     uapp_logf_layout("devmgr: pane sections %d rows %d scroll %d driver %d filter \"%s\" rows %d\n",
                      g_props.nsec, g_props.nrow, g_props.scroll, g_drv_mode, filter_text(),
                      uui_tree_visible_count(&g_tree));
@@ -849,6 +909,12 @@ static void do_command(struct uapp *a, int code) {
 }
 
 static void on_action(struct uapp *a, int code) {
+    if (uui_netadapter_on_action(&g_net, code)) {
+        uapp_logf_layout("devmgr: netadapter %s reset: %s\n", g_net.d.name, g_net.note);
+        build_props(selected());
+        uapp_redraw(a);
+        return;
+    }
     switch (code) {
     case ID_REFRESH: do_command(a, CMD_REFRESH); return;
     case ID_LOAD:    do_command(a, CMD_LOAD); return;
@@ -862,6 +928,19 @@ static void on_action(struct uapp *a, int code) {
 }
 
 static void on_widget(struct uapp *a, int id, int reason) {
+    if (id >= ID_NETADP && id < ID_NETADP + UUI_NETADAPTER_IDS) {
+        if ((reason == UUI_REASON_RELEASE || reason == UUI_REASON_KEY) &&
+            uui_netadapter_on_widget(&g_net, id)) {
+            uapp_logf_layout("devmgr: netadapter %s rates %#llx eee %llu flow %llu moderation %llu: %s\n",
+                             g_net.d.name, (unsigned long long)g_net.d.rates,
+                             (unsigned long long)g_net.d.eee, (unsigned long long)g_net.d.flow,
+                             (unsigned long long)g_net.d.moderation, g_net.note);
+            build_props(selected());
+            build_focus();
+        }
+        uapp_redraw(a);
+        return;
+    }
     if (id >= ID_SNDFMT && id < ID_SNDFMT + UUI_SNDFORMAT_IDS) {
         if ((reason == UUI_REASON_RELEASE || reason == UUI_REASON_KEY) &&
             uui_sndformat_on_widget(&g_fmt, id)) {
@@ -1016,6 +1095,11 @@ int main(void) {
     g_status.count = 3;
 
     uui_sndformat_init(&g_fmt, ID_SNDFMT);
+    uui_netadapter_init(&g_net, ID_NETADP);
+    uui_clip_init(&g_fmt_clip, (struct uui_item){ .ops = &uui_layout_ops, .widget = &g_fmt.col,
+                                                  .name = "sndfmt" });
+    uui_clip_init(&g_net_clip, (struct uui_item){ .ops = &uui_layout_ops, .widget = &g_net.col,
+                                                  .name = "netadapter" });
     build_focus();
 
     struct uapp_desc desc = {

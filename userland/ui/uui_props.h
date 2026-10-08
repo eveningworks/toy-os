@@ -78,6 +78,11 @@ void uui_props_row(struct uui_props *w, const char *key, const char *fmt, ...)
 void uui_props_slot(struct uui_props *w, int section, int id, int h);
 // Where slot `id` is: 1 with its rect when wholly in view, 0 otherwise.
 int  uui_props_slot_rect(const struct uui_props *w, int id, int *x, int *y, int *ww, int *hh);
+// Where slot `id` is wherever the scroll has put it, in view or not: 1
+// with its rect, 0 when there is no such slot. For controls a uui_clip
+// cuts to the pane (uui_clip.h), rather than hiding them until all of
+// the slot shows.
+int  uui_props_slot_place(const struct uui_props *w, int id, int *x, int *y, int *ww, int *hh);
 // The section whose action link was clicked since the last call, or -1.
 int  uui_props_take_action(struct uui_props *w);
 // A section's title rect and its action link's, for a test to click; 0

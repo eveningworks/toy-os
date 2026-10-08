@@ -39,6 +39,7 @@ static int on_tick(struct uapp *a) {
     int clock = clock_tick();   // the live clock's second moved
     clock |= kbd_tick();        // Try it took or left focus
     clock |= snd_tick();        // the card's rate moved under "Playing now"
+    clock |= adapters_tick();   // a network card's link moved under Connection
     if (registry_generation() == g_generation && !g_stale) return clock;
     if (page_dirty() || uui_dialog_is_open(&g_ask) ||
         (g_opts_win && uapp_window_is_open(g_opts_win))) {
@@ -133,7 +134,21 @@ static void navigate(int node_id) {
     // New cards: the previous fit says nothing about them.
     g_prose_fitted = 0;
     g_prose_fit_w = 0;
-    if (node_id == NODE_STARTUP) {
+    if (node_id == NODE_ADAPTERS) {
+        g_show_sysinfo = 0;
+        g_show_startup = 0;
+        g_show_adapters = 1;
+        g_page_group = -1;
+        g_slot_count = 0;
+        strlcpy(g_page_title_text, "Adapters", sizeof g_page_title_text);
+        strlcpy(g_page_desc_text, "Each network card's link settings. A change applies at once and is "
+                "kept for that card.", sizeof g_page_desc_text);
+        strlcpy(g_status, "Network adapters", sizeof g_status);
+        adapters_load();
+        relayout_page();
+        ulogf("settings: page %s slots 0 advanced 0 captions 0 disabled 0\n", g_page_title_text);
+    } else if (node_id == NODE_STARTUP) {
+        g_show_adapters = 0;
         g_show_sysinfo = 0;
         g_show_startup = 1;
         g_page_group = -1;
@@ -146,6 +161,7 @@ static void navigate(int node_id) {
         relayout_page();
         ulogf("settings: page %s slots 0 advanced 0 captions 0 disabled 0\n", g_page_title_text);
     } else if (node_id == NODE_SYSINFO) {
+        g_show_adapters = 0;
         g_show_startup = 0;
         g_show_sysinfo = 1;
         g_page_group = -1;
@@ -259,6 +275,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
     }
     if (kbd_on_widget(a, id)) { uapp_redraw(a); return; }
     if (snd_on_widget(a, id)) { uapp_redraw(a); return; }
+    if (adapters_on_widget(id)) { relayout_page(); uapp_redraw(a); return; }
 
     switch (id) {
     case ID_SIDE_SPLIT:
@@ -317,6 +334,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
 // ids.
 static void on_action(struct uapp *a, int code) {
     if (kbd_on_action(a, code)) { uapp_redraw(a); return; }
+    if (adapters_on_action(code)) { relayout_page(); uapp_redraw(a); return; }
     switch (code) {
     case ID_RESET:
         if (page_dirty() && g_page_group >= 0) {
@@ -601,6 +619,8 @@ static void on_size(int *w, int *h) {
         // "bootmenu" names set_startup.c's page, which holds no setting.
         if (g_open_setting && !strcmp(g_open_setting, "bootmenu"))
             uui_sidebar_select_id(&g_tree, NODE_STARTUP);
+        if (g_open_setting && !strcmp(g_open_setting, "adapters"))   // set_network.c's
+            uui_sidebar_select_id(&g_tree, NODE_ADAPTERS);
         if (g_node_count > 0) navigate(uui_sidebar_selected_id(&g_tree));
     }
     // Font-derived, so HERE rather than in main(): ugfx_char_h() is 0
@@ -652,6 +672,7 @@ int main(int argc, char **argv) {
     sysinfo_init();
     clock_init();
     kbd_init();
+    adapters_init();
     snd_init();
     startup_init();
 

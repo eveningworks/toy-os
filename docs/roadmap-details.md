@@ -2664,7 +2664,19 @@ Measured on the desktop: firmware 1.3.18 boots in about 40 ms, the
 link comes up at 2.5 Gb/s about 8 s later, DHCP and ping work, MSI-X
 interrupts arrive. The A1 half is untested -- no A1 card is here.
 
-### Per-card Ethernet adapter settings -- EEE, link speed, flow control, interrupt moderation, in Device Manager and Settings
+### Per-card Ethernet adapter settings (EEE, speed, flow control, moderation) in Device Manager and Settings
+
+**DONE 2026-10-08.** `SYS_NET_LINK` and `net_device.link_caps`/
+`set_link` (`kernel/drivers/net/net_link.c`), `lib/unetlink.c` (the
+words, applying and saving), `netctl link`, netd reapplying the file
+every pass, `uui_netadapter` in Device Manager and on Settings' Network
+> Adapters page. `aq` offers all four, `e1000` interrupt moderation.
+Verified on the desktop's AQC113 (a 1 Gb/s cap renegotiated at 1G, EEE
+on came up "in use", defaults went back to 2.5G) and by
+`tools/netadapter_test.py` on QEMU. **Not built**: the Connection row
+only reports -- editing the address (static/DHCP) or the name from the
+page; `r8169`'s speeds and EEE through its PHY; jumbo frames, which the
+stack's fixed 1500-byte MTU rules out.
 
 Chosen 2026-10-08 from mockups (A + C): an "Adapter settings" section in
 Device Manager and a System Settings "Network" page, both drawn by ONE

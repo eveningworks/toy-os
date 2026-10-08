@@ -124,6 +124,11 @@ static int setting_matches(int i) {
     return 0;
 }
 
+static int adapters_matches(void) {
+    return !g_filter[0] || has_word("Adapters network card Ethernet", g_filter) ||
+           has_word("Link speed Energy Efficient Ethernet EEE flow control interrupt moderation", g_filter);
+}
+
 static int startup_matches(void) {
     return !g_filter[0] || has_word("Boot menu GRUB", g_filter) ||
            has_word("Default boot entry timeout next restart", g_filter);
@@ -267,7 +272,24 @@ void rebuild_sidebar(void) {
     // the headings over them.
     int rows_max = 2 * g_cap + 1;
     int shown = 0;
-    for (int c = 0; c < g_cat_count; c++) {
+    // NETWORK > ADAPTERS is set_network.c's page, and no registry setting
+    // is in the Network category -- so the heading is drawn here, in the
+    // place category.Network's Order gives it.
+    int net_done = !adapters_matches();
+    int net_order = usetting_category_order("Network");
+    for (int c = 0; c <= g_cat_count; c++) {
+        // No registry page in Network: its heading and Adapters go before
+        // the first category ordered after it, or last.
+        if (!net_done && (c == g_cat_count || g_cat_order[c] > net_order) &&
+            g_node_count + 2 <= rows_max) {
+            g_nodes[g_node_count++] = (struct uui_sidebar_row){
+                .label = "Network", .kind = UUI_SIDEBAR_HEADING, .icon = category_icon("Network") };
+            g_nodes[g_node_count++] = (struct uui_sidebar_row){
+                .label = "Adapters", .kind = UUI_SIDEBAR_ITEM, .id = NODE_ADAPTERS };
+            net_done = 1;
+            shown++;
+        }
+        if (c == g_cat_count) break;
         int heading = 0;
         for (int g = 0; g < g_group_count; g++) {
             if (strcmp(g_group_cat[g], g_cat[c]) != 0 || !group_shown(g) ||
@@ -282,6 +304,15 @@ void rebuild_sidebar(void) {
             g_nodes[g_node_count++] = (struct uui_sidebar_row){
                 .label = g_group_display[g], .kind = UUI_SIDEBAR_ITEM,
                 .id = NODE_GROUP_BASE + g };
+            shown++;
+        }
+        if (!net_done && !strcmp(g_cat[c], "Network") && g_node_count + 2 <= rows_max) {
+            if (!heading)
+                g_nodes[g_node_count++] = (struct uui_sidebar_row){
+                    .label = g_cat[c], .kind = UUI_SIDEBAR_HEADING, .icon = category_icon(g_cat[c]) };
+            g_nodes[g_node_count++] = (struct uui_sidebar_row){
+                .label = "Adapters", .kind = UUI_SIDEBAR_ITEM, .id = NODE_ADAPTERS };
+            net_done = 1;
             shown++;
         }
         // Boot menu is set_startup.c's page, not a registry group: it joins

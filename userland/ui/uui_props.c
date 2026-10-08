@@ -196,6 +196,19 @@ int uui_props_slot_rect(const struct uui_props *w, int id, int *x, int *y, int *
     return 0;
 }
 
+int uui_props_slot_place(const struct uui_props *w, int id, int *x, int *y, int *ww, int *hh) {
+    for (int i = 0; i < w->nsec; i++) {
+        const struct uui_props_section *s = &w->sec[i];
+        if (s->slot_id != id || !s->slot_h || s->kind == UUI_PROPS_NOTICE) continue;
+        *x = w->x + 2 * pad();
+        *y = section_y(w, i) + hdr_h();
+        *ww = w->w - 4 * pad();
+        *hh = s->slot_h;
+        return 1;
+    }
+    return 0;
+}
+
 // The action link's rect in section `i` (0 when it has none).
 static int link_rect(const struct uui_props *w, int i, int *x, int *y, int *ww, int *hh) {
     const struct uui_props_section *s = &w->sec[i];

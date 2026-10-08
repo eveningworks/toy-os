@@ -91,6 +91,7 @@ def layout(dbg):
         if m:
             _lay["pane.sections"], _lay["pane.rows"] = int(m.group(1)), int(m.group(2))
             _lay["pane.driver"], _lay["filter"] = int(m.group(4)), m.group(5)
+            _lay["pane.scroll"] = int(m.group(3))
             _lay["tree.visible"] = int(m.group(6))
         m = re.search(r"devmgr: copy (\S+) (-?\d+) bytes (\w+)", line)
         if m:
@@ -244,8 +245,46 @@ def main():
     nic_driver = devs[nic][1]
     bx, by, bw, bh = lay["toggle"]
 
-    # Cancel first: the card must stay bound.
     select_device(dbg, win, nic)
+    # THE CARD'S ADAPTER SETTINGS, the panel Settings > Adapters shares
+    # (ui/uui_netadapter.c): QEMU's e1000 offers moderation alone, so a
+    # pane that drew every row for every card fails the second check.
+    # netadapter_test.py drives the panel itself.
+    deadline = time.time() + 4
+    wid = {}
+    while time.time() < deadline and "netadapter_mod" not in wid:
+        time.sleep(0.3)
+        wid = dbg.widgets(TITLE)
+    check("the network card's pane has its adapter settings (Interrupt moderation)",
+          "netadapter_mod" in wid, f"widgets={sorted(wid)}")
+    check("...and only the ones its driver offers",
+          not any(n in wid for n in ("netadapter_speed", "netadapter_eee", "netadapter_flow")),
+          f"widgets={sorted(wid)}")
+    # A PANEL SCROLLS WITH THE PANE, cut at its edge (ui/uui_clip.h): one
+    # notch down leaves its top above the pane, which used to hide the
+    # whole panel until the slot fitted again (seen on the desktop).
+    lay = layout(dbg)
+    px, py, pw, ph = lay.get("props", (0, 0, 0, 0))
+    c = win["content"]
+    dbg.send(f"gui move {c['x'] + px + pw // 2} {c['y'] + py + ph // 2}")
+    dbg.send("gui wheel -1")
+    lay = wait_layout(dbg, lambda l: l.get("pane.scroll", 0) > 0, 3.0)
+    wid = dbg.widgets(TITLE)
+    scrolled = lay.get("pane.scroll", 0)
+    check("scrolled a notch, the adapter panel is still there (cut, not hidden)",
+          scrolled > 0 and "netadapter_reset" in wid,
+          f"scroll={scrolled} widgets={sorted(wid)}")
+    # BACK TO THE TOP, AND CONFIRMED: an injected position lasts one WM
+    # pass, so the pointer is put over the pane again first -- a notch
+    # that went to the tree left the pane scrolled, and every later
+    # check clicked its controls 75 px off.
+    dbg.send(f"gui move {c['x'] + px + pw // 2} {c['y'] + py + ph // 2}")
+    dbg.send("gui wheel 1")
+    lay = wait_layout(dbg, lambda l: l.get("pane.scroll", -1) == 0, 3.0)
+    check("...and a notch back up returns the pane to the top", lay.get("pane.scroll", -1) == 0,
+          f"scroll={lay.get('pane.scroll')}")
+
+    # Cancel first: the card must stay bound.
     click(dbg, win, bx + bw // 2, by + bh // 2)
     lay = wait_layout(dbg, lambda l: l.get("ask", (0, 0, 0, 0))[2] > 0)
     check("Disable asks first", lay.get("ask", (0, 0, 0, 0))[2] > 0, f"ask={lay.get('ask')}")

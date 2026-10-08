@@ -282,6 +282,7 @@ void open_group(int g) {
     g_prose_fitted = 0;   // load_slot() resets every card's fit: ask again
     g_show_sysinfo = 0;
     g_show_startup = 0;
+    g_show_adapters = 0;
     g_slot_count = 0;
     g_saver_slot = -1;
     g_saver_base = -1;
@@ -578,8 +579,9 @@ void relayout_page(void) {
                                        .flags = UUI_FILL_W };
 
     g_page_captions = 0;
-    if (!g_show_sysinfo && !g_show_startup) n = clock_emit_top(PAGE, n);
+    if (!g_show_sysinfo && !g_show_startup && !g_show_adapters) n = clock_emit_top(PAGE, n);
     if (g_show_startup) n = startup_emit(PAGE, n, FOCUS, &FOCUS_COUNT);
+    if (g_show_adapters) n = adapters_emit(PAGE, n, FOCUS, &FOCUS_COUNT);
     // SYSTEM INFORMATION is one drawn item and two buttons (set_sysinfo.c).
     if (g_show_sysinfo) {
         static struct uui_item si_btns[2];
@@ -702,6 +704,7 @@ int refit_prose(void) {
         if (g_slot[i].setting >= 0 && uui_setting_row_fit(&g_slot[i].row)) changed = 1;
     if (g_show_sysinfo && uui_setting_row_fit(&g_si_debug)) changed = 1;
     if (g_show_startup && startup_fit()) changed = 1;
+    if (g_show_adapters && adapters_fit()) changed = 1;
     if (changed) relayout_page();
     return changed;
 }
