@@ -787,7 +787,16 @@ void path_sync(void) {
     // follows the directory here; with it on, a navigation reveals it
     // (on_pane_dir), and doing it here too would reopen a branch the
     // user collapsed.
-    if (!g_tree_on) tree_select_path(dir);
+    //
+    // ONLY WHEN THE DIRECTORY CHANGED. This runs on every filesystem
+    // change -- logd writes once a second -- and re-selecting there set a
+    // folder that is no place to -1 between a row's PRESS and its RELEASE,
+    // so the click navigated nowhere (pins_gui_test, ~1 in 15).
+    static char synced[PATH_MAX_LEN];
+    if (!g_tree_on && strcmp(synced, dir) != 0) {
+        tree_select_path(dir);
+        strlcpy(synced, dir, sizeof synced);
+    }
     if (!g_search_on && strcmp(uui_textbox_text(&g_search), g_query[g_active]) != 0)
         uui_textbox_set_text(&g_search, g_query[g_active]);
     const char *sc = search_scope(dir);
