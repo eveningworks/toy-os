@@ -38,10 +38,12 @@
 #include "lib/uwmchan.h"
 #include "utls.h"
 #include "query_abi.h"   // QUERY_REMOTE_STATUS
+#include "lib/uclip.h"
+#include "lib/ucharset.h"
 
 #define POLL_MS 10              // the read deadline: how often the compositor's
                                 // nudge is looked for while the viewer is quiet
-#define CUT_TEXT_MAX (1 << 20)  // a clipboard the viewer sends; skipped
+#define CUT_TEXT_MAX (1 << 20)  // a viewer's cut text past this ends the session
 #define ENCODINGS_MAX 64
 
 #define CMP_TILE 64
@@ -67,6 +69,7 @@ struct vnc {
     uint8_t dirty[TILES_Y_MAX][TILES_X_MAX];   // differs from what the viewer has
     uint8_t buttons;
     int view_only;
+    unsigned clip_seen;       // the clipboard serial the viewer has, or set itself
     int tls_ready;            // this machine has a key to offer VeNCrypt with
     int encrypted;            // ...and this viewer took it
     struct rd_buf out;
@@ -630,6 +633,46 @@ static int skip(uint32_t n) {
     return 1;
 }
 
+// --- the clipboard ---------------------------------------------------------
+//
+// RFB's cut text is LATIN-1 (RFB 7.5.6, 7.6.4) and toy-os's is UTF-8, so
+// each way is converted; a character past Latin-1 goes to a viewer as '?'.
+// The UTF-8 Extended Clipboard is not offered -- Debian's libvncclient,
+// Remmina's, does not speak it. Text only, as every VNC server sends.
+
+// ClientCutText: the viewer copied `n` bytes. A view-only viewer's are
+// read and dropped, as TigerVNC and x11vnc drop them.
+static int cut_text_in(struct vnc *v, uint32_t n) {
+    static char raw[UCLIP_TEXT_MAX], u8[UCLIP_TEXT_MAX + 1];
+    if (v->view_only || n > sizeof raw) return skip(n);
+    if (!read_full(raw, n)) return 0;
+    long len = ucharset_latin1_to_utf8(u8, sizeof u8, raw, n);
+    if (len < 0 || !uclip_set_text(u8, (int)len)) {
+        rd_log("remoted: vnc: the viewer's clipboard did not fit on this one\n");
+        return 1;
+    }
+    v->clip_seen = uclip_peek_serial();   // the viewer has it: no echo
+    return 1;
+}
+
+// ServerCutText when this machine's clipboard changed. 0 on a write
+// failure (the viewer has gone).
+static int cut_text_out(struct vnc *v) {
+    static struct uclip c;
+    static uint8_t msg[8 + UCLIP_TEXT_MAX + 1];
+    v->clip_seen = uclip_peek_serial();
+    int n;
+    const char *t = uclip_load(&c) ? uclip_text(&c, &n) : 0;
+    if (!t) return 1;   // files, or empty: nothing a viewer can take
+    long len = ucharset_utf8_to_latin1((char *)msg + 8, sizeof msg - 8, t, (size_t)n, '?');
+    if (len < 0) return 1;
+    msg[0] = 3;                                      // ServerCutText
+    msg[1] = msg[2] = msg[3] = 0;
+    msg[4] = (uint8_t)(len >> 24); msg[5] = (uint8_t)(len >> 16);
+    msg[6] = (uint8_t)(len >> 8);  msg[7] = (uint8_t)len;
+    return write_full(msg, 8 + (size_t)len);
+}
+
 static int message(struct vnc *v, uint8_t type) {
     uint8_t b[20];
     switch (type) {
@@ -669,10 +712,10 @@ static int message(struct vnc *v, uint8_t type) {
     case 6: {                                        // ClientCutText
         if (!read_full(b, 7)) return 0;
         int32_t len = (int32_t)be32(b + 3);
-        // Negative is the Extended Clipboard form; either way, skipped.
+        // Negative is the Extended Clipboard form, never offered: skipped.
         uint32_t n = len < 0 ? (uint32_t)-len : (uint32_t)len;
         if (n > CUT_TEXT_MAX) return 0;
-        return skip(n);
+        return len < 0 ? skip(n) : cut_text_in(v, n);
     }
     default:
         rd_log("remoted: vnc: unknown message %u -- closing\n", type);
@@ -726,6 +769,7 @@ int rd_vnc_session(const struct uremote_conf *c, uint32_t peer) {
     v.tx = (v.w + CMP_TILE - 1) / CMP_TILE;
     v.ty = (v.h + CMP_TILE - 1) / CMP_TILE;
     v.damage_pending = v.cursor_dirty = 1;
+    v.clip_seen = uclip_peek_serial();   // sent when it CHANGES, as every server does
     v.st_t0 = now_ns();
     int ok = 1;
     while (ok) {
@@ -747,6 +791,7 @@ int rd_vnc_session(const struct uremote_conf *c, uint32_t peer) {
             set_status(&v);
             rd_log("remoted: vnc: %s now %s\n", ip, v.view_only ? "view only" : "in control");
         }
+        if (uclip_peek_serial() != v.clip_seen && !cut_text_out(&v)) break;
         int bits = ushot_events(&v.shot);
         if (bits & WIN_CAST_DAMAGE) v.damage_pending = 1;
         if (bits & WIN_CAST_CURSOR) v.cursor_dirty = 1;

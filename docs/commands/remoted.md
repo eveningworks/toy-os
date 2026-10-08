@@ -47,6 +47,14 @@ so moving the mouse sends nothing; for one that does not, the pointer is
 drawn into the picture. `dmesg | grep remoted` shows each session's
 update count and what capture, encoding and sending cost.
 
+**The clipboard is shared both ways, as text.** What the viewer copies
+lands on this machine's clipboard, and whatever is copied here is sent
+to every viewer when it changes. RFB carries cut text as Latin-1, so a
+character beyond it (a euro sign, an emoji) reaches a viewer as `?`;
+TigerVNC's UTF-8 Extended Clipboard is not offered yet, since Remmina's
+libvncclient does not speak it. A view-only viewer receives the
+clipboard but cannot set it.
+
 **Keyboard and mouse** enter the kernel where a real keyboard's and
 mouse's do (`SYS_INPUT_INJECT`), so a viewer types on this machine's
 layout and its keys reach the same shortcuts and windows. A character

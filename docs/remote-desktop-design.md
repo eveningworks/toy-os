@@ -132,6 +132,11 @@ own reader, which this TCP stack's retransmission timers need.
 
 ## Known limits
 
+- **Cut text is Latin-1** (RFB's own encoding, converted by
+  `lib/ucharset.h`), so a character past U+00FF reaches a viewer as
+  `?`. The Extended Clipboard pseudo-encoding (UTF-8, TigerVNC) is the
+  fix, on the roadmap.
+
 - **Plain VNC is DES over 8 characters, unencrypted**, and under the
   default `prefer` a viewer may still choose it (Remmina does, without a
   CA file); `require` closes that.

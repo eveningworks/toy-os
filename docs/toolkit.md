@@ -23,6 +23,7 @@
 | `ubytes.h` | Little-endian fields out of a byte buffer, and a read at an offset that does not come back short -- what every parser of an on-disk format here starts by writing (zip, WAD, RIFF/WAV, SoundFont). |
 | `uchan.h` | uchan -- a message channel between two ring-3 processes. |
 | `uchan_page.h` | uchan -- the shared page layout for a message channel between two ring-3 processes. |
+| `ucharset.h` | Latin-1 (ISO 8859-1) to and from UTF-8, for a protocol or format older than UTF-8 meeting toy-os's text: RFB's cut text, an ID3v1 tag. |
 | `uclip.h` | uclip -- the system clipboard, for a ring-3 app. |
 | `uclip_page.h` | The clipboard's shared page: the contract between every app's lib/uclip.c and /bin/clipboardd, and between no other two things. |
 | `uclock.h` | The smallest non-zero gap the monotonic clock will actually show. |

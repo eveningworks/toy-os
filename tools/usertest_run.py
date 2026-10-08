@@ -100,6 +100,8 @@ TESTS = [
     ("ulogset_test", 0, None, None),
     # lib/uargs.h, the declared-table parser behind -h/--help.
     ("uargs_test", 0, None, None),
+    # lib/ucharset.h, Latin-1 <-> UTF-8 (a VNC viewer's cut text).
+    ("ucharset_test", 0, None, None),
     # SYS_FS_CHECK by path, and /bin/fsck's exit statuses. Spawned: it
     # spawns /bin/fsck, which the legacy loader cannot.
     ("fscheck_test", None, None, None),

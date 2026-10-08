@@ -43,8 +43,13 @@ def sh(cmd, label, tail=8):
     print(f"mutate: [{label}] {cmd}", flush=True)
     r = subprocess.run(cmd, shell=True, cwd=REPO, capture_output=True, text=True)
     lines = (r.stdout + r.stderr).rstrip().splitlines()
-    for ln in lines[-tail:]:
-        print(f"    {ln}")
+    # Every FAIL line as well as the tail: a control has fired on the
+    # RIGHT check only if the reader can see which one went red, and in
+    # a long test it scrolls out of the tail.
+    shown = set(range(max(0, len(lines) - tail), len(lines)))
+    for i, ln in enumerate(lines):
+        if i in shown or "FAIL" in ln:
+            print(f"    {ln}")
     print(f"mutate: [{label}] exit {r.returncode}", flush=True)
     return r.returncode
 

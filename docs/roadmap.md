@@ -27,7 +27,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
-- [ ] Remote desktop: the clipboard both ways between a VNC viewer and the machine (cut text)  *(Networking)*
+- [ ] Remote desktop: a resolution change keeps the VNC viewer (DesktopSize) instead of ending it  *(Networking)*
 - [ ] Restore trust in the GUI suite: harness faults first, then the deterministic reds, intermittents kept with a rate  *(Kernel test harness)*
 <!-- END next-up -->
 
@@ -1028,8 +1028,9 @@ run on, not by order.
 - [x] ~~Remote desktop, stage 1: a VNC server~~ DONE 2026-10-08 -- `/bin/remoted`, `SYS_INPUT_INJECT`; `docs/remote-desktop-design.md`
 - [x] ~~Remote desktop, stage 2: the Settings page, the corner notice that asks, the tray indicator and a trusted list~~ DONE 2026-10-08
 - [x] ~~Remote desktop, stage 3: TLS on the server side, and VeNCrypt for VNC~~ DONE 2026-10-08 -- `utls_accept()`
-- [ ] **NEXT** Remote desktop: the clipboard both ways between a VNC viewer and the machine (cut text)
-- [ ] Remote desktop: a resolution change keeps the VNC viewer (DesktopSize) instead of ending it
+- [x] ~~Remote desktop: the clipboard both ways between a VNC viewer and the machine (cut text)~~ DONE 2026-10-08
+- [ ] Remote desktop: the UTF-8 Extended Clipboard for VNC, so text past Latin-1 is not sent as `?`
+- [ ] **NEXT** Remote desktop: a resolution change keeps the VNC viewer (DesktopSize) instead of ending it
 - [ ] Remote desktop: the machine's own mouse shown to a VNC viewer that draws the pointer (PointerPos)
 - [ ] Remote desktop: Tight encoding with JPEG, for a VNC viewer on a slow link
 - [ ] Remote desktop, stage 4: an RDP server -- X.224/MCS/GCC, bitmap updates and NLA, over stage 3's TLS

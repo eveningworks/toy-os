@@ -2745,11 +2745,17 @@ general, the certificate's names are remoted's.
 
 ### Remote desktop: the clipboard both ways between a VNC viewer and the machine (cut text)
 
-RFB's ClientCutText (read and dropped today) into the system clipboard
-(`lib/uclip.h`, text only), and ServerCutText when the clipboard's
-serial moves while a viewer is connected. Latin-1 both ways, as RFB 3.8
-says; the Extended Clipboard pseudo-encoding (UTF-8, formats) is the
-larger follow-on. Approved 2026-10-08 with stage 3.
+DONE 2026-10-08: ClientCutText into `lib/uclip.h` (not from a view-only
+viewer), ServerCutText when the clipboard's serial moves, Latin-1 on the
+wire through `lib/ucharset.h`.
+
+### Remote desktop: the UTF-8 Extended Clipboard for VNC, so text past Latin-1 is not sent as `?`
+
+RFB's legacy cut text is Latin-1. The Extended Clipboard pseudo-encoding
+(0xC0A1E5CE, TigerVNC's) carries UTF-8 zlib-compressed, with a caps
+exchange and notify/request/provide; the server offers it only to a
+viewer that lists it, and keeps Latin-1 for the rest -- Debian 12's
+libvncclient (Remmina) does not speak it.
 
 ### Remote desktop: a resolution change keeps the VNC viewer (DesktopSize) instead of ending it
 

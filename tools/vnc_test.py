@@ -46,6 +46,7 @@ import port_guard                  # noqa: E402
 from harness import copy_disk      # noqa: E402
 from qmp_test import QMPSession    # noqa: E402
 from gui_debug import DebugConsole  # noqa: E402
+from vm import TFTP_PORT           # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -115,12 +116,12 @@ def vencrypt(conn, security, password, ca=None):
 
 
 class Viewer:
-    def __init__(self, port, password, timeout=30, security="vnc", ca=None):
+    def __init__(self, port, password, timeout=30, security="vnc", ca=None, host="127.0.0.1"):
         """`security`: "vnc" (type 2), or VeNCrypt's "tls-vnc" (X509Vnc)
         or "tls-plain" (X509Plain). `ca`: a PEM to verify the server's
         certificate against, for 127.0.0.1, as a careful viewer does;
         without one the certificate is taken and kept in self.cert_der."""
-        self.s = socket.create_connection(("127.0.0.1", port), timeout=timeout)
+        self.s = socket.create_connection((host, port), timeout=timeout)
         self.z = zlib.decompressobj()
         self.bpp = 32
         self.cert_der = None
@@ -156,6 +157,7 @@ class Viewer:
         self.name = self.recv(struct.unpack(">I", self.recv(4))[0]).decode()
         self.fb = bytearray(self.w * self.h * 3)
         self.cursor = None
+        self.cuts = []
 
     def recv(self, n):
         out = b""
@@ -203,11 +205,48 @@ class Viewer:
         o = (y * self.w + x) * 3
         self.fb[o:o + 3] = bytes(rgb)
 
+    def cut(self, text):
+        """ClientCutText: `text` is bytes, Latin-1 as RFB has it."""
+        self.s.sendall(struct.pack(">BxxxI", 6, len(text)) + text)
+
+    def read_cut_body(self):
+        self.recv(3)
+        self.cuts.append(self.recv(struct.unpack(">I", self.recv(4))[0]))
+
+    def wait_cut(self, timeout):
+        """The next ServerCutText's bytes, reading past any updates; None
+        when nothing came in `timeout` seconds."""
+        end = time.time() + timeout
+        old = self.s.gettimeout()
+        try:
+            while time.time() < end:
+                self.s.settimeout(max(0.1, end - time.time()))
+                try:
+                    t = self.recv(1)[0]
+                except socket.timeout:
+                    return None
+                if t == 3:
+                    self.read_cut_body()
+                    return self.cuts.pop()
+                if t != 0:
+                    raise RuntimeError(f"unexpected server message {t}")
+                self.update_body()
+            return None
+        finally:
+            self.s.settimeout(old)
+
     def read_update(self):
-        """One FramebufferUpdate into self.fb; returns its rectangles."""
+        """One FramebufferUpdate into self.fb; returns its rectangles. A
+        ServerCutText before it is kept in self.cuts."""
         t = self.recv(1)[0]
-        while t != 0:
+        while t == 3:
+            self.read_cut_body()
+            t = self.recv(1)[0]
+        if t != 0:
             raise RuntimeError(f"unexpected server message {t}")
+        return self.update_body()
+
+    def update_body(self):
         self.recv(1)
         n = struct.unpack(">H", self.recv(2))[0]
         rects = []
@@ -307,6 +346,19 @@ def vm(args, *rest, timeout=180):
     return subprocess.run([sys.executable, VM, "--instance", str(args.instance),
                            "--disk", args.disk, *rest], cwd=REPO,
                           capture_output=True, text=True, timeout=timeout)
+
+
+def guest_bytes(args, path, tmp):
+    """A guest file's exact bytes, over TFTP: `vm.py exec "cat"` comes
+    back through the console, which mangles anything past ASCII."""
+    out = os.path.join(tmp, "got.bin")
+    if os.path.exists(out):
+        os.remove(out)
+    subprocess.run([sys.executable, os.path.join(HERE, "remote.py"), "--host", "127.0.0.1",
+                    "--tftp-port", str(TFTP_PORT + args.instance), "get", path, out],
+                   cwd=REPO, capture_output=True, timeout=60)
+    with open(out, "rb") if os.path.exists(out) else open(os.devnull, "rb") as fh:
+        return fh.read()
 
 
 def dump(q, tmp):
@@ -847,10 +899,37 @@ def main():
                     f"shape update {shape}, then {rects}")
             v.tap(0xFF1B)
             time.sleep(1.0)
+        # The clipboard: Latin-1 on the wire, UTF-8 on this machine. A
+        # second viewer must get what the first copied, byte for byte, and
+        # the first must not get its own text back; pasted into the
+        # Terminal, the a-umlaut must reach the shell as UTF-8 -- what a
+        # session storing the viewer's Latin-1 unconverted would fail,
+        # though the round trip between viewers would pass.
+        clip = "echo VNC_clip-\u00e4"
+        other = connect(args)
+        other.set_encodings([0])
+        v.cut(clip.encode("latin-1"))
+        got = other.wait_cut(10)
+        r.check("a viewer's copy reaches the other viewer, as Latin-1",
+                got == clip.encode("latin-1"), repr(got))
+        echo = v.wait_cut(2)
+        r.check("...and is not sent back to the viewer that copied it", echo is None, repr(echo))
+        other.close()
+        for k in (0xFFE3, 0xFFE1):     # Ctrl+Shift+V: the Terminal's paste
+            v.key(k, True)
+        v.tap(ord("V"))
+        for k in (0xFFE1, 0xFFE3):
+            v.key(k, False)
+        time.sleep(0.5)
+        v.tap(0xFF0D)
+        time.sleep(2.0)
         dc.close()   # vm.py exec needs the console's socket
         hist = vm(args, "exec", "cat /etc/tosh_history").stdout
         r.check("typed text reaches the shell, Shift characters and all",
                 line in hist, hist[-300:])
+        raw = guest_bytes(args, "/etc/tosh_history", tmp)
+        r.check("pasted in the Terminal, it is UTF-8 on this machine",
+                clip.encode("utf-8") in raw, repr(raw[-120:]))
         v.close()
         stage2(args, r, tmp, conf)
         stage3(args, r, q, tmp, conf)

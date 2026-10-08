@@ -210,7 +210,9 @@ manual steps to be worth automating:
   touching anything (`--recover` after a SIGKILL), builds, runs,
   restores in a `finally` and checks the bytes, then REBUILDS so the
   artifacts match the source again -- the step a hand-done control
-  forgets. Exit 0 = the control fired (the test sees the break), 1 = it
+  forgets. It shows the run's last lines AND every line with FAIL in it,
+  so which check went red is on screen -- a control that fired on the
+  wrong check proves nothing. Exit 0 = the control fired (the test sees the break), 1 = it
   did not, 2 = the mutated tree did not build. `--build` (default `make
   iso`) for a host-only check.
 - **`preflight_stamp.py`** -- `preflight.sh` writes `build/.preflight-pass`
@@ -590,7 +592,11 @@ manual steps to be worth automating:
   typed into a Terminal arriving in `/etc/tosh_history`; with the Cursor
   pseudo-encoding, the shape arriving and a pointer move sending no
   pixels near the pointer (not "none at all": the taskbar clock may
-  tick in the same second, and did once); then asking at the screen --
+  tick in the same second, and did once); the clipboard -- a viewer's
+  Latin-1 cut text reaching a second viewer byte for byte and not echoed
+  to the first, and pasted into the Terminal arriving in the history as
+  UTF-8 (read over TFTP: `vm.py exec` output mangles non-ASCII); then
+  asking at the screen --
   the card naming the viewer, Allow letting it in, Deny refusing it in
   RFB's words, "Ask every time" offering no Always allow, Always allow
   with View only letting it in read-only and adding the address to
