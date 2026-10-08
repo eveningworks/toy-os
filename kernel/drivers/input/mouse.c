@@ -314,8 +314,14 @@ static int btn_trans_head, btn_trans_tail;
 // EXTRA, kernel/input.h). Masked rather than stored whole so a driver
 // reporting a button nothing here has a name for cannot invent one --
 // a HID mouse's byte 0 has three more bits above these.
-void mouse_feed_buttons(uint8_t mask) {
-    mask &= 0x1F;
+//
+// **A REMOTE DESKTOP'S BUTTONS ARE A SECOND MASK, OR'D IN**
+// (mouse_inject_buttons(), kernel/input.h): every device report carries
+// its whole mask, so one shared level would let a local mouse's next
+// packet release a remote drag.
+static uint8_t g_dev_buttons, g_inj_buttons;
+
+static void set_buttons(uint8_t mask) {
     if (mask != mouse_buttons) {
         int next = (btn_trans_head + 1) % BTN_TRANS_MAX;
         // Dropping the OLDEST keeps the most recent releases, which are
@@ -328,6 +334,16 @@ void mouse_feed_buttons(uint8_t mask) {
         btn_trans_head = next;
     }
     mouse_buttons = mask;
+}
+
+void mouse_feed_buttons(uint8_t mask) {
+    g_dev_buttons = mask & 0x1F;
+    set_buttons(g_dev_buttons | g_inj_buttons);
+}
+
+void mouse_inject_buttons(uint8_t mask) {
+    g_inj_buttons = mask & 0x1F;
+    set_buttons(g_dev_buttons | g_inj_buttons);
 }
 
 int mouse_try_get_button_edge(uint8_t *out_mask, int *out_x, int *out_y) {

@@ -225,3 +225,36 @@ KTEST("kblayout", "every layout in /usr/share/kbs loads from its own file") {
     restore(&s);
     KTEST_ASSERT_EQ(line, 0);
 }
+
+// --- the inverse: a character back to its key ------------------------
+
+static int find_checks(void) {
+    uint16_t kc;
+    int sh, ag;
+    CHECK(keyboard_layout_load_text(FIXTURE, sizeof FIXTURE - 1) == 1);
+    CHECK(keyboard_layout_find('q', &kc, &sh, &ag) && kc == KC_Q && !sh && !ag);
+    CHECK(keyboard_layout_find('Q', &kc, &sh, &ag) && kc == KC_Q && sh && !ag);
+    CHECK(keyboard_layout_find('@', &kc, &sh, &ag) && kc == KC_Q && !sh && ag);
+    CHECK(keyboard_layout_find(0xAE, &kc, &sh, &ag) && kc == KC_Q && sh && ag);
+    CHECK(keyboard_layout_find(0xC5, &kc, &sh, &ag) && kc == KC_P_RIGHT && sh);
+    // A character no key types is refused, not approximated.
+    CHECK(!keyboard_layout_find('z', &kc, &sh, &ag));
+    CHECK(!keyboard_layout_find(0, &kc, &sh, &ag));
+    CHECK(!keyboard_layout_find(0x100, &kc, &sh, &ag));
+    // German: @ is AltGr+Q, and every lookup round-trips through translate.
+    CHECK(keyboard_layout_load("de") == 1);
+    CHECK(keyboard_layout_find('@', &kc, &sh, &ag) && kc == KC_Q && ag);
+    for (int ch = 0x20; ch <= 0xFF; ch++) {
+        if (!keyboard_layout_find(ch, &kc, &sh, &ag)) continue;
+        CHECK(keyboard_layout_translate(kc, sh, ag) == ch);
+    }
+    return 0;
+}
+
+KTEST("kblayout", "a character finds the key and level that type it") {
+    struct saved s;
+    save(&s);
+    int line = find_checks();
+    restore(&s);
+    KTEST_ASSERT_EQ(line, 0);
+}

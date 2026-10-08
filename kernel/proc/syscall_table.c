@@ -202,6 +202,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_RENAME2]       = { "rename2",       sys_rename2,       { A_PATH, A_PATH, A_HEX } },
     [SYS_FS_CHECK]      = { "fs_check",      sys_fs_check,      { A_PATH, A_HEX, A_HEX } },
     [SYS_NET_LINK]      = { "net_link",      sys_net_link,      { A_HEX } },
+    [SYS_INPUT_INJECT]  = { "input_inject",  sys_input_inject,  { A_HEX, A_INT } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

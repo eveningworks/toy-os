@@ -468,24 +468,10 @@ static uint32_t def_hash(const uint8_t *p) {
 
 size_t udeflate_bound(size_t n) { return n + n / 8 + 128; }
 
-int udeflate_into(const void *src_v, size_t n, enum uinflate_wrap wrap,
-                  void *dst_v, size_t cap, size_t *out_len) {
-    const uint8_t *src = src_v;
-    uint8_t *dst = dst_v;
-    size_t head = 0;
-
-    if (wrap == UINFLATE_ZLIB) {
-        if (cap < 6) ZFAIL(-ENOMEM, "no room for a zlib stream");
-        dst[0] = 0x78;   // deflate, 32 KiB window
-        dst[1] = 0x01;   // and the two bytes are a multiple of 31
-        head = 2;
-    } else if (wrap == UINFLATE_GZIP) {
-        if (cap < 18) ZFAIL(-ENOMEM, "no room for a gzip member");
-        static const uint8_t hdr[10] = { 0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 255 };
-        memcpy(dst, hdr, sizeof hdr);
-        head = 10;
-    }
-
+// One fixed-Huffman block of `src` into `b`: greedy LZ77 over this
+// input alone, so a block never reaches back into an earlier one -- which
+// is what lets a stream be cut into independently made pieces.
+static int deflate_block(const uint8_t *src, size_t n, struct bitw *b, int final) {
     int32_t *head_tbl = malloc((size_t)DEF_HSIZE * sizeof *head_tbl);
     int32_t *prev = malloc((size_t)WSIZE * sizeof *prev);
     if (!head_tbl || !prev) {
@@ -495,10 +481,8 @@ int udeflate_into(const void *src_v, size_t n, enum uinflate_wrap wrap,
     for (int i = 0; i < DEF_HSIZE; i++) head_tbl[i] = -1;
     for (int i = 0; i < WSIZE; i++) prev[i] = -1;
 
-    size_t tail = (wrap == UINFLATE_RAW) ? 0 : (wrap == UINFLATE_ZLIB ? 4 : 8);
-    struct bitw b = { dst + head, cap > head + tail ? cap - head - tail : 0, 0, 0, 0, 0 };
-    bw_bits(&b, 1, 1); // BFINAL
-    bw_bits(&b, 1, 2); // BTYPE = fixed Huffman
+    bw_bits(b, final ? 1 : 0, 1); // BFINAL
+    bw_bits(b, 1, 2);             // BTYPE = fixed Huffman
 
     size_t pos = 0;
     while (pos < n) {
@@ -524,7 +508,7 @@ int udeflate_into(const void *src_v, size_t n, enum uinflate_wrap wrap,
         }
 
         if (best_len >= DEF_MINLEN) {
-            bw_match(&b, best_len, best_dist);
+            bw_match(b, best_len, best_dist);
             // Every position inside the match still has to enter the
             // chain, or the next search cannot see back past it.
             for (int i = 0; i < best_len; i++) {
@@ -536,7 +520,7 @@ int udeflate_into(const void *src_v, size_t n, enum uinflate_wrap wrap,
                 pos++;
             }
         } else {
-            bw_fixed_sym(&b, src[pos]);
+            bw_fixed_sym(b, src[pos]);
             if (pos + DEF_MINLEN <= n) {
                 uint32_t h = def_hash(src + pos);
                 prev[pos & (WSIZE - 1)] = head_tbl[h];
@@ -544,13 +528,38 @@ int udeflate_into(const void *src_v, size_t n, enum uinflate_wrap wrap,
             }
             pos++;
         }
-        if (b.full) break;
+        if (b->full) break;
     }
 
-    bw_fixed_sym(&b, 256); // end of block
-    bw_flush(&b);
+    bw_fixed_sym(b, 256); // end of block
     free(head_tbl);
     free(prev);
+    return 0;
+}
+
+int udeflate_into(const void *src_v, size_t n, enum uinflate_wrap wrap,
+                  void *dst_v, size_t cap, size_t *out_len) {
+    const uint8_t *src = src_v;
+    uint8_t *dst = dst_v;
+    size_t head = 0;
+
+    if (wrap == UINFLATE_ZLIB) {
+        if (cap < 6) ZFAIL(-ENOMEM, "no room for a zlib stream");
+        dst[0] = 0x78;   // deflate, 32 KiB window
+        dst[1] = 0x01;   // and the two bytes are a multiple of 31
+        head = 2;
+    } else if (wrap == UINFLATE_GZIP) {
+        if (cap < 18) ZFAIL(-ENOMEM, "no room for a gzip member");
+        static const uint8_t hdr[10] = { 0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 255 };
+        memcpy(dst, hdr, sizeof hdr);
+        head = 10;
+    }
+
+    size_t tail = (wrap == UINFLATE_RAW) ? 0 : (wrap == UINFLATE_ZLIB ? 4 : 8);
+    struct bitw b = { dst + head, cap > head + tail ? cap - head - tail : 0, 0, 0, 0, 0 };
+    int rc = deflate_block(src, n, &b, 1);
+    if (rc) return rc;
+    bw_flush(&b);
     if (b.full) ZFAIL(-ENOMEM, "the compressed result did not fit");
 
     size_t len = head + b.len;
@@ -569,5 +578,32 @@ int udeflate_into(const void *src_v, size_t n, enum uinflate_wrap wrap,
         dst[len++] = (uint8_t)(isz >> 16); dst[len++] = (uint8_t)(isz >> 24);
     }
     if (out_len) *out_len = len;
+    return 0;
+}
+
+int udeflate_sync(struct udeflate_stream *st, const void *src, size_t n,
+                  void *dst_v, size_t cap, size_t *out_len) {
+    uint8_t *dst = dst_v;
+    size_t head = 0;
+    if (!st->started) {
+        if (cap < 2) ZFAIL(-ENOMEM, "no room for a zlib header");
+        dst[0] = 0x78;
+        dst[1] = 0x01;
+        head = 2;
+    }
+    struct bitw b = { dst + head, cap > head ? cap - head : 0, 0, 0, 0, 0 };
+    int rc = deflate_block(src, n, &b, 0);
+    if (rc) return rc;
+    // THE SYNC FLUSH: an empty stored block, which byte-aligns the stream
+    // (zlib's Z_SYNC_FLUSH). The reader can then decode everything sent
+    // so far without the stream ever ending.
+    bw_bits(&b, 0, 1);
+    bw_bits(&b, 0, 2);
+    bw_flush(&b);
+    bw_bits(&b, 0x0000, 16);
+    bw_bits(&b, 0xFFFF, 16);
+    if (b.full) ZFAIL(-ENOMEM, "the compressed result did not fit");
+    st->started = 1;
+    if (out_len) *out_len = head + b.len;
     return 0;
 }

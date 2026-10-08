@@ -2683,6 +2683,36 @@ struct usb_control_msg {
                              // or the driver's own -errno, the card then
                              // keeping what it had.
 
+#define SYS_INPUT_INJECT 142 // RDI = a `struct input_inject[]`, RSI =
+                             // how many (1..INPUT_INJECT_BATCH): feed a
+                             // remote viewer's keys and pointer into the
+                             // input core as a device's. ONLY FOR
+                             // /bin/remoted (its spawn path) -- -EPERM
+                             // for anyone else. Returns how many were
+                             // applied (one the layout cannot type is
+                             // skipped and counted), or -EINVAL at an
+                             // unknown op, -EFAULT. What the caller holds
+                             // is released when it exits.
+
+#define INPUT_INJECT_BATCH 32
+#define INPUT_INJECT_KEY      1 // code: an evdev keycode; x: 1 down, 0 up
+#define INPUT_INJECT_CHAR     2 // code: a Latin-1 character, typed on the
+                                // active layout (Shift/AltGr pressed
+                                // around it as needed); x: down/up
+#define INPUT_INJECT_SCANCODE 3 // code: a set-1 make code, | INPUT_INJECT_E0
+                                // when 0xE0-prefixed (what RDP sends); x
+#define INPUT_INJECT_POINTER  4 // x, y: SCREEN pixels; code: the button
+                                // mask (bit0 left, bit1 right, bit2 middle)
+#define INPUT_INJECT_WHEEL    5 // x: notches, + = away from the user
+#define INPUT_INJECT_RELEASE  6 // let go of everything held
+#define INPUT_INJECT_E0 0x100
+
+struct input_inject {
+    uint16_t op;
+    uint16_t code;
+    int32_t x, y;
+};
+
 struct usb_isoch_msg {
     uint32_t slot;
     uint32_t ep;         // endpoint address, e.g. 0x01

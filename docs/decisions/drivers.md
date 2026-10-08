@@ -3276,3 +3276,41 @@ dying holder leaves the card unbound on purpose (stage 2 of
 hands the card back with `DEV_RELEASE_REBIND` -- until the service has
 run on both laptops; deleting them is on the roadmap. `audio_test.py`
 stops the service before the phases that are about the kernel's driver.
+
+## A remote viewer's input enters the kernel's input core, not the compositor
+
+**Decided 2026-10-08, with the VNC server (`docs/remote-desktop-design.md`).**
+`/bin/remoted` feeds a viewer's keys and pointer through
+`SYS_INPUT_INJECT` into `kernel/input.h`'s reporting functions --
+`keyboard_key_event()`, the mouse state -- exactly where a USB or
+virtio keyboard's go. Linux's uinput is the same shape; x11vnc's XTest is
+the X11 equivalent.
+
+**The obvious alternative was the compositor**, which is where Wayland
+puts it: GNOME's and KDE's servers inject through the RemoteDesktop
+portal (libei), so the compositor can tag and refuse emulated input. It
+was rejected here because a key is not finished when it reaches the
+compositor: the layout, Caps Lock, dead keys, the Ctrl encoding
+(`api/keyboard.h`'s "Ctrl and Alt"), the by-position stream DOOM reads
+and the key tap all happen in the kernel's keyboard path. Injecting
+above that means a second translator in toywm, and two translators of
+the same keystroke drift -- the exact failure the input core was built
+to end (`kernel/input.h`'s history of the keycode-to-scancode table).
+
+**What it costs, said plainly:**
+
+- **A privilege check with no model behind it.** The syscall answers
+  only a process spawned from `/bin/remoted` -- the spawn-path identity
+  the compositor already uses for screensavers and app grouping. On a
+  system with no users that is the honest ceiling; it stops a casual
+  program typing into the desktop, not a determined one.
+- **The kernel has to find a key for a character.** VNC sends keysyms,
+  so `keyboard_layout_find()` inverts the layout and Shift/AltGr are
+  pressed around the key as its level needs. A character the layout has
+  no key for is dropped. RDP sends scancodes and needs none of this.
+- **Buttons need their own mask.** Every device report carries its
+  whole button mask, so a remote press beside a local mouse would be
+  released by the local mouse's next packet; `mouse_inject_buttons()`
+  keeps the remote mask apart and OR's it in.
+- **A crashed server must not leave Shift down for the whole machine**:
+  what it holds is released from `scheduler_on_exit()`.

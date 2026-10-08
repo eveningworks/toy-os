@@ -407,6 +407,13 @@ int sys_net_admin(const char *dev, unsigned flags);
 struct net_linkcfg;
 int sys_net_link(const struct net_linkcfg *req);
 
+// Feed a remote viewer's keys and pointer into the input core, `n`
+// events of abi/syscall_abi.h's struct input_inject at once. How many
+// were applied, or -1 with sys_errno(): EPERM for any program but
+// /bin/remoted, EINVAL, EFAULT.
+struct input_inject;
+int sys_input_inject(const struct input_inject *ev, int n);
+
 // Give an interface a different name. 0, or -ENODEV / -EINVAL.
 // Naming POLICY is /bin/netd's -- see /etc/net.conf.
 int sys_net_rename(const char *dev, const char *to);

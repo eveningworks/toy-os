@@ -27,6 +27,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
+- [ ] Remote desktop, stage 2: the Settings page, the corner notice that asks, the tray indicator and a trusted list  *(Networking)*
 - [ ] Restore trust in the GUI suite: harness faults first, then the deterministic reds, intermittents kept with a rate  *(Kernel test harness)*
 <!-- END next-up -->
 
@@ -1024,6 +1025,10 @@ run on, not by order.
 - [x] ~~An HTTP client (`wget`-shaped), the first thing that makes the stack useful rather than demonstrable~~ DONE 2026-08-29
 - [x] ~~HTTPS: a TLS client~~ DONE 2026-09-07 -- mbedTLS 3.6 vendored; `/lib/libssl.so` and `/lib/libhttp.so`; TLS 1.3, chain verification
 - [ ] A TLS *server*, so `httpd` can speak https -- needs a private key on disk and a decision about where it lives
+- [x] ~~Remote desktop, stage 1: a VNC server~~ DONE 2026-10-08 -- `/bin/remoted`, `SYS_INPUT_INJECT`; `docs/remote-desktop-design.md`
+- [ ] **NEXT** Remote desktop, stage 2: the Settings page, the corner notice that asks, the tray indicator and a trusted list
+- [ ] Remote desktop, stage 3: TLS on the server side, and VeNCrypt for VNC -- shares the key decision with the line above
+- [ ] Remote desktop, stage 4: an RDP server -- X.224/MCS/GCC, bitmap updates and NLA, over stage 3's TLS
 - [ ] Certificate revocation: nothing reads a CRL or speaks OCSP, so a revoked certificate still verifies
 - [ ] `wget` following redirects, which most https URLs now answer with
 - [ ] IPv6, or a written decision against it -- link-local, neighbour discovery and SLAAC first

@@ -1,0 +1,11 @@
+# The remote desktop server. STARTED ALWAYS, and IDLE until a protocol
+# is switched on in /etc/remote.conf -- which ships with everything off,
+# so a stock machine listens on nothing. One switch, as ntpd's: System
+# Settings > Network > Remote Desktop needs no service to enable as well.
+#
+# After= is ordering only; a listener needs no address to bind.
+Name=remoted
+Description=Let a VNC viewer see and use this desktop
+Exec=/bin/remoted
+After=netd
+Restart=always

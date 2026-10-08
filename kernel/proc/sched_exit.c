@@ -4,6 +4,7 @@
 #include "sched_internal.h"
 #include "futex.h"
 #include "remote_log.h" // a session created from a socket is a REMOTE session
+#include "input.h"      // input_inject_process_exit() -- a remote desktop's held keys
 #include "win_role.h"
 #include "syscall.h" // syscall_process_kill_cleanup()
 #include "vmm.h"     // vmm_current_pml4() -- the exiting group's address space
@@ -230,6 +231,7 @@ void scheduler_on_exit(int code) {
     // and what stops the tray indicator outliving the connection.
     int pid = procs[leader].pid;
     remote_log_session_closed(pid);
+    input_inject_process_exit(pid);   // a remote desktop's held keys
 
     // Tell the window server to drop anything this client still owned.
     // Here rather than at reap: a zombie's windows must come off the

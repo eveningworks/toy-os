@@ -7,7 +7,8 @@
 // DEFLATE, both directions, in ring 3 -- RFC 1951, plus the zlib (RFC
 // 1950) and gzip (RFC 1952) wrappers around it.
 //
-// Two real callers: `uimg_png.c` reads and writes zlib streams, and
+// Three real callers: `uimg_png.c` reads and writes zlib streams,
+// `/bin/remoted` streams ZRLE through udeflate_sync(), and
 // `/bin/wget` inflates a gzip Content-Encoding.
 //
 // **RING 3, AND THE KERNEL DOES NOT NEED A COPY -- MEASURED.** This
@@ -127,6 +128,17 @@ extern const uint8_t  uinflate_dist_extra[30];
 // pathological input can exceed the source) or the match tables could
 // not be allocated.
 int udeflate_into(const void *src, size_t n, enum uinflate_wrap wrap,
+                  void *dst, size_t cap, size_t *out_len);
+
+// ONE PIECE OF A ZLIB STREAM THAT NEVER ENDS -- RFB's ZRLE keeps a
+// single stream per connection and each rectangle's bytes continue it.
+// The first call writes the zlib header; every call writes one
+// non-final block of `src` and a sync flush, so the reader can inflate
+// it at once. No adler32 is ever written (the stream has no end). A
+// piece never refers back into an earlier one, which costs ratio and
+// keeps this stateless beyond `started`. 0, or -ENOMEM as above.
+struct udeflate_stream { int started; };
+int udeflate_sync(struct udeflate_stream *st, const void *src, size_t n,
                   void *dst, size_t cap, size_t *out_len);
 
 // A bound `cap` can safely be: deflate's worst case plus the wrapper.

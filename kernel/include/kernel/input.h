@@ -159,6 +159,21 @@ void input_report_buttons(uint8_t mask);
 // Wheel notches, positive = away from the user.
 void input_report_wheel(int notches);
 
+// --- injected input: a remote desktop (input_inject.c) --------------
+//
+// SYS_INPUT_INJECT's half of the core: an event a remote viewer sent,
+// fed in where a device's would be. The struct and the ops are the ABI
+// (abi/syscall_abi.h). Call with interrupts off -- the device paths
+// write the same state from their handlers.
+struct input_inject;
+int  input_inject_one(const struct input_inject *e);
+// Lets go of every key and button injection is holding.
+void input_inject_release_all(void);
+// scheduler_on_exit()'s hook: releases what `pid` held, if it injected.
+void input_inject_process_exit(int pid);
+// The button mask a remote viewer holds, OR'd with the devices' (mouse.c).
+void mouse_inject_buttons(uint8_t mask);
+
 // --- evdev keycodes ---------------------------------------------------
 //
 // The numbers themselves are the kernel<->userland contract's

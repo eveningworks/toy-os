@@ -60,6 +60,16 @@ int keyboard_layout_translate(uint16_t keycode, int shift, int altgr);
 // With AltGr held Caps changes nothing: levels 3 and 4 never swap.
 int keyboard_layout_translate_caps(uint16_t keycode, int shift, int altgr, int caps);
 
+// THE INVERSE: which key, at which level, types character `ch` (Latin-1,
+// 1..0xFF) on the active layout -- for an input source that knows the
+// CHARACTER it wants rather than the key, which is what a VNC viewer
+// sends (an X11 keysym). x11vnc and QEMU's VNC server make the same
+// reverse lookup. Returns 1 and fills the outs, or 0 when no single key
+// types it (a character only a dead key composes, or one the layout
+// lacks). The lowest level wins, then the lowest keycode -- so '1' is
+// the top row's key rather than the keypad's.
+int keyboard_layout_find(int ch, uint16_t *keycode, int *shift, int *altgr);
+
 // --- dead keys -------------------------------------------------------
 //
 // **THE STATE LIVES HERE, BEHIND EVERY DRIVER.** PS/2, virtio-input and

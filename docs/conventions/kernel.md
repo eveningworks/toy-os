@@ -4610,6 +4610,28 @@ as characters, which is what a missing decoder looks like.
 a Meta prefix and is handed back. That keeps Alt-<key> working and costs
 Alt-[, which is the trade readline makes for the same reason.
 
+## A REMOTE VIEWER'S INPUT IS A DEVICE'S: `SYS_INPUT_INJECT`, ONLY FROM `/bin/remoted`, RELEASED AT EXIT
+
+`kernel/drivers/input/input_inject.c`. A key, a character, a scancode,
+a pointer position with its buttons, a wheel notch -- each enters the
+input core where a keyboard's or a mouse's would, so nothing above the
+kernel can tell a remote keystroke from a local one, and nothing should
+try (`docs/decisions/drivers.md` has why it is not the compositor's).
+
+- **Only a process spawned from `/bin/remoted` may call it** (`-EPERM`
+  otherwise). A second injector would need the same check widened, not
+  a second syscall.
+- **A CHARACTER is typed on the ACTIVE layout** (`keyboard_layout_find()`,
+  lowest level, then lowest keycode), with Shift and AltGr pressed or let
+  go around the key and put back after. Never hand-build a keycode for a
+  character in ring 3.
+- **Injected buttons are a SEPARATE MASK** (`mouse_inject_buttons()`)
+  OR'd with the devices'. A new pointer source that reports a whole mask
+  must not write the injected half.
+- **Everything injected is tracked and released** -- by
+  `INPUT_INJECT_RELEASE` at a session's end and from `scheduler_on_exit()`
+  when the injector dies. A new kind of held input joins that tracking.
+
 ## A BUTTON OR A KEY IS AN EDGE AND IS QUEUED; A POSITION IS A LEVEL AND IS SAMPLED
 
 Ask which of the two a piece of input is before writing anything that

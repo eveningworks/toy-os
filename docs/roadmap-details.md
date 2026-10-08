@@ -2696,6 +2696,55 @@ registers); `r8169` could offer speeds and EEE through its PHY later.
 Its default stays EEE off: with the firmware's default (on) the
 desktop's AQC113 came up 2 boots in 12 receiving corrupt frames.
 
+### Remote desktop, stage 1: a VNC server
+
+**DONE 2026-10-08.** `/bin/remoted` (a listener plus one `remoted session
+vnc PEER` per viewer), RFB 3.8/3.7/3.3, VNC Authentication over
+`lib/udes.c`, Raw and ZRLE at 8/16/32 bits with the 64x64-tile compare,
+keys, pointer and wheel through the new `SYS_INPUT_INJECT`, settings in
+`/etc/remote.conf`. `tools/vnc_test.py` drives it from a client written
+in Python against QEMU's screendump. The whole plan, and why input enters
+the kernel's input core rather than the compositor, is
+`docs/remote-desktop-design.md`. **Not built in stage 1**: asking at the
+screen (an unknown viewer is refused until stage 2), DesktopSize, the
+Cursor pseudo-encoding (the pointer is drawn into the picture), the
+clipboard (ClientCutText is read and dropped), CopyRect.
+
+### Remote desktop, stage 2: the Settings page, the corner notice that asks, the tray indicator and a trusted list
+
+Chosen 2026-10-08 from mockups: System Settings > Network > Remote
+Desktop with ONE CARD PER PROTOCOL (VNC, RDP), each its own switch, port
+and sign-in; "When someone connects: Ask every time / Ask unless trusted
+(the default) / Always allow" and "Allow connections from" shared below
+them; a Trusted viewers list (an address or subnet, a label, last seen,
+Remove); the connected sessions as a shared `uui_` widget, also in the
+tray flyout. The P2 corner notice -- Allow / View only / Deny, an
+"Always allow <address>" box, denied after 30 s -- is a compositor
+notice kind, answered back to the waiting session. The Remote activity
+tray item lights for a desktop session; the record is the kernel's,
+taken from the SOCKET's peer as telnet sessions' are, so no program can
+claim one.
+
+### Remote desktop, stage 3: TLS on the server side, and VeNCrypt for VNC -- shares the key decision with the line above
+
+mbedtls built with `MBEDTLS_SSL_SRV_C` (and the key generation and
+X.509 writing it does not carry today), a key and self-signed
+certificate made on first start and kept under `/etc`, its fingerprint
+shown on the Settings card. VNC offers VeNCrypt X509Plain/TLSPlain;
+TigerVNC and Remmina use it, macOS Screen Sharing does not and keeps the
+plain password. The same key answers "A TLS *server*, so `httpd` can
+speak https".
+
+### Remote desktop, stage 4: an RDP server -- X.224/MCS/GCC, bitmap updates and NLA, over stage 3's TLS
+
+MS-RDPBCGR's connection sequence (X.224, MCS with GCC conference
+blocks, capability exchange, licensing), fast-path input (scancodes ->
+`INPUT_INJECT_SCANCODE`) and bitmap updates (interleaved RLE or planar;
+RemoteFX/H.264 out of reach). The Windows client asks for NLA by
+default -- CredSSP with NTLMv2 over the TLS channel -- which is its own
+piece of work; without it mstsc connects only when told to skip NLA.
+xrdp and FreeRDP's server are the scale to compare against.
+
 ### IPv6, or a written decision against it -- link-local, neighbour discovery and SLAAC first
 
 The minimum is link-local addressing, neighbour discovery (IPv6's ARP,

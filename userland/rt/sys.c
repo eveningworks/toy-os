@@ -691,6 +691,10 @@ int sys_net_link(const struct net_linkcfg *req) {
     return (int)err(syscall1(SYS_NET_LINK, (uint64_t)(uintptr_t)req));
 }
 
+int sys_input_inject(const struct input_inject *ev, int n) {
+    return (int)err(syscall2(SYS_INPUT_INJECT, (uint64_t)(uintptr_t)ev, (uint64_t)n));
+}
+
 int sys_net_rename(const char *dev, const char *to) {
     struct net_rename req;
     for (unsigned i = 0; i < sizeof req.name; i++) req.name[i] = 0;

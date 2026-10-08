@@ -280,6 +280,23 @@ int keyboard_layout_translate(uint16_t keycode, int shift, int altgr) {
     return g_table[shift ? LVL_SHIFT : LVL_BASE][keycode];
 }
 
+int keyboard_layout_find(int ch, uint16_t *keycode, int *shift, int *altgr) {
+    if (ch <= 0 || ch > 0xFF) return 0;
+    // Through translate() rather than g_table, so the answer types `ch`
+    // under the same fallthrough a real key press gets.
+    static const uint8_t lv[4][2] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 1 } };
+    for (int l = 0; l < 4; l++) {
+        for (uint16_t kc = 1; kc < KB_KEYCODE_MAX; kc++) {
+            if (keyboard_layout_translate(kc, lv[l][0], lv[l][1]) != ch) continue;
+            if (keycode) *keycode = kc;
+            if (shift) *shift = lv[l][0];
+            if (altgr) *altgr = lv[l][1];
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // Is `lo` a lowercase letter whose capital is `up`? (k_latin1_toupper:
 // ASCII and Latin-1 alike.)
 static int case_pair(int lo, int up) {

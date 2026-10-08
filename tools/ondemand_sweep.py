@@ -86,6 +86,10 @@ TOOLS = [
     # for the same reason: the bytes are fixed, and the failure it exists
     # to catch (an axis read from the wrong bits) is a pointer flying
     # across somebody's screen with a person as the only oracle.
+    # DES for VNC's password check, against OpenSSL's legacy provider --
+    # a wrong cipher on the server reads as a wrong password, forever.
+    ("des_host",    "des_hostcheck.py",        "udes (VNC auth's DES) against OpenSSL", False,
+     None,                                                                                   False),
     ("hid_parse",   "hid_parse_hostcheck.py",  "the HID descriptor parser vs real captures", False,
      None,                                                                                   False),
     # The easing tween's invariants, on the host: it takes its clock as
@@ -279,6 +283,10 @@ TOOLS = [
     ("remote",      "remote_test.py",          "telnetd, tftpd and tools/remote.py end to end", True, None,           False),
     # A one-shot GRUB entry, taken once. Reboots its guest twice against
     # a COPY of disk.img, so it is here rather than in the gate.
+    # The VNC server from a client written in Python: the password,
+    # Raw/ZRLE frames against QEMU's screendump, keys and pointer. Boots
+    # its own guest on a COPY of disk.img.
+    ("vnc",         "vnc_test.py",             "remoted's VNC: auth, frames vs screendump, input", True, None,     False),
     ("boot_entry",  "boot_entry_test.py",      "reboot --entry: one boot, cleared by GRUB", True,  None,             False),
     # bootcfg on a real /boot, and a trial entry booted once. Reboots
     # its guest twice against a COPY of disk.img, as boot_entry does.

@@ -553,6 +553,28 @@ manual steps to be worth automating:
   twice. `/tests/bootcfg_test` (in `usertest_run.py`) covers the model
   itself on fixtures.
 
+- **`vnc_test.py`** -- `/bin/remoted`'s VNC server, from an RFB client
+  written in the tool (DES through `openssl`, ZRLE through Python's
+  `zlib`, so neither shares code with the server). Twelve checks: a wrong
+  password refused and the right one let in; a Raw frame against QEMU's
+  screendump; ZRLE at 32 and 16 bits against the Raw frame; a
+  PointerEvent landing exactly where the compositor reports the pointer;
+  Super opening the Start menu; an incremental update smaller than the
+  screen that patches back to the screendump; and `echo VNC_typed-42!`
+  typed into a Terminal arriving in `/etc/tosh_history` -- the capitals
+  and Shift punctuation are the point, since they need the kernel to
+  press Shift around the key. On demand: it boots its own guest on a
+  COPY of `disk.img`, guest port 5900 on host 15900+N.
+
+  **The 99.5% bar is the pointer**: remoted draws it into the picture and
+  QEMU's dump does not, so it is parked in the corner first. A broken
+  encoder, stride or pixel format moves most of the frame. **A frame that
+  does not decode is a FAIL of the check that asked for it**, not a
+  traceback, so the input checks (which run on Raw) still report. Seen
+  red under `mutate.py`: palette-RLE runs without their flag bit (every
+  ZRLE check), and no Shift around a shifted character (the typing check
+  read `echo vnc-typed-421`).
+
 - **`remote_test.py`** -- `telnetd`, `tftpd` and `remote.py` end to end
   against a QEMU guest, seven checks. On demand: it boots its own guest
   and ENABLES services that ship disabled, so it leaves `disk.img` with
@@ -6103,6 +6125,15 @@ runs first**: a `doom1.wad` with one
   finding aimed at each -- the winding check reads the triangles through
   `teapot_cell_tris()` itself, so it tests the header rather than a copy
   of it. Needs only gcc.
+
+- **`des_hostcheck.py`** -- `userland/lib/udes.c` against `openssl enc
+  -des-ecb` (OpenSSL 3 keeps DES in its legacy provider, which the tool
+  loads), 300 random key/block pairs plus FIPS 81's worked example, each
+  also decrypted back. DES is here for VNC's password check only, where
+  a wrong cipher is indistinguishable from a wrong password.
+  `--positive-control` breaks the key schedule's shift table in a copy
+  -- a fault a round trip alone would pass, since a wrong schedule is
+  still a permutation.
 
 - **`hash_hostcheck.py`** -- compiles `/lib/libhash.so`'s two algorithms
   (`userland/dynlib/uhash.c` plus `kernel/lib/kcrc.c`) with the host gcc
