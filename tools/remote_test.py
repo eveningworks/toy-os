@@ -325,7 +325,17 @@ def main():
 
         dbg = DebugConsole(port_guard.instance_sock(INSTANCE))
         try:
+            # A CLOSE IS ASYNCHRONOUS: remote.py's last `exec` returns once
+            # it has its output, and only then does telnetd see the hangup
+            # and end the shell -- the session's close. Asked at once, this
+            # read `sessions: 1` from a session that was already ending, 4
+            # runs in 4. Bounded, and the check stays exact: hidden AND 0.
+            deadline = time.time() + 10.0
             before = dbg.json("gui remote --json")
+            while (not before or before.get("sessions") != 0 or before.get("tray_hidden") is not True) \
+                    and time.time() < deadline:
+                time.sleep(0.5)
+                before = dbg.json("gui remote --json")
             r.check("the tray item is hidden with nobody connected",
                     before and before.get("tray_hidden") is True
                     and before.get("sessions") == 0, repr(before)[:200])
@@ -349,9 +359,12 @@ def main():
                 r.check("and the program it started, with its path",
                         any("/bin/uptime" in row for row in rows),
                         repr(rows)[:300])
-            finally:
-                held.close()
 
+                # WHILE THE SESSION IS STILL HELD: the item hides itself
+                # the moment the session ends, so a click after close() hits
+                # nothing -- it only worked while telnetd was slow to notice
+                # the hangup.
+                #
                 # **DRAWN, NOT MERELY REPORTED.** The checks above read
                 # the app's own JSON, and this project has shipped three
                 # inert scrollbars and an invisible Calculator past
@@ -385,6 +398,8 @@ def main():
                     r.check("...while the strip beside it did not",
                             before_ctl == after_ctl)
                     dbg.click(tray.get("cx", 0), tray.get("cy", 0))
+            finally:
+                held.close()
 
             # A TRANSFER, HERE, because the flyout lists the last ten
             # records: the puts above are long gone behind the commands

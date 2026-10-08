@@ -228,19 +228,26 @@ def run_media(args, c, media):
         cmd = ("install --disk ata0 --mbr confirm" if mbr
                else "install --disk ata0 confirm")
         out = vm(args, media, "--timeout", "400", "exec", cmd, timeout=900)
+        # THE KERNEL'S LINES ARE IN THE KERNEL LOG, not in `exec`'s reply:
+        # the debug console has its own port (COM2) since 71bc75ef, so
+        # what the syscalls log (`mkpart: ...`, `mkfs: ...`, `mount`,
+        # `install_boot: ...`) no longer interleaves with the command's
+        # output -- four checks read empty while the install was right.
+        klog = vm(args, media, "exec", "dmesg")
+        both = out + "\n" + klog
         add("the installer runs to completion", "install: done." in out)
         add("it partitioned the target",
-            ("2 partition(s) named" if mbr else "3 partition(s) named") in out)
+            ("2 partition(s) named" if mbr else "3 partition(s) named") in both)
         add("it formatted both target filesystems",
-            "formatted as fat32" in out and "formatted as tfs3" in out)
+            "formatted as fat32" in both and "formatted as tfs3" in both)
         add("it mounted the target while its own root stayed mounted",
-            f"mounted at /mnt on ata0p{root_n}" in out and
-            f"mounted at /mnt/boot on ata0p{boot_n}" in out)
+            f"mounted at /mnt on ata0p{root_n}" in both and
+            f"mounted at /mnt/boot on ata0p{boot_n}" in both)
         add("it copied the system and wrote the target's /boot",
             "copying the system" in out and "/install/kernel.bin" in out)
         add("nothing was truncated or ran out of room", "no space left" not in out)
         add("it wrote a boot sector and a core image",
-            "boot sector written, core image at LBA" in out)
+            "boot sector written, core image at LBA" in both)
     finally:
         vm(args, media, "stop", timeout=120)
 
@@ -350,8 +357,9 @@ def run_bootloader(args, c):
 
         done = guest("exec", "install --bootloader confirm", "sync")
         add("writes the bootloader", "boots the newly written GRUB" in done)
-        add("the kernel logged the write", "install_boot:" in done and
-            "boot sector written" in done)
+        klog = guest("exec", "dmesg")     # its own port, as above
+        add("the kernel logged the write", "install_boot:" in klog and
+            "boot sector written" in klog)
         add("records what it installed in /etc/grub-core.modules",
             "gzio" in guest("exec", "cat /etc/grub-core.modules"))
     finally:

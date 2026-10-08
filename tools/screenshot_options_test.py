@@ -242,8 +242,24 @@ def run(dbg, res, qmp):
               f"popover closed={pop_closed} overlay after one Esc={still} gone after two={closed}")
 
     # 6. Options: Print Screen -> Does nothing, then Defaults
+    #
+    # THE OVERLAY STAYS FULLSCREEN UNDER ITS OWN DIALOG: the part of the
+    # taskbar band the dialog does not reach must read the SAME before and
+    # after Options opens. The compositor once asked only whether the
+    # FOCUSED window was fullscreen, so the dialog taking focus brought
+    # the live taskbar back over the frozen frame.
+    shots = tempfile.mkdtemp(prefix="shotopts-band-")
+    seen = {}
+
     def options():
         w = overlay(dbg)
+        if w:
+            # Where the LIVE taskbar would show the overlay's own window
+            # button -- the frozen frame was taken before the app ran and
+            # has none, so the two differ unmistakably. The bar's dark
+            # foot alone did not: a dimmed dark is still dark.
+            seen["band"] = (56, w["h"] - 40, 200, w["h"] - 8)
+            seen["before"] = qmp.stable_pixels(os.path.join(shots, "before.png"), seen["band"])
         gear = rect(dbg, "screenshot", "gear")
         dbg.logs("options: layout", clear=True)
         if w and gear:
@@ -258,6 +274,10 @@ def run(dbg, res, qmp):
     k0 = rect(dbg, "options", "key0")
     res.check("the gear opens Screenshot Options with the Print Screen keys", ow is not None and k0,
               f"windows={[x['title'] for x in dbg.windows()]}")
+    if "before" in seen and ow:
+        after = qmp.stable_pixels(os.path.join(shots, "after.png"), seen["band"])
+        res.check("...and the overlay stays fullscreen under it: no taskbar comes back",
+                  after == seen["before"])
     if ow and k0:
         click_rect(dbg, ow, k0)          # opens the list and takes the focus
         drawn, why = popup_drawn(dbg, qmp)

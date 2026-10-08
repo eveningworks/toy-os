@@ -126,13 +126,24 @@ def type_line(qmp, text, delay=0.045):
 
 def ls_root_until(d, names, timeout=15.0):
     """`sh ls /` once every name in `names` is listed, or the last listing
-    when `timeout` runs out. Each `touch` is an ELF load, which under TCG
-    lands seconds after Enter -- one read at a fixed delay missed files
-    that appeared a moment later."""
+    when NO NEW NAME has appeared for `timeout`. Each `touch` is an ELF
+    load, which under TCG lands seconds after Enter, and the wrap phase
+    types 25 of them ahead of a shell still starting the first: a fixed
+    deadline gave up at 13-17 files while the rest were still arriving
+    (every keystroke had been decoded -- the driver's report count is
+    exact). Waiting on PROGRESS keeps a stalled shell a failure and a
+    slow one a pass."""
     deadline = time.monotonic() + timeout
+    seen = -1
     while True:
         out = d.send("sh ls /") or ""
-        if all(n in out for n in names) or time.monotonic() > deadline:
+        have = sum(1 for n in names if n in out)
+        if have == len(names):
+            return out
+        if have > seen:
+            seen = have
+            deadline = time.monotonic() + timeout
+        if time.monotonic() > deadline:
             return out
         time.sleep(0.5)
 

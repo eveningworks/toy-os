@@ -37,6 +37,9 @@ THE BOOTS, and what a broken version would still pass
   D. An OLD install's grub.cfg (no probe, no word): `install --bootloader`
      must report what it will add, add it to both entries, find nothing
      to add a second time -- and the next boot must carry bootpart=.
+  E. The ISO booted as a CD beside a system disk: GRUB's probe has no
+     partition to name and answers `none` -- the boot must reach the
+     kernel, which must take that as naming nothing and say so.
 
     python3 tools/rootdisk_test.py
 """
@@ -288,10 +291,42 @@ def phase_refresh(res, tmp):
               fs_lines(log))
 
 
+def phase_cd(res, tmp):
+    print("rootdisk_test: E -- the ISO booted as a CD: GRUB's probe names no partition")
+    boot = copy_disk(tmp, "rootdisk_e_disk.img")
+    iso = os.path.join(ROOT, "toy-os.iso")
+    log = os.path.abspath(os.path.join(tmp, "rootdisk_e.log"))
+    pidfile = os.path.abspath(os.path.join(tmp, "rootdisk_e.pid"))
+    for p in (log, pidfile):
+        if os.path.exists(p):
+            os.remove(p)
+    # THE CD FIRST, BY BOOTINDEX: the disk beside it is bootable too, and
+    # GRUB from the disk would answer the probe.
+    sh(f"qemu-system-x86_64 -drive file={iso},media=cdrom,if=none,id=cd0"
+       f" -device ide-cd,drive=cd0,bus=ide.1,bootindex=0"
+       f" -drive if=none,id=d0,file={boot},format=raw -device ide-hd,drive=d0,bus=ide.0,bootindex=1"
+       f" -m 512 -display none -no-reboot -serial file:{log} -daemonize -pidfile {pidfile}")
+    text, deadline = "", time.time() + MOUNT_WAIT_S
+    try:
+        while time.time() < deadline:
+            time.sleep(0.5)
+            with open(log, "rb") as f:
+                text = f.read().decode("utf-8", "replace")
+            if "mounted at / on" in text:
+                break
+    finally:
+        kill(pidfile)
+    res.check("a CD boot reaches the kernel -- the probe did not stop GRUB",
+              "toy-os 0.5" in text or "mounted at /" in text, text.strip()[-200:])
+    res.check("...which is told bootpart= names no partition, and chooses by content",
+              "bootpart= names no partition" in text and "mounted at / on ata0p3" in text,
+              fs_lines(text))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--tmp", default="/tmp")
-    ap.add_argument("--phase", choices=("sata", "blank", "two", "refresh", "all"), default="all")
+    ap.add_argument("--phase", choices=("sata", "blank", "two", "refresh", "cd", "all"), default="all")
     args = ap.parse_args()
 
     res = Results()
@@ -303,6 +338,8 @@ def main():
         phase_two_systems(res, args.tmp)
     if args.phase in ("refresh", "all"):
         phase_refresh(res, args.tmp)
+    if args.phase in ("cd", "all"):
+        phase_cd(res, args.tmp)
 
     print("\n" + res.summary("rootdisk_test"))
     return 1 if res.fails else 0

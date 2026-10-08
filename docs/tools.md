@@ -2744,7 +2744,7 @@ window without going through it will find its layout polls timing out.
 
 - **`damage_sweep.py`'s positive control injects its miss.** `gui damage
   shrink <n>` (a test lever in `wm_render.c`) insets every
-  `wm_damage_window_rect()` by 32 px for the next `n` rendered frames;
+  `wm_damage_window_rect()` by 48 px for the next `n` rendered frames;
   `--positive-control` shrinks four frames before a drag and expects the
   verifier to report the border the window vacated. Shrink rather than
   drop, because a frame whose damage is all dropped has none, and a frame
@@ -2752,10 +2752,10 @@ window without going through it will find its layout polls timing out.
   2026-09-18 the control only EXPECTED a violation, which passed for as
   long as the WM had a real one -- two, as it turned out (a focus change's
   shadow and the Start button's lit state) -- and the day both were fixed
-  it reported the harness as "not checking anything". **The injected miss
-  does not yet make the verifier fire** -- `docs/bugs.md` has the
-  measurement -- so the control exits 1, loudly, and a clean sweep is
-  not yet proof until it does.
+  it reported the harness as "not checking anything". **It fires since 2026-10-07**: at 32 px the inset was net of the
+  28 px shadow margin and took only the shadow's nearly transparent
+  outermost 4 px, so nothing visible was left stale; 48 bites 20 px into
+  the moved window's old body.
 
 - **`shadow_test.py`** -- drop shadows (`userland/wm/wm_shadow.c`) and
   `desktop.shadows`. Places Notepad and Calculator over the flat lower
@@ -6619,7 +6619,7 @@ runs first**: a `doom1.wad` with one
   demand, not in any gate.
 
 - **`rootdisk_test.py`** -- **every SATA drive, and which disk is the
-  root.** Seven boots, on demand. **A**: three SATA drives on TWO
+  root.** Eight boots, on demand. **A**: three SATA drives on TWO
   `ich9-ahci` HBAs, the system disk on HBA 0 PORT 1 (booted by
   `bootindex`), a host-seeded data disk on port 0 and a blank disk on
   the second HBA -- three drives named, the root from port 1 rather than
@@ -6635,6 +6635,9 @@ runs first**: a `doom1.wad` with one
   agreed. **D**: an old install's grub.cfg (no probe lines, no word):
   `install --bootloader` must preview and then add `bootpart=` to both
   entries, add nothing a second time, and the next boot must carry it.
+  **E**: the ISO booted as a CD beside a system disk -- GRUB's probe
+  answers `none` there (it does not fail), the boot must reach the
+  kernel, and the kernel must say the loader named no partition.
 
   Its controls (`mutate.py`): AHCI stopping at one drive per HBA
   reddens every check of A; the content rule reduced to precedence

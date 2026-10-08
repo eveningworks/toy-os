@@ -108,6 +108,23 @@ def vm_run(disk, instance, *argv):
     return r.stdout + r.stderr
 
 
+def finished_names(dbg, timeout=20.0):
+    """`/`'s names once a typed `file_test` has FINISHED -- never after a
+    fixed sleep. Its first launch under TCG can outlast 2.5 s, and then a
+    check read `/` too early and the next keys went to file_test rather
+    than the shell. `filetest.bin` is the file it writes LAST, so its
+    arrival means it is done; it is removed again for the next run.
+    Returns the names as they were, so a check that it never arrived
+    still fails on what was there."""
+    deadline = time.time() + timeout
+    names = root_names(dbg)
+    while "filetest.bin" not in names and time.time() < deadline:
+        time.sleep(0.5)
+        names = root_names(dbg)
+    dbg.send("sh rm /filetest.bin")
+    return names
+
+
 def root_names(dbg):
     """The names in `/` as a SET of exact entries -- never a substring
     search over the raw reply, which cannot tell a file called
@@ -295,9 +312,9 @@ def main():
 
         print("a typed line reaches the ring-3 shell")
         type_line(flow, "file_test")
-        time.sleep(2.5)
+        names = finished_names(dbg)
         check("a program spawned from the typed line ran",
-              "filetest.txt" in root_names(dbg))
+              "filetest.txt" in names, " ".join(sorted(names)))
 
         print("Ctrl-D, and init puts a new prompt back")
         dbg.send(f"sh rm {MADE}")
@@ -325,8 +342,7 @@ def main():
               f"pid {row2[0]} state {row2[1]}" if row2 else "no tosh row")
 
         type_line(flow, "file_test")
-        time.sleep(2.5)
-        names = root_names(dbg)
+        names = finished_names(dbg)
         check("the restarted shell runs a typed line", "filetest.txt" in names)
         check("the kernel shell did not take the console back in the gap",
               "kprobe.txt" not in names)
@@ -355,9 +371,8 @@ def main():
         flow.session.send_key("delete")
         time.sleep(0.2)
         flow.session.send_key("ret")
-        time.sleep(2.5)
         check("Home + Delete edit mid-line, and the edited line runs",
-              "filetest.txt" in root_names(dbg))
+              "filetest.txt" in finished_names(dbg))
 
         # 2. Ctrl-U kills the line. Typing a command that WOULD leave a
         #    trace, killing it, then running one that does: the probe
@@ -369,8 +384,7 @@ def main():
         flow.session.combo(["ctrl", "u"])
         time.sleep(0.3)
         type_line(flow, "file_test")
-        time.sleep(2.5)
-        names = root_names(dbg)
+        names = finished_names(dbg)
         check("Ctrl-U killed the line before it ran",
               "kprobe.txt" not in names and "filetest.txt" in names,
               " ".join(sorted(names)))
@@ -383,9 +397,8 @@ def main():
         flow.session.send_key("up")
         time.sleep(0.3)
         flow.session.send_key("ret")
-        time.sleep(2.5)
         check("Up recalls the previous command and it runs again",
-              "filetest.txt" in root_names(dbg))
+              "filetest.txt" in finished_names(dbg))
 
         # --- REDIRECTION -------------------------------------------
         #
@@ -615,9 +628,8 @@ def main():
         dbg.send("sh rm /filetest.txt")
         time.sleep(0.4)
         type_line(flow, "file_test")
-        time.sleep(2.5)
         check("...and the shell is still usable after it exits",
-              "filetest.txt" in root_names(dbg))
+              "filetest.txt" in finished_names(dbg))
 
         # --- PIPELINES ---------------------------------------------
         #
