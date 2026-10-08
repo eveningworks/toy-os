@@ -607,6 +607,35 @@ def main():
             r.check("with it, a pointer move sends no pixels", True)
         v.s.settimeout(30)
 
+        # A SESSION THAT DIES WITH A NUDGE PENDING FREES ITS SLOT. Each of
+        # these takes a frame with the pointer drawn in, moves the pointer
+        # (damage, so the compositor nudges it) and hangs up before
+        # asking again. The compositor has four screen-sharing slots; the
+        # sixth viewer got no picture at all until a dead one's slot was
+        # freed when it went (the ASUS, after a day of connections).
+        v.close()
+        got = True
+        for i in range(6):
+            d = connect(args)
+            d.set_encodings([0] if i < 5 else [16, -239])
+            d.s.settimeout(10)
+            try:
+                d.request(False)
+                d.read_update()
+            except (socket.timeout, OSError, EOFError, RuntimeError):
+                got = False   # no picture: every slot is held by the dead
+            if i < 5:
+                d.pointer(100 + 40 * i, 100)
+                time.sleep(0.5)
+            d.close()
+            time.sleep(0.5)
+            if not got:
+                break
+        r.check("a viewer after five that hung up mid-nudge still gets the picture", got,
+                f"no picture for viewer {i + 1}")
+        v = connect(args)
+        v.set_encodings([16, -239])
+
         # Ctrl+Alt+T opens a Terminal; type into it.
         for k in (0xFFE3, 0xFFE9):
             v.key(k, True)

@@ -34,6 +34,8 @@ int wm_screenshot_damage(int from, unsigned flags, int capacity_px, struct win_d
 void wm_screenshot_frame_damage(int x, int y, int w, int h);
 void wm_screenshot_pointer_damage(int x, int y, int w, int h);
 void wm_screenshot_cursor_changed(void);
+// A client went away: its caster slot is freed (wm_client.c's scan).
+void wm_screenshot_client_gone(int pid);
 // Is any caster sharing the screen with the pointer drawn in? The render
 // paths ask before working out where the pointer's box is.
 int wm_screenshot_casting_pointer(void);

@@ -147,6 +147,16 @@ static void cast_rect(int pointer_only, int x, int y, int w, int h) {
     }
 }
 
+// A DEAD CASTER IS FORGOTTEN WHEN ITS CLIENT GOES, not when a nudge to
+// it next fails: a caster that died with a nudge already out is never
+// nudged again, so the four slots filled with the dead and every later
+// viewer was refused (-EBUSY) -- the pointer moved, clicks landed, and
+// the picture never came. Found on the ASUS after a day of connections.
+void wm_screenshot_client_gone(int pid) {
+    struct caster *c = caster_of(pid);
+    if (c && pid) k_memset(c, 0, sizeof *c);
+}
+
 void wm_screenshot_frame_damage(int x, int y, int w, int h) { cast_rect(0, x, y, w, h); }
 
 int wm_screenshot_casting_pointer(void) {

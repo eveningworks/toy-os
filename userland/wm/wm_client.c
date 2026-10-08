@@ -1391,6 +1391,7 @@ void wm_client_chan_pump(void) {
     int n = uchan_server_scan(&g_chan, gone, WM_CHAN_GONE_MAX);
     for (int i = 0; i < n; i++) {
         wm_bg_client_gone(gone[i]);
+        wm_screenshot_client_gone(gone[i]);   // its screen-sharing slot
         for (int w = window_count - 1; w >= 0; w--)
             if (windows[w].client_pid == gone[i])
                 on_window_destroyed(gone[i], windows[w].client_win);
