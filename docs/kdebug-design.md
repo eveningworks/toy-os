@@ -212,6 +212,15 @@ loop, a breakpoint in `heap_total_bytes()` was hit by `meminfo` run over
 the OS's own NIC, `bt` read through `sys_query` and `syscall_dispatch`,
 and detach let the command finish.
 
+**The Kaby Lake desktop, 2026-10-08**: its integrated RTL8168G (`03:00.0`)
+is the debugger's and the OS networks on the AQC113 PCIe card (`aq.c`).
+The first boot armed the stub and then it answered nothing: `r8169_kdb.c`
+still brought the receiver up in the old order, which on the 8168G family
+receives one lap of the ring -- eight frames of LAN broadcast -- and then
+nothing; `r8169.c` had been fixed for the same chip (f0168cc0) and the
+copy had not. Both now ask `r8169_g_family()`. Verified: break-in from
+the idle loop, `bt`, `toy-dmesg`, `toy-ps` and detach over the network.
+
 **What it cost to get there, both in `docs/bugs.md`**: with BOTH NICs up
 in the OS on one subnet, replies leave through the first matching
 device, so run one per subnet; and a half-open TCP connection that never

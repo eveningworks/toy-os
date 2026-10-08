@@ -347,9 +347,7 @@ static int r8169_probe(const struct pci_device *pci) {
     // lap of the ring (32 frames) and then nothing, every bring-up, while
     // the 8168GU worked. Its gate read open (MISC 0x3f), so the order,
     // EARLYOFF_V2 or the handler's IMR re-arm cured it -- not isolated.
-    uint32_t fam = xid & TCR_FAMILY;
-    int g_family = fam == HWREV_8168G || fam == HWREV_8168GU ||
-                   fam == HWREV_8168H || fam == HWREV_8411B;
+    int g_family = r8169_g_family(xid);
     uint32_t rcr = RCR_FIFO_NONE | RCR_DMA_UNLIM | RCR_BROAD | RCR_MULTI | RCR_INDIV;
     if (g_family) {
         reg_write32(REG_MISC, reg_read32(REG_MISC) & ~MISC_RXDV_GATED);

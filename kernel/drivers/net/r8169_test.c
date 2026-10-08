@@ -8,6 +8,7 @@
 // off the end of it. Both look like a working driver until something
 // upstream checksums a frame, or the machine stops.
 #include "r8169.h"
+#include "r8169_regs.h"
 #include "netdev.h"
 #include "ktest.h"
 
@@ -78,4 +79,14 @@ KTEST("r8169", "an impossible length is refused") {
 // the completion, where it must not be mistaken for anything.
 KTEST("r8169", "the ring-end mark does not disturb a received length") {
     KTEST_ASSERT_EQ(r8169_rx_frame_len(EOR | FS | LS | 1518u), 1514u);
+}
+
+// Both drivers decide the receiver's bring-up order by this; the
+// desktop's RTL8168G (XID 0x4c000000) is the case that broke.
+KTEST("r8169", "the 8168G family is told apart from older chips by its revision") {
+    KTEST_ASSERT(r8169_g_family(0x4C000000u));
+    KTEST_ASSERT(r8169_g_family(0x4C100000u));        // a minor revision of the same
+    KTEST_ASSERT(r8169_g_family(0x54000000u));        // 8168H
+    KTEST_ASSERT(!r8169_g_family(0x2C000000u));       // 8168E
+    KTEST_ASSERT(!r8169_g_family(0x00000000u));
 }

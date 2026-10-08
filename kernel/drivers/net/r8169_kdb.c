@@ -25,6 +25,7 @@ static uint64_t g_rxbuf_phys, g_txbuf_phys;
 static uint32_t g_rx_cur, g_tx_cur;
 
 static uint8_t  rd8 (uint32_t o) { return *(volatile uint8_t  *)(g_mmio + o); }
+static uint32_t rd32(uint32_t o) { return *(volatile uint32_t *)(g_mmio + o); }
 static uint16_t rd16(uint32_t o) { return *(volatile uint16_t *)(g_mmio + o); }
 static void wr8 (uint32_t o, uint8_t v)  { *(volatile uint8_t  *)(g_mmio + o) = v; }
 static void wr16(uint32_t o, uint16_t v) { *(volatile uint16_t *)(g_mmio + o) = v; }
@@ -84,12 +85,24 @@ static int rtl_claim(const struct pci_device *pci, uint8_t mac[6]) {
     wr64(REG_RDSAR, rings);
     wr64(REG_TNPDS, rings + 2048);
     wr8(REG_9346CR, CFG_LOCK);
+    uint32_t xid = rd32(REG_TCR) & TCR_HWREV;
     wr32(REG_TCR, TCR_IFG_STD | TCR_DMA_UNLIM);
-    // Receiver configured AFTER it is enabled -- r8169.c says why.
-    wr8(REG_CR, CR_RX_ENB | CR_TX_ENB);
-    wr32(REG_RCR, RCR_FIFO_NONE | RCR_DMA_UNLIM | RCR_BROAD | RCR_MULTI | RCR_INDIV);
-    wr32(REG_MAR0, 0xFFFFFFFFu);
-    wr32(REG_MAR0 + 4, 0xFFFFFFFFu);
+    // The receiver's order depends on the generation -- r8169.c says why.
+    // The old order on the desktop's 8168G received one lap of this ring
+    // (8 frames of LAN broadcast) and then nothing, so the stub went deaf.
+    uint32_t rcr = RCR_FIFO_NONE | RCR_DMA_UNLIM | RCR_BROAD | RCR_MULTI | RCR_INDIV;
+    if (r8169_g_family(xid)) {
+        wr32(REG_MISC, rd32(REG_MISC) & ~MISC_RXDV_GATED);
+        wr32(REG_RCR, rcr | RCR_EARLYOFF_V2);
+        wr32(REG_MAR0, 0xFFFFFFFFu);
+        wr32(REG_MAR0 + 4, 0xFFFFFFFFu);
+        wr8(REG_CR, CR_RX_ENB | CR_TX_ENB);
+    } else {
+        wr8(REG_CR, CR_RX_ENB | CR_TX_ENB);
+        wr32(REG_RCR, rcr);
+        wr32(REG_MAR0, 0xFFFFFFFFu);
+        wr32(REG_MAR0 + 4, 0xFFFFFFFFu);
+    }
     wr16(REG_ISR, 0xFFFF);
     return 1;
 }

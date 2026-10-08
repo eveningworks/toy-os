@@ -522,7 +522,8 @@ before a module-level buffer anything a syscall reaches uses),
 `modules-design.md`, `update-design.md`, `rootfs-design.md`,
 `winserver-ring3-design.md` (stages 0-1 BUILT -- before
 `kernel/proc/win_*.c`), `kdebug-design.md` (the GDB stub: serial BUILT,
-the network on a dedicated e1000 BUILT; real hardware is next),
+the network BUILT, on QEMU's e1000 and on real r8169s -- the Lenovo,
+the desktop),
 `netstack-design.md` (the network stack in ring 3, PLANNED -- before
 socket or `kernel/net/` work).
 

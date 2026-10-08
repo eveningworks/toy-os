@@ -81,4 +81,12 @@ struct rl_desc {
 
 _Static_assert(sizeof(struct rl_desc) == 16, "a C+ descriptor is 16 bytes");
 
+// The 8168G family (re(4)'s revision mask) brings its receiver up in the
+// OTHER order -- r8169.c's bring-up says why. Shared so r8169_kdb.c
+// cannot fall behind it again.
+static inline int r8169_g_family(uint32_t tcr) {
+    uint32_t fam = tcr & TCR_FAMILY;
+    return fam == HWREV_8168G || fam == HWREV_8168GU || fam == HWREV_8168H || fam == HWREV_8411B;
+}
+
 #endif
