@@ -133,7 +133,7 @@ AREAS = {
               "module modules locale version",
     "Storage": "fs tfs3 fat32 vfs ahci ata nvme block storage mount mkfs fsck",
     "Sound": "sound usnd soundd hda ac97 audio usb-audio usbaudio midi flac mp3 aplay",
-    "Network": "net netd tcp udp dhcp ntpd wget httpd tls tftp e1000 r8169 rtl_usb dns",
+    "Network": "net netd tcp udp dhcp ntpd wget httpd tls tftp e1000 r8169 aq rtl_usb dns",
     "USB": "usb xhci",
     "Graphics": "intel display gfx modeset virtio-gpu scanout uimg",
     "Input": "keyboard kbs input win_input mouse touchpad osk",

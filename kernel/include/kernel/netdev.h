@@ -66,9 +66,10 @@ struct net_device {
     // is unplugged, and `netctl` must not claim otherwise. Bits per
     // second because that is what the wire negotiated, not what the bus
     // could carry -- a gigabit adapter on USB 2 still says 1000000000.
+    // 64 bits: 10 Gb/s does not fit in 32 (aq.c).
     uint8_t  link_known;
     uint8_t  link_up;
-    uint32_t link_bps;
+    uint64_t link_bps;
 
     // ADMINISTRATIVELY DOWN -- Linux's IFF_UP, inverted so a driver's
     // zeroed struct is up. Set from ring 3 (SYS_NET_CONFIG's

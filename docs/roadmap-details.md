@@ -2641,7 +2641,7 @@ signed -- GitHub Releases is the obvious host, and publishing one is a
 release, confirmed with the maintainer each time. Until it exists the
 list names only private servers, which `update.server` already covers.
 
-### An AQC113 (Aquantia AQtion, 10G) driver for the desktop's XG-C100C V2, so its onboard r8169 can be the `kdebug=net` card
+### An AQC113 (Aquantia 10G) driver, so the desktop's r8169 can be the `kdebug=net` card
 
 The Kaby Lake desktop (.159) has an ASUS XG-C100C V2 at `01:00.0`, read
 2026-10-05 as `1d6a:94c0` "AQtion AQC113CS" -- Aquantia's A2 generation,
@@ -2651,12 +2651,18 @@ not the AQC107 the first XG-C100C carried -- with no driver binding it.
 the AQC113 is what lets the desktop keep its network while its r8169 is
 the debugger's (`kdebug=net,...,nic=03:00.0`).
 
-What is known going in, to be checked rather than trusted: Linux drives
-it with `atlantic` (the `hw_atl2` half); the link is brought up by the
-card's own firmware through a shared-memory interface rather than by
-PHY registers; there is no public datasheet, so Linux's driver is the
-reference. QEMU models no Aquantia part, so every test is on the
-desktop, debugged over the r8169.
+**DONE 2026-10-08: `kernel/drivers/net/aq.c`**, both generations (A1
+AQC100-112, A2 AQC113-116), one queue, one vector. The premise that
+Linux's `atlantic` had to be the reference was wrong on two counts:
+this repository is MIT and keeps off GPL drivers (`LICENSE`, the r8169
+and ure notes), and OpenBSD's `aq(4)` (`if_aq_pci.c`, ISC/BSD) has
+driven A2 since 2023 -- so it was the reference, with NetBSD's
+`if_aq.c` for the A1 firmware-1.x calls OpenBSD leaves out. The
+firmware-run link was confirmed: the driver asks for rates in the
+interface buffer and reads back the result; nothing touches the PHY.
+Measured on the desktop: firmware 1.3.18 boots in about 40 ms, the
+link comes up at 2.5 Gb/s about 8 s later, DHCP and ping work, MSI-X
+interrupts arrive. The A1 half is untested -- no A1 card is here.
 
 ### IPv6, or a written decision against it -- link-local, neighbour discovery and SLAAC first
 

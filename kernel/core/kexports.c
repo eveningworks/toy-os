@@ -23,6 +23,7 @@
 #include "module.h"
 #include "ubsan.h"
 #include "multiboot.h"
+#include "clocksource.h"
 #include <stddef.h>
 
 // --- the stack protector: every module function carries a canary -----
@@ -132,6 +133,9 @@ EXPORT_SYMBOL(module_put);
 
 // --- multiboot.h: the boot line, for a driver's `noXXX` word ------------
 EXPORT_SYMBOL(multiboot_cmdline);
+
+// --- clocksource.h: a wait bounded in time, with or without interrupts --
+EXPORT_SYMBOL(clocksource_delay_ms);
 
 // --- the table ---------------------------------------------------------
 extern const struct kexport __kexports_start[];
