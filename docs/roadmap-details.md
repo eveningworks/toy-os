@@ -2664,6 +2664,26 @@ Measured on the desktop: firmware 1.3.18 boots in about 40 ms, the
 link comes up at 2.5 Gb/s about 8 s later, DHCP and ping work, MSI-X
 interrupts arrive. The A1 half is untested -- no A1 card is here.
 
+### Per-card Ethernet adapter settings -- EEE, link speed, flow control, interrupt moderation, in Device Manager and Settings
+
+Chosen 2026-10-08 from mockups (A + C): an "Adapter settings" section in
+Device Manager and a System Settings "Network" page, both drawn by ONE
+toolkit widget, `uui_netadapter` -- the shape `uui_sndformat` already has
+in both apps. Each card shows only what its driver can do; `e1000` and
+virtio-net show nothing. Windows keeps these knobs in Device Manager's
+Advanced tab (driver-declared properties), Linux in `ethtool` and in a
+NetworkManager connection's Ethernet tab.
+
+What it needs underneath: a configuration op on `struct net_device`
+(today it has only `transmit` and `poll`), capability and current-value
+fields in `QUERY_NETDEV`, a way to set them from ring 3, and per-card
+persistence -- a `[card]` section in `/etc/net.conf`, applied by `netd`
+when the card registers, as `/etc/sound-cards.conf` is per sound card.
+`aq` can do all four (EEE, a rate mask, pause frames, the moderation
+registers); `r8169` could offer speeds and EEE through its PHY later.
+Its default stays EEE off: with the firmware's default (on) the
+desktop's AQC113 came up 2 boots in 12 receiving corrupt frames.
+
 ### IPv6, or a written decision against it -- link-local, neighbour discovery and SLAAC first
 
 The minimum is link-local addressing, neighbour discovery (IPv6's ARP,

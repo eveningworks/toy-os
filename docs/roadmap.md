@@ -27,6 +27,7 @@ buildable now. Something that MISBEHAVES is not here -- that is
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
 - [ ] `_PRW` and a real GPE wake set -- stage 3, and the fix for the two-press power button in `docs/bugs.md`  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
+- [ ] Per-card Ethernet adapter settings -- EEE, link speed, flow control, interrupt moderation, in Device Manager and Settings  *(Networking)*
 - [ ] Restore trust in the GUI suite: harness faults first, then the deterministic reds, intermittents kept with a rate  *(Kernel test harness)*
 <!-- END next-up -->
 
@@ -999,6 +1000,7 @@ run on, not by order.
 - [x] ~~**A connection per child process**~~ DONE 2026-08-29 -- `/bin/inetd`; the spawn NAMES fd 0/1, so `inetd -p 7 /bin/cat` echoes
 - [x] ~~An RTL8111/8168 driver, for the Ethernet built into most laptops~~ DONE 2026-09-05 -- `r8169.c`; DHCP and 5.5 MB of TFTP
 - [x] ~~An AQC113 (Aquantia 10G) driver, so the desktop's r8169 can be the `kdebug=net` card~~ DONE 2026-10-08 -- `aq.c`, A1 and A2
+- [ ] **NEXT** Per-card Ethernet adapter settings -- EEE, link speed, flow control, interrupt moderation, in Device Manager and Settings
 - [x] ~~Remove a network device when it is unplugged~~ DONE 2026-09-05 -- `net_unregister()`; net was the last class registry without one
 - [x] ~~`/bin/netd`: naming rules from `/etc/net.conf`, and a lease per card~~ DONE 2026-09-05 -- replaced the `dhcp` service
 - [ ] An RTT estimate, and Nagle -- the retransmit timeout is a fixed floor with backoff
