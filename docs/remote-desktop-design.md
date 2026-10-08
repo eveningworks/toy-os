@@ -93,15 +93,22 @@ own reader, which this TCP stack's retransmission timers need.
    3.8/3.7/3.3, VNC Authentication, Raw and ZRLE at 8/16/32 bits, keys
    and pointer and wheel, `/etc/remote.conf`, the service.
    `tools/vnc_test.py`.
-2. **Settings, the prompt, the indicator.** System Settings > Network >
-   Remote Desktop (S2: a card per protocol). The P2 corner notice (Allow /
-   View only / Deny, an "Always allow this address" box, denied after
-   30 s) -- a `WIN_NOTICE_*` kind the compositor owns, answered back to
-   the session over the client channel. The tray's Remote activity
-   indicator lights for a desktop session (a kernel record taken from the
-   SOCKET's peer, so a program cannot claim one), and its flyout gains
-   View only and Disconnect. The connected-sessions list is a shared
-   `uui_` widget.
+2. **BUILT (2026-10-08)** -- the Settings page, the prompt, the
+   indicator. System Settings > Network > Remote Desktop (S2: a card per
+   protocol, `uui_card`; "When someone connects" and "Allow connections
+   from" below; Trusted viewers and Connected as `uui_actionlist`s; the
+   password a masked `uui_textbox`). The P2 corner notice
+   (`WIN_NOTICE_REMOTE`: Allow / View only / Deny, "Always allow" unless
+   the machine asks every time, denied after 30 s), answered back to the
+   session as `WIN_EV_REMOTE_ANSWER`, before RFB's security result. Each
+   session is spawned `SPAWN_SETSID`, so the kernel lists it
+   (`QUERY_REMOTESESS`, its peer taken from the socket) with the status
+   line the session sets; the tray icon is lit while a desktop session is
+   open (`tray_set_accent()`) and its flyout ends one or makes it view
+   only. Ending and view-only are SIGNALS to the session (SIGTERM,
+   SIGUSR1/SIGUSR2, the latter pair new to toy-os), so the tray, Settings
+   and a shell all use the same lever and a wedged session still dies.
+   `/etc/remote.conf` is `lib/uremote.h`'s, shared by the three.
 3. **TLS on the server side.** mbedtls with `MBEDTLS_SSL_SRV_C`, a key
    and self-signed certificate made on first start, its fingerprint shown
    in Settings. VNC gains VeNCrypt (TigerVNC and Remmina encrypt; macOS

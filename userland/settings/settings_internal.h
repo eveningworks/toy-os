@@ -91,6 +91,8 @@ enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST,
        ID_SU_DEFAULT, ID_SU_TIMEOUT, ID_SU_NEXT, ID_SU_OPEN,
        ID_KB_LIST, ID_KB_ADD, ID_KB_REMOVE, ID_KB_UP, ID_KB_DOWN, ID_KB_TRY,
        ID_NA_CARD, ID_NA_DEVMGR,
+       ID_RD_VNC, ID_RD_RDP, ID_RD_PORT, ID_RD_PW, ID_RD_PW_SAVE, ID_RD_WHEN, ID_RD_FROM,
+       ID_RD_TRUSTED, ID_RD_ADD_ADDR, ID_RD_ADD_LABEL, ID_RD_ADD, ID_RD_CONN,
        ID_SNDFMT = 60,          // .. + UUI_SNDFORMAT_IDS, Sound > Output's Format
        ID_NETADP = 80,          // .. + UUI_NETADAPTER_IDS, Network > Adapters' panel
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
@@ -104,6 +106,7 @@ enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST,
 #define NODE_SYSINFO       1
 #define NODE_STARTUP       2
 #define NODE_ADAPTERS      3
+#define NODE_REMOTE        4
 #define NODE_CATEGORY_BASE 1000
 #define NODE_GROUP_BASE    2000
 
@@ -375,5 +378,17 @@ int  adapters_fit(void);
 int  adapters_on_widget(int id);
 int  adapters_on_action(int code);
 int  adapters_tick(void);
+
+// Network > Remote Desktop (set_remote.c): /etc/remote.conf, the trusted
+// addresses, the sessions open now.
+extern int g_show_remote;
+void remote_init(void);
+void remote_fonts(void);
+void remote_load(void);
+int  remote_emit(struct uui_item *out, int n, struct uui_focusable *focus, int *nfocus);
+int  remote_fit(void);
+int  remote_on_widget(int id);
+int  remote_on_action(int code);
+int  remote_tick(void);
 
 #endif

@@ -119,8 +119,10 @@ static void paint(struct ugfx_surface *s, void *w) {
     const struct uui_setting_row *r = w;
     uint32_t card = UTHEME_WHITE, fg = UTHEME_TEXT;
     uint32_t dim = uui_state_bg(fg, UUI_STATE_DISABLED);
-    uui_fill_round_rect(s, r->x, r->y, r->w, r->h, 6, UTHEME_SEPARATOR);
-    uui_fill_round_rect(s, r->x + 1, r->y + 1, r->w - 2, r->h - 2, 5, card);
+    if (!r->flat) {
+        uui_fill_round_rect(s, r->x, r->y, r->w, r->h, 6, UTHEME_SEPARATOR);
+        uui_fill_round_rect(s, r->x + 1, r->y + 1, r->w - 2, r->h - 2, 5, card);
+    }
 
     int tx = r->x + pad_x(), tw = text_w(r);
     int ty = is_stacked(r) ? r->y + pad_y() : r->y + (r->h - text_h(r)) / 2;

@@ -68,6 +68,7 @@
 | `uprogress.h` | A one-line transfer meter, redrawn in place with `\r`. |
 | `urecent.h` | RECENT FILES: what was opened lately, by any app, and in which -- freedesktop's recently-used.xbel and Windows' Recent Items, as one plain-text list in /var/lib/recent. |
 | `uregion.h` | A REGION: a bounded list of disjoint rectangles, cut by subtraction -- what the compositor draws each window inside once the opaque windows above it are taken away (pixman's region32, which wlroots... |
+| `uremote.h` | The remote desktop, from any program: /etc/remote.conf (what /bin/remoted serves and who may connect), the sessions open now, and the two things anyone may do to one -- end it, or make it view only. |
 | `urename.h` | RENAMING MANY FILES AT ONCE: the new names a rule gives a set of names, and whether the set can be renamed as planned -- Dolphin's "Rename items", Thunar's Bulk Rename, PowerToys' PowerRename. |
 | `uresolv.h` | Turning a name into an address: DNS over UDP, in ring 3. |
 | `usaver.h` | Where the savers are. |
@@ -109,10 +110,12 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `utext.h` | utext -- a wrapped, scrollable, editable text buffer with a cursor and a selection. |
 | `utheme.h` | The ring-3 toolkit's THEME: a PALETTE (colour roles, Qt's QPalette / GTK's named colours) and METRICS (font-derived sizes and spacing, Qt's QStyle). |
 | `uui.h` | Toykit -- the ring-3 GUI toolkit -- and the umbrella include for its widgets. |
+| `uui_actionlist.h` | ROWS OF THINGS, EACH WITH ITS OWN BUTTONS: a title, a dim line under it, and up to two buttons at the right of the row -- "Disconnect" on a remote session, "Remove" on a trusted address. |
 | `uui_anim.h` | FRAMES FOR THINGS THAT MOVE ON THEIR OWN. |
 | `uui_button.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |
 | `uui_button_group.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |
 | `uui_canvas.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |
+| `uui_card.h` | A CARD THAT HOLDS A GROUP: a title and a line under it, an optional control at the right of that header -- a switch that turns the whole group on -- and a column of items below. |
 | `uui_caret.h` | THE TEXT CARET'S BLINK -- one phase for the whole process, asked by every widget that draws a caret (uui_textbox, utext, so uui_textview). |
 | `uui_chart.h` | chart -- a value over TIME, which is the one thing uui_meter cannot show. |
 | `uui_checkbox.h` | The ring-3 checkbox, an OBJECT -- it holds its own geometry, checked state and hover, like uui_button/uui_listbox. |

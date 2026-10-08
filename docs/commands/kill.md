@@ -16,9 +16,11 @@ group. With no signal named it sends `TERM`, as every Unix does.
 The signal may be given by name or by number, with or without a `SIG`
 prefix and in any case: `-TERM`, `-SIGTERM`, `-term` and `-15` are the
 same request. The signals this kernel has are `HUP` (1), `INT` (2),
-`QUIT` (3), `KILL` (9), `SEGV` (11), `TERM` (15), `CHLD` (17), `CONT`
-(18), `STOP` (19) and `TSTP` (20) — POSIX's numbers, so nothing here
-means something different from everywhere else.
+`QUIT` (3), `ILL` (4), `ABRT` (6), `FPE` (8), `KILL` (9), `USR1` (10),
+`SEGV` (11), `USR2` (12), `PIPE` (13), `TERM` (15), `CHLD` (17), `CONT`
+(18), `STOP` (19), `TSTP` (20), `TTIN` (21), `TTOU` (22) and `WINCH`
+(28) — POSIX's numbers, so nothing here means something different from
+everywhere else; `kernel/include/abi/signal_abi.h` is the list itself.
 
 **A negative target is a process GROUP**, POSIX's spelling: `kill -TERM
 -4` signals every live member of group 4. Pids are 1-based, so a

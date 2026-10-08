@@ -222,6 +222,8 @@ int comp_pid(void) {
 // Sends one request over the channel. Returns 1 if it went, 0 if there
 // is no compositor channel or its ring is full.
 // The payload rides the text union: a string, or a present's damage.
+#define WMCHAN_SEND_WAIT_MS 500
+
 int wmchan_send_damage(uint32_t type, uint32_t window, int aa, int bb, int cc,
                               const char *text, const struct win_damage *dmg) {
     if (!wmchan()) return 0;
@@ -232,7 +234,11 @@ int wmchan_send_damage(uint32_t type, uint32_t window, int aa, int bb, int cc,
     m.a = aa; m.b = bb; m.c = cc;
     if (text) snprintf(m.text, sizeof m.text, "%s", text);
     else if (dmg) m.damage = *dmg;
-    return uchan_send(&g_wmchan, &m, sizeof m) == 0;
+    // A FULL RING WAITS rather than drops: a window's widget map is a
+    // message per named widget, and a page with more than the ring holds
+    // lost the PRESENT queued behind them -- a window that opened and
+    // never drew (System Settings' Remote Desktop page found it).
+    return uchan_send_wait(&g_wmchan, &m, sizeof m, WMCHAN_SEND_WAIT_MS) == 0;
 }
 
 int wmchan_send(uint32_t type, uint32_t window,

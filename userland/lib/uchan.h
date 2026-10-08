@@ -116,6 +116,12 @@ int uchan_client_open(struct uchan_client *c, const char *name);
 // needs to find out about.
 int uchan_send(struct uchan_client *c, const void *msg, unsigned long len);
 
+// The same, WAITING for room while the ring is full -- up to `timeout_ms`,
+// and only while the server is alive. What a client that sends a burst
+// wants: Xlib blocks on a full output buffer and a Wayland client waits
+// for its socket, rather than dropping the request. -1 when it gave up.
+int uchan_send_wait(struct uchan_client *c, const void *msg, unsigned long len, int timeout_ms);
+
 // Send, then wait for the server's answer. The explicit round trip, for
 // the few messages that have one. Returns 0, or -1 on timeout.
 int uchan_call(struct uchan_client *c, const void *msg, unsigned long len,

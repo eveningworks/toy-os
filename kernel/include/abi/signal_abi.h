@@ -45,7 +45,11 @@
 #define SIGFPE   8  // a division error (#DE). POSIX's name is a
                     // misnomer everywhere -- there is no FPU trap here
 #define SIGKILL  9  // uncatchable, unignorable -- what a force-quit sends
+#define SIGUSR1 10  // the program's own meaning; default action terminates,
+                    // so it is sent only to a program that asked for it.
+                    // /bin/remoted: make this session view only
 #define SIGSEGV 11  // a memory fault (#PF or #GP), given a name
+#define SIGUSR2 12  // the second of the pair; remoted: give control back
 #define SIGPIPE 13  // wrote to a pipe nobody is reading. Raised by
                     // sys_write() on a dead pipe, which also fails EPIPE
                     // for a caller that ignores it (kernel/proc/pipe.c).

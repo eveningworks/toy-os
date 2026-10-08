@@ -33,6 +33,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
+#include <stdio.h>
+#include "lib/uwmchan.h"
+#include "query_abi.h"   // QUERY_REMOTE_STATUS
 
 #define POLL_MS 10              // the read deadline: how often the compositor's
                                 // nudge is looked for while the viewer is quiet
@@ -46,7 +50,7 @@
 #define STATS_NS 10000000000ull    // a summary line this often, while busy
 
 struct vnc {
-    const struct rd_conf *conf;
+    const struct uremote_conf *conf;
     uint32_t peer;
     struct rd_enc enc;
     struct ushot shot;
@@ -152,6 +156,8 @@ static int vnc_auth(const char *password) {
     return diff == 0;
 }
 
+static int admitted(struct vnc *v);
+
 // The version exchange, security and authentication. 1 when the viewer
 // is in.
 static int handshake(struct vnc *v, int *minor) {
@@ -181,12 +187,20 @@ static int handshake(struct vnc *v, int *minor) {
         if (!write_full(t, 2) || !read_full(&pick, 1) || pick != 2) return 0;
     }
     int ok = vnc_auth(pw);
-    uint8_t res[4] = { 0, 0, 0, ok ? 0 : 1 };
+    // THE SECOND QUESTION BEFORE THE ANSWER: the password is right, but
+    // the result is not sent until "When someone connects" says yes too
+    // -- so a viewer that is turned away hears why, in RFB's own words.
+    int refused = ok && !admitted(v);
+    uint8_t res[4] = { 0, 0, 0, ok && !refused ? 0 : 1 };
     write_full(res, 4);
+    if (refused) {
+        if (*minor == 8) send_reason("The person at this computer did not allow the connection.");
+        return 0;
+    }
     if (!ok) {
         if (*minor == 8) send_reason("Authentication failed.");
         char ip[16];
-        rd_fmt_ip(v->peer, ip, sizeof ip);
+        uremote_fmt_ip(v->peer, ip, sizeof ip);
         rd_log("remoted: vnc: %s: wrong password\n", ip);
         // A guess per two seconds per connection: the 8-character DES
         // key is weak enough that pacing is the only defence left.
@@ -198,17 +212,70 @@ static int handshake(struct vnc *v, int *minor) {
 
 // May this viewer in, once authenticated? The password is already
 // checked; this is the second question, "When someone connects".
-static int admitted(struct vnc *v) {
-    const struct rd_conf *c = v->conf;
-    if (c->when == RD_ALWAYS) return 1;
-    if (c->when == RD_ASK_UNLESS_TRUSTED && rd_peer_trusted(c, v->peer)) return 1;
-    // Asking the person at the screen is the compositor's notice, which
-    // this build does not have yet: refuse rather than let in unasked.
+// Asks the person at the screen: the compositor's corner notice
+// (WIN_NOTICE_REMOTE), answered as WIN_EV_REMOTE_ANSWER on this
+// process's channel. Waits a little past the card's own time, so the
+// card's deny is what normally ends it. Returns WIN_REMOTE_*.
+static int ask(struct vnc *v, int *always) {
     char ip[16];
-    rd_fmt_ip(v->peer, ip, sizeof ip);
-    rd_log("remoted: vnc: %s: not trusted, and asking is not built yet -- refused\n", ip);
-    return 0;
+    uremote_fmt_ip(v->peer, ip, sizeof ip);
+    struct wmchan_msg m, r;
+    memset(&m, 0, sizeof m);
+    m.type = WIN_REQ_NOTICE;
+    m.a = 0 | (1 << 8);
+    m.b = WIN_NOTICE_REMOTE;
+    // "Ask every time" ignores the trusted list, so a box that would add
+    // to it would promise something the next connection does not keep.
+    m.c = v->conf->when == UREMOTE_ASK ? WIN_NOTICE_F_NO_ALWAYS : 0;
+    snprintf(m.text, sizeof m.text, "%s VNC", ip);
+    if (!v->shot.chan || uchan_call(v->shot.chan, &m, sizeof m, &r, sizeof r, 2000) != 0)
+        return WIN_REMOTE_DENY;   // no desktop to ask on
+    rd_log("remoted: vnc: %s: asking at the screen\n", ip);
+    unsigned long long end = now_ns() + (WIN_REMOTE_ASK_S + 3) * 1000000000ull;
+    while (now_ns() < end) {
+        uchan_client_wait(v->shot.chan, 250);
+        struct win_event ev;
+        while (uchan_client_recv(v->shot.chan, &ev, sizeof ev) == 1) {
+            if (ev.type != WIN_EV_REMOTE_ANSWER) continue;
+            *always = ev.b != 0;
+            return ev.a;
+        }
+    }
+    return WIN_REMOTE_DENY;
 }
+
+// May this viewer in, once its password is right? "When someone
+// connects": always, a trusted address, or the person at the screen.
+static int admitted(struct vnc *v) {
+    const struct uremote_conf *c = v->conf;
+    if (c->when == UREMOTE_ALWAYS) return 1;
+    if (c->when == UREMOTE_ASK_UNLESS_TRUSTED && uremote_trusted(c, v->peer)) return 1;
+    int always = 0;
+    int a = ask(v, &always);
+    char ip[16];
+    uremote_fmt_ip(v->peer, ip, sizeof ip);
+    rd_log("remoted: vnc: %s: %s%s\n", ip,
+           a == WIN_REMOTE_ALLOW ? "allowed" : a == WIN_REMOTE_VIEW ? "allowed, view only" : "denied",
+           always && a != WIN_REMOTE_DENY ? ", and trusted from now on" : "");
+    if (a == WIN_REMOTE_DENY) return 0;
+    if (a == WIN_REMOTE_VIEW) v->view_only = 1;
+    // The person said so at the screen, so it is saved for them -- the
+    // address alone, as the trusted list always is.
+    if (always && uremote_trust(ip, "allowed at the screen") != 0)
+        rd_log("remoted: vnc: could not save %s to the trusted list\n", ip);
+    return 1;
+}
+
+// What QUERY_REMOTESESS shows for this session -- the tray flyout's and
+// System Settings' line.
+static void set_status(const struct vnc *v) {
+    sys_remote_log(QUERY_REMOTE_STATUS, 0, v->view_only ? "VNC, view only" : "VNC, full control");
+}
+
+// SIGUSR1: view only; SIGUSR2: control back (lib/uremote.h). The handler
+// only records it; the loop applies it.
+static volatile int g_want_view = -1;
+static void on_usr(int sig) { g_want_view = sig == SIGUSR1; }
 
 static int server_init(struct vnc *v) {
     rd_buf_u16(&v->out, (uint16_t)v->w);
@@ -468,7 +535,7 @@ static int message(struct vnc *v, uint8_t type) {
     }
 }
 
-int rd_vnc_session(const struct rd_conf *c, uint32_t peer) {
+int rd_vnc_session(const struct uremote_conf *c, uint32_t peer) {
     static struct vnc v;
     memset(&v, 0, sizeof v);
     v.conf = c;
@@ -478,7 +545,7 @@ int rd_vnc_session(const struct rd_conf *c, uint32_t peer) {
     v.enc.encoding = RD_ENC_RAW;
 
     char ip[16];
-    rd_fmt_ip(peer, ip, sizeof ip);
+    uremote_fmt_ip(peer, ip, sizeof ip);
     int rc = ushot_open(&v.shot);
     if (rc < 0) {
         rd_log("remoted: vnc: %s: no screen to share (%s)\n", ip, ushot_strerror(rc));
@@ -490,7 +557,7 @@ int rd_vnc_session(const struct rd_conf *c, uint32_t peer) {
     if (!v.prev) { ushot_close(&v.shot); return 1; }
 
     int minor = 8;
-    if (!handshake(&v, &minor) || !admitted(&v)) {
+    if (!handshake(&v, &minor)) {   // the password, then "When someone connects"
         ushot_close(&v.shot);
         return 1;
     }
@@ -499,7 +566,10 @@ int rd_vnc_session(const struct rd_conf *c, uint32_t peer) {
         ushot_close(&v.shot);
         return 1;
     }
-    rd_log("remoted: vnc: %s connected (%dx%d)\n", ip, v.w, v.h);
+    rd_log("remoted: vnc: %s connected (%dx%d)%s\n", ip, v.w, v.h, v.view_only ? ", view only" : "");
+    set_status(&v);
+    signal(SIGUSR1, on_usr);
+    signal(SIGUSR2, on_usr);
 
     v.tx = (v.w + CMP_TILE - 1) / CMP_TILE;
     v.ty = (v.h + CMP_TILE - 1) / CMP_TILE;
@@ -513,6 +583,17 @@ int rd_vnc_session(const struct rd_conf *c, uint32_t peer) {
         if (r == 1) {
             ok = message(&v, type);
             continue;   // drain what the viewer sent before drawing
+        }
+        if (g_want_view >= 0) {
+            if (g_want_view && !v.view_only) {
+                // Let go of anything the viewer is holding, or it stays down.
+                struct input_inject rel = { INPUT_INJECT_RELEASE, 0, 0, 0 };
+                inject(&rel, 1);
+            }
+            v.view_only = g_want_view;
+            g_want_view = -1;
+            set_status(&v);
+            rd_log("remoted: vnc: %s now %s\n", ip, v.view_only ? "view only" : "in control");
         }
         int bits = ushot_events(&v.shot);
         if (bits & WIN_CAST_DAMAGE) v.damage_pending = 1;

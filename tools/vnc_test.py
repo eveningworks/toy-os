@@ -34,6 +34,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zlib
 
@@ -302,6 +303,186 @@ def connect(args, password=PASSWORD, wait=60):
     raise RuntimeError(f"no VNC server on port {args.port}: {last}")
 
 
+# --- stage 2: asking at the screen, the tray, the settings page -------------
+
+ASK_CONF = f"""when = ask
+from = anywhere
+[vnc]
+enabled = yes
+port = 5900
+password = {PASSWORD}
+"""
+
+
+def put_conf(args, path, text):
+    with open(path, "w") as fh:
+        fh.write(text)
+    vm(args, "put", path, "/etc/remote.conf")
+
+
+def connect_async(args):
+    """Connects in a thread -- the handshake waits for the answer at the
+    screen -- and returns a dict the thread fills: viewer or error."""
+    out = {}
+
+    def run():
+        try:
+            out["v"] = Viewer(args.port, PASSWORD, timeout=60)
+        except PermissionError as e:
+            out["refused"] = str(e)
+        except (OSError, EOFError, RuntimeError) as e:
+            out["error"] = repr(e)
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    out["thread"] = t
+    return out
+
+
+def wait_notice(dc, timeout=20):
+    end = time.time() + timeout
+    while time.time() < end:
+        n = dc.state().get("notice")
+        if n and n.get("title") == "Remote desktop request":
+            return n
+        time.sleep(0.5)
+    return None
+
+
+def press(dc, notice, label):
+    b = [b for b in notice["buttons"] if b["label"] == label]
+    if not b:
+        return False
+    dc.click(b[0]["x"] + b[0]["w"] // 2, b[0]["y"] + b[0]["h"] // 2)
+    return True
+
+
+def stage2(args, r, tmp, conf):
+    put_conf(args, conf, ASK_CONF)
+    time.sleep(3)
+    dc = DebugConsole(port_guard.instance_sock(args.instance))
+
+    # Allow: the card names the asker, and the answer lets it in.
+    c = connect_async(args)
+    n = wait_notice(dc)
+    r.check("an unknown viewer is asked about at the screen", n is not None, str(n))
+    r.check("...the card says who is asking", n is not None and "10.0.2.2" in n.get("sub", ""),
+            str(n and n.get("sub")))
+    if n:
+        press(dc, n, "Allow")
+    c["thread"].join(30)
+    v = c.get("v")
+    r.check("Allow lets the viewer in", v is not None, str(c))
+
+    # The kernel lists the session, the tray lights, and the flyout's
+    # View only takes the keyboard and mouse away.
+    # The flyout reads the kernel's list once a second.
+    time.sleep(2.5)
+    rj = dc.json("gui remote --json") if v else {}
+    r.check("the session is listed live, and the tray icon is lit",
+            bool(rj.get("live")) and rj.get("accent") is True, str(rj)[:300])
+    if v and rj.get("live"):
+        dc.click(rj["tray"]["cx"], rj["tray"]["cy"])
+        time.sleep(1)
+        rj = dc.json("gui remote --json")
+        view = rj["live"][0].get("view")
+        if view:
+            dc.click(view["cx"], view["cy"])
+            time.sleep(1.5)
+        before = dc.cursor()
+        v.pointer(before[0] // 2 + 7, before[1] // 2 + 5)
+        time.sleep(1.5)
+        r.check("View only from the tray stops the viewer's mouse", dc.cursor() == before,
+                f"{before} -> {dc.cursor()}")
+        rj = dc.json("gui remote --json")
+        if not rj.get("open"):
+            dc.click(rj["tray"]["cx"], rj["tray"]["cy"])
+            time.sleep(1)
+            rj = dc.json("gui remote --json")
+        disc = rj["live"][0].get("disconnect") if rj.get("live") else None
+        if disc:
+            dc.click(disc["cx"], disc["cy"])
+            time.sleep(2.5)
+        try:
+            v.s.settimeout(5)
+            gone = v.s.recv(1) == b""
+        except OSError:
+            gone = True
+        rj = dc.json("gui remote --json")
+        r.check("Disconnect in the tray ends the session", gone and not rj.get("live"), str(rj)[:300])
+    if v:
+        v.close()
+
+    # Deny: refused in RFB's own words.
+    c = connect_async(args)
+    n = wait_notice(dc)
+    if n:
+        press(dc, n, "Deny")
+    c["thread"].join(30)
+    r.check("Deny refuses the viewer, and says why", "did not allow" in c.get("refused", ""), str(c))
+
+    # "Ask every time" offers no "Always allow" -- it would not be kept.
+    c = connect_async(args)
+    n = wait_notice(dc)
+    r.check("\"Ask every time\" offers no Always allow",
+            n is not None and "Always allow" not in [b["label"] for b in n["buttons"]], str(n))
+    if n:
+        press(dc, n, "Deny")
+    c["thread"].join(30)
+
+    # Always allow + View only, under "Ask unless trusted": in,
+    # read-only, and saved for next time.
+    dc.close()
+    put_conf(args, conf, ASK_CONF.replace("when = ask", "when = ask-unless-trusted"))
+    dc = DebugConsole(port_guard.instance_sock(args.instance))
+    time.sleep(3)
+    c = connect_async(args)
+    n = wait_notice(dc)
+    if n:
+        press(dc, n, "Always allow")
+        time.sleep(0.5)
+        n = wait_notice(dc)
+        press(dc, n, "View only")
+    c["thread"].join(30)
+    v = c.get("v")
+    r.check("Always allow with View only lets the viewer in", v is not None, str(c))
+    if v:
+        before = dc.cursor()
+        v.pointer(before[0] // 3 + 11, before[1] // 3 + 13)
+        time.sleep(1.5)
+        r.check("...and its mouse does nothing", dc.cursor() == before, f"{before} -> {dc.cursor()}")
+        v.close()
+    dc.close()
+    saved = vm(args, "exec", "cat /etc/remote.conf").stdout
+    dc = DebugConsole(port_guard.instance_sock(args.instance))
+    r.check("...and the address is trusted from now on", "10.0.2.2" in saved, saved[-300:])
+    time.sleep(3)
+    # Getting in AT ALL within the timeout is the check: an untrusted
+    # viewer would sit on the card's thirty seconds first.
+    try:
+        v = Viewer(args.port, PASSWORD, timeout=20)
+        r.check("a trusted viewer gets in without being asked", True)
+        v.close()
+    except (OSError, EOFError, RuntimeError, PermissionError) as e:
+        r.check("a trusted viewer gets in without being asked", False, repr(e))
+
+    # The settings page: its VNC switch writes /etc/remote.conf.
+    dc.send("gui spawn /bin/wm/system/settings remotedesktop")
+    w = {}
+    end = time.time() + 30
+    while time.time() < end and "rd_vnc" not in w:
+        time.sleep(1)
+        w = dc.widgets("System Settings")
+    sw = w.get("rd_vnc")
+    r.check("the Remote Desktop page opens on its own name", sw is not None, str(list(w)[:20]))
+    if sw:
+        dc.click(sw["screen"]["x"] + sw["w"] // 2, sw["screen"]["y"] + sw["h"] // 2)
+        time.sleep(2)
+    dc.close()
+    after = vm(args, "exec", "cat /etc/remote.conf").stdout
+    r.check("its VNC switch turns the server off in /etc/remote.conf",
+            "enabled = no" in after or "enabled=no" in after, after[-300:])
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--instance", type=int, default=0)
@@ -443,6 +624,7 @@ def main():
         r.check("typed text reaches the shell, Shift characters and all",
                 line in hist, hist[-300:])
         v.close()
+        stage2(args, r, tmp, conf)
         q.close()
     finally:
         if not args.keep:

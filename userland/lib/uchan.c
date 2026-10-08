@@ -273,6 +273,17 @@ int uchan_send(struct uchan_client *c, const void *msg, unsigned long len) {
     return 0;
 }
 
+int uchan_send_wait(struct uchan_client *c, const void *msg, unsigned long len, int timeout_ms) {
+    // Polled at a millisecond: the server says nothing when it drains,
+    // and a burst that fills 32 slots is gone within a frame of its
+    // loop -- a wake word for "room" would cost every message a write.
+    for (int waited = 0;; waited++) {
+        if (uchan_send(c, msg, len) == 0) return 0;
+        if (waited >= timeout_ms || !c->ring || !uchan_client_server_alive(c)) return -1;
+        sys_sleep_ms(1);
+    }
+}
+
 int uchan_call(struct uchan_client *c, const void *msg, unsigned long len,
                void *reply, unsigned long reply_cap, int timeout_ms) {
     if (!c->ring) return -1;

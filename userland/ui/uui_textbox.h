@@ -78,6 +78,11 @@ struct uui_textbox {
     // here, or the frame reads as doubled. Zero, as init leaves it, is
     // every ordinary field.
     int bare;
+
+    // 1 = a password: every character is drawn as '*' (the font is
+    // Latin-1, which has no bullet), and clicks place the caret by those.
+    // The text itself is unchanged in `buf`.
+    int masked;
 };
 
 void uui_textbox_init(struct uui_textbox *f, const char *initial);

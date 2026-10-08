@@ -485,6 +485,8 @@ void wm_client_unmap(struct window *win);
 void wm_client_release_buf(struct window *win, int b);
 struct win_event;
 int wm_client_push_event(int pid, const struct win_event *ev);
+// Was `pid` spawned from `exec`? (QUERY_PROCPATH -- never its say-so.)
+int wm_pid_exec_is(int pid, const char *exec);
 // Re-sends the state events a client's inbox had no room for last time.
 // Once per frame, after the timers.
 void wm_client_flush_pending(void);

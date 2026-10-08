@@ -38,6 +38,7 @@ struct uui_setting_row {
     int desc_rows;              // OWNED -- fit()'s answer, 1 until then
     int changed;                // mark the card: edited, not yet applied
     int disabled;               // dims the text; the control has its own
+    int flat;                   // no card of its own: a row inside a uui_card
 };
 
 void uui_setting_row_init(struct uui_setting_row *r, const char *title,

@@ -1070,6 +1070,16 @@ int wm_pid_is_screensaver(int pid) {
     return 0;
 }
 
+// Whether `pid` was spawned from `exec` -- the same scan and rule as
+// above, for a request only one program may make.
+int wm_pid_exec_is(int pid, const char *exec) {
+    struct query_procpath r;
+    QUERY_FOREACH(QUERY_PROCPATH, r, i) {
+        if (r.pid == pid) return k_strcmp(r.path, exec) == 0;
+    }
+    return 0;
+}
+
 // Maps a client's buffer into this process, so the compositor can read
 // its pixels. Idempotent, and must be re-done after a resize: the frames
 // are reallocated, and the old mapping is revoked with them.

@@ -44,6 +44,11 @@ struct tray_item {
     // runtime (`desktop.tray_*`, or the hardware behind an item
     // appearing) must not be able to move its neighbours.
     int hidden;
+    // LIT: an accent square behind the icon, the icon in the accent's
+    // text colour -- "something is happening through this item now" (a
+    // remote desktop session). Colour may carry it here because the
+    // square is the panel's drawing, not the icon file's.
+    int accent;
 };
 
 static struct tray_item tray_items[TRAY_MAX_ITEMS];
@@ -129,6 +134,13 @@ void tray_set_hidden(int tray_id, int hidden) {
 int tray_is_hidden(int tray_id) {
     if (tray_id < 0 || tray_id >= TRAY_MAX_ITEMS) return 0;
     return tray_items[tray_id].hidden;
+}
+
+void tray_set_accent(int tray_id, int on) {
+    if (tray_id < 0 || tray_id >= TRAY_MAX_ITEMS || !tray_items[tray_id].active) return;
+    if (tray_items[tray_id].accent == !!on) return;
+    tray_items[tray_id].accent = !!on;
+    tray_damage();
 }
 
 void tray_set_icon(int tray_id, const char *icon) {
@@ -412,9 +424,17 @@ static void tray_draw_item(int id, int x, int w, void *vctx) {
         // than in its own, so it follows the panel instead of assuming
         // one. Every tray item today is the shell's own indicator; an
         // app-registered icon would have to say it is not symbolic.
+        uint32_t ink = p->text;
+        if (tray_items[id].accent) {
+            int sq = g->btn_h * 3 / 4;
+            uui_fill_round_rect(wm_surface(), x + (w - sq) / 2, g->btn_y + (g->btn_h - sq) / 2,
+                                sq, sq, g->btn_r, uui_state_bg(UTHEME_ACCENT, id == tray_hovered
+                                                               ? UUI_STATE_HOVER : UUI_STATE_REST));
+            ink = UTHEME_ACCENT_TEXT;
+        }
         if (ico)
             ugfx_blit_tinted(wm_surface(), x, g->btn_y + (g->btn_h - ico->h) / 2,
-                             ico->w, ico->h, ico->px, ico->w, p->text);
+                             ico->w, ico->h, ico->px, ico->w, ink);
         return;
     }
     int ch = ugfx_char_h();

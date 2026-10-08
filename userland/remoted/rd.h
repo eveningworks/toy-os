@@ -2,55 +2,21 @@
 #define REMOTED_RD_H
 
 // /bin/remoted's parts, shared through one header (userland/wm/'s
-// shape): rd_conf.c reads /etc/remote.conf and judges a peer, rd_vnc.c
-// speaks RFB to one viewer, rd_enc.c turns pixels into RFB rectangles.
-// userland/bin/remoted.c is the listener and the session entry point.
+// shape): rd_vnc.c speaks RFB to one viewer, rd_enc.c turns pixels into
+// RFB rectangles. userland/bin/remoted.c is the listener and the session
+// entry point; /etc/remote.conf is lib/uremote.h's, shared with System
+// Settings and the tray.
 
 #include <stdint.h>
 #include <stddef.h>
-
-#define RD_CONF "/etc/remote.conf"
-#define RD_PASSWORD_MAX 64
-#define RD_TRUSTED_MAX 16
-
-enum rd_when { RD_ASK, RD_ASK_UNLESS_TRUSTED, RD_ALWAYS };
-enum rd_from { RD_FROM_NETWORK, RD_FROM_ANYWHERE };
-
-struct rd_net { uint32_t ip, mask; };   // one trusted address or subnet
-
-struct rd_proto {
-    int enabled;
-    int port;
-    char user[32];                 // RDP's; VNC has no user name
-    char password[RD_PASSWORD_MAX];
-};
-
-struct rd_conf {
-    struct rd_proto vnc, rdp;
-    enum rd_when when;
-    enum rd_from from;
-    struct rd_net trusted[RD_TRUSTED_MAX];
-    int ntrusted;
-    int view_only;
-};
-
-// Reads RD_CONF; a missing file or key is its default (everything off).
-void rd_conf_load(struct rd_conf *c);
-
-// Is `ip` on a network one of this machine's cards is on? What
-// `from = network` admits.
-int rd_peer_local(uint32_t ip);
-int rd_peer_trusted(const struct rd_conf *c, uint32_t ip);
-// "a.b.c.d" or "a.b.c.d/bits"; 1 on success. A parser that refuses.
-int rd_parse_net(const char *s, struct rd_net *out);
-void rd_fmt_ip(uint32_t ip, char *out, size_t cap);
+#include "lib/uremote.h"   // the config, who may connect
 
 // Logs to fd 2 -- the kernel log. NEVER stdout: in a session fd 1 is
 // the viewer's socket.
 void rd_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 // --- one VNC viewer, on fd 0/1 (rd_vnc.c) ---------------------------
-int rd_vnc_session(const struct rd_conf *c, uint32_t peer);
+int rd_vnc_session(const struct uremote_conf *c, uint32_t peer);
 
 // --- encoding (rd_enc.c) ----------------------------------------------
 

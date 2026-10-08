@@ -162,7 +162,18 @@ static int field_window_start(const struct uui_textbox *f, int avail) {
     return start;
 }
 
-int uui_textbox_index_at_x(const struct uui_textbox *f, int cx) {
+// What is DRAWN: the field itself, or for a masked one a copy whose text
+// is all '*' -- so every width below is measured on what is on screen.
+static const struct uui_textbox *shown_field(const struct uui_textbox *f, struct uui_textbox *tmp) {
+    if (!f->masked) return f;
+    *tmp = *f;
+    for (int i = 0; i < f->len; i++) tmp->buf[i] = '*';
+    return tmp;
+}
+
+int uui_textbox_index_at_x(const struct uui_textbox *f0, int cx) {
+    static struct uui_textbox tmp;
+    const struct uui_textbox *f = shown_field(f0, &tmp);
     int start = field_window_start(f, field_avail(f));
     int rel = cx - (f->x + UUI_TEXTBOX_PAD);
     if (rel < 0) rel = 0;
@@ -217,7 +228,9 @@ uint32_t uui_textbox_c_fg(const struct uui_textbox *f)
 uint32_t uui_textbox_c_border(const struct uui_textbox *f)
 { return UUI_COLOR(f->border, UTHEME_OUTLINE); }
 
-void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f) {
+void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f0) {
+    static struct uui_textbox tmp;
+    const struct uui_textbox *f = shown_field(f0, &tmp);
     uint32_t bg = uui_textbox_c_bg(f);
     uint32_t fg = uui_textbox_c_fg(f);
     uint32_t border = uui_textbox_c_border(f);

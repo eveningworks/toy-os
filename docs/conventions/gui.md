@@ -2752,6 +2752,28 @@ real scanout hardware does. Do not write a pixel assertion for one.
   cursor image lands at the start of the shared buffer** -- the mirror's
   top rows -- so `ushot_cursor()` keeps those pixels aside.
 
+- **A CLIENT'S MESSAGE WAITS FOR ROOM; NOTHING IS DROPPED BEHIND A BURST
+  (`uchan_send_wait()`).** A client's ring holds `UCHAN_SLOTS` messages,
+  and a window's widget map is one per named widget -- so a page with
+  more named widgets than that lost the PRESENT queued behind them: a
+  window that opened and never drew, and only under no logging (the
+  log calls slowed the client enough for the compositor to drain). uapp
+  now waits up to `WMCHAN_SEND_WAIT_MS` for room, as Xlib blocks on a
+  full output buffer and a Wayland client waits on its socket. **A new
+  burst of messages from a client goes through the waiting send**, never
+  bare `uchan_send()` with its -1 ignored.
+
+- **A REMOTE DESKTOP REQUEST IS THE ONE NOTICE THAT ANSWERS:
+  `WIN_NOTICE_REMOTE`.** Every other card acts in the compositor; this
+  one sends `WIN_EV_REMOTE_ANSWER` back to the asker, which is waiting.
+  Three rules. **Only `/bin/remoted` may ask** (`wm_pid_exec_is()`, the
+  spawn path), because "let this address use your screen?" is exactly
+  the card a hostile program would forge. **It stands at the TOP RIGHT,
+  apart from the stack above the taskbar**, and is not kept by hovering:
+  unanswered is denied at `WIN_REMOTE_ASK_S`, and the card says so with a
+  countdown. **It goes when the asker does** -- checked against
+  `QUERY_REMOTESESS`, so a viewer that hung up takes its question with it.
+
 - **A PICKER ASKS WHAT IT WOULD GET BEFORE IT ASKS FOR IT:
   `WIN_SHOT_WINDOW_AT` + `WIN_SHOT_PROBE`.** Pointing at a window to
   capture it needs the window's rectangle on every pointer move, so

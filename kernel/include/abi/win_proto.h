@@ -1247,6 +1247,15 @@ struct win_popup_pos {
 #define WIN_REQ_TAB  42
 #define WIN_TABS_MAX 8
 #define WIN_NOTICE_SCREENSHOT 1   // "Screenshot saved", the image as its thumbnail
+// SOMEBODY WANTS THE SCREEN: a remote desktop session asks the person at
+// it (Allow / View only / Deny, "Always allow this address"). One piece,
+// `text` = "<a.b.c.d> <PROTOCOL>". Only /bin/remoted may ask -- the
+// compositor checks the asker's spawn path -- and the answer goes back
+// to the asker as WIN_EV_REMOTE_ANSWER. Denied after WIN_REMOTE_ASK_S.
+#define WIN_NOTICE_REMOTE     2
+#define WIN_REMOTE_ASK_S      30
+#define WIN_NOTICE_F_NO_ALWAYS 0x8 // a remote request with no "Always allow"
+                                   // box: the machine asks every time
 #define WIN_NOTICE_F_COPIED   0x1 // it is on the clipboard already: say so
 #define WIN_NOTICE_F_NO_CARD  0x2 // put up no card (the tool's own choice)
 #define WIN_NOTICE_F_FLASH    0x4 // flash the screen white (wm_flash.h)
@@ -1301,6 +1310,12 @@ struct win_popup_pos {
 // of state -- not again until the client captures -- so a busy screen
 // costs one event, not one per frame.
 #define WIN_EV_CAST 44
+// The person at the screen answered a WIN_NOTICE_REMOTE (or the card ran
+// out of time: DENY). a: WIN_REMOTE_*; b: 1 = "always allow this address".
+#define WIN_EV_REMOTE_ANSWER 45
+#define WIN_REMOTE_DENY  0
+#define WIN_REMOTE_VIEW  1
+#define WIN_REMOTE_ALLOW 2
 #define WIN_CAST_DAMAGE 0x1   // pixels: capture with WIN_SHOT_DAMAGE
 #define WIN_CAST_CURSOR 0x2   // the pointer's shape: capture WIN_SHOT_CURSOR
 

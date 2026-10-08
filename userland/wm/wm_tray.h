@@ -48,6 +48,10 @@ int  tray_is_hidden(int tray_id);
 // called every frame without repainting the taskbar.
 void tray_set_icon(int tray_id, const char *icon);
 
+// Lights an icon item -- an accent square behind it -- or puts it out.
+// A no-op when unchanged.
+void tray_set_accent(int tray_id, int on);
+
 // Any item's box in the taskbar strip, from the SAME right-to-left walk
 // that draws it -- so a click cannot be told a different position from
 // the one the item was drawn at. 0 when there is no such item.

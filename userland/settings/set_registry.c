@@ -129,9 +129,31 @@ static int adapters_matches(void) {
            has_word("Link speed Energy Efficient Ethernet EEE flow control interrupt moderation", g_filter);
 }
 
+static int remote_matches(void) {
+    return !g_filter[0] || has_word("Remote Desktop VNC RDP viewer share screen", g_filter) ||
+           has_word("Trusted password connected disconnect view only", g_filter);
+}
+
 static int startup_matches(void) {
     return !g_filter[0] || has_word("Boot menu GRUB", g_filter) ||
            has_word("Default boot entry timeout next restart", g_filter);
+}
+
+// NETWORK'S OWN PAGES, neither a registry group: Adapters (set_network.c)
+// and Remote Desktop (set_remote.c), each if the filter keeps it.
+static int net_pages(int rows_max) {
+    int n = 0;
+    if (adapters_matches() && g_node_count < rows_max) {
+        g_nodes[g_node_count++] = (struct uui_sidebar_row){
+            .label = "Adapters", .kind = UUI_SIDEBAR_ITEM, .id = NODE_ADAPTERS };
+        n++;
+    }
+    if (remote_matches() && g_node_count < rows_max) {
+        g_nodes[g_node_count++] = (struct uui_sidebar_row){
+            .label = "Remote Desktop", .kind = UUI_SIDEBAR_ITEM, .id = NODE_REMOTE };
+        n++;
+    }
+    return n;
 }
 
 int group_matches(int g) {
@@ -275,7 +297,7 @@ void rebuild_sidebar(void) {
     // NETWORK > ADAPTERS is set_network.c's page, and no registry setting
     // is in the Network category -- so the heading is drawn here, in the
     // place category.Network's Order gives it.
-    int net_done = !adapters_matches();
+    int net_done = !adapters_matches() && !remote_matches();
     int net_order = usetting_category_order("Network");
     for (int c = 0; c <= g_cat_count; c++) {
         // No registry page in Network: its heading and Adapters go before
@@ -284,10 +306,8 @@ void rebuild_sidebar(void) {
             g_node_count + 2 <= rows_max) {
             g_nodes[g_node_count++] = (struct uui_sidebar_row){
                 .label = "Network", .kind = UUI_SIDEBAR_HEADING, .icon = category_icon("Network") };
-            g_nodes[g_node_count++] = (struct uui_sidebar_row){
-                .label = "Adapters", .kind = UUI_SIDEBAR_ITEM, .id = NODE_ADAPTERS };
+            shown += net_pages(rows_max);
             net_done = 1;
-            shown++;
         }
         if (c == g_cat_count) break;
         int heading = 0;
@@ -310,10 +330,8 @@ void rebuild_sidebar(void) {
             if (!heading)
                 g_nodes[g_node_count++] = (struct uui_sidebar_row){
                     .label = g_cat[c], .kind = UUI_SIDEBAR_HEADING, .icon = category_icon(g_cat[c]) };
-            g_nodes[g_node_count++] = (struct uui_sidebar_row){
-                .label = "Adapters", .kind = UUI_SIDEBAR_ITEM, .id = NODE_ADAPTERS };
+            shown += net_pages(rows_max);
             net_done = 1;
-            shown++;
         }
         // Boot menu is set_startup.c's page, not a registry group: it joins
         // System's pages by hand, its heading added if nothing else drew it.

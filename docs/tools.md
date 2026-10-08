@@ -568,7 +568,7 @@ manual steps to be worth automating:
 
 - **`vnc_test.py`** -- `/bin/remoted`'s VNC server, from an RFB client
   written in the tool (DES through `openssl`, ZRLE through Python's
-  `zlib`, so neither shares code with the server). Fourteen checks: a wrong
+  `zlib`, so neither shares code with the server). Twenty-eight checks: a wrong
   password refused and the right one let in; a Raw frame against QEMU's
   screendump; ZRLE at 32 and 16 bits against the Raw frame; a
   PointerEvent landing exactly where the compositor reports the pointer;
@@ -577,7 +577,14 @@ manual steps to be worth automating:
   typed into a Terminal arriving in `/etc/tosh_history`; with the Cursor
   pseudo-encoding, the shape arriving and a pointer move sending no
   pixels near the pointer (not "none at all": the taskbar clock may
-  tick in the same second, and did once) -- the capitals
+  tick in the same second, and did once); then asking at the screen --
+  the card naming the viewer, Allow letting it in, Deny refusing it in
+  RFB's words, "Ask every time" offering no Always allow, Always allow
+  with View only letting it in read-only and adding the address to
+  `/etc/remote.conf`, the next connection then unasked -- the session
+  listed live with the tray icon lit, the flyout's View only stopping the
+  viewer's mouse and its Disconnect ending the session, and the Settings
+  page's VNC switch writing the file -- the capitals
   and Shift punctuation are the point, since they need the kernel to
   press Shift around the key. On demand: it boots its own guest on a
   COPY of `disk.img`, guest port 5900 on host 15900+N.

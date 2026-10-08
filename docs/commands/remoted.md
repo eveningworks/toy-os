@@ -22,7 +22,8 @@
 
 `/bin/remoted` is the remote desktop server: a **VNC viewer** on another
 computer -- TigerVNC, RealVNC, Remmina, macOS Screen Sharing -- sees this
-screen and uses its keyboard and mouse. RDP is planned
+screen and uses its keyboard and mouse. System Settings > Network >
+Remote Desktop is where it is switched on; RDP is planned
 (`docs/remote-desktop-design.md`).
 
 **Started always, idle until switched on.** The `remoted` service runs
@@ -63,9 +64,34 @@ the layout has no key for is dropped.
 | `[vnc] port` | `5900` | |
 | `[vnc] password` | (none) | **required**: with none, every viewer is refused |
 
-**Asking at the screen is not built yet**: until it is, `ask` -- and
-`ask-unless-trusted` for an address not on the list -- refuses the
-viewer and logs why.
+Trusted addresses may carry a name, kept under `[labels]` by address:
+`192.168.1.20 = my laptop`.
+
+## Asking at the screen
+
+Under `ask`, and `ask-unless-trusted` for an address not on the list,
+the password is checked and then the person at this computer is asked:
+a card at the top right of the screen says who is connecting, with
+**Deny**, **View only** and **Allow**, and -- unless the machine asks
+every time -- an **Always allow** box that adds the address to the
+trusted list. Nobody answering in 30 seconds is a Deny. The viewer is
+told the answer in RFB's own words ("The person at this computer did not
+allow the connection.").
+
+## Sessions
+
+Each viewer is a session of its own, so the kernel lists it
+(`QUERY_REMOTESESS`) for as long as it lasts: the tray's remote-activity
+icon is lit while a remote desktop is open, and its flyout -- like
+System Settings > Network > Remote Desktop -- lists who is connected,
+with **View only** and **Disconnect**. Both are signals to the session
+and work from a shell as well:
+
+| Signal | To the session's pid | Does |
+|---|---|---|
+| `SIGTERM` | `kill PID` | ends it; anything the viewer held down is released |
+| `SIGUSR1` | `kill -USR1 PID` | view only: the viewer's keys and mouse are ignored |
+| `SIGUSR2` | `kill -USR2 PID` | gives the viewer control back |
 
 ## Security
 

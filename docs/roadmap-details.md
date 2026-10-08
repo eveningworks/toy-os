@@ -2712,6 +2712,15 @@ clipboard (ClientCutText is read and dropped), CopyRect.
 
 ### Remote desktop, stage 2: the Settings page, the corner notice that asks, the tray indicator and a trusted list
 
+**DONE 2026-10-08** -- `userland/settings/set_remote.c`, `KIND_REMOTE` in
+`userland/wm/crash_notice.c`, the flyout in `remote_popup.c`,
+`lib/uremote.c`, `ui/uui_card.c`, `ui/uui_actionlist.c`,
+`QUERY_REMOTESESS`; `tools/vnc_test.py` covers the asking, the tray's
+View only and Disconnect, "Always allow" and the page's switch.
+**Not built**: a "last connected" line per trusted address (nothing keeps
+that history past the remote log's ring), and the RDP card's fields --
+it says RDP is not built yet.
+
 Chosen 2026-10-08 from mockups: System Settings > Network > Remote
 Desktop with ONE CARD PER PROTOCOL (VNC, RDP), each its own switch, port
 and sign-in; "When someone connects: Ask every time / Ask unless trusted

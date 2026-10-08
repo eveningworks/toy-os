@@ -40,6 +40,7 @@ static int on_tick(struct uapp *a) {
     clock |= kbd_tick();        // Try it took or left focus
     clock |= snd_tick();        // the card's rate moved under "Playing now"
     clock |= adapters_tick();   // a network card's link moved under Connection
+    clock |= remote_tick();     // somebody connected or left
     if (registry_generation() == g_generation && !g_stale) return clock;
     if (page_dirty() || uui_dialog_is_open(&g_ask) ||
         (g_opts_win && uapp_window_is_open(g_opts_win))) {
@@ -138,6 +139,7 @@ static void navigate(int node_id) {
         g_show_sysinfo = 0;
         g_show_startup = 0;
         g_show_adapters = 1;
+        g_show_remote = 0;
         g_page_group = -1;
         g_slot_count = 0;
         strlcpy(g_page_title_text, "Adapters", sizeof g_page_title_text);
@@ -147,8 +149,23 @@ static void navigate(int node_id) {
         adapters_load();
         relayout_page();
         ulogf("settings: page %s slots 0 advanced 0 captions 0 disabled 0\n", g_page_title_text);
+    } else if (node_id == NODE_REMOTE) {
+        g_show_sysinfo = 0;
+        g_show_startup = 0;
+        g_show_adapters = 0;
+        g_show_remote = 1;
+        g_page_group = -1;
+        g_slot_count = 0;
+        strlcpy(g_page_title_text, "Remote Desktop", sizeof g_page_title_text);
+        strlcpy(g_page_desc_text, "Let another computer see this screen and use its keyboard and "
+                "mouse. A change is saved at once.", sizeof g_page_desc_text);
+        strlcpy(g_status, "Remote Desktop", sizeof g_status);
+        remote_load();
+        relayout_page();
+        ulogf("settings: page %s slots 0 advanced 0 captions 0 disabled 0\n", g_page_title_text);
     } else if (node_id == NODE_STARTUP) {
         g_show_adapters = 0;
+        g_show_remote = 0;
         g_show_sysinfo = 0;
         g_show_startup = 1;
         g_page_group = -1;
@@ -162,6 +179,7 @@ static void navigate(int node_id) {
         ulogf("settings: page %s slots 0 advanced 0 captions 0 disabled 0\n", g_page_title_text);
     } else if (node_id == NODE_SYSINFO) {
         g_show_adapters = 0;
+        g_show_remote = 0;
         g_show_startup = 0;
         g_show_sysinfo = 1;
         g_page_group = -1;
@@ -276,6 +294,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
     if (kbd_on_widget(a, id)) { uapp_redraw(a); return; }
     if (snd_on_widget(a, id)) { uapp_redraw(a); return; }
     if (adapters_on_widget(id)) { relayout_page(); uapp_redraw(a); return; }
+    if (remote_on_widget(id)) { relayout_page(); uapp_redraw(a); return; }
 
     switch (id) {
     case ID_SIDE_SPLIT:
@@ -335,6 +354,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
 static void on_action(struct uapp *a, int code) {
     if (kbd_on_action(a, code)) { uapp_redraw(a); return; }
     if (adapters_on_action(code)) { relayout_page(); uapp_redraw(a); return; }
+    if (remote_on_action(code)) { relayout_page(); uapp_redraw(a); return; }
     switch (code) {
     case ID_RESET:
         if (page_dirty() && g_page_group >= 0) {
@@ -621,6 +641,8 @@ static void on_size(int *w, int *h) {
             uui_sidebar_select_id(&g_tree, NODE_STARTUP);
         if (g_open_setting && !strcmp(g_open_setting, "adapters"))   // set_network.c's
             uui_sidebar_select_id(&g_tree, NODE_ADAPTERS);
+        if (g_open_setting && !strcmp(g_open_setting, "remotedesktop"))   // set_remote.c's
+            uui_sidebar_select_id(&g_tree, NODE_REMOTE);
         if (g_node_count > 0) navigate(uui_sidebar_selected_id(&g_tree));
     }
     // Font-derived, so HERE rather than in main(): ugfx_char_h() is 0
@@ -628,6 +650,7 @@ static void on_size(int *w, int *h) {
     g_advanced_cb.size = ugfx_char_h();
     g_si_debug_cb.size = ugfx_char_h();
     g_page_title.font = ugfx_font_session(UGFX_FONT_BOLD);
+    remote_fonts();
 
     // Wide enough for a card's text beside its control, tall enough that
     // the densest page opens without scrolling past its first cards.
@@ -673,6 +696,7 @@ int main(int argc, char **argv) {
     clock_init();
     kbd_init();
     adapters_init();
+    remote_init();
     snd_init();
     startup_init();
 

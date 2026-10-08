@@ -1860,7 +1860,22 @@ static void cmd_remote(struct dbg_out *o, int json) {
             remote_row_text(i, buf, sizeof buf);
             dbg_out_printf(o, "%s\"%s\"", i ? "," : "", buf);
         }
-        dbg_out_printf(o, "],\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,", g.x, g.y, g.w, g.h);
+        // The live sessions' buttons, centres included, so a test
+        // presses Disconnect by asking where it is.
+        dbg_out_printf(o, "],\"live\":[");
+        for (int i = 0; i < remote_live_count(); i++) {
+            dbg_out_printf(o, "%s{", i ? "," : "");
+            int n = 0;
+            for (int b = 0; b < 2; b++) {
+                int r[4];
+                if (!remote_live_button(i, b, r)) continue;
+                dbg_out_printf(o, "%s\"%s\":{\"cx\":%d,\"cy\":%d}", n++ ? "," : "",
+                               b ? "disconnect" : "view", r[0] + r[2] / 2, r[1] + r[3] / 2);
+            }
+            dbg_out_printf(o, "}");
+        }
+        dbg_out_printf(o, "],\"accent\":%s", remote_desktop_live() ? "true" : "false");
+        dbg_out_printf(o, ",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,", g.x, g.y, g.w, g.h);
         dbg_out_printf(o, "\"tray\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"cx\":%d,\"cy\":%d}}\r\n",
                      g.tray_x, g.tray_y, g.tray_w, g.tray_h,
                      g.tray_x + g.tray_w / 2, g.tray_y + g.tray_h / 2);

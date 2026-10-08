@@ -1,11 +1,12 @@
 // See crash_notice.h.
 //
-// THREE KINDS OF CARD share the stack, the timing and the drawing: a
-// crash (polled from the kernel), a FILE a client made (WIN_REQ_NOTICE,
-// a screenshot so far), which carries a thumbnail and Open / Copy /
-// Folder, and the windows a Close all left open. The compositor acts on
-// those itself, because the client is usually gone by the time anyone
-// clicks.
+// FOUR KINDS OF CARD share the timing and the drawing: a crash (polled
+// from the kernel), a FILE a client made (WIN_REQ_NOTICE, a screenshot so
+// far), which carries a thumbnail and Open / Copy / Folder, the windows a
+// Close all left open, and a REMOTE DESKTOP REQUEST. The compositor acts
+// on the first three itself, because the client is usually gone by the
+// time anyone clicks; a request is the one whose answer goes BACK to the
+// client that asked (WIN_EV_REMOTE_ANSWER), which is waiting for it.
 #include "wm_internal.h"
 #include "wm_overlay.h"
 #include "wm_shadow.h"
@@ -38,7 +39,12 @@ enum { BTN_CLOSE = 0, BTN_A, BTN_B, BTN_C, BTN_D, BTNS };
 #define BTN_REOPEN  BTN_B
 #define BTN_SHOW    BTN_A   // a close-all's
 #define BTN_FORCE   BTN_B
-enum { KIND_CRASH = 0, KIND_SHOT, KIND_STAYED };
+#define BTN_DENY    BTN_A   // a remote request's
+#define BTN_VIEW    BTN_B
+#define BTN_ALLOW   BTN_C
+#define BTN_ALWAYS  BTN_D   // its "Always allow" box, a toggle
+enum { KIND_CRASH = 0, KIND_SHOT, KIND_STAYED, KIND_REMOTE };
+#define ASK_NS ((uint64_t)WIN_REMOTE_ASK_S * 1000000000ull)
 
 #define PATH_MAX_NOTICE (WIN_NOTICE_PIECES_MAX * (WIN_TITLE_LEN - 1) + 1)
 
@@ -54,6 +60,11 @@ struct notice {
     struct uimg thumb;            // ...and its picture, scaled to the card; owned
     uint32_t seq[NOTICE_STAYED_MAX];   // a close-all's windows, by open_seq
     int nwin;
+    int pid;                      // a remote request's asker: the answer goes there
+    int always;                   // ...and its box
+    int no_always;                // ...which this request does not offer
+    char peer[16];
+    int shown_left;               // the countdown's second as last drawn
     uint64_t until;
 };
 
@@ -80,7 +91,7 @@ static void push(const struct notice *n) {
     if (g_count == MAX_NOTICES) uimg_free(&g_n[MAX_NOTICES - 1].thumb);
     for (int i = MAX_NOTICES - 1; i > 0; i--) g_n[i] = g_n[i - 1];
     g_n[0] = *n;
-    g_n[0].until = sys_monotonic_ns() + SHOW_NS;
+    g_n[0].until = sys_monotonic_ns() + (n->kind == KIND_REMOTE ? ASK_NS : SHOW_NS);
     if (g_count < MAX_NOTICES) g_count++;
     // THE STACK FITS THE SCREEN: picture cards are tall, and one off the
     // top would have its buttons out of reach. The oldest goes.
@@ -228,6 +239,55 @@ static void tell_file(int kind, unsigned flags, const char *path) {
     push(&n);
 }
 
+// --- a remote desktop request (WIN_NOTICE_REMOTE) ------------------------
+
+static void answer(const struct notice *n, int a, int always) {
+    struct win_event ev;
+    k_memset(&ev, 0, sizeof ev);
+    ev.type = WIN_EV_REMOTE_ANSWER;
+    ev.a = a;
+    ev.b = always;
+    wm_client_push_event(n->pid, &ev);
+    ulogf("wm: remote request %s from %s answered %s%s\n", n->peer, n->peer,
+          a == WIN_REMOTE_ALLOW ? "allow" : a == WIN_REMOTE_VIEW ? "view-only" : "deny",
+          always ? " always" : "");
+}
+
+// A REQUEST IS ONLY /bin/remoted's TO MAKE: any client may send the
+// message, and a card that asks "let this address use your screen?" is
+// exactly what a hostile program would forge to get a click.
+static void tell_remote(int pid, unsigned flags, const char *text) {
+    if (!wm_pid_exec_is(pid, "/bin/remoted")) {
+        wm_logf("notice: remote request from pid %d refused -- not /bin/remoted\n", pid);
+        return;
+    }
+    struct notice n;
+    k_memset(&n, 0, sizeof n);
+    n.kind = KIND_REMOTE;
+    n.pid = pid;
+    n.no_always = (flags & WIN_NOTICE_F_NO_ALWAYS) != 0;
+    int i = 0;
+    for (; text[i] && text[i] != ' ' && i < (int)sizeof n.peer - 1; i++) n.peer[i] = text[i];
+    n.peer[i] = 0;
+    const char *proto = text[i] == ' ' ? text + i + 1 : "";
+    k_strlcpy(n.title, "Remote desktop request", sizeof n.title);
+    snprintf(n.sub, sizeof n.sub, "%s wants to see and use this screen. %s, password accepted.",
+             n.peer, proto[0] ? proto : "Remote desktop");
+    k_strlcpy(n.icon, "tray-remote", sizeof n.icon);
+    push(&n);
+    ulogf("wm: remote request from %s (%s)\n", n.peer, proto);
+}
+
+// Is the asker still waiting? Its session is in the kernel's list for as
+// long as it lives (QUERY_REMOTESESS) -- a viewer that hung up takes its
+// question with it.
+static int asker_alive(int pid) {
+    struct query_remotesess q;
+    for (int i = 0; sys_query_record(QUERY_REMOTESESS, i, &q, sizeof q) > 0; i++)
+        if ((int)q.pid == pid) return 1;
+    return 0;
+}
+
 void crash_notice_piece(int pid, int a, int kind, unsigned flags, const char *text) {
     int idx = a & 0xff, pieces = (a >> 8) & 0xff;
     if (pieces < 1 || pieces > WIN_NOTICE_PIECES_MAX || idx >= pieces) return;
@@ -242,7 +302,8 @@ void crash_notice_piece(int pid, int a, int kind, unsigned flags, const char *te
     g_asm[slot].have = idx + 1;
     if (g_asm[slot].have == pieces) {
         g_asm[slot].pid = 0;
-        tell_file(kind, flags, g_asm[slot].buf);
+        if (kind == WIN_NOTICE_REMOTE) tell_remote(pid, flags, g_asm[slot].buf);
+        else                           tell_file(kind, flags, g_asm[slot].buf);
     }
 }
 
@@ -269,10 +330,22 @@ void crash_notice_init(void) {
 
 void crash_notice_poll(void) {
     uint64_t now = sys_monotonic_ns();
-    for (int i = g_count - 1; i >= 0; i--)
+    for (int i = g_count - 1; i >= 0; i--) {
+        if (g_n[i].kind == KIND_REMOTE) {
+            // NOT KEPT BY HOVERING, unlike the others: the asker's own
+            // wait ends a little after this, and the answer must be ours.
+            if (now >= g_n[i].until) { answer(&g_n[i], WIN_REMOTE_DENY, 0); drop(i); }
+            else if (now >= g_next_poll && !asker_alive(g_n[i].pid)) drop(i);
+            else if ((int)((g_n[i].until - now) / 1000000000ull) != g_n[i].shown_left) {
+                g_n[i].shown_left = (int)((g_n[i].until - now) / 1000000000ull);
+                crash_notice_damage();   // the countdown, once a second
+            }
+            continue;
+        }
         if ((now >= g_n[i].until && g_hover_card != i) ||
             (g_n[i].kind == KIND_STAYED && !stayed_open(&g_n[i])))   // saved and closed meanwhile
             drop(i);
+    }
     if (now < g_next_poll) return;
     g_next_poll = now + POLL_NS;
     struct query_crash c;
@@ -305,16 +378,28 @@ static int card_h_of(int i) {
         h -= ugfx_char_h();                      // one line of sentence is enough
         if (g_n[i].thumb.px) h += g_n[i].thumb.h + pad();
     }
+    if (g_n[i].kind == KIND_REMOTE && !g_n[i].no_always)
+        h += ugfx_char_h() + pad() / 2;   // the "Always allow" box
     return h;
 }
 static int gap(void)    { return pad(); }
 
+// A REMOTE REQUEST STANDS AT THE TOP RIGHT, apart from the stack above
+// the taskbar: it is a question with a deadline, and it must not sit
+// under the tray flyout that shows the session it would open.
 static void card_rect(int i, int *x, int *y, int *w, int *h) {
     *w = card_w(); *h = card_h_of(i);
     *x = screen_w - *w - gap();
-    int below = 0;   // the cards under this one, which is newer
-    for (int k = 0; k < i; k++) below += card_h_of(k) + gap();
-    *y = screen_h - taskbar_h - gap() - below - *h;
+    int remote = g_n[i].kind == KIND_REMOTE;
+    int before = 0;   // the cards of the same stack nearer its edge (newer)
+    for (int k = 0; k < i; k++)
+        if ((g_n[k].kind == KIND_REMOTE) == remote) before += card_h_of(k) + gap();
+    if (remote) *y = gap() + before;
+    else        *y = screen_h - taskbar_h - gap() - before - *h;
+}
+
+static const char *remote_label(int b) {
+    return b == BTN_DENY ? "Deny" : b == BTN_VIEW ? "View only" : "Allow";
 }
 
 static const char *stayed_label(int b) { return b == BTN_SHOW ? "Show it" : "Force Quit"; }
@@ -328,12 +413,32 @@ static int button_rect(int i, int b, int *x, int *y, int *w, int *h) {
     card_rect(i, &cx, &cy, &cw, &chh);
     const struct notice *n = &g_n[i];
     if (b == BTN_CLOSE) {
+        if (n->kind == KIND_REMOTE) return 0;   // a countdown stands there; Deny is the close
         *w = *h = ugfx_char_h() + 4;
         *x = cx + cw - *w - pad() / 2; *y = cy + pad() / 2;
         return 1;
     }
     *h = utheme_control_h();
     *y = cy + chh - pad() - *h;
+    if (n->kind == KIND_REMOTE) {
+        if (b == BTN_ALWAYS) {
+            if (n->no_always) return 0;
+            // The whole line is the box's target, as a checkbox's label is.
+            *x = cx + pad();
+            *w = cw - 2 * pad();
+            *h = ugfx_char_h() + 4;
+            *y = cy + chh - pad() - utheme_control_h() - pad() / 2 - *h;
+            return 1;
+        }
+        // Right-aligned, Allow outermost and filled: Deny, View only, Allow.
+        int right = cx + cw - pad();
+        for (int k = BTN_ALLOW; k >= BTN_DENY; k--) {
+            int bw = ugfx_text_width(remote_label(k)) + 2 * ugfx_char_w();
+            if (k == b) { *w = bw; *x = right - bw; return 1; }
+            right -= bw + pad() / 2;
+        }
+        return 0;
+    }
     if (n->kind == KIND_SHOT) {
         // Left to right under the picture: Open (the primary), Copy,
         // Folder, Save as.
@@ -383,6 +488,7 @@ const char *crash_notice_button(int b, int r[4]) {
     if (!button_rect(0, b, &r[0], &r[1], &r[2], &r[3])) return 0;
     if (g_n[0].kind == KIND_SHOT) return shot_label(b);
     if (g_n[0].kind == KIND_STAYED) return stayed_label(b);
+    if (g_n[0].kind == KIND_REMOTE) return b == BTN_ALWAYS ? "Always allow" : remote_label(b);
     return b == BTN_DETAILS ? "Details" : "Reopen";
 }
 
@@ -435,6 +541,18 @@ int crash_notice_handle_click(int mx, int my) {
     if (t < 0) return 0;
     if (t >= CARD_TOKEN) return 1;   // on a card: swallowed, nothing to do
     int i = t / BTNS, b = t % BTNS;
+    if (g_n[i].kind == KIND_REMOTE) {
+        if (b == BTN_ALWAYS) {   // a toggle: the question stays up
+            g_n[i].always = !g_n[i].always;
+            crash_notice_damage();
+            return 1;
+        }
+        struct notice q = g_n[i];
+        drop(i);
+        answer(&q, b == BTN_ALLOW ? WIN_REMOTE_ALLOW : b == BTN_VIEW ? WIN_REMOTE_VIEW
+                   : WIN_REMOTE_DENY, q.always);
+        return 1;
+    }
     struct notice n = g_n[i];
     n.thumb.px = 0;   // drop() frees the card's picture; this copy must not
     drop(i);
@@ -534,6 +652,17 @@ void crash_notice_draw(int mx, int my) {
         const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
         ugfx_draw_string_elided(s, tx, y + pad(), tw, n->title, UTHEME_TEXT, UTHEME_PANEL_BG);
         ugfx_set_font(was);
+        if (n->kind == KIND_REMOTE) {
+            // THE TIME LEFT, where the close box would be: unanswered
+            // means denied, and the person should see when.
+            uint64_t now = sys_monotonic_ns();
+            int left = now >= n->until ? 0 : (int)((n->until - now + 999999999ull) / 1000000000ull);
+            char cd[8];
+            snprintf(cd, sizeof cd, "0:%02d", left);
+            int cw = ugfx_text_width(cd);
+            ugfx_draw_string(s, x + w - pad() - cw, y + pad(),
+                             cd, uui_state_bg(UTHEME_TEXT, UUI_STATE_DISABLED), UTHEME_PANEL_BG);
+        }
         // The sentence WRAPS, two lines at most; the second elides.
         const char *rest = n->sub;
         int sw = x + w - pad() - tx, sy = y + pad() + ugfx_char_h() + ugfx_char_h() / 3;
@@ -556,6 +685,33 @@ void crash_notice_draw(int mx, int my) {
                 int cx = bx + bw / 2, cy = by + bh / 2, k = bh / 5;
                 ugfx_draw_line(s, cx - k, cy - k, cx + k, cy + k, UTHEME_TEXT, GEOM_AA);
                 ugfx_draw_line(s, cx + k, cy - k, cx - k, cy + k, UTHEME_TEXT, GEOM_AA);
+                continue;
+            }
+            if (n->kind == KIND_REMOTE) {
+                if (b == BTN_ALWAYS) {
+                    int box = ugfx_char_h() - 2, bx0 = bx, by0 = by + (bh - box) / 2;
+                    uui_fill_round_rect(s, bx0, by0, box, box, 3,
+                                        n->always ? UTHEME_ACCENT : UTHEME_OUTLINE);
+                    if (!n->always)
+                        uui_fill_round_rect(s, bx0 + 1, by0 + 1, box - 2, box - 2, 2, UTHEME_PANEL_BG);
+                    else {   // the tick
+                        ugfx_draw_line(s, bx0 + box / 4, by0 + box / 2, bx0 + box / 2 - 1,
+                                       by0 + box * 3 / 4, UTHEME_ACCENT_TEXT, GEOM_AA);
+                        ugfx_draw_line(s, bx0 + box / 2 - 1, by0 + box * 3 / 4, bx0 + box * 3 / 4 + 1,
+                                       by0 + box / 4, UTHEME_ACCENT_TEXT, GEOM_AA);
+                    }
+                    char line[48];
+                    snprintf(line, sizeof line, "Always allow %s", n->peer);
+                    ugfx_draw_string_clipped(s, bx0 + box + pad() / 2, by + (bh - ugfx_char_h()) / 2,
+                                             bw - box - pad() / 2, line,
+                                             hot ? UTHEME_ACCENT : UTHEME_TEXT, UTHEME_PANEL_BG);
+                    continue;
+                }
+                int allow = b == BTN_ALLOW;
+                uui_button_draw(s, bx, by, bw, bh, remote_label(b),
+                                allow ? UTHEME_ACCENT : UTHEME_BUTTON_BG,
+                                allow ? UTHEME_ACCENT_TEXT : UTHEME_TEXT,
+                                hot ? UUI_STATE_HOVER : UUI_STATE_REST);
                 continue;
             }
             int shot = n->kind == KIND_SHOT, stayed = n->kind == KIND_STAYED;
