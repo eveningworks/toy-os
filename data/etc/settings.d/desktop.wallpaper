@@ -1,12 +1,14 @@
 Type=enum
 File=/etc/desktop.conf
-Label=Image
+Label=Picture
 Category=Desktop
 Group=Wallpaper
 Default=aurora
-Choices=none
 ChoiceDir=/usr/share/wallpapers
 ChoiceDirMode=stem
-Description=The desktop background, from /usr/share/wallpapers
-Widget=dropdown
-Choice.none=No wallpaper (plain colour)
+Description=From /usr/share/wallpapers. An animated GIF there plays.
+Widget=gallery
+Preview=picture
+Order=2
+Requires=desktop.wallpaper_type=picture
+WhenUnmet=hide

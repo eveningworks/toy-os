@@ -1,0 +1,19 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Colour
+Category=Desktop
+Group=Wallpaper
+Default=blue
+Choices=blue,teal,slate,graphite,plum,forest
+Description=The whole desktop in one colour
+Widget=gallery
+Preview=colour
+Order=6
+Requires=desktop.wallpaper_type=colour
+WhenUnmet=hide
+Choice.blue=Blue
+Choice.teal=Teal
+Choice.slate=Slate
+Choice.graphite=Graphite
+Choice.plum=Plum
+Choice.forest=Forest

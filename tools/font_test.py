@@ -647,8 +647,8 @@ def main():
     # face behind was why consecutive runs failed more and more checks
     # (docs/bugs.md).
     orig = {k: config_get(dbg, k) for k in
-            ("system.font_face", "system.font_size", "desktop.wallpaper")}
-    set_setting(dbg, "desktop.wallpaper", "none")
+            ("system.font_face", "system.font_size", "desktop.wallpaper_type")}
+    set_setting(dbg, "desktop.wallpaper_type", "colour")
     set_size(dbg, 14)
     set_face(dbg, PROP)
     mono_rep = set_face(dbg, MONO)
@@ -745,8 +745,8 @@ def main():
 
     # Put back what was there.
     close_font_demo(dbg)
-    if orig["desktop.wallpaper"]:
-        set_setting(dbg, "desktop.wallpaper", orig["desktop.wallpaper"])
+    if orig["desktop.wallpaper_type"]:
+        set_setting(dbg, "desktop.wallpaper_type", orig["desktop.wallpaper_type"])
     if orig["system.font_size"]:
         set_size(dbg, orig["system.font_size"])
     if orig["system.font_face"]:

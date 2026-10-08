@@ -474,6 +474,13 @@ int wm_launched_max(void);
 uint64_t wm_client_next_timer_due(void);
 
 void wm_client_check_timers(void);
+// wm_client.c's buffer handling, for wm_background.c's surface, which is
+// a struct window kept OUT of windows[].
+int wm_client_map_buf(struct window *win, int b, uint32_t gen, int w, int h);
+void wm_client_unmap(struct window *win);
+void wm_client_release_buf(struct window *win, int b);
+struct win_event;
+int wm_client_push_event(int pid, const struct win_event *ev);
 // Re-sends the state events a client's inbox had no room for last time.
 // Once per frame, after the timers.
 void wm_client_flush_pending(void);

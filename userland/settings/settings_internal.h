@@ -115,7 +115,9 @@ enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST,
 // OBJECTS, NOT LITERALS: an owner kind is compared by POINTER, and two
 // translation units' copies of one string literal need not be the same
 // address.
-extern const char OWNER_SAVER[], OWNER_EFFECT[];
+extern const char OWNER_SAVER[], OWNER_EFFECT[], OWNER_LIVE[];
+int slot_hidden(int i);   // set_page.c: a WhenUnmet=hide row whose controller says no
+void find_requirements(void);   // set_page.c: who each such row follows, at page open
 
 // --- the page's controls ---------------------------------------------
 //

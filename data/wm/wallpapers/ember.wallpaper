@@ -1,0 +1,10 @@
+# What this live wallpaper lets you change (lib/ulivewall.h).
+Options=speed,colours
+Option.speed=int:1..10:4
+Label.speed=Speed
+Desc.speed=How fast it moves.
+Widget.speed=slider
+Option.colours=enum:aurora,dusk,ember,slate:ember
+Label.colours=Colours
+Desc.colours=Taken from the picture of the same name.
+Widget.colours=radio

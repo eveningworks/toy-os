@@ -2,6 +2,7 @@
 #include "wm_internal.h"
 #include "wm_anim.h"
 #include "wm_idle.h"
+#include "wm_background.h"
 #include "desktop.h"   // desktop_icon_geometry -- `gui icons`
 #include "wm_taskbar.h"
 #include "lib/icon_cache.h"
@@ -2350,6 +2351,15 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
                    (unsigned)wm_idle_seconds(), wm_idle_saver_pid(),
                    wm_idle_saver_name(), wm_idle_minutes());
         dbg_out_write(o, buf);
+        return 1;
+    }
+
+    // THE BACKGROUND CLIENT (wm_background.h), as one JSON line.
+    if (k_strcmp(sub, "background") == 0) {
+        char buf[256];
+        wm_bg_describe(buf, sizeof buf);
+        dbg_out_write(o, buf);
+        dbg_out_write(o, "\r\n");
         return 1;
     }
 

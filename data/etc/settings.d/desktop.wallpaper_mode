@@ -7,5 +7,8 @@ Default=fill
 Choices=fill,fit
 Description=How the picture is placed when it is not the screen's shape
 Widget=radio
+Order=3
 Choice.fill=Fill the screen (crop)
 Choice.fit=Fit the whole picture
+Requires=desktop.wallpaper_type=picture
+WhenUnmet=hide

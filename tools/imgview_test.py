@@ -297,7 +297,7 @@ def run(dbg, qmp, tmp, res, inst):
     # desktop repaints on its own cadence within about a second either
     # way. This measures that the setting reaches the picture; the
     # damage request is about promptness and is not under test.
-    set_setting(dbg, "desktop.wallpaper", "none")
+    set_setting(dbg, "desktop.wallpaper_type", "colour")
     time.sleep(1.5)
     plain = shot(qmp, tmp, "desk-plain.png")
     flat = {plain.getpixel((x, y)) for x in (300, 700, 1100) for y in (120, 400)}
@@ -305,6 +305,7 @@ def run(dbg, qmp, tmp, res, inst):
               f"sampled {flat}")
 
     set_setting(dbg, "desktop.wallpaper", "aurora")
+    set_setting(dbg, "desktop.wallpaper_type", "picture")
 
     time.sleep(2.5)   # the desktop polls, decodes and repaints
 

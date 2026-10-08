@@ -18,6 +18,8 @@
 #include "lib/icon_cache.h"
 #include "wm/wm_log.h"
 #include "lib/uimg.h"
+#include "lib/ulivewall.h" // ulivewall_colour() -- the plain colours
+#include "wm_background.h"   // a live frame, drawn where the picture would be
 #include "ui/uui_image.h"
 #include "ui/uui_label.h"  // uui_label_wrap_next() -- the caption's wrap
 #include "lib/uclip.h"      // the desktop's Copy/Cut/Paste ride the system clipboard
@@ -408,7 +410,12 @@ static struct uui_image wallpaper_view;  // placement, and the scaled cache
 static char wallpaper_name[SETTING_ABI_VALUE_MAX];
 static char wallpaper_mode[16];
 static int wallpaper_loaded;
+static int wallpaper_animated;      // a GIF with more than one frame: wm_background.c plays it
 static uint32_t g_background_gen;   // desktop_background_gen()
+// `desktop.wallpaper_type` is colour: the picture stays loaded (a switch
+// back costs no decode) but is not drawn.
+static int g_plain_only;
+static uint32_t g_plain_rgb = 0x183c5a;   // `desktop.background_colour`
 
 // Reads the two settings and reloads only when something actually
 // changed -- so this is safe to call on a generation bump, which fires
@@ -434,6 +441,20 @@ static void wallpaper_reload(void) {
         k_strlcpy(name, v, sizeof name);
     if (usetting_get("desktop.wallpaper_mode", v, sizeof v) && v[0])
         k_strlcpy(mode, v, sizeof mode);
+
+    // THE TYPE AND THE PLAIN COLOUR. "none" is what a plain background
+    // was before the type existed, and still reads as one.
+    char type[16] = "picture";
+    if (usetting_get("desktop.wallpaper_type", v, sizeof v) && v[0])
+        k_strlcpy(type, v, sizeof type);
+    uint32_t plain = ulivewall_colour(
+        usetting_get("desktop.background_colour", v, sizeof v) ? v : "blue");
+    int plain_only = k_strcmp(type, "colour") == 0 || k_strcmp(name, "none") == 0;
+    if (plain != g_plain_rgb || plain_only != g_plain_only) {
+        g_plain_rgb = plain;
+        g_plain_only = plain_only;
+        desktop_background_changed();
+    }
 
     int name_changed = k_strcmp(name, wallpaper_name) != 0;
     int mode_changed = k_strcmp(mode, wallpaper_mode) != 0;
@@ -467,6 +488,7 @@ static void wallpaper_reload(void) {
     if (!name_changed && wallpaper_loaded) return;
 
     uui_image_set(&wallpaper_view, NULL);
+    wallpaper_animated = 0;
     if (wallpaper_loaded) {
         uimg_free(&wallpaper_src);
         wallpaper_loaded = 0;
@@ -478,11 +500,25 @@ static void wallpaper_reload(void) {
 
     // A NAME, not a path -- the same rule a font face and a cursor theme
     // follow (kernel/lib/wallpaper_config.c says why).
+    // THE FIRST FORMAT THAT LOADS: the value is the stem, as a ChoiceDir
+    // in stem mode lists it, so the file may be any of these.
+    static const char *const EXT[] = { "jpg", "gif", "png", "qoi" };
     char path[80];
-    k_snprintf(path, sizeof path, "%s/%s.jpg", WALLPAPER_DIR, name);
-
     uint64_t t0 = sys_ticks();
-    int rc = uimg_load(path, &wallpaper_src);
+    int rc = -1;
+    for (unsigned e = 0; e < sizeof EXT / sizeof EXT[0] && rc < 0; e++) {
+        k_snprintf(path, sizeof path, "%s/%s.%s", WALLPAPER_DIR, name, EXT[e]);
+        rc = uimg_load(path, &wallpaper_src);
+        // Frame 0 is what this draws; more than one frame is what the
+        // background client is started for.
+        if (rc == 0 && k_strcmp(EXT[e], "gif") == 0) {
+            struct uimg_anim an;
+            if (uimg_anim_load(path, &an) == 0) {
+                wallpaper_animated = an.frames > 1;
+                uimg_anim_close(&an);
+            }
+        }
+    }
     if (rc < 0) {
         // NOT fatal and NOT silent: the desktop falls back to its plain
         // colour and says why, because a background that quietly does
@@ -546,7 +582,12 @@ void desktop_poll_config(void) {
 // ("fit") wallpaper, which is why it is the widget's own background
 // rather than a separate fill.
 static void draw_background(void) {
-    if (wallpaper_loaded) {
+    const uint32_t *live = wm_bg_frame();
+    if (live) {
+        ugfx_blit(wm_surface(), 0, 0, screen_w, screen_h, live, screen_w);
+        return;
+    }
+    if (wallpaper_loaded && !g_plain_only) {
         wallpaper_view.x = 0;
         wallpaper_view.y = 0;
         wallpaper_view.w = screen_w;
@@ -554,7 +595,7 @@ static void draw_background(void) {
         uui_image_draw(wm_surface(), &wallpaper_view);
         return;
     }
-    ugfx_fill(wm_surface(), DESKTOP_BG);
+    ugfx_fill(wm_surface(), g_plain_rgb);
 }
 
 void desktop_draw_background_into(struct ugfx_surface *dst) {
@@ -565,6 +606,15 @@ void desktop_draw_background_into(struct ugfx_surface *dst) {
 }
 
 uint32_t desktop_background_gen(void) { return g_background_gen; }
+
+void desktop_background_changed(void) {
+    g_background_gen++;
+    redraw_pending = 1;
+    wm_damage_rect(0, 0, screen_w, screen_h);
+}
+
+const char *desktop_wallpaper_name(void) { return wallpaper_name; }
+int desktop_wallpaper_animated(void) { return wallpaper_loaded && wallpaper_animated; }
 
 // The rect a press or a band tests against: the centred icon box plus
 // its label lines. One function, so drawing, hit-testing and the debug

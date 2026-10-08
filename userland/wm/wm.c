@@ -31,6 +31,7 @@
 #include "wm_glass.h"
 #include "wm_anim.h"   // wm_damage_window_rect(): a window's rect plus its shadow
 #include "wm_idle.h"
+#include "wm_background.h"
 #include "wm_dnd.h"
 #include "wm_geometry.h"
 #include "wm_debug.h"
@@ -872,6 +873,7 @@ void wm_screen_changed(void) {
     wm_hwcursor_invalidate();
     wm_logf("wm: screen changed -- %dx%d, %d scanout(s)\n", screen_w, screen_h,
             g_wm_screen.buffers);
+    wm_bg_screen_changed();
 }
 
 // The usable area moved -- a new screen size, or a new taskbar height
@@ -1185,6 +1187,7 @@ void wm_run(void) {
         // to the wrong file.
         wmwd_phase("wallpaper");
         desktop_poll_config();
+        wm_bg_poll();   // the live background follows the picture's settings
 
         // The Start button's appearance, on the same counter. Its own
         // phase for the watchdog's sake but not because it is slow --

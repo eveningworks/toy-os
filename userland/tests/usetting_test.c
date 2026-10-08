@@ -122,12 +122,13 @@ int main(void) {
     // --- the schema half is reachable directly -----------------------
     struct uschema s;
     utest_check(uschema_find("desktop.wallpaper", &s), "the wallpaper is declared");
-    utest_check(uschema_choice_count(&s) > 1,
-                "and its choices come from a directory, plus `none`");
-    char first[SETTING_ABI_VALUE_MAX];
-    utest_check(uschema_choice(&s, 0, first, sizeof first) &&
-                strcmp(first, "none") == 0,
-                "with the literal choice ahead of the directory's");
+    int n = uschema_choice_count(&s), aurora = 0;
+    utest_check(n > 1, "and its choices come from a directory");
+    for (int i = 0; i < n; i++) {
+        char c[SETTING_ABI_VALUE_MAX];
+        if (uschema_choice(&s, i, c, sizeof c) && strcmp(c, "aurora") == 0) aurora = 1;
+    }
+    utest_check(aurora, "as stems: aurora.jpg is the choice `aurora`");
     utest_check(!uschema_find("system.font_size", &s),
                 "a KERNEL setting is not declared by a file");
 

@@ -1,0 +1,12 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Background
+Category=Desktop
+Group=Wallpaper
+Default=picture
+Choices=picture,live,colour
+Description=A picture, a live effect, or one colour
+Order=1
+Choice.picture=Picture
+Choice.live=Live
+Choice.colour=Plain colour

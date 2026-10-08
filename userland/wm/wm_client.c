@@ -23,6 +23,7 @@
 #include "wm_anim.h"   // wm_damage_window_rect(): a window's rect plus its shadow
 #include "wm_shortcut.h"
 #include "lib/usaver.h"
+#include "wm_background.h"
 #include "wm_idle.h"
 #include "wm_dnd.h"
 #include "diag_abi.h"
@@ -954,6 +955,8 @@ uint64_t wm_client_next_timer_due(void) {
         if (!wm_client_is_client_window(win)) continue;
         if (!soonest || win->timer_due_ns < soonest) soonest = win->timer_due_ns;
     }
+    uint64_t bg = wm_bg_timer_due();
+    if (bg && (!soonest || bg < soonest)) soonest = bg;
     return soonest;
 }
 
@@ -974,6 +977,7 @@ void wm_client_check_timers(void) {
         win->timer_due_ns += win->timer_period_ns;
         if (win->timer_due_ns <= now) win->timer_due_ns = now + win->timer_period_ns;
     }
+    wm_bg_check_timer(now);
 }
 
 // WM_SERVER_OPS is GONE. It was the kernel's way of calling INTO the WM,
@@ -1200,6 +1204,12 @@ static void req_create(int from, struct wmchan_msg *m) {
     k_memset(&r, 0, sizeof r);
     r.type = WIN_REQ_CREATE;
     r.a = -1;
+    int bg_ok = 0;
+    if (wm_bg_create(from, m->window, m->a, m->b, &bg_ok)) {   // wm_background.h
+        if (bg_ok) r.a = (int)m->window;
+        uchan_server_reply(&g_chan, from, &r, sizeof r);
+        return;
+    }
     if (find_client_window(from, m->window) < 0 &&
         on_window_created(from, m->window, m->a, m->b, 0, 0,
                           m->text, identity_for_pid(from))) {
@@ -1218,6 +1228,9 @@ static void req_create(int from, struct wmchan_msg *m) {
 // stale. Ownership is checked the way every request here is --
 // `from` is the ring's pid and cannot be forged.
 static void req_present(int from, struct wmchan_msg *m) {
+    if (wm_bg_present(from, m->window, WIN_PRESENT_BUF(m->a), WIN_PRESENT_GEN(m->a),
+                      WIN_PRESENT_W((uint32_t)m->b), WIN_PRESENT_H((uint32_t)m->b),
+                      (uint32_t)m->c)) return;
     on_window_present(from, m->window, WIN_PRESENT_BUF(m->a),
                       WIN_PRESENT_GEN(m->a),
                       WIN_PRESENT_W((uint32_t)m->b),
@@ -1260,6 +1273,7 @@ static void req_dialog(int from, struct wmchan_msg *m) {
 }
 
 static void req_destroy(int from, struct wmchan_msg *m) {
+    if (wm_bg_destroy(from, m->window)) return;
     on_window_destroyed(from, m->window);
 }
 
@@ -1272,6 +1286,7 @@ static void req_widget(int from, struct wmchan_msg *m) {
 }
 
 static void req_timer(int from, struct wmchan_msg *m) {
+    if (wm_bg_timer(from, m->window, (unsigned)m->a)) return;
     on_window_timer(from, m->window, (unsigned)m->a);
 }
 
@@ -1362,6 +1377,7 @@ void wm_client_chan_pump(void) {
     int gone[WM_CHAN_GONE_MAX];
     int n = uchan_server_scan(&g_chan, gone, WM_CHAN_GONE_MAX);
     for (int i = 0; i < n; i++) {
+        wm_bg_client_gone(gone[i]);
         for (int w = window_count - 1; w >= 0; w--)
             if (windows[w].client_pid == gone[i])
                 on_window_destroyed(gone[i], windows[w].client_win);
@@ -1944,3 +1960,14 @@ int wm_client_check_liveness(void) {
     }
     return report;
 }
+
+// --- the same buffer handling, for wm_background.c's surface ------------
+//
+// Its surface is not in windows[] (wm_background.h says why), so it is
+// handed these rather than reaching the statics above.
+int wm_client_map_buf(struct window *win, int b, uint32_t gen, int w, int h) {
+    return map_buf(win, b, gen, w, h);
+}
+void wm_client_unmap(struct window *win) { unmap_client_window(win); }
+void wm_client_release_buf(struct window *win, int b) { send_release(win, b); }
+int wm_client_push_event(int pid, const struct win_event *ev) { return win_events_push(pid, ev); }

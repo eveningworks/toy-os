@@ -5,6 +5,7 @@
 // text when the control is a list. Which control a setting gets is
 // decided here from what its values ARE -- see pick_kind().
 #include "settings/settings_internal.h"
+#include "lib/usetting_schema.h" // WhenUnmet= and Requires=, read from the declaration
 
 char g_status[160];
 int  g_loaded;
@@ -336,6 +337,8 @@ void open_group(int g) {
         strlcpy(g_page_desc_text, m.description, sizeof g_page_desc_text);
     fit_rows(&g_page_desc, g_page_desc_text);
 
+    find_requirements();
+
     // Found by the setting it carries, not the page's NAME, so a page
     // renamed in /etc/settings.d keeps it.
     g_test_has = 0;
@@ -443,6 +446,65 @@ int apply_page(void) {
     return failed == 0;
 }
 
+// --- rows that follow another row's STAGED value -------------------------
+//
+// `WhenUnmet=hide` beside a Requires= that names a setting ON THE SAME
+// PAGE: the row is shown only while that setting's STAGED value matches,
+// so the Wallpaper page's Picture / Live / Plain colour switch swaps the
+// rows under it as it is clicked, before Apply -- Windows' and KDE's
+// background pages. Without the key a Requires= row greys, as before.
+//
+// Apply writes slots in page order and the controller sorts first, so
+// the requirement is met by the time a shown row is written.
+// The controlling slot PLUS ONE, so the zeroed array before any page
+// opens reads as "follows nothing" rather than "follows slot 0".
+static int g_req_slot[PAGE_MAX];
+static char g_req_value[PAGE_MAX][SETTING_ABI_VALUE_MAX];
+
+void find_requirements(void) {
+    for (int i = 0; i < PAGE_MAX; i++) g_req_slot[i] = 0;
+    for (int i = 0; i < g_slot_count; i++) {
+        int k = g_slot[i].setting;
+        if (k < 0 || opt_of(k)) continue;
+        const char *name = g_name[k];
+        size_t nl = strlen(g_ns[k]);
+        if (nl && !strncmp(name, g_ns[k], nl) && name[nl] == '.') name += nl + 1;
+        char word[16];
+        if (!uschema_text_word(g_ns[k], name, "WhenUnmet", word, sizeof word) || strcmp(word, "hide"))
+            continue;
+        struct uschema s;
+        if (!uschema_find(g_name[k], &s) || !s.req_name[0]) continue;
+        for (int j = 0; j < g_slot_count; j++) {
+            int c = g_slot[j].setting;
+            if (j == i || c < 0 || strcmp(g_name[c], s.req_name)) continue;
+            g_req_slot[i] = j + 1;
+            strlcpy(g_req_value[i], s.req_value, sizeof g_req_value[i]);
+            // ITS VISIBILITY SAYS IT. Greyed as well, a row shown because
+            // the switch was just moved would be shown disabled until Apply.
+            g_unavail[k][0] = '\0';
+            set_slot_enabled(&g_slot[i], k);
+        }
+    }
+}
+
+int slot_hidden(int i) {
+    if (i < 0 || i >= g_slot_count) return 0;
+    // An owner's synthesised options go wherever the owner goes.
+    if (g_saver_slot >= 0 && i >= g_saver_slot) {
+        for (int o = 0; o < g_saver_slot; o++)
+            if (g_slot[o].setting >= 0 && owner_kind(g_slot[o].setting)) return slot_hidden(o);
+        return 0;
+    }
+    int j = g_req_slot[i] - 1;
+    return j >= 0 && strcmp(staged_value(&g_slot[j]), g_req_value[i]) != 0;
+}
+
+static int controls_rows(int slot_index) {
+    for (int i = 0; i < g_slot_count; i++)
+        if (g_req_slot[i] == slot_index + 1) return 1;
+    return 0;
+}
+
 // --- the page's items ---------------------------------------------------
 
 struct uui_item PAGE[PAGE_ITEMS];
@@ -539,6 +601,7 @@ void relayout_page(void) {
                      ? g_saver_slot : g_slot_count;
     for (int i = 0; i < page_slots; i++) {
         struct slot *sl = &g_slot[i];
+        if (slot_hidden(i)) continue;
         int kn = kbd_emit_slot(PAGE, n, i, FOCUS, &FOCUS_COUNT);
         n = kn >= 0 ? kn : emit_slot(PAGE, n, i, FOCUS, &FOCUS_COUNT);
         n = clock_emit_after(PAGE, n, i, FOCUS, &FOCUS_COUNT);
@@ -596,6 +659,11 @@ int control_changed(int slot_index) {
                  g_label[sl->setting], staged_value(sl));
         // LOGGED as well as shown: a test asserts on facts, not pixels.
         ulogf("settings: staged %s %s\n", g_name[sl->setting], staged_value(sl));
+    }
+    // A SWITCH OTHER ROWS FOLLOW (WhenUnmet=hide) changes which are shown.
+    if (controls_rows(slot_index)) {
+        g_prose_fitted = 0;
+        relayout = 1;
     }
     // PICKING A SAVER CHANGES WHAT IS BELOW IT.
     if (sl->setting >= 0 && !opt_of(sl->setting) && owner_kind(sl->setting)) {

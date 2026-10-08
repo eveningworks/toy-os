@@ -175,7 +175,7 @@ def main():
     # Both cursor checks saturated at the full patch (7744 = 88x88) the
     # day a default wallpaper shipped, which reads exactly like the theme
     # switch doing nothing.
-    set_setting(dbg, "desktop.wallpaper", "none")
+    set_setting(dbg, "desktop.wallpaper_type", "colour")
     set_setting(dbg, "cursor_size", "normal")
     set_setting(dbg, "cursor_theme", "bold")
     set_setting(dbg, "cursor_theme", "default")

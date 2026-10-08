@@ -3517,6 +3517,19 @@ window without going through it will find its layout polls timing out.
   to establish its own selection with Home rather than inheriting the
   phase above's -- the insertion broke it on the first run, which is the
   argument for the rule rather than a reason to move the phase.
+- **`live_wallpaper_test.py`** -- live wallpapers: the background client
+  (`userland/wm/wm_background.c`), read through `gui background`, a JSON
+  line with the pid, program, frame count and whether it is paused. It
+  checks that the background MOVES between two raw captures while the
+  taskbar strip, its control, does not, and that the moving picture is
+  not the still one. **The pause is checked against its own resume**: a
+  screensaver (`gui idle start`) must stop the frame counter and its
+  stop must restart it, because a counter that never moved would pass
+  "stopped" on its own. It also kills the client to check the fallback
+  to the picture and the restart, plays `rain.gif` through the GIF
+  player, reads a plain colour back from pixels, and shows that the same
+  program started by hand is an ordinary window. Every setting it
+  touches is restored. In `gui_regress.py` as `livewall`.
 - **`wallpaper_mode_test.py`** -- `desktop.wallpaper_mode`, at a screen
   mode where the setting can actually be seen. **It sets 1024x768
   because at the default it would measure nothing**: both stock

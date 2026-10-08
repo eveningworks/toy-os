@@ -1,9 +1,11 @@
 // System Settings: a screensaver's or effect's own options, and the
 // dialog an effect's are edited in.
 #include "settings/settings_internal.h"
+#include "lib/ulivewall.h"
 
 const char OWNER_SAVER[]  = "desktop.screensaver";
 const char OWNER_EFFECT[] = "desktop.minimize_effect";
+const char OWNER_LIVE[]   = "desktop.wallpaper_live";
 
 // THE SELECTED SCREENSAVER'S OPTIONS, as rows past the registry's.
 //
@@ -54,8 +56,9 @@ void rebuild_owner_options(const char *kind, const char *saver) {
     // open_group's, where the owner is known to be absent.
     if (!kind || !saver || !saver[0]) return;
 
-    if (kind == OWNER_EFFECT) ueffect_load(saver, &g_saver);
-    else                      usaver_load(saver, &g_saver);
+    if (kind == OWNER_EFFECT)    ueffect_load(saver, &g_saver);
+    else if (kind == OWNER_LIVE) ulivewall_options(saver, &g_saver);
+    else                         usaver_load(saver, &g_saver);
     if (!g_saver.opt_count) return;
     g_saver_base = g_setting_count;
 
@@ -77,8 +80,9 @@ void rebuild_owner_options(const char *kind, const char *saver) {
         // could both claim.
         snprintf(g_name[k], sizeof g_name[k], "%s.%s", saver, o->key);
         g_ns[k][0] = '\0';
-        if (kind == OWNER_EFFECT) ueffect_conf_path(saver, g_file[k], sizeof g_file[k]);
-        else                      usaver_conf_path(saver, g_file[k], sizeof g_file[k]);
+        if (kind == OWNER_EFFECT)    ueffect_conf_path(saver, g_file[k], sizeof g_file[k]);
+        else if (kind == OWNER_LIVE) ulivewall_conf_path(saver, g_file[k], sizeof g_file[k]);
+        else                         usaver_conf_path(saver, g_file[k], sizeof g_file[k]);
         g_cat_of[k][0] = '\0';
         g_group_of[k][0] = '\0';
         g_unavail[k][0] = '\0';
@@ -114,6 +118,7 @@ const char *owner_kind(int idx) {
     if (idx < 0) return 0;
     if (!strcmp(g_name[idx], OWNER_SAVER))  return OWNER_SAVER;
     if (!strcmp(g_name[idx], OWNER_EFFECT)) return OWNER_EFFECT;
+    if (!strcmp(g_name[idx], OWNER_LIVE))   return OWNER_LIVE;
     return 0;
 }
 

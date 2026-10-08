@@ -10831,3 +10831,47 @@ hooks, button group, drag and drop, raw pointer callbacks) WRAP them.
 **No API changed** -- `uapp_window_*` and `uapp_*` are as they were --
 which is why it could land under every app at once. The file then split
 along the seams this exposed (`docs/uapp-design.md`).
+
+## A live wallpaper is a background client, and not a window
+
+**2026-10-08.** Live wallpapers (`lib/ulivewall.h`, `/bin/wm/wallpapers`)
+are drawn by a process of their own, as Wayland does it: wlr-layer-shell's
+`background` layer, which swaybg and mpvpaper are clients of, and KDE's
+plasmashell drawing its wallpaper plugins as a client of KWin. Drawing
+the effect inside the compositor would have been less code, but a bug in
+an effect would then take the desktop down, and the screensavers had
+already put this kind of program in a process of its own.
+
+**The client is not a row in `windows[]`.** That list is the stack people
+work with, and forty-odd places walk it for the taskbar, focus, Alt+Tab,
+hit testing, covering and animation. A background row would have to opt
+out of every one, and the first place that forgot would put the wallpaper
+on the taskbar. It also cannot be the bottom window, because the desktop
+icons are drawn above the wallpaper and below every window.
+`wm_background.c` therefore keeps the client's surface in a slot of its
+own, takes the client's create, present, timer and destroy requests
+before `wm_client.c` looks them up, and reuses that file's buffer mapping.
+`desktop.c` draws the frame where it would draw the picture.
+
+**Only the pid the compositor spawned gets the role.** It checks that pid,
+not the program's path, so the same program run from a shell opens an
+ordinary window: a preview, never a takeover.
+
+**Pausing is withholding the timer.** The client draws on
+`WIN_EV_TIMER`, and the compositor does not deliver it while a window
+fills the screen, a screensaver runs or the Leave page is up. This is the
+shape of Wayland's frame callbacks, which a compositor does not send to
+a hidden surface. Wallpaper Engine pauses on a maximized window for the
+same reason. A hidden background costs nothing, and the client needs no
+protocol to learn that it is hidden.
+
+**Glass samples a still frame.** The "Wallpaper" glass kind blurs the
+background once per change (`wm_glass.c`). A live background counts as
+changed when its first frame arrives, never on every frame, as Windows'
+Mica samples the wallpaper. Re-blurring a moving background each frame
+is the cost that glass kind exists to avoid.
+
+**An effect paints a grid of cell corners, and one bilinear pass fills
+the screen.** At 8 px cells a 1920x1080 frame costs about 33,000 effect
+samples, plus a few adds per pixel. That is what lets a full-screen
+background move at about 15 frames a second under emulation.

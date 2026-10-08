@@ -203,6 +203,7 @@ TOOLS = [
     ("kblayouts", "keyboard_layouts_test.py", "several keyboard layouts: the list, the tray item, Super+Space, the Settings page and Try it"),
     ("modeset", "modeset_test.py", "a runtime resolution change: device, desktop and setting agree"),
     ("wallpaper", "wallpaper_mode_test.py", "fit vs fill, at a mode where they differ, and when the picture is decoded"),
+    ("livewall", "live_wallpaper_test.py", "live wallpapers: the background client, moving, paused, crash fallback, GIF, plain colour"),
     ("thumbcache", "thumbcache_test.py", "thumbnail decode rate, and the disk cache under it"),
     ("shortcut", "shortcut_test.py", "global keyboard shortcuts, and rebinding them"),
     ("identity", "window_identity_test.py", "a held window survives a close or raise that renumbers windows[]"),

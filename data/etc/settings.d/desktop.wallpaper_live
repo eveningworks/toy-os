@@ -1,0 +1,19 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Effect
+Category=Desktop
+Group=Wallpaper
+Default=aurora
+ChoiceDir=/bin/wm/wallpapers
+Description=Drawn by a program of its own, beneath the desktop
+Widget=gallery
+Preview=live
+Order=4
+Requires=desktop.wallpaper_type=live
+WhenUnmet=hide
+Choice.aurora=Aurora
+Choice.drift=Drift
+Choice.tide=Tide
+Choice.lava=Lava lamp
+Choice.fireflies=Fireflies
+Choice.ember=Ember

@@ -28,7 +28,7 @@ same encoder settings to keep in step.
                 both lives in tools/uimg_codec_hostcheck.py; these few
                 are what proves the codecs in ring 3.
 
-  --wallpapers  data/wallpapers/*.jpg -- the desktop backgrounds, drawn
+  --wallpapers  data/wallpapers/*.jpg and rain.gif -- the desktop backgrounds, drawn
                 here rather than committed as somebody's photograph so
                 the repo carries no image it does not own.
 
@@ -52,6 +52,7 @@ Needs Pillow (see docs/tools.md's host-tools section).
 import argparse
 import io
 import math
+import random
 import os
 import struct
 import sys
@@ -500,6 +501,31 @@ def wallpaper_tide(w, h):
     return im.filter(ImageFilter.GaussianBlur(3))
 
 
+def wallpaper_rain(w=320, h=180, n=16):
+    """An ANIMATED picture -- a GIF in /usr/share/wallpapers plays as the
+    background (gui/wallpapers/players/gif.c). Low resolution and a loop
+    of streaks over a night gradient: what a GIF wallpaper usually is, and
+    small enough to ship. The loop is seamless because every streak falls
+    a whole number of screen heights per cycle."""
+    rnd = random.Random(7)
+    drops = [(rnd.uniform(0, w), rnd.uniform(0, h), rnd.choice((1, 2)), rnd.uniform(5, 11))
+             for _ in range(90)]
+    frames = []
+    for k in range(n):
+        im = Image.new("RGB", (w, h))
+        d = ImageDraw.Draw(im)
+        for y in range(h):
+            t = y / (h - 1)
+            d.line([(0, y), (w, y)], fill=(int(12 + 14 * t), int(20 + 30 * t), int(38 + 44 * t)))
+        for x0, y0, laps, length in drops:
+            y = (y0 + laps * h * k / n) % h
+            x = x0 - 0.18 * y
+            d.line([(x, y), (x - 0.18 * length, y - length)],
+                   fill=(int(110 + 20 * laps), int(140 + 20 * laps), 190))
+        frames.append(im.quantize(colors=32, dither=Image.Dither.NONE))
+    return frames
+
+
 def build_wallpapers():
     os.makedirs(WALLPAPER_DIR, exist_ok=True)
     for name, fn in (("aurora", wallpaper_aurora), ("dusk", wallpaper_dusk),
@@ -510,6 +536,11 @@ def build_wallpapers():
         im.save(path, format="JPEG", quality=88, subsampling=2, optimize=True)
         print("wrote %s (%d bytes)" % (os.path.relpath(path, ROOT),
                                        os.path.getsize(path)))
+    frames = wallpaper_rain()
+    path = os.path.join(WALLPAPER_DIR, "rain.gif")
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=80, loop=0,
+                   optimize=False)
+    print("wrote %s (%d bytes)" % (os.path.relpath(path, ROOT), os.path.getsize(path)))
 
 
 # --- sample pictures ---------------------------------------------------

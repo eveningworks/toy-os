@@ -49,6 +49,7 @@
 | `ukeymap.h` | A keyboard layout read from /usr/share/kbs/<name>, for SHOWING it -- which character each key gives on each level, and which keys are dead. |
 | `ulaunch.h` | ulaunch -- is this file something to RUN, and how should it run? |
 | `uline.h` | uline -- the PAINTING half of a ring-3 line-editing front end. |
+| `ulivewall.h` | LIVE WALLPAPERS: the effects, their options, and a wallpaper program's whole main(). |
 | `ulogset.h` | ulogset -- log lines held for READING: the kernel ring, the application ring, a stored boot or any /var/log file, parsed into time, level, source and subsystem, merged in time order, counted for re... |
 | `umd.h` | umd -- rendering Markdown as text for a terminal. |
 | `umemcomp.h` | Where the memory in use is, as four rows that SUM to it: Apps (every process's private bytes, QUERY_PROCMEM), Shared (shm objects, each once), Graphics (RAM held for the screen) and Kernel (the res... |
