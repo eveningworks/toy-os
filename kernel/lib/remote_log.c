@@ -10,6 +10,7 @@
 #include "syscalls.h"
 #include "errno.h"
 #include "proc_info.h"
+#include "ktest.h"
 
 // Enough to cover a whole flash (a few dozen commands and the transfers
 // between them) without the ring being the reason something is missed,
@@ -27,7 +28,13 @@ static int g_head;                // where the oldest one is
 // (the shell killed, the link dropped) must not leave the indicator up
 // forever, and scheduler_exit() names the leader it is retiring.
 #define REMOTE_SESSIONS_MAX 8
-static struct { int leader; uint32_t ip; } g_sessions[REMOTE_SESSIONS_MAX];
+static struct {
+    int leader;
+    uint32_t ip;
+    uint64_t opened_utc;
+    char comm[24];
+    char status[QUERY_REMOTESESS_STATUS_MAX];
+} g_sessions[REMOTE_SESSIONS_MAX];
 
 void remote_log_record(int kind, uint32_t remote_ip, int pid,
                        const char *comm, const char *text) {
@@ -95,21 +102,40 @@ uint32_t remote_log_session_ip(void) {
     return 0;
 }
 
-void remote_log_session_opened(int leader_pid, uint32_t ip) {
+void remote_log_session_opened(int leader_pid, uint32_t ip, const char *creator) {
     if (leader_pid <= 0) return;
+    if (!creator || !creator[0]) creator = "?";
     for (int i = 0; i < REMOTE_SESSIONS_MAX; i++) {
         if (g_sessions[i].leader) continue;
         g_sessions[i].leader = leader_pid;
         g_sessions[i].ip = ip;
-        remote_log_record(QUERY_REMOTE_SESSION, ip, leader_pid, "telnetd",
-                          "session opened");
+        g_sessions[i].opened_utc = ktime_now_sec();
+        k_strlcpy(g_sessions[i].comm, creator, sizeof g_sessions[i].comm);
+        g_sessions[i].status[0] = 0;
+        remote_log_record(QUERY_REMOTE_SESSION, ip, leader_pid, creator, "session opened");
         return;
     }
     // FULL MEANS THE INDICATOR STILL GOES UP, because the alternative
     // is a session nobody can see. The record is written; only the
     // per-session slot is lost, which costs the close line.
-    remote_log_record(QUERY_REMOTE_SESSION, ip, leader_pid, "telnetd",
+    remote_log_record(QUERY_REMOTE_SESSION, ip, leader_pid, creator,
                       "session opened (too many to track)");
+}
+
+int remote_log_session_count(void) { return remote_log_sessions(); }
+
+int remote_log_session_get(int index, struct query_remotesess *out) {
+    for (int i = 0; i < REMOTE_SESSIONS_MAX; i++) {
+        if (!g_sessions[i].leader || index--) continue;
+        k_memset(out, 0, sizeof *out);
+        out->pid = (uint64_t)g_sessions[i].leader;
+        out->remote_ip = g_sessions[i].ip;
+        out->opened_utc = g_sessions[i].opened_utc;
+        k_strlcpy(out->comm, g_sessions[i].comm, sizeof out->comm);
+        k_strlcpy(out->status, g_sessions[i].status, sizeof out->status);
+        return 1;
+    }
+    return 0;
 }
 
 void remote_log_session_closed(int leader_pid) {
@@ -120,10 +146,11 @@ void remote_log_session_closed(int leader_pid) {
         // `sessions` as the current answer, and a close that still
         // counted itself would leave the indicator up forever.
         uint32_t ip = g_sessions[i].ip;
+        char comm[sizeof g_sessions[i].comm];
+        k_strlcpy(comm, g_sessions[i].comm, sizeof comm);
         g_sessions[i].leader = 0;
         g_sessions[i].ip = 0;
-        remote_log_record(QUERY_REMOTE_SESSION, ip, leader_pid,
-                          "telnetd", "session closed");
+        remote_log_record(QUERY_REMOTE_SESSION, ip, leader_pid, comm, "session closed");
         return;
     }
 }
@@ -139,12 +166,25 @@ int sys_remote_log(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
-    if (kind < QUERY_REMOTE_SESSION || kind > QUERY_REMOTE_XFER) {
+    if (kind < QUERY_REMOTE_SESSION || kind > QUERY_REMOTE_STATUS) {
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         return 0;
     }
 
     int pid = scheduler_current_pid();
+    // A STATUS IS THE SESSION LEADER'S OWN LINE about its session, and
+    // only a leader of a live remote session has one to set -- anyone
+    // else is told so, since there is nothing they could mean.
+    if (kind == QUERY_REMOTE_STATUS) {
+        for (int i = 0; i < REMOTE_SESSIONS_MAX; i++) {
+            if (g_sessions[i].leader != pid) continue;
+            k_strlcpy(g_sessions[i].status, text, sizeof g_sessions[i].status);
+            c->regs[14] = 0;
+            return 0;
+        }
+        c->regs[14] = (uint64_t)(int64_t)-ESRCH;
+        return 0;
+    }
     // THE SESSION'S PEER OUTRANKS THE CALLER'S CLAIM, which is what
     // makes a shell's record trustworthy: it says what was typed, and
     // the kernel says where from. A caller with no remote session may
@@ -164,4 +204,30 @@ int sys_remote_log(struct syscall_ctx *c) {
     remote_log_record(kind, ip, pid, comm, text);
     c->regs[14] = 0;
     return 0;
+}
+
+// --- KTESTs ---------------------------------------------------------------
+
+KTEST("remote", "a session is listed with its creator and status until it closes") {
+    int pid = 0x7ffff0;   // no process has it; the table only keeps numbers
+    int before = remote_log_session_count();
+    remote_log_session_opened(pid, 0xC0A80167, "remoted");
+    struct query_remotesess q;
+    int found = 0;
+    for (int i = 0; remote_log_session_get(i, &q); i++)
+        if ((int)q.pid == pid) { found = 1; break; }
+    int k;
+    for (k = 0; k < REMOTE_SESSIONS_MAX && g_sessions[k].leader != pid; k++) {}
+    if (k < REMOTE_SESSIONS_MAX) k_strlcpy(g_sessions[k].status, "VNC, view only",
+                                           sizeof g_sessions[k].status);
+    struct query_remotesess q2;
+    int status_ok = 0;
+    for (int i = 0; remote_log_session_get(i, &q2); i++)
+        if ((int)q2.pid == pid) status_ok = !k_strcmp(q2.status, "VNC, view only");
+    remote_log_session_closed(pid);
+    KTEST_ASSERT(found);
+    KTEST_ASSERT_EQ(q.remote_ip, 0xC0A80167);
+    KTEST_ASSERT(!k_strcmp(q.comm, "remoted"));
+    KTEST_ASSERT(status_ok);
+    KTEST_ASSERT_EQ(remote_log_session_count(), before);
 }

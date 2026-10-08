@@ -36,7 +36,12 @@ uint32_t remote_log_session_of(int leader_pid); // 0 = not a remote session
 int remote_log_sessions(void);        // how many remote sessions are open
 uint32_t remote_log_session_ip(void); // the most recent one's peer, or 0
 
-void remote_log_session_opened(int leader_pid, uint32_t ip);
+// `creator` is the program that made the session (its parent's name):
+// what the record and QUERY_REMOTESESS call it.
+void remote_log_session_opened(int leader_pid, uint32_t ip, const char *creator);
+// QUERY_REMOTESESS: the `index`th open session; 0 past the end.
+int remote_log_session_count(void);
+int remote_log_session_get(int index, struct query_remotesess *out);
 void remote_log_session_closed(int leader_pid);
 
 #endif // KERNEL_REMOTE_LOG_H

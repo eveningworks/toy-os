@@ -564,6 +564,9 @@ struct query_fsstat {
 #define QUERY_REMOTE_COMMAND  1 // a command line the remote shell ran
 #define QUERY_REMOTE_SPAWN    2 // a program a remote session started
 #define QUERY_REMOTE_XFER     3 // a file read or written over the network
+// SYS_REMOTE_LOG only, never a record: the caller's live session's
+// STATUS line ("VNC, full control") -- QUERY_REMOTESESS shows it.
+#define QUERY_REMOTE_STATUS   4
 
 #define QUERY_REMOTELOG_TEXT_MAX 120
 
@@ -585,6 +588,23 @@ struct query_remotelog {
     uint64_t sessions;
     char     comm[24];      // that process's name (PROC_NAME_MAX)
     char     text[QUERY_REMOTELOG_TEXT_MAX];
+};
+
+// THE REMOTE SESSIONS OPEN NOW, one record each: a telnet shell, a VNC
+// viewer. The remote log above is history; this is the present, so the
+// tray flyout and System Settings list who is on without replaying a
+// ring. `comm` is the program that CREATED the session (telnetd,
+// remoted) -- the kernel's fact; `status` is the leader's own line,
+// set with SYS_REMOTE_LOG's QUERY_REMOTE_STATUS, and empty until it does.
+#define QUERY_REMOTESESS 52
+#define QUERY_REMOTESESS_STATUS_MAX 64
+
+struct query_remotesess {
+    uint64_t pid;           // the session leader: signal it to act on the session
+    uint64_t remote_ip;     // host byte order
+    uint64_t opened_utc;    // seconds since 1970-01-01 UTC
+    char     comm[24];
+    char     status[QUERY_REMOTESESS_STATUS_MAX];
 };
 
 #define QUERY_SYSCALL_STALL_NAME 24

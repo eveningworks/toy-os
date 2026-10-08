@@ -6,6 +6,7 @@
 #include "sched_internal.h"
 #include "syscalls.h" // the fd table: a child inherits its parent's descriptors
 #include "remote_log.h" // a session created from a socket is a REMOTE session
+#include "proc_info.h"   // the creator's name
 #include "syscall_abi.h" // SYS_RETRY -- the wake value a blocked waiter sees
 
 // --- signals and process groups --------------------------------------
@@ -137,7 +138,11 @@ void scheduler_make_session_leader(int pid) {
     // carries it (kernel/include/kernel/remote_log.h).
     if (p->ppid > 0) {
         uint32_t ip = fd_peer_ip(scheduler_pid_pml4(p->ppid));
-        if (ip) remote_log_session_opened(pid, ip);
+        if (ip) {
+            struct proc_info creator;
+            const char *name = scheduler_proc_info_pid(p->ppid, &creator) ? creator.name : "";
+            remote_log_session_opened(pid, ip, name);
+        }
     }
 }
 

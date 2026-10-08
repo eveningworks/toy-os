@@ -36,7 +36,23 @@ static const struct query_provider remotelog_provider = {
     .field_count = 0,
 };
 
+static int remotesess_fill(int index, void *out) {
+    return index >= 0 && remote_log_session_get(index, out);
+}
+
+static const struct query_provider remotesess_provider = {
+    .cls = QUERY_REMOTESESS,
+    .name = "remotesess",
+    .record_size = sizeof(struct query_remotesess),
+    .flags = QUERY_F_LIST,
+    .count = remote_log_session_count,
+    .fill = remotesess_fill,
+    .fields = NULL,
+    .field_count = 0,
+};
+
 void remote_log_query_init(void) {
     query_register(&remotelog_provider);
+    query_register(&remotesess_provider);
 }
 INITCALL(remote_log_query_init, INIT_QUERY);
