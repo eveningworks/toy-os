@@ -10875,3 +10875,23 @@ is the cost that glass kind exists to avoid.
 the screen.** At 8 px cells a 1920x1080 frame costs about 33,000 effect
 samples, plus a few adds per pixel. That is what lets a full-screen
 background move at about 15 frames a second under emulation.
+
+## The cube's debris is a height per column, not a physics engine
+
+**2026-10-08.** The Desktop cube chips where it hits and sheds debris
+that piles up at the bottom (`lib/upile.h`). Real debris would be a
+rigid-body solver, Box2D's shape, with every fragment colliding with
+every other. A screensaver needs the look of a pile, not the
+simulation. So a piece in the air is a particle with gravity and
+bounce, and the pile is one height per screen column. A grain rolls to
+a lower neighbour until the step down is one grain at most, which is
+the sandpile rule falling-sand games are built on, cut down to a single
+row of cells. It is then painted into the saver's backdrop. A settled
+pile therefore costs nothing per frame, and the saver's "repaint only
+what moved" rule (cube.c) carries on unchanged. Only pieces still in
+the air are drawn. **Chips are not painted into the texture**, because
+all six faces share it and a chip would appear on every face. A chip is
+a point on the solid in model space, drawn after it and clipped to its
+face's square, so it turns and foreshortens with the face. That is why
+only the cube shape chips: a pyramid's or a ball's faces are not that
+square.

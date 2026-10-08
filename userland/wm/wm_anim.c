@@ -675,7 +675,7 @@ static void adopt_effect_opts(void) {
     g_shatter_pieces = PIECES_COARSE;
     g_shatter_motion = MOTION_POUR;
     if (g_effect != EFFECT_SHATTER) return;   // no other effect has options
-    struct usaver o;
+    static struct usaver o;   // past the 2 KB ring-3 frame cap
     if (!ueffect_load("shatter", &o) || !o.opt_count) return;
     const char *p = usaver_str(&o, "pieces", "coarse");
     g_shatter_pieces = !k_strcmp(p, "fine")   ? PIECES_FINE

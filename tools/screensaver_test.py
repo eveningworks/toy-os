@@ -294,6 +294,8 @@ def main():
 
     # --- Desktop cube: the DESKTOP reaches its faces and its backdrop ----
     cube_saver(dbg, qmp, args)
+    # --- ...and with damage on, what it sheds piles up -------------------
+    cube_damage(dbg, qmp, args)
 
     # --- System Settings' Test button -----------------------------------
     #
@@ -536,6 +538,61 @@ def cube_saver(dbg, qmp, args):
     check("cube: its faces carry the desktop's colours",
           all(abs(imean[c] - dmean[c]) < 25 for c in range(3)),
           f"faces {[round(v) for v in imean]} vs desktop {[round(v) for v in dmean]}")
+
+
+def cube_run(dbg, qmp, args, damage, until, timeout):
+    """One cube run: the backdrop's bottom band compared before and after.
+    Returns (lines logged, px of the band that differ from the backdrop)."""
+    from PIL import Image
+    name = "cube"
+    set_setting(dbg, "desktop.screensaver", name)
+    write_conf(dbg, name, [("speed", 10), ("spin", 6), ("size", 40), ("intro", "off"),
+                           ("lighting", "flat"), ("damage", damage), ("debris", "crumble")])
+    st = dbg.state()
+    sw, sh = st["screen"]["w"], st["screen"]["h"]
+    qmp.goto(sw - 2, 2)
+    time.sleep(0.5)
+    before = f"{args.logs}/cube_dmg_desktop_{damage}.png"
+    qmp.screenshot(before)
+    want = cube_backdrop(Image.open(before).convert("RGB"))
+    dbg.logs("cube:", clear=True)
+    dbg.send("gui idle start")
+    lines = []
+    if wait_pid(dbg, True) is not None:
+        deadline = time.time() + timeout
+        while time.time() < deadline and not any(until in ln for ln in lines):
+            lines += dbg.logs("cube:")
+            time.sleep(0.5)
+        time.sleep(1.5)   # what was thrown lands
+    shot = f"{args.logs}/cube_dmg_{damage}.png"
+    qmp.screenshot(shot, stable=False)
+    dbg.key(ord("a"))
+    wait_pid(dbg, False)
+    dbg.send(f"sh rm {SAVER_CONF}/{name}.conf")
+    set_setting(dbg, "desktop.screensaver", "starfield")
+    fp = Image.open(shot).convert("RGB").load()
+    # The bottom band, where the pile settles; the solid stays above it
+    # most of the time, so a frame with it passing through counts little.
+    band = [(x, y) for y in range(sh - sh // 12, sh - 2, 2) for x in range(0, sw, 4)]
+    off = sum(1 for x, y in band if max(abs(a - b) for a, b in zip(fp[x, y], want(x, y))) > 24)
+    return lines, off, len(band)
+
+
+def cube_damage(dbg, qmp, args):
+    """Damage on: hits are logged, debris piles into the bottom band, and
+    worn to half it shatters and folds in again. THE CONTROL is the same
+    run with damage off, where the band must stay the backdrop -- or a
+    band that differs for some other reason (the solid passing, a clock)
+    would pass the first check on its own."""
+    lines, off, n = cube_run(dbg, qmp, args, "off", "never", 8)
+    check("cube damage off: nothing logged as a hit, the floor stays the backdrop (control)",
+          not any("hit" in ln for ln in lines) and off < n // 20, f"{off} of {n} px differ")
+    lines, off, n = cube_run(dbg, qmp, args, "on", "refolded", 75)
+    hits = [ln for ln in lines if "cube: hit" in ln]
+    check("cube damage on: hits chip it and throw debris", bool(hits), lines[-3:])
+    check("cube damage on: the debris piles along the bottom", off > n // 5, f"{off} of {n} px differ")
+    check("cube damage on: worn to half, it shatters and folds in again",
+          any("shattered" in ln for ln in lines) and any("refolded" in ln for ln in lines), lines[-4:])
 
 
 def every_saver(dbg, qmp, args):

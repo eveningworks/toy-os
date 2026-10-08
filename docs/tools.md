@@ -4669,6 +4669,11 @@ window without going through it will find its layout polls timing out.
   intro's three phases are asserted from the saver's log, in order. Its
   positive control (the capture dropped, `g_have_shot = 0 &&`) reddens
   four checks.
+  **The cube's damage** is checked with its own control. The same fast
+  run with `damage=off` must leave the bottom band as the backdrop and
+  log no hit. With it on, hits are logged, the band fills with the pile,
+  and a worn cube shatters and refolds. A band that differs for another
+  reason would pass the second check without the first.
 - **`settings_harness_hostcheck.py`** -- `settings_test.py`'s own
   geometry and waits, on the host against a scripted console: a sidebar
   row is aimed at where it IS rather than where it would be unscrolled

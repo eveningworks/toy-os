@@ -59,6 +59,7 @@
 | `uopen.h` | uopen -- which program opens this file? |
 | `upager.h` | The pager: show a block of text one screenful at a time, on whichever of fd 0 and fd 1 is a terminal. |
 | `upath.h` | PATH lookup for a ring-3 program that has to RUN another one. |
+| `upile.h` | DEBRIS THAT FALLS, BOUNCES AND PILES UP at the bottom of a picture -- the Desktop cube's chips (gui/savers/cube.c), and anything else that sheds bits onto a floor. |
 | `upins.h` | PINNED FOLDERS: the folders a person added to Places, kept in /etc/places.conf one absolute path per line -- GTK's bookmarks file, Explorer's Quick access pins. |
 | `uprefs.h` | uprefs -- an app's options file described as a TABLE: one row per key names the field it fills, its type, its range or words and its default, and load, save and Defaults all walk that one table --... |
 | `uprogress.h` | A one-line transfer meter, redrawn in place with `\r`. |

@@ -1,6 +1,6 @@
 # What Desktop cube lets you change. See userland/lib/usaver.h for the
 # format; the values chosen here are written to /etc/savers/cube.conf.
-Options=shape,size,speed,spin,backdrop,intro,lighting,squash
+Options=shape,size,speed,spin,backdrop,intro,lighting,squash,damage,debris
 Option.shape=enum:cube,pyramid,ball:cube
 Label.shape=Shape
 Desc.shape=What the desktop is wrapped around.
@@ -27,3 +27,9 @@ Desc.lighting=Shade each face by which way it points, or draw every face at full
 Option.squash=enum:off,on:on
 Label.squash=Squash on bounce
 Desc.squash=Flatten briefly against an edge on impact.
+Option.damage=enum:off,on:on
+Label.damage=Damage
+Desc.damage=Chip where it hits, shed debris into a pile, wear down and shatter.
+Option.debris=enum:shards,sand,crumble:crumble
+Label.debris=Debris
+Desc.debris=What falls off: shards, sand, or shards that crumble to sand.
