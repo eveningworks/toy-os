@@ -80,7 +80,12 @@ static struct caster {
     int pid;
     int pointer;                 // it asked for the pointer in the copy
     int full;                    // owes the whole screen (its first capture)
-    int notified;                // a WIN_EV_CAST is out and not yet answered
+    // WIN_CAST_* bits sent and not yet answered by a capture -- PER BIT.
+    // One flag for both was cleared only by a DAMAGE capture, so a
+    // pointer-shape nudge answered by a cursor capture left it set, and
+    // every later change went unannounced: a VNC picture that froze the
+    // moment the pointer changed shape (dragging a window on the ASUS).
+    int notified;
     int cursor_dirty;
     struct win_damage d;
 } g_cast[CASTERS];
@@ -91,7 +96,7 @@ static struct caster *caster_of(int pid) {
 }
 
 static void notify(struct caster *c, int bits) {
-    if (c->notified) return;
+    if (!(bits & ~c->notified)) return;   // each kind is announced once
     struct win_event ev;
     k_memset(&ev, 0, sizeof ev);
     ev.type = WIN_EV_CAST;
@@ -99,7 +104,7 @@ static void notify(struct caster *c, int bits) {
     // NO RING MEANS NO CLIENT: a session that died is forgotten here
     // rather than through a hook of its own.
     if (!wm_client_push_event(c->pid, &ev)) { k_memset(c, 0, sizeof *c); return; }
-    c->notified = 1;
+    c->notified |= bits;
 }
 
 static long area(int w, int h) { return (long)w * h; }
@@ -212,7 +217,7 @@ static int capture_damage(int from, unsigned flags, int capacity_px, struct win_
     }
     k_memset(&c->d, 0, sizeof c->d);
     c->full = 0;
-    c->notified = 0;
+    c->notified &= ~WIN_CAST_DAMAGE;
     d.flags = WIN_DAMAGE_LIST;
     *out = d;
     if (!d.n) return 0;
@@ -243,7 +248,10 @@ static int capture_cursor(int from, int capacity_px, struct win_shot *rect) {
         return -EINVAL;
     if (w * h > capacity_px) return -ENOSPC;
     struct caster *c = caster_of(from);
-    if (c) c->cursor_dirty = 0;
+    if (c) {
+        c->cursor_dirty = 0;
+        c->notified &= ~WIN_CAST_CURSOR;
+    }
     uint64_t bytes = (uint64_t)w * h * 4;
     uint32_t *dst = map_shot(from, bytes);
     if (!dst) return -ENOENT;

@@ -648,6 +648,46 @@ def main():
             v.tap(ord(ch))
         v.tap(0xFF0D)
         time.sleep(3.0)
+        # A POINTER-SHAPE CHANGE MUST NOT SILENCE WHAT FOLLOWS. It froze
+        # once (one "nudged" flag for both kinds, cleared only by a pixel
+        # fetch) -- and only on a QUIET screen: a blinking caret's
+        # repaints fetched pixels and cleared it. So the screen is let
+        # go still first (the caret stops ten seconds after the last
+        # key), then the pointer turns into an I-beam over the Terminal
+        # (a cursor-only update), then the Start menu must arrive.
+        tw = [w for w in dc.windows() if w["title"].startswith("Terminal")]
+        if tw:
+            c = tw[0]["content"]
+            v.pointer(5, 5)            # the desktop: an arrow
+            time.sleep(11)
+            v.s.settimeout(1.5)
+            for _ in range(20):        # drain until the screen is still
+                try:
+                    v.request(True)
+                    v.read_update()
+                except (socket.timeout, OSError, EOFError, RuntimeError):
+                    break
+            v.s.settimeout(5)
+            v.pointer(c["x"] + c["w"] // 2, c["y"] + c["h"] // 2)
+            time.sleep(1.0)
+            try:
+                shape = v.read_update()   # answers the request the drain left open
+            except (socket.timeout, OSError, EOFError, RuntimeError):
+                shape = []
+            v.tap(0xFFEB)              # Super: the Start menu, real pixels
+            time.sleep(1.5)
+            try:
+                v.request(True)
+                rects = v.read_update()
+                pix = [rc for rc in rects if rc[4] != -239]
+            except (socket.timeout, OSError, EOFError, RuntimeError) as e:
+                pix = []
+                rects = repr(e)
+            v.s.settimeout(30)
+            r.check("after the pointer changes shape, a screen change still arrives", bool(pix),
+                    f"shape update {shape}, then {rects}")
+            v.tap(0xFF1B)
+            time.sleep(1.0)
         dc.close()   # vm.py exec needs the console's socket
         hist = vm(args, "exec", "cat /etc/tosh_history").stdout
         r.check("typed text reaches the shell, Shift characters and all",
