@@ -20,8 +20,10 @@ void uui_gallery_init(struct uui_gallery *g, const char *const *labels, int coun
                                .hovered = -1, .armed_prev = -1 };
 }
 
+static int card_min(const struct uui_gallery *g) { return g->min_w > 0 ? g->min_w : min_card(); }
+
 int uui_gallery_cols(const struct uui_gallery *g) {
-    int c = g->w > 0 ? (g->w + gap()) / (min_card() + gap()) : 3;
+    int c = g->w > 0 ? (g->w + gap()) / (card_min(g) + gap()) : 3;
     if (c < 1) c = 1;
     if (g->count > 0 && c > g->count) c = g->count;
     return c;
@@ -35,7 +37,7 @@ static int rows(const struct uui_gallery *g) {
 int uui_gallery_card_rect(const struct uui_gallery *g, int i, int *x, int *y, int *w, int *h) {
     if (i < 0 || i >= g->count) return 0;
     int c = uui_gallery_cols(g);
-    int cw = g->w > 0 ? (g->w - (c - 1) * gap()) / c : min_card();
+    int cw = g->w > 0 ? (g->w - (c - 1) * gap()) / c : card_min(g);
     *x = g->x + (i % c) * (cw + gap());
     *y = g->y + (i / c) * (card_h() + gap());
     *w = cw;
@@ -121,7 +123,7 @@ static void draw(struct ugfx_surface *s, const void *w) {
 static void natural_size(const void *w, int *ow, int *oh) {
     const struct uui_gallery *g = w;
     int c = uui_gallery_cols(g), r = rows(g);
-    *ow = c * min_card() + (c - 1) * gap();
+    *ow = c * card_min(g) + (c - 1) * gap();
     *oh = r > 0 ? r * card_h() + (r - 1) * gap() : 0;
 }
 

@@ -1845,6 +1845,8 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	# would become a saver you could select and which could not start.
 	mkdir -p $(SEED_DIR)/sync/usr/wm/savers
 	cp data/wm/savers/*.saver $(SEED_DIR)/sync/usr/wm/savers/
+	# ...and each saver's gallery picture (tools/gen_saver_thumbs.py).
+	cp data/wm/savers/*.jpg $(SEED_DIR)/sync/usr/wm/savers/
 	# ...and the directory their VALUES are written to, empty. Shipped so
 	# the first save has somewhere to land: nothing here creates a parent
 	# directory, so an absent /etc/savers is a write that fails with the

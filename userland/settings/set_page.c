@@ -562,6 +562,11 @@ int emit_slot(struct uui_item *out, int n, int i,
     return n;
 }
 
+static struct uui_custom g_monitor;
+static void draw_monitor(struct ugfx_surface *s, const struct uui_custom *c) {
+    preview_monitor(s, c->x, c->y, c->w, c->h, staged_value((struct slot *)c->state));
+}
+
 void relayout_page(void) {
     int n = 0;
     focus_ring_open();          // settings.c: remember what has focus
@@ -602,6 +607,12 @@ void relayout_page(void) {
     for (int i = 0; i < page_slots; i++) {
         struct slot *sl = &g_slot[i];
         if (slot_hidden(i)) continue;
+        // THE SAVER GALLERY'S MONITOR, above it: the chosen saver, big.
+        if (sl->setting >= 0 && sl->kind == CTRL_GALLERY && !strcmp(g_name[sl->setting], OWNER_SAVER)) {
+            g_monitor = (struct uui_custom){ .w = 0, .h = ugfx_char_h() * 11, .draw = draw_monitor, .state = sl };
+            PAGE[n++] = (struct uui_item){ .ops = &uui_custom_ops, .widget = &g_monitor,
+                                           .flags = UUI_FILL_W, .name = "saver_monitor" };
+        }
         int kn = kbd_emit_slot(PAGE, n, i, FOCUS, &FOCUS_COUNT);
         n = kn >= 0 ? kn : emit_slot(PAGE, n, i, FOCUS, &FOCUS_COUNT);
         n = clock_emit_after(PAGE, n, i, FOCUS, &FOCUS_COUNT);

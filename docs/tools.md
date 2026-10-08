@@ -6054,6 +6054,14 @@ runs first**: a `doom1.wad` with one
   in the tree -- a vector load written that way made the effect twice as
   SLOW on the ASUS while a plain host build showed it 3x faster.
 
+- **`gen_saver_thumbs.py`** -- draws each screensaver's picture for System
+  Settings' gallery and monitor (`data/wm/savers/<name>.jpg`). A saver is
+  a program, and Settings can neither draw nor host one, so each ships a
+  frame the way a macOS screen saver bundle ships a thumbnail. Run on a
+  VM booted from a fresh image, so the Desktop cube's picture shows the
+  default desktop. A dark frame of small points is grown before it is
+  shrunk, or Starfield's stars average away to black. **A new saver
+  needs it run.**
 - **`usolid_hostcheck.py`** -- `usolid_slice()`, the Desktop cube's
   damage, on the cube, the pyramid and the ball, with the host gcc. After
   four cuts each solid must be closed and wound one way. Every directed

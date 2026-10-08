@@ -1657,7 +1657,6 @@ def main():
     if check("the sidebar offers a Screensaver page", saver_row is not None):
         mark_sv = len(drain(dbg))
         open_row(saver_row)
-        sv_ctl = controls(dbg, mark_sv).get("desktop.screensaver")
 
         def option_slots(mark):
             """The page's rows that belong to a saver, not the registry.
@@ -1688,61 +1687,51 @@ def main():
               "spin" in kinds and kinds & {"radio", "segmented", "switch", "combo"},
               f"kinds={sorted(kinds)} from {[o['name'] for o in opts]}")
 
-        def pick_saver(want=None, avoid=None, tries=14):
-            """Open the saver dropdown and choose a row, by NAME where one
-            is asked for. Returns (saver, option rows), or (None, []).
+        def saver_cards(mark):
+            """The saver gallery's cards, from the app's own report (last
+            frame wins): index -> content-relative rect."""
+            out = {}
+            pat = re.compile(r"settings: gallery \d+ desktop\.screensaver card (\d+) "
+                             r"(-?\d+) (-?\d+) (\d+) (\d+)")
+            for line in drain(dbg)[mark:]:
+                m = pat.search(line)
+                if m:
+                    out[int(m.group(1))] = tuple(int(m.group(k)) for k in range(2, 6))
+            return out
+
+        def pick_saver(want=None, avoid=None):
+            """Click the saver gallery's cards until the APP says the
+            wanted saver is staged. Returns (saver, option rows), or
+            (None, []).
 
             IT RETURNS THE ROWS IT SAW, rather than leaving the caller to
             ask afterwards. The app's layout report is DEDUPED per frame,
             so the rebuilt page is described exactly once -- in the window
-            this function already drained. A caller that nudged another
-            frame and read again got an empty list and a check that
-            failed with the feature working.
+            this function already drained.
 
-            IT SCANS RATHER THAN ASSUMING A ROW PITCH. The popup is a
-            uui_listbox with no `describe`, so nothing reports its row
-            height -- and a pitch worked out once from a font size is the
-            constant this repo has had to re-measure three times. Walking
-            down the popup until the APP says the wanted saver is staged
-            asks the app instead of doing arithmetic, and needs no
-            knowledge of the order the savers directory lists them in.
-
-            THE POPUP SHOWS SIX ROWS (uui_dropdown's max_rows) and scrolls
-            past that, so a second pass wheels it to the end first: the
-            seventh saver put Starfield below the fold, and every check
-            after this one failed on a page that never changed.
+            BY THE APP'S WORD, card by card, rather than mapping a name to
+            an index: the cards are the savers directory's order, which
+            this tool has no business assuming.
             """
-            if sv_ctl is None:
-                return None
-            popup_top = cy + sv_ctl["y"] + sv_ctl["h"]
-            for scrolled in (0, 1):
-                for step in range(tries):
-                    mk = len(drain(dbg))
-                    dbg.send(f"gui click {cx + sv_ctl['x'] + sv_ctl['w'] // 2} "
-                             f"{cy + sv_ctl['y'] + sv_ctl['h'] // 2}")
-                    dbg.settle()
-                    time.sleep(0.35)
-                    y = popup_top + 6 + step * 8
-                    if scrolled:
-                        dbg.send(f"gui move {cx + sv_ctl['x'] + 20} {popup_top + 20}")
-                        dbg.settle()
-                        dbg.wheel(-10)
-                        time.sleep(0.2)
-                    dbg.send(f"gui click {cx + sv_ctl['x'] + 20} {y}")
-                    dbg.settle()
-                    time.sleep(0.45)
-                    # A SECOND FRAME, for the reason click() gives: the
-                    # control report comes from on_draw, which runs before
-                    # the rebuilt page has been laid out.
-                    dbg.send(f"gui move {cx + sv_ctl['x'] + 20} {y + 1}")
-                    dbg.settle()
-                    time.sleep(0.3)
-                    got = chosen(mk)
-                    if got is None:
-                        continue
-                    if (want is not None and got == want) or \
-                       (want is None and got != avoid):
-                        return got, option_slots(mk)
+            cards = saver_cards(mark_sv)
+            for i in sorted(cards):
+                x, y, w, h = cards[i]
+                mk = len(drain(dbg))
+                dbg.send(f"gui click {cx + x + w // 2} {cy + y + h // 2}")
+                dbg.settle()
+                time.sleep(0.45)
+                # A SECOND FRAME, for the reason click() gives: the
+                # control report comes from on_draw, which runs before
+                # the rebuilt page has been laid out.
+                dbg.send(f"gui move {cx + x + w // 2} {cy + y + h // 2 + 1}")
+                dbg.settle()
+                time.sleep(0.3)
+                got = chosen(mk)
+                if got is None:
+                    continue
+                if (want is not None and got == want) or \
+                   (want is None and got != avoid):
+                    return got, option_slots(mk)
             return None, []
 
         # BY NAME, and a name that HAS options: "any saver but this one"
@@ -1750,7 +1739,7 @@ def main():
         # below failed on the one saver that cannot demonstrate it.
         want_other = "plasma" if started_on == "matrix" else "matrix"
         picked, new_opts = pick_saver(want=want_other)
-        if check(f"the saver dropdown can select {want_other}",
+        if check(f"the saver gallery can select {want_other}",
                  picked is not None, f"stayed on {started_on!r}"):
             # BOTH HALVES: the rows now shown belong to the saver just
             # chosen, AND none of the previous saver's rows survived. The
@@ -1762,6 +1751,29 @@ def main():
                               for o in new_opts),
                   f"{picked}: {[o['name'] for o in new_opts]}")
 
+        def monitor_lit(tag):
+            """Pixels on the saver monitor's screen that are not black --
+            the chosen saver's picture, or nothing for a black one. The
+            page may have scrolled the monitor half out of view (a click
+            lower down brings its card in), so the count is a lower bound,
+            and the threshold sits well under a full view's."""
+            from PIL import Image
+            m = dbg.widgets("System Settings").get("saver_monitor")
+            if not m:
+                return None
+            path = f"/tmp/settings_monitor_{tag}.png"
+            qmp.screenshot(path)
+            im = Image.open(path).convert("RGB")
+            x, y, w, h = m["screen"]["x"], m["screen"]["y"], m["w"], m["h"]
+            # Inside the bezel: the screen is centred, about 2/5 of the item wide.
+            box = im.crop((x + w * 32 // 100, y + h // 10, x + w * 68 // 100, y + h * 8 // 10))
+            return sum(1 for p in box.getdata() if max(p) > 48)
+
+        # THE MONITOR SHOWS THE CHOSEN SAVER: lit for a saver that draws
+        # colour, dark for the blank one -- the control, or a monitor that
+        # drew the same picture whatever was chosen would pass.
+        lit_other = monitor_lit(want_other)
+
         # A SAVER MAY DECLARE NO OPTIONS, and `blank` ships without a
         # descriptor at all -- an empty page is a supported state here
         # rather than a failed read, and it is the case that proves the
@@ -1770,6 +1782,12 @@ def main():
         if blank == "blank":
             check("a saver with no descriptor contributes no options",
                   not blank_opts, f"{[o['name'] for o in blank_opts]}")
+            lit_blank = monitor_lit("blank")
+            check("the monitor shows the chosen saver: lit for "
+                  f"{want_other}, dark for blank (the control)",
+                  lit_other is not None and lit_blank is not None
+                  and lit_other > 60 and lit_blank < 10,
+                  f"{want_other}={lit_other} blank={lit_blank}")
         else:
             check("the blank saver is selectable", False, "never staged")
 

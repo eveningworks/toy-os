@@ -96,9 +96,14 @@ static void cache_reset(struct tile_cache *c) {
     }
 }
 
+static struct uimg g_mon;
+static char g_mon_name[SETTING_ABI_VALUE_MAX];
+
 static void pictures_reset(void) {
     cache_reset(&g_pv_pic);
     cache_reset(&g_pv_live);
+    uimg_free(&g_mon);
+    g_mon_name[0] = '\0';
 }
 
 // `dir/stem.<ext>` for the first extension that decodes, scaled to COVER
@@ -140,8 +145,11 @@ static int render_effect(const char *name, int w, int h, struct uimg *out) {
     return out->px != 0;
 }
 
+enum { TILE_PICTURE, TILE_LIVE, TILE_SAVER };
+#define SAVER_PICTURES "/usr/wm/savers"   // a saver's thumbnail beside its descriptor
+
 static void draw_cached(struct ugfx_surface *s, struct tile_cache *c, const struct slot *sl,
-                        int i, int x, int y, int w, int h, int live) {
+                        int i, int x, int y, int w, int h, int kind) {
     uui_fill_round_rect(s, x, y, w, h, ugfx_char_h() / 3, PREVIEW_DARK);
     if (i < 0 || i >= PREVIEW_TILES || i >= sl->choice_count || w <= 0 || h <= 0) return;
     struct uimg *p = &c->img[i];
@@ -151,8 +159,10 @@ static void draw_cached(struct ugfx_surface *s, struct tile_cache *c, const stru
         strlcpy(c->name[i], name, sizeof c->name[i]);
         // A LIVE CHOICE is an effect, or else an animated picture, whose
         // first frame stands for it.
-        if (!live || !render_effect(name, w, h, p))
-            load_cover(live ? LIVEWALL_ANIMATED_DIR : "/usr/share/wallpapers", name, w, h, p);
+        if (kind != TILE_LIVE || !render_effect(name, w, h, p))
+            load_cover(kind == TILE_LIVE ? LIVEWALL_ANIMATED_DIR
+                       : kind == TILE_SAVER ? SAVER_PICTURES : "/usr/share/wallpapers",
+                       name, w, h, p);
     }
     if (!p->px) return;
     int ox = (p->w - w) / 2, oy = (p->h - h) / 2;
@@ -160,7 +170,37 @@ static void draw_cached(struct ugfx_surface *s, struct tile_cache *c, const stru
 }
 
 static void picture_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h, void *ctx) {
-    draw_cached(s, &g_pv_pic, ctx, i, x, y, w, h, 0);
+    draw_cached(s, &g_pv_pic, ctx, i, x, y, w, h, TILE_PICTURE);
+}
+
+static void saver_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h, void *ctx) {
+    draw_cached(s, &g_pv_pic, ctx, i, x, y, w, h, TILE_SAVER);
+}
+
+// THE PREVIEW MONITOR above the screensaver gallery (mockup G2): the
+// chosen saver's picture on a screen with a bezel and a stand. A STILL --
+// Windows' preview runs the saver into a child window, and nothing here
+// can host another program's window yet.
+
+void preview_monitor(struct ugfx_surface *s, int x, int y, int w, int h, const char *saver) {
+    int bez = ugfx_char_h() / 2 + 2, stand = ugfx_char_h();
+    int sh = h - 2 * bez - stand, sw = sh * 16 / 9;
+    if (sw + 2 * bez > w) { sw = w - 2 * bez; sh = sw * 9 / 16; }
+    if (sw <= 0 || sh <= 0) return;
+    int mx = x + (w - sw - 2 * bez) / 2;
+    uui_fill_round_rect(s, mx, y, sw + 2 * bez, sh + 2 * bez, bez, 0x2b2d31);
+    ugfx_fill_rect(s, mx + (sw + 2 * bez) / 2 - stand, y + sh + 2 * bez, 2 * stand, stand / 2, 0x2b2d31);
+    ugfx_fill_rect(s, mx + (sw + 2 * bez) / 2 - 2 * stand, y + sh + 2 * bez + stand / 2, 4 * stand, stand / 2, 0x2b2d31);
+    ugfx_fill_rect(s, mx + bez, y + bez, sw, sh, 0);
+    if (!saver || !saver[0]) return;
+    if (strcmp(g_mon_name, saver) != 0 || g_mon.w < sw || g_mon.h < sh) {
+        uimg_free(&g_mon);
+        strlcpy(g_mon_name, saver, sizeof g_mon_name);
+        load_cover(SAVER_PICTURES, saver, sw, sh, &g_mon);
+    }
+    if (!g_mon.px) return;
+    int ox = (g_mon.w - sw) / 2, oy = (g_mon.h - sh) / 2;
+    ugfx_blit(s, mx + bez, y + bez, sw, sh, g_mon.px + (size_t)oy * (size_t)g_mon.w + ox, g_mon.w);
 }
 
 static void live_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h, void *ctx) {
@@ -185,6 +225,7 @@ static const struct {
     { "picture", picture_tile },
     { "live", live_tile },
     { "colour", colour_tile },
+    { "saver", saver_tile },
 };
 
 void preview_attach(struct slot *sl, int idx) {
@@ -198,4 +239,7 @@ void preview_attach(struct slot *sl, int idx) {
     if (!uschema_text_word(g_ns[idx], name, SETTING_TEXT_KEY_PREVIEW, word, sizeof word)) return;
     for (unsigned p = 0; p < sizeof PAINTERS / sizeof PAINTERS[0]; p++)
         if (!strcmp(word, PAINTERS[p].word)) sl->gallery.draw_tile = PAINTERS[p].paint;
+    // Seven savers on a page half as wide as the wallpapers': smaller
+    // cards, four across, under the monitor that shows the chosen one big.
+    if (!strcmp(word, "saver")) sl->gallery.min_w = ugfx_char_h() * 8;
 }

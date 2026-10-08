@@ -306,6 +306,8 @@ const char *slot_kind_name(const struct slot *sl);
 // preview_reset() frees what the last page decoded.
 void preview_attach(struct slot *sl, int idx);
 void preview_reset(void);
+// The chosen saver's picture on a monitor, filling (x, y, w, h).
+void preview_monitor(struct ugfx_surface *s, int x, int y, int w, int h, const char *saver);
 int slot_disabled(const struct slot *sl);
 
 // set_keyboard.c -- Input > Keyboard's layout list, preview and Try it.
