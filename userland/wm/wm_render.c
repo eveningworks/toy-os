@@ -1588,7 +1588,13 @@ static int damage_x0, damage_y0, damage_x1, damage_y1;
 // and a frame with no damage is a full repaint -- correct by
 // construction, nothing to report. A shrunk box keeps the frame
 // damage-limited and leaves a border the moved window changed.
-#define WM_DAMAGE_SHRINK_PX 32
+//
+// INTO THE WINDOW'S BODY, past its shadow: the shrink is net of the
+// 28 px shadow margin, and at 32 it took only the shadow's outermost
+// 4 px -- nearly transparent, so leaving them stale changed almost no
+// pixels and the control reported nothing for weeks. 48 leaves 20 px
+// of a moved window's old body unrepainted, which no verifier can miss.
+#define WM_DAMAGE_SHRINK_PX 48
 static int g_damage_shrink;
 void wm_damage_shrink(int n) { g_damage_shrink = n > 0 ? n : 0; }
 int  wm_damage_shrink_px(void) { return g_damage_shrink > 0 ? WM_DAMAGE_SHRINK_PX : 0; }
@@ -1800,12 +1806,40 @@ static int window_intersects_damage(const struct window *w) {
 // covers everything, so the wallpaper, the taskbar and the windows
 // under it are not painted. Before the adoption the proposal is still
 // in flight and the old buffer does not cover the screen.
-int wm_top_covers_screen(void) {
-    int focus = wm_focus_index();
-    if (focus < 0) return 0;
-    const struct window *w = &windows[focus];
+//
+// NOT ONLY THE FOCUSED WINDOW: everything above the fullscreen one may be
+// that same client's own menus and dialogs -- Screenshot's Options over
+// its fullscreen overlay. Asking about focus alone brought the taskbar
+// and every window under the overlay back the moment the dialog took
+// focus; Windows keeps a fullscreen app's taskbar hidden while its own
+// dialog is up.
+static int covers(const struct window *w) {
     return w->fullscreen && w->x == 0 && w->y == 0 && w->w >= screen_w && w->h >= screen_h;
 }
+
+// The covering window's index, or -1. windows[] is z-order, the top last.
+static int cover_index(void) {
+    int dialog_pid = 0;
+    for (int i = window_count - 1; i >= 0; i--) {
+        const struct window *w = &windows[i];
+        if (w->state == WIN_MINIMIZED) continue;
+        if (covers(w)) {
+            // The dialogs above it must be ITS: another app's dialog over
+            // a fullscreen window is that app on screen, taskbar and all.
+            if (dialog_pid && dialog_pid != w->client_pid) return -1;
+            return i;
+        }
+        if (w->popup) continue;
+        if (!w->dialog || !w->client_pid || (dialog_pid && dialog_pid != w->client_pid)) return -1;
+        dialog_pid = w->client_pid;
+    }
+    return -1;
+}
+
+int wm_top_covers_screen(void) { return cover_index() >= 0; }
+
+// What render_scene() found this frame: nothing under it is painted.
+static int g_cover = -1;
 
 // Is window i painted at all this frame? Every reason draw_one_window()
 // skips one, in one place, because the OCCLUDER walk below must agree:
@@ -1818,7 +1852,8 @@ static int window_shown(int i, int focus, int covered, int lifted) {
     if (wm_render_hidden_pid() && wm_client_is_client_window(w) &&
         w->client_pid == wm_render_hidden_pid()) return 0;
     if (wm_anim_hides(w)) return 0;   // its ghost is on screen instead (wm_anim.h)
-    if (covered && i < focus && !w->popup) return 0; // under the fullscreen window
+    (void)focus;
+    if (covered && i < g_cover && !w->popup) return 0; // under the fullscreen window
     // NOTHING UNTIL THE CLIENT'S FIRST PRESENT, popup or toplevel: the
     // buffer opened at create is whatever the client has drawn so far --
     // nothing, or whatever the pages came up as -- and compositing it
@@ -2026,7 +2061,8 @@ void wm_cull_stats(struct wm_cull_stats *out) { *out = g_cull; }
 static void render_scene(int mx, int my, int has_damage) {
     apply_scene_clip(has_damage);
 
-    int covered = wm_top_covers_screen();
+    g_cover = cover_index();
+    int covered = g_cover >= 0;
     // Everything under this frame's clip is painted afresh: no shadow on it yet.
     wm_shadow_cover(0, 0, screen_w, screen_h);
     // UNDER THE LEAVE PAGE'S SNAPSHOT nothing of the scene shows: skip it.

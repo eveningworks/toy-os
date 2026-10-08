@@ -74,6 +74,7 @@ struct emit {
     int started;     // at least one line of this block has been emitted
     int blank;       // a blank line is owed before the next block
     int bold, code;  // active inline styles
+    unsigned istyle; // the walk's style, carried from one source line to the next
     int upper;       // fold to upper case, for a section heading
     char w[WORD_CAP];
     int  wn, ww;     // pending word: bytes, and display columns
@@ -142,12 +143,14 @@ static void e_block(struct emit *e, int left, int hang) {
     e->left = left;
     e->hang = hang;
     e->started = 0;
+    e->istyle = 0;
 }
 
 static void e_end(struct emit *e) {
     e_word(e, 0);
     if (e->open) e_nl(e);
     e->blank = 1;
+    e->istyle = 0;
 }
 
 // Opens a line explicitly, for a list marker that must sit before the
@@ -157,6 +160,7 @@ static void e_marker(struct emit *e, int ind, const char *marker) {
     e->col = ind;
     e->open = 1;
     e->started = 1;
+    e->istyle = 0;   // a new item is a new run of text
     if (e->color) os_(e->out, "\x1b[1m");
     for (const char *m = marker; *m; m++) { ob(e->out, *m); e->col++; }
     if (e->color) os_(e->out, "\x1b[0m");
@@ -177,6 +181,11 @@ static void e_marker(struct emit *e, int ind, const char *marker) {
 // fed one source line at a time with no buffer.
 void umd_inline_walk(const char *s, int n, umd_inline_fn emit, void *ctx) {
     unsigned style = 0;
+    umd_inline_walk_from(s, n, &style, emit, ctx);
+}
+
+void umd_inline_walk_from(const char *s, int n, unsigned *style_io, umd_inline_fn emit, void *ctx) {
+    unsigned style = *style_io;
     for (int i = 0; i < n; ) {
         char c = s[i];
 
@@ -234,6 +243,7 @@ void umd_inline_walk(const char *s, int n, umd_inline_fn emit, void *ctx) {
         for (const char *r = rep; *r; r++) emit(ctx, *r, style);
         i += L;
     }
+    *style_io = style;
 }
 
 // The text renderer's sink for the walk above: whitespace ends a word,
@@ -265,7 +275,7 @@ static void inline_text(struct emit *e, const char *s, int n) {
 // Not folded into inline_text() because that function also renders the
 // TEXT OF A LINK, where flushing would split a word in half.
 static void inline_line(struct emit *e, const char *s, int n) {
-    inline_text(e, s, n);
+    umd_inline_walk_from(s, n, &e->istyle, text_sink, e);
     e_word(e, 0);
 }
 

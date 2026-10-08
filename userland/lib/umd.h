@@ -57,6 +57,13 @@ typedef void (*umd_inline_fn)(void *ctx, char c, unsigned style);
 
 void umd_inline_walk(const char *s, int n, umd_inline_fn emit, void *ctx);
 
+// The same, starting from `*style` and leaving there whatever is still
+// open where the text ends. A paragraph is fed ONE SOURCE LINE AT A TIME,
+// and a `code` span or **bold** may cross a line break: walked from 0
+// each line, the next line closed the span backwards and read the `**`
+// after it as code text. Set it to 0 where a block starts.
+void umd_inline_walk_from(const char *s, int n, unsigned *style, umd_inline_fn emit, void *ctx);
+
 // --- line classification, for the same reason -------------------------
 //
 // What KIND of line this is. A block renderer needs exactly these

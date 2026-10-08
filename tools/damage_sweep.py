@@ -38,7 +38,7 @@ rediscover:
      carried over. Windows move; a cached rect drags the wrong thing and
      the failure looks like a WM bug.
   3. It VALIDATES ITSELF. --positive-control INJECTS a miss -- `gui
-     damage shrink 4` insets every WINDOW damage rect by 32 px for the
+     damage shrink 4` insets every WINDOW damage rect by 48 px for the
      next few rendered frames, so a drag's frames are limited to a box
      smaller than the area the window vacated -- and then expects the
      verifier to report it, so "0 bugs" can be distinguished from "the

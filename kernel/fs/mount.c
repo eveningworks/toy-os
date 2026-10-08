@@ -865,6 +865,16 @@ static void split_root(const char *name) {
     }
 }
 
+// Is `<key>` on the boot line with NOTHING after it? cmdline_value()
+// answers 0 for that and for an absent key alike.
+static int cmdline_has_empty(const char *cmdline, const char *key) {
+    if (!cmdline) return 0;
+    uint32_t klen = (uint32_t)k_strlen(key);
+    for (const char *p = cmdline; (p = k_strstr(p, key)) != 0; p += klen)
+        if ((p == cmdline || p[-1] == ' ') && (p[klen] == 0 || p[klen] == ' ')) return 1;
+    return 0;
+}
+
 // A `root=` that names nothing is REPORTED AND IGNORED, never fatal.
 // Every /etc reader here treats a typo that way, and the argument is
 // stronger on the boot line: a machine that refuses to boot because of
@@ -980,8 +990,12 @@ static void choose_root_disk(const char *cmdline) {
     int n = root_candidates(cand, BLK_MAX_DEVICES);
     if (n == 0) return;                 // no disk: the live image, or ramfs
 
+    // GRUB ANSWERS `none` FOR A DEVICE WITH NO PARTITION (the CD), and an
+    // empty word means it could not ask at all (a core image without
+    // `probe`). Either way the loader named no partition.
     char want[40];
-    if (cmdline_value(cmdline, "bootpart=", want, sizeof want)) {
+    int named = cmdline_value(cmdline, "bootpart=", want, sizeof want);
+    if (named && k_strcmp(want, "none") != 0) {
         for (int i = 0; i < n; i++) {
             if (!disk_has_partuuid(cand[i], want)) continue;
             blk_set_root(cand[i]);
@@ -992,6 +1006,9 @@ static void choose_root_disk(const char *cmdline) {
         }
         klog_printf("fs: bootpart=%s is on no disk this kernel drives -- choosing by content\n",
                     want);
+    } else if (named || cmdline_has_empty(cmdline, "bootpart=")) {
+        klog_write("fs: bootpart= names no partition -- the loader booted from a device "
+                   "without one, or could not ask; choosing by content\n");
     }
 
     int best = 0, best_kind = -1;

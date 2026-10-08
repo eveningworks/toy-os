@@ -45,6 +45,7 @@ struct md_ctx {
     // otherwise share it, and a static that is only safe because two
     // walks never interleave is a trap waiting for the day one does.
     int level;
+    unsigned istyle;          // the inline walk's style across a block's lines
 };
 
 // --- fonts ------------------------------------------------------------
@@ -224,12 +225,13 @@ static void end_block(struct md_ctx *c) {
     flush_word(c, 1);
     if (c->open) c->pen_y += line_height(c);
     c->open = 0;
+    c->istyle = 0;
     c->pen_x = c->left;
     c->hang = c->left;
 }
 
 static void feed(struct md_ctx *c, const char *s, int n) {
-    umd_inline_walk(s, n, md_sink, c);
+    umd_inline_walk_from(s, n, &c->istyle, md_sink, c);
     flush_word(c, 1);   // the LINE BREAK IS WHITESPACE (lib/umd.c says why)
 }
 

@@ -299,6 +299,10 @@ int main(int argc, char **argv) {
     // nothing attached to it. This is the hangup a real telnetd sends.
     sys_kill(-g_child, SIGHUP);
     sys_kill(-g_child, SIGKILL);
-    close(g_master);
+    // NO close(g_master): shell_to_client() may be about to read it, and
+    // a read on a descriptor another thread just closed is the kernel's
+    // `read() rejected -- bad fd`, an ERROR line in the log -- once per
+    // session on the ASUS. Returning ends the process, its thread and
+    // every descriptor at once.
     return 0;
 }
