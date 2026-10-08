@@ -611,7 +611,10 @@ manual steps to be worth automating:
   against its names), X509Plain refusing a wrong password and taking
   the right one; under `encryption = require` VeNCrypt alone offered and
   an RFB 3.3 viewer told why it is refused; and two silent connections
-  holding both sessions until the handshake deadline drops them. It
+  holding both sessions until the handshake deadline drops them; last,
+  `config set resolution 1024x768` reaching a DesktopSize viewer as the
+  new size, the whole screen after it against the screendump, a viewer
+  without DesktopSize closed, and the old size followed back. It
   boots with `--cpu max`, since without RDRAND no key is made. In the
   typing check the capitals and Shift punctuation are the point, since
   they need the kernel to press Shift around the key. On demand: it boots its own guest on a

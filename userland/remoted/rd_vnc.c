@@ -505,7 +505,7 @@ static int tile_h(const struct vnc *v, int ty) {
 static int take_damage(struct vnc *v) {
     struct win_damage d;
     int rc = ushot_damage(&v->shot, v->cursor_enc ? 0 : WIN_SHOT_POINTER, &d);
-    if (rc < 0) return rc;
+    if (rc != 0) return rc;   // an error, or USHOT_RESIZED
     v->damage_pending = 0;
     for (int k = 0; k < d.n; k++) {
         int x0 = d.r[k].x / CMP_TILE, y0 = d.r[k].y / CMP_TILE;
@@ -546,6 +546,43 @@ static void stats_line(struct vnc *v, unsigned long long now) {
     v->st_cap = v->st_enc = v->st_send = v->st_bytes = 0;
 }
 
+// THE SCREEN CHANGED SIZE (ushot_damage() said USHOT_RESIZED and has
+// re-made its mirror). A viewer that offered DesktopSize (RFB 7.8.2) is
+// sent the new size as the whole of this update, and asks for the screen
+// again; one that did not has no way to be told, and is ended.
+static int resized(struct vnc *v) {
+    int w = v->shot.screen_w, h = v->shot.screen_h;
+    char ip[16];
+    uremote_fmt_ip(v->peer, ip, sizeof ip);
+    if (!v->desktop_size || w > TILES_X_MAX * CMP_TILE || h > TILES_Y_MAX * CMP_TILE) {
+        rd_log("remoted: vnc: %s: the screen is now %dx%d, which this viewer cannot follow "
+               "-- closing\n", ip, w, h);
+        return -1;
+    }
+    uint32_t *prev = calloc((size_t)w * h, 4);
+    if (!prev) return -1;
+    free(v->prev);
+    v->prev = prev;
+    v->w = w;
+    v->h = h;
+    v->tx = (w + CMP_TILE - 1) / CMP_TILE;
+    v->ty = (h + CMP_TILE - 1) / CMP_TILE;
+    memset(v->dirty, 0, sizeof v->dirty);
+    v->want_full = v->damage_pending = v->cursor_dirty = 1;
+    v->want_update = 0;   // answered: the viewer asks anew at the new size
+    v->out.len = 0;
+    rd_buf_u8(&v->out, 0);                           // FramebufferUpdate
+    rd_buf_u8(&v->out, 0);
+    rd_buf_u16(&v->out, 1);
+    rd_buf_u16(&v->out, 0);
+    rd_buf_u16(&v->out, 0);
+    rd_buf_u16(&v->out, (uint16_t)w);
+    rd_buf_u16(&v->out, (uint16_t)h);
+    rd_buf_u32(&v->out, (uint32_t)RD_ENC_DESKTOP_SIZE);
+    rd_log("remoted: vnc: %s: the screen is now %dx%d\n", ip, w, h);
+    return flush(v) ? 1 : -1;
+}
+
 // One FramebufferUpdate: the pointer's shape if it changed, then the
 // marked tiles in the requested region, merged along each row of tiles.
 // 1 sent, 0 nothing to send yet, -1 the connection failed.
@@ -553,6 +590,7 @@ static int send_update(struct vnc *v) {
     unsigned long long t0 = now_ns();
     if (v->damage_pending || v->want_full) {
         int rc = take_damage(v);
+        if (rc == USHOT_RESIZED) return resized(v);
         if (rc == -EBUSY) return 0;   // a fullscreen program has the display
         if (rc < 0) return -1;
     }
@@ -616,8 +654,8 @@ static int set_encodings(struct vnc *v) {
         int32_t enc = (int32_t)be32(e);
         // The viewer lists them by preference; the first one known wins.
         if (chosen < 0 && (enc == RD_ENC_ZRLE || enc == RD_ENC_RAW)) chosen = enc;
-        if (enc == -223) v->desktop_size = 1;
-        if (enc == -239) v->cursor_enc = 1;
+        if (enc == RD_ENC_DESKTOP_SIZE) v->desktop_size = 1;
+        if (enc == RD_ENC_CURSOR) v->cursor_enc = 1;
     }
     v->enc.encoding = chosen < 0 ? RD_ENC_RAW : chosen;
     return 1;

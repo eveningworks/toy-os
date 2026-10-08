@@ -94,7 +94,11 @@ int ushot_save(const struct ushot *s, const char *path, const char *format);
 // rects, n = 0 when nothing changed. The first call copies everything.
 // WIN_SHOT_POINTER in `flags` draws the pointer in, and then its moves
 // count as changes. 0 or a negative errno (-EBUSY: a fullscreen program
-// has the display, or four screens are shared already).
+// has the display, or four screens are shared already) -- or
+// USHOT_RESIZED: the screen changed size, nothing was copied, and the
+// mirror has been re-made at the new `screen_w` x `screen_h` (so `px`
+// MOVED); the next call copies the whole screen into it.
+#define USHOT_RESIZED 1
 int ushot_damage(struct ushot *s, unsigned flags, struct win_damage *out);
 
 // The pointer's shape, 0xAARRGGBB, copied into `out` (at most `cap`

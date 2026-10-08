@@ -39,6 +39,10 @@ static int alloc_buffer(struct ushot *s) {
 
     s->map = p;
     s->px = p;
+    // The compositor cannot open the object until it is named as the
+    // one process that may (SYS_SHM_GRANT is a capability, not a mode) --
+    // and that holds for every object, a re-made one (USHOT_RESIZED) too.
+    sys_shm_grant(name, s->chan->beacon->server_pid);
     return 0;
 }
 
@@ -60,12 +64,6 @@ static int open_common(struct ushot *s, struct uchan_client *borrow) {
         s->chan = NULL;
         return rc;
     }
-
-    // The compositor cannot open the object until it is named as the
-    // one process that may (SYS_SHM_GRANT is a capability, not a mode).
-    char name[WIN_SHOT_NAME_MAX];
-    snprintf(name, sizeof name, WIN_SHOT_NAME_FMT, sys_getpid());
-    sys_shm_grant(name, s->chan->beacon->server_pid);
     return 0;
 }
 
@@ -113,10 +111,20 @@ int ushot_damage(struct ushot *s, unsigned flags, struct win_damage *out) {
     m.a = WIN_SHOT_SCREEN;
     m.b = (int32_t)(flags | WIN_SHOT_DAMAGE);
     m.c = s->cap_px;
+    m.shot.w = s->screen_w;
+    m.shot.h = s->screen_h;
     struct wmchan_msg r;
     memset(&r, 0, sizeof r);
     if (uchan_call(s->chan, &m, sizeof m, &r, sizeof r, USHOT_TIMEOUT_MS) != 0) return -EAGAIN;
     if (r.a < 0) return r.a;
+    if (r.a == WIN_SHOT_RESIZED) {
+        sys_munmap(s->map, (s->map_bytes + 4095) & ~4095ull);
+        s->map = s->px = NULL;
+        int rc = alloc_buffer(s);   // reads the new size from QUERY_DISPLAY
+        if (rc < 0) return rc;
+        memset(out, 0, sizeof *out);
+        return USHOT_RESIZED;
+    }
     *out = r.damage;
     if (out->n > WIN_DAMAGE_MAX) out->n = WIN_DAMAGE_MAX;
     s->x = s->y = 0;

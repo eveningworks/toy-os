@@ -150,8 +150,11 @@ own reader, which this TCP stack's retransmission timers need.
 - **A fullscreen program holding a scanout lease cannot be shown**: the
   compositor refuses the capture (-EBUSY) and the viewer keeps its last
   frame.
-- **A resolution change ends the session**; DesktopSize is read from the
-  viewer but not yet sent.
+- **A resolution change ends a viewer that did not offer DesktopSize**
+  -- RFB has no other way to tell it; every current viewer offers it.
+  One that did is sent the new size and then the whole screen
+  (`WIN_SHOT_RESIZED`: the compositor copies nothing into a mirror laid
+  out for the old size).
 - **With the Cursor encoding the viewer does not see the LOCAL mouse
   move** -- it draws its own pointer where its own mouse is. Real servers
   add the PointerPos pseudo-encoding for that; not yet here.

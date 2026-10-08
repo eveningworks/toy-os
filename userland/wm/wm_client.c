@@ -1200,7 +1200,7 @@ static void req_screenshot(int from, struct wmchan_msg *m) {
     r.type = WIN_REQ_SCREENSHOT;
     r.shot = m->shot;
     if (m->a == WIN_SHOT_SCREEN && ((unsigned)m->b & WIN_SHOT_DAMAGE))
-        r.a = wm_screenshot_damage(from, (unsigned)m->b, m->c, &r.damage);
+        r.a = wm_screenshot_damage(from, (unsigned)m->b, m->c, &r.shot, &r.damage);
     else
         r.a = wm_screenshot_capture(from, m->a, (unsigned)m->b, m->c, &r.shot);
     uchan_server_reply(&g_chan, from, &r, sizeof r);

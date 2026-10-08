@@ -1300,7 +1300,15 @@ struct win_popup_pos {
 // WIN_SHOT_POINTER asks for the pointer in the copy, and then a pointer
 // move IS damage; without it the client is expected to draw the pointer
 // itself (WIN_SHOT_CURSOR), and a move changes nothing it was sent.
+//
+// REQUEST `shot.w`/`shot.h`: the size the client's mirror is laid out
+// for. When the screen is not that size any more (a mode change) nothing
+// is copied -- a mirror at the wrong stride is garbage -- and the reply is
+// WIN_SHOT_RESIZED with the new size in `shot.w`/`shot.h`; the client
+// re-makes its buffer and asks again, and gets the whole screen. 0 skips
+// the check.
 #define WIN_SHOT_DAMAGE  0x10
+#define WIN_SHOT_RESIZED 1   // a positive REPLY `a`, not an error
 #define WIN_SHOT_CURSOR  4  // a MODE: the pointer's current shape, tightly
                             // packed 0xAARRGGBB, `w` x `h`; REPLY shot.x/y
                             // is its hotspot. RFB's Cursor pseudo-encoding.

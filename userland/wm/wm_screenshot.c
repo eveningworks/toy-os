@@ -189,7 +189,8 @@ static void *map_shot(int from, uint64_t bytes) {
 }
 
 // WIN_SHOT_DAMAGE: copy what the caster is owed into its mirror.
-static int capture_damage(int from, unsigned flags, int capacity_px, struct win_damage *out) {
+static int capture_damage(int from, unsigned flags, int capacity_px, struct win_shot *size,
+                          struct win_damage *out) {
     struct caster *c = caster_of(from);
     if (!c) {
         c = caster_of(0);
@@ -200,6 +201,15 @@ static int capture_damage(int from, unsigned flags, int capacity_px, struct win_
         c->cursor_dirty = 1;
     }
     c->pointer = (flags & WIN_SHOT_POINTER) != 0;
+    if (size->w && (size->w != screen_w || size->h != screen_h)) {
+        c->full = 1;   // the re-made mirror is filled whole
+        c->notified &= ~WIN_CAST_DAMAGE;
+        k_memset(out, 0, sizeof *out);
+        size->x = size->y = 0;
+        size->w = screen_w;
+        size->h = screen_h;
+        return WIN_SHOT_RESIZED;
+    }
     if (capacity_px < screen_w * screen_h) return -ENOSPC;
 
     struct ugfx_surface *back = &g_wm_screen.back;
@@ -262,9 +272,10 @@ static int capture_cursor(int from, int capacity_px, struct win_shot *rect) {
     return 0;
 }
 
-int wm_screenshot_damage(int from, unsigned flags, int capacity_px, struct win_damage *out) {
+int wm_screenshot_damage(int from, unsigned flags, int capacity_px, struct win_shot *size,
+                         struct win_damage *out) {
     if (wm_scanout_active()) return -EBUSY;
-    return capture_damage(from, flags, capacity_px, out);
+    return capture_damage(from, flags, capacity_px, size, out);
 }
 
 int wm_screenshot_capture(int from, int mode, unsigned flags,

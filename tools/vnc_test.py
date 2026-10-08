@@ -263,6 +263,9 @@ class Viewer:
             elif enc == 16:
                 ln = struct.unpack(">I", self.recv(4))[0]
                 self.zrle(x, y, w, h, self.z.decompress(self.recv(ln)))
+            elif enc == -223:   # DesktopSize: the screen is now w x h
+                self.w, self.h = w, h
+                self.fb = bytearray(w * h * 3)
             elif enc == -239:   # the pointer's shape: pixels, then a 1-bit mask
                 bp = self.bpp // 8
                 self.cursor = (x, y, w, h, self.recv(w * h * bp), self.recv((w + 7) // 8 * h))
@@ -693,6 +696,80 @@ def stage3(args, r, q, tmp, conf):
         r.check("...until the handshake's deadline drops them", False, f"{waited:.0f} s, {e!r}")
 
 
+# --- DesktopSize --------------------------------------------------------------
+
+def resolution(dc, w, h):
+    return (dc.send(f"sh config set resolution {w}x{h}") or "").strip()
+
+
+def wait_size(v, timeout=20):
+    """Incremental updates until one carries DesktopSize; its (w, h)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            v.request(True)
+            for rc in v.read_update():
+                if rc[4] == -223:
+                    return rc[2], rc[3]
+        except socket.timeout:
+            pass
+        except (EOFError, OSError, RuntimeError) as e:
+            return repr(e)   # the session ended: a FAIL that says how
+        time.sleep(0.5)
+    return None
+
+
+def stage_desktop_size(args, r, q, tmp, conf):
+    put_conf(args, conf, CONF)   # stage 3 left encryption required
+    v = connect(args)
+    v.s.settimeout(5)
+    w0, h0 = v.w, v.h
+    v.set_encodings([0, -223])
+    v.pointer(v.w - 1, v.h - 1)   # out of the screendump comparison
+    v.request(False)
+    v.read_update()
+    blind = connect(args)          # offers no DesktopSize
+    blind.set_encodings([0])
+    blind.request(False)
+    blind.read_update()
+    dc = DebugConsole(port_guard.instance_sock(args.instance))
+    restored = False
+    try:
+        said = resolution(dc, 1024, 768)
+        size = wait_size(v)
+        r.check("a resolution change reaches the viewer as DesktopSize", size == (1024, 768),
+                f"{size}; config said {said!r}")
+        if size:
+            v.pointer(v.w - 1, v.h - 1)
+            time.sleep(1.0)
+            frame(r, v, "...and the whole screen after it is the new one")
+            dsize, ref = dump(q, tmp)
+            frac = same_fraction(bytes(v.fb), ref) if dsize == (v.w, v.h) else 0
+            r.check("...and the whole screen after it is the new one", frac >= 0.995,
+                    f"{frac:.4%} identical, dump {dsize}")
+        closed = False
+        try:
+            blind.s.settimeout(10)
+            for _ in range(20):
+                blind.request(True)
+                blind.read_update()
+        except (EOFError, ConnectionResetError, BrokenPipeError):
+            closed = True
+        except (socket.timeout, OSError, RuntimeError):
+            pass
+        r.check("a viewer without DesktopSize is closed, not sent the wrong size", closed)
+        resolution(dc, w0, h0)
+        restored = True
+        size = wait_size(v)
+        r.check("...and back at the old size, the viewer follows again", size == (w0, h0), str(size))
+    finally:
+        if not restored:
+            resolution(dc, w0, h0)
+        dc.close()
+        v.close()
+        blind.s.close()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--instance", type=int, default=0)
@@ -933,6 +1010,7 @@ def main():
         v.close()
         stage2(args, r, tmp, conf)
         stage3(args, r, q, tmp, conf)
+        stage_desktop_size(args, r, q, tmp, conf)
         q.close()
     finally:
         if not args.keep:

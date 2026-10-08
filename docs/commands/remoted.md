@@ -47,6 +47,10 @@ so moving the mouse sends nothing; for one that does not, the pointer is
 drawn into the picture. `dmesg | grep remoted` shows each session's
 update count and what capture, encoding and sending cost.
 
+**A resolution change follows through**: the viewer is told the new
+size (RFB's DesktopSize) and gets the whole screen again. A viewer that
+never offered DesktopSize -- none current -- is disconnected instead.
+
 **The clipboard is shared both ways, as text.** What the viewer copies
 lands on this machine's clipboard, and whatever is copied here is sent
 to every viewer when it changes. RFB carries cut text as Latin-1, so a

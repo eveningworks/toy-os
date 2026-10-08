@@ -2759,9 +2759,9 @@ libvncclient (Remmina) does not speak it.
 
 ### Remote desktop: a resolution change keeps the VNC viewer (DesktopSize) instead of ending it
 
-The viewer's DesktopSize pseudo-encoding (-223) is recorded already; on
-WIN_EV_SCREEN the session reopens its capture at the new size, sends a
-DesktopSize rectangle and then a full frame. Approved 2026-10-08.
+DONE 2026-10-08: the compositor answers a damage capture for the wrong
+size with `WIN_SHOT_RESIZED`, `ushot_damage()` re-makes its mirror, and
+the session sends DesktopSize and then the whole screen.
 
 ### Remote desktop: the machine's own mouse shown to a VNC viewer that draws the pointer (PointerPos)
 

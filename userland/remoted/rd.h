@@ -49,6 +49,8 @@ void rd_buf_free(struct rd_buf *b);
 
 #define RD_ENC_RAW  0
 #define RD_ENC_ZRLE 16
+#define RD_ENC_DESKTOP_SIZE (-223)   // pseudo-encodings: what a viewer can be told
+#define RD_ENC_CURSOR       (-239)
 
 // The encoder's state for one connection: ZRLE's single zlib stream.
 struct rd_enc {
