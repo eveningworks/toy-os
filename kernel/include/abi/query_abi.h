@@ -1130,6 +1130,19 @@ struct query_netdev {
     // The bus device it is, udevice's naming ("pci:00:03.0",
     // "usb:14:2357:0601"), or "" when the driver does not say.
     char device_id[24];
+    // ADAPTER SETTINGS (SYS_NET_LINK). `link_caps` is which of them the
+    // driver can change (NET_LINK_*), 0 for none -- the fields after it
+    // mean nothing then. `rates_supported` is what the card can link at
+    // (NET_RATE_*), `rates` what it currently offers; `eee_active` is
+    // whether the link that came up NEGOTIATED EEE, which `eee` (the
+    // request) does not decide alone -- the switch must agree.
+    uint64_t link_caps;
+    uint64_t rates_supported;
+    uint64_t rates;
+    uint64_t eee;
+    uint64_t flow;
+    uint64_t moderation;
+    uint64_t eee_active;
 };
 
 // QUERY_PARTTABLE's record -- the table, not its entries.

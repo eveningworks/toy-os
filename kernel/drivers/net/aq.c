@@ -50,14 +50,14 @@ DRIVER_DECLARE("aq", "net", "Aquantia AQtion multi-gigabit Ethernet (AQC100-AQC1
 #define IRQ_RX    0
 #define IRQ_LINK  31
 
-// Link rates, as the BSDs name them -- what this driver asks the
-// firmware for, per part.
-#define LINK_10M  (1u << 0)
-#define LINK_100M (1u << 1)
-#define LINK_1G   (1u << 2)
-#define LINK_2G5  (1u << 3)
-#define LINK_5G   (1u << 4)
-#define LINK_10G  (1u << 5)
+// Link rates are the ABI's NET_RATE_* (abi/net_abi.h), what this driver
+// asks the firmware for.
+#define LINK_10M  NET_RATE_10M
+#define LINK_100M NET_RATE_100M
+#define LINK_1G   NET_RATE_1G
+#define LINK_2G5  NET_RATE_2G5
+#define LINK_5G   NET_RATE_5G
+#define LINK_10G  NET_RATE_10G
 
 // A1 revision features -- they change a handful of register writes.
 #define FEAT_REV_B0 (1u << 0)
@@ -256,7 +256,9 @@ static int aq1_get_mac(uint8_t mac[6]) {
     return 1;
 }
 
-static void aq1_set_rates(uint32_t rates) {
+// `v` NULL takes the link down. Firmware 1.x has rates and nothing else.
+static int aq1_apply(const struct net_link_values *v) {
+    uint32_t rates = v ? v->rates : 0;
     if (fw1_major() == 1) {
         uint32_t s = 0;
         if (rates & LINK_10G)  s |= 1u << 0;
@@ -265,7 +267,7 @@ static void aq1_set_rates(uint32_t rates) {
         if (rates & LINK_1G)   s |= 1u << 4;
         if (rates & LINK_100M) s |= 1u << 5;
         wr(FW1X_MPI_CONTROL_REG, 2 /* MPI_INIT */ | (s << 16));
-        return;
+        return 0;
     }
     uint64_t c = rd64(FW2X_MPI_CONTROL_REG);
     c &= ~((1ull << 5) | (1ull << 8) | (1ull << 9) | (1ull << 10) | (1ull << 11));
@@ -274,10 +276,14 @@ static void aq1_set_rates(uint32_t rates) {
     if (rates & LINK_2G5)  c |= 1ull << 9;
     if (rates & LINK_1G)   c |= 1ull << 8;
     if (rates & LINK_100M) c |= 1ull << 5;
-    c &= ~(1ull << 54);                         // LINK_DROP
-    c &= ~((1ull << 33) | (1ull << 37) | (0xFull << 40));   // every EEE rate off
-    c &= ~((1ull << 35) | (1ull << 36));        // no pause frames
+    c &= ~(1ull << 54);                                       // LINK_DROP
+    c &= ~((1ull << 33) | (1ull << 37) | (0xFull << 40));     // every EEE rate
+    if (v && v->eee) c |= (1ull << 33) | (1ull << 37) | (0xFull << 40);
+    c &= ~((1ull << 35) | (1ull << 36));                      // pause, asymmetric pause
+    if (v && (v->flow & NET_FLOW_RX)) c |= 1ull << 35;
+    if (v && (v->flow & NET_FLOW_TX)) c |= 1ull << 36;
     wr64(FW2X_MPI_CONTROL_REG, c);
+    return 0;
 }
 
 static uint64_t aq1_link_bps(void) {
@@ -355,24 +361,37 @@ static int aq2_get_mac(uint8_t mac[6]) {
     return 1;
 }
 
-static void aq2_set_rates(uint32_t rates) {
-    uint32_t v = rd(AQ2_FW_IN_LINK_OPTIONS_REG);
-    // EEE OFF, rather than whatever the firmware left: on the desktop's
-    // switch a link that negotiated it came up 2 boots in 12 receiving
-    // truncated frames with MACERR until the cable was replugged.
-    v &= ~(AQ2_LINK_OPT_RATE_MASK | AQ2_LINK_OPT_LINK_UP | AQ2_LINK_OPT_PAUSE_TX | AQ2_LINK_OPT_PAUSE_RX |
+// `v` NULL takes the link down (SHUTDOWN mode).
+static int aq2_apply(const struct net_link_values *v) {
+    uint32_t rates = v ? v->rates : 0;
+    uint32_t o = rd(AQ2_FW_IN_LINK_OPTIONS_REG);
+    o &= ~(AQ2_LINK_OPT_RATE_MASK | AQ2_LINK_OPT_LINK_UP | AQ2_LINK_OPT_PAUSE_TX | AQ2_LINK_OPT_PAUSE_RX |
            AQ2_LINK_OPT_EEE_MASK);
-    if (rates & LINK_10G)  v |= AQ2_LINK_OPT_RATE_10G;
-    if (rates & LINK_5G)   v |= AQ2_LINK_OPT_RATE_N5G | AQ2_LINK_OPT_RATE_5G;
-    if (rates & LINK_2G5)  v |= AQ2_LINK_OPT_RATE_N2G5 | AQ2_LINK_OPT_RATE_2G5;
-    if (rates & LINK_1G)   v |= AQ2_LINK_OPT_RATE_1G | AQ2_LINK_OPT_RATE_1G_HD;
-    if (rates & LINK_100M) v |= AQ2_LINK_OPT_RATE_100M | AQ2_LINK_OPT_RATE_100M_HD;
-    if (rates & LINK_10M)  v |= AQ2_LINK_OPT_RATE_10M | AQ2_LINK_OPT_RATE_10M_HD;
-    if (rates) v |= AQ2_LINK_OPT_LINK_UP;
+    if (rates & LINK_10G)  o |= AQ2_LINK_OPT_RATE_10G;
+    if (rates & LINK_5G)   o |= AQ2_LINK_OPT_RATE_N5G | AQ2_LINK_OPT_RATE_5G;
+    if (rates & LINK_2G5)  o |= AQ2_LINK_OPT_RATE_N2G5 | AQ2_LINK_OPT_RATE_2G5;
+    if (rates & LINK_1G)   o |= AQ2_LINK_OPT_RATE_1G | AQ2_LINK_OPT_RATE_1G_HD;
+    if (rates & LINK_100M) o |= AQ2_LINK_OPT_RATE_100M | AQ2_LINK_OPT_RATE_100M_HD;
+    if (rates & LINK_10M)  o |= AQ2_LINK_OPT_RATE_10M | AQ2_LINK_OPT_RATE_10M_HD;
+    // EEE per rate it can be offered at; 10M has none.
+    if (v && v->eee) {
+        if (rates & LINK_10G)  o |= 1u << 20;
+        if (rates & LINK_5G)   o |= 1u << 19;
+        if (rates & LINK_2G5)  o |= 1u << 18;
+        if (rates & LINK_1G)   o |= 1u << 17;
+        if (rates & LINK_100M) o |= 1u << 16;
+    }
+    if (v && (v->flow & NET_FLOW_RX)) o |= AQ2_LINK_OPT_PAUSE_RX;
+    if (v && (v->flow & NET_FLOW_TX)) o |= AQ2_LINK_OPT_PAUSE_TX;
+    if (rates) o |= AQ2_LINK_OPT_LINK_UP;
     set_field(AQ2_FW_IN_LINK_CONTROL_REG, AQ2_FW_IN_LINK_CONTROL_MODE,
               rates ? AQ2_LINK_MODE_ACTIVE : AQ2_LINK_MODE_SHUTDOWN);
-    wr(AQ2_FW_IN_LINK_OPTIONS_REG, v);
-    if (!aq2_commit()) klog_write(KLOG_WARN "aq: the firmware did not acknowledge the link request\n");
+    wr(AQ2_FW_IN_LINK_OPTIONS_REG, o);
+    if (!aq2_commit()) {
+        klog_write(KLOG_WARN "aq: the firmware did not acknowledge the link request\n");
+        return -EIO;
+    }
+    return 0;
 }
 
 // One ART entry, under the semaphore the firmware shares.
@@ -390,7 +409,29 @@ static void aq2_art_set(uint32_t idx, uint32_t tag, uint32_t mask, uint32_t acti
     wr(AQ2_ART_SEM_REG, 1);
 }
 
-static void set_rates(uint32_t rates) { if (g_aq.a2) aq2_set_rates(rates); else aq1_set_rates(rates); }
+static int link_apply(const struct net_link_values *v) { return g_aq.a2 ? aq2_apply(v) : aq1_apply(v); }
+
+// How long a receive interrupt may be held back, in the hardware's 2 us
+// units: the first frame waits at most `min` for company, a burst at
+// most `max`. MEDIUM is the BSDs' 12-120 us.
+static void moderation_apply(uint32_t m) {
+    static const uint16_t lo[4] = { 0, 2, 6, 20 }, hi[4] = { 0, 20, 60, 200 };
+    if (m > NET_MOD_HIGH) m = NET_MOD_MEDIUM;
+    set_field(RX_INTR_MODERATION_CTL_REG(0), RX_INTR_MODERATION_CTL_EN, 0);
+    if (m == NET_MOD_OFF) return;
+    set_field(RX_INTR_MODERATION_CTL_REG(0), RX_INTR_MODERATION_CTL_MIN, lo[m]);
+    set_field(RX_INTR_MODERATION_CTL_REG(0), RX_INTR_MODERATION_CTL_MAX, hi[m]);
+    set_field(RX_INTR_MODERATION_CTL_REG(0), RX_INTR_MODERATION_CTL_EN, 1);
+}
+
+// SYS_NET_LINK, through the core (net_link.c), which has validated `v`.
+static int aq_set_link(struct net_device *dev, const struct net_link_values *v) {
+    int r = link_apply(v);
+    if (r) return r;
+    if (!v->eee) dev->eee_active = 0;   // not until the link renegotiates, otherwise
+    moderation_apply(v->moderation);
+    return 0;
+}
 static uint64_t link_bps(void) { return g_aq.a2 ? aq2_link_bps(rd(AQ2_FW_OUT_LINK_STATUS_REG)) : aq1_link_bps(); }
 
 // --- the MAC: filters, buffers, rings ----------------------------------
@@ -556,10 +597,13 @@ static void rings_start(void) {
 static void update_link(struct net_device *dev) {
     uint64_t bps = link_bps();
     uint8_t up = bps ? 1 : 0;
+    // Whether the link NEGOTIATED EEE -- the request alone does not
+    // decide it. A2 says so in its link status; A1 does not say.
+    dev->eee_active = up && g_aq.a2 && (rd(AQ2_FW_OUT_LINK_STATUS_REG) & (1u << 10)) ? 1 : 0;
     if (!dev->link_known || dev->link_up != up || dev->link_bps != bps) {
         // EEE is named because a link that negotiated it is a different
         // link: the PHY drops into low-power idle between frames.
-        const char *eee = g_aq.a2 && (rd(AQ2_FW_OUT_LINK_STATUS_REG) & (1u << 10)) ? ", EEE" : "";
+        const char *eee = dev->eee_active ? ", EEE" : "";
         if (!up) klog_printf("aq: %s link down\n", dev->name);
         else if (bps >= 1000000000ull && bps % 1000000000ull)
             klog_printf("aq: %s link UP %u.%uG%s\n", dev->name, (unsigned)(bps / 1000000000ull),
@@ -816,7 +860,7 @@ static int aq_probe(const struct pci_device *pci) {
     init_tx_path();
     init_rx_path();
     set_own_mac(g_dev.mac);
-    set_rates(0);
+    link_apply(0);
     init_qos();
     if (g_aq.a2) set_field(AQ2_RPF_NEW_CTRL_REG, AQ2_RPF_NEW_CTRL_ENABLE, 1);
 
@@ -828,15 +872,22 @@ static int aq_probe(const struct pci_device *pci) {
     wr(AQ_GEN_INTR_MAP_REG(3), (1u << 7) | IRQ_LINK);
 
     // Moderation: at most one receive interrupt per 12-120 us (units of 2 us).
-    set_field(RX_INTR_MODERATION_CTL_REG(0), RX_INTR_MODERATION_CTL_MIN, 6);
-    set_field(RX_INTR_MODERATION_CTL_REG(0), RX_INTR_MODERATION_CTL_MAX, 60);
-    set_field(RX_INTR_MODERATION_CTL_REG(0), RX_INTR_MODERATION_CTL_EN, 1);
+    moderation_apply(NET_MOD_MEDIUM);
     set_field(TX_DMA_INT_DESC_WRWB_EN_REG, TX_DMA_INT_DESC_WRWB_EN, 0);
     set_field(TX_DMA_INT_DESC_WRWB_EN_REG, TX_DMA_INT_DESC_MODERATE_EN, 1);
     set_field(RX_DMA_INT_DESC_WRWB_EN_REG, RX_DMA_INT_DESC_WRWB_EN, 0);
     set_field(RX_DMA_INT_DESC_WRWB_EN_REG, RX_DMA_INT_DESC_MODERATE_EN, 1);
 
-    set_rates(g_aq.rates);
+    // THE DEFAULTS the core keeps for "Restore defaults": every rate the
+    // part has, no pause frames, MEDIUM moderation -- and EEE OFF, not the
+    // firmware's on: on the desktop's switch a link that negotiated it came
+    // up 2 boots in 12 receiving truncated frames with MACERR until the
+    // cable was replugged, and 0 in 20 with it off.
+    g_dev.link = (struct net_link_values){ g_aq.rates, 0, 0, NET_MOD_MEDIUM };
+    g_dev.rates_supported = g_aq.rates;
+    g_dev.link_caps = (g_aq.a2 || fw1_major() >= 2) ? NET_LINK_ALL : NET_LINK_RATES | NET_LINK_MODERATION;
+    g_dev.set_link = aq_set_link;
+    link_apply(&g_dev.link);
 
     // --- up (the BSDs' aq_up) ---
     rings_start();
@@ -891,7 +942,7 @@ static void aq_remove(const struct pci_device *pci) {
         set_field(TPB_TX_BUF_REG, TPB_TX_BUF_EN, 0);
         set_field(RX_DMA_DESC_REG(0), RX_DMA_DESC_EN, 0);
         set_field(TX_DMA_DESC_REG(0), TX_DMA_DESC_EN, 0);
-        set_rates(0);
+        link_apply(0);
     }
     net_unregister(&g_dev);
     if (g_aq.rx) pmm_free_contiguous((uint64_t)(uintptr_t)g_aq.rx, 1);

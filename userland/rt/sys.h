@@ -400,6 +400,13 @@ int sys_net_config(const char *dev, uint32_t ip, uint32_t netmask, uint32_t gate
 // administratively down or up (abi/net_abi.h). netd and netctl's half.
 int sys_net_admin(const char *dev, unsigned flags);
 
+// Change a card's adapter settings (abi/net_abi.h's struct net_linkcfg:
+// rates, EEE, pause frames, interrupt moderation). 0, or -1 with
+// sys_errno(): ENODEV, ENOTSUP for a setting the driver lacks, EINVAL.
+// lib/unetlink.h is what a program should use -- it also SAVES them.
+struct net_linkcfg;
+int sys_net_link(const struct net_linkcfg *req);
+
 // Give an interface a different name. 0, or -ENODEV / -EINVAL.
 // Naming POLICY is /bin/netd's -- see /etc/net.conf.
 int sys_net_rename(const char *dev, const char *to);

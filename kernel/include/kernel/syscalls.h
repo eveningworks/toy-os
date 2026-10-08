@@ -309,6 +309,7 @@ int sys_listen(struct syscall_ctx *c);
 int sys_accept(struct syscall_ctx *c);
 int sys_net_config(struct syscall_ctx *c);
 int sys_net_rename(struct syscall_ctx *c);
+int sys_net_link(struct syscall_ctx *c);
 int sys_net_resolved(struct syscall_ctx *c);
 int sys_net_arp_probe(struct syscall_ctx *c);
 

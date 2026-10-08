@@ -2674,6 +2674,15 @@ struct usb_control_msg {
                              // (a repair the backend cannot do), -EIO,
                              // -EINVAL (an unknown flag), -EFAULT.
 
+#define SYS_NET_LINK 141     // RDI = a `struct net_linkcfg *` (abi/
+                             // net_abi.h): change one card's adapter
+                             // settings. Returns 0; -ENODEV for no such
+                             // card; -ENOTSUP for a field its driver
+                             // cannot change; -EINVAL for a value out of
+                             // range or a rate the card does not offer;
+                             // or the driver's own -errno, the card then
+                             // keeping what it had.
+
 struct usb_isoch_msg {
     uint32_t slot;
     uint32_t ep;         // endpoint address, e.g. 0x01

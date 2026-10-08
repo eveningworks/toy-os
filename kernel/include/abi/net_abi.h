@@ -114,6 +114,45 @@ struct net_rename {
     char to[NET_ABI_NAME_MAX];
 };
 
+// SYS_NET_LINK's argument: one card's ADAPTER settings -- what it offers
+// when it negotiates, and how it behaves -- as Windows' Advanced tab and
+// `ethtool -s`/`--set-eee`/`-A`/`-C` set them. `which` names the fields
+// to change (NET_LINK_*); the rest are left as they are. A driver
+// declares which it can change (query_netdev.link_caps), and a field it
+// cannot is -ENOTSUP rather than ignored.
+struct net_linkcfg {
+    char name[NET_ABI_NAME_MAX];
+    uint32_t which;        // NET_LINK_*; NET_LINK_DEFAULTS resets every field
+    uint32_t rates;        // NET_RATE_*: the rates it may link at; never 0
+    uint32_t eee;          // 0 off, 1 on
+    uint32_t flow;         // NET_FLOW_* -- 0 is no pause frames
+    uint32_t moderation;   // NET_MOD_*
+};
+#define NET_LINK_RATES      0x01u
+#define NET_LINK_EEE        0x02u
+#define NET_LINK_FLOW       0x04u
+#define NET_LINK_MODERATION 0x08u
+#define NET_LINK_ALL        0x0Fu
+#define NET_LINK_DEFAULTS   0x80000000u   // the driver's own values, all of them
+
+#define NET_RATE_10M   0x01u
+#define NET_RATE_100M  0x02u
+#define NET_RATE_1G    0x04u
+#define NET_RATE_2G5   0x08u
+#define NET_RATE_5G    0x10u
+#define NET_RATE_10G   0x20u
+#define NET_RATE_ALL   0x3Fu
+
+#define NET_FLOW_RX 0x1u   // honour pause frames the switch sends
+#define NET_FLOW_TX 0x2u   // send them when our buffers fill
+
+// Interrupt moderation, coarse on purpose: how long a card may hold a
+// receive interrupt back, each driver mapping it to its own registers.
+#define NET_MOD_OFF    0u   // one interrupt per frame: lowest latency
+#define NET_MOD_LOW    1u
+#define NET_MOD_MEDIUM 2u
+#define NET_MOD_HIGH   3u   // fewest interrupts: most throughput per CPU
+
 // SYS_NET_ARP_PROBE's argument: which device to ask on, and the address
 // to ask about. `ip` is host byte order like every address above the
 // wire here.

@@ -21,6 +21,7 @@
 #include "lib/uchan.h"
 #include "lib/uconf.h"
 #include "lib/unetctl.h"
+#include "lib/unetlink.h"
 
 #define WAIT_MS   15000   // longer than one DHCP exchange's worst case
 #define REPLY_MS  15000   // netd answers between passes, and a pass can be one exchange
@@ -38,6 +39,8 @@ static const struct uargs_cmd CMDS[] = {
     { "renew",   "DEVICE",   "ask for the lease again, the same address first" },
     { "down",    "DEVICE",   "switch the card off: nothing sent or received, address cleared" },
     { "up",      "DEVICE",   "switch it back on and lease at once" },
+    { "link",    "DEVICE [SETTING VALUE]... | DEVICE defaults",
+                 "the card's adapter settings: show, change and save, or restore its driver's" },
     { 0 },
 };
 
@@ -50,6 +53,12 @@ static const struct uargs_prog PROG = {
     .cmds = CMDS,
     .notes = "DEVICE is a card's name as `netctl` lists it (net-718ebf, or what\n"
              "/etc/net.conf calls it). Addresses are dotted quads.\n"
+             "link SETTINGs, each only where the card's driver offers it:\n"
+             "  speed       auto, or the fastest rate to offer: 10g 5g 2.5g 1g 100m 10m\n"
+             "  eee         on | off       (Energy Efficient Ethernet)\n"
+             "  flow        off | rx | tx | both   (pause frames)\n"
+             "  moderation  off | low | medium | high   (interrupt moderation)\n"
+             "A change applies at once and is saved in the card's /etc/net.conf section.\n"
              "Exit status: 0 done, 1 refused or failed, 2 bad usage.",
 };
 
@@ -99,6 +108,30 @@ static void link_words(const struct query_netdev *d, char *out, size_t cap) {
         snprintf(out, cap, "up");
 }
 
+// "speed auto (up to 10 Gb/s), eee off, ..." -- the settings this card's
+// driver offers, as /etc/net.conf spells them.
+static void adapter_words(const struct query_netdev *d, char *out, size_t cap) {
+    size_t n = 0;
+    out[0] = 0;
+    uint32_t c = (uint32_t)d->link_caps;
+    if (c & NET_LINK_RATES) {
+        uint32_t top = unetlink_cap_of((uint32_t)d->rates_supported, (uint32_t)d->rates);
+        uint32_t best = unetlink_cap_of((uint32_t)d->rates_supported, 0);
+        (void)best;
+        uint32_t fastest = 0;
+        for (uint32_t b = 1; b <= NET_RATE_ALL; b <<= 1) if (d->rates_supported & b) fastest = b;
+        if (top) n += (size_t)snprintf(out + n, cap - n, "speed %s", unetlink_speed_word(top));
+        else n += (size_t)snprintf(out + n, cap - n, "speed auto (up to %s)", unetlink_rate_label(fastest));
+    }
+    if ((c & NET_LINK_EEE) && n < cap)
+        n += (size_t)snprintf(out + n, cap - n, "%seee %s%s", n ? ", " : "", d->eee ? "on" : "off",
+                              d->eee_active ? " (in use)" : "");
+    if ((c & NET_LINK_FLOW) && n < cap)
+        n += (size_t)snprintf(out + n, cap - n, "%sflow %s", n ? ", " : "", unetlink_flow_word((uint32_t)d->flow));
+    if ((c & NET_LINK_MODERATION) && n < cap)
+        snprintf(out + n, cap - n, "%smoderation %s", n ? ", " : "", unetlink_mod_word((uint32_t)d->moderation));
+}
+
 static void show_one(const struct query_netdev *d) {
     char ip[24], mask[24], gw[24];
     print_ip(ip, sizeof ip, d->ip);
@@ -138,6 +171,12 @@ static void show_one(const struct query_netdev *d) {
         for (const char *p = secs; *p >= '0' && *p <= '9'; p++) s = s * 10 + (unsigned long)(*p - '0');
         if (s % 3600 == 0) printf("    lease %lu h from %s\n", s / 3600, server);
         else               printf("    lease %lu s from %s\n", s, server);
+    }
+
+    if (d->link_caps) {
+        char aw[160];
+        adapter_words(d, aw, sizeof aw);
+        printf("    adapter %s\n", aw);
     }
 
     printf("    rx %llu packets, %llu bytes, %llu dropped\n"
@@ -269,6 +308,73 @@ static int cmd_control(uint32_t verb, const char *dev) {
     return 0;
 }
 
+// `netctl link DEVICE [SETTING VALUE]...`. Every pair is read before
+// anything is applied, so a typo in the third changes nothing.
+static int cmd_link(char **v, int n) {
+    struct query_netdev d;
+    if (!find(v[0], &d)) { printf("netctl: no such device: %s\n", v[0]); return 1; }
+    if (!d.link_caps) { printf("%s: its driver (%s) offers no adapter settings\n", d.name, d.driver); return 1; }
+    if (n == 1) {
+        char aw[160];
+        adapter_words(&d, aw, sizeof aw);
+        printf("%s: %s\n", d.name, aw);
+        return 0;
+    }
+    if (n == 2 && !strcmp(v[1], "defaults")) {
+        if (unetlink_reset(&d) < 0) { printf("netctl: %s refused: %s\n", d.name, sys_strerror(sys_errno())); return 1; }
+        find(v[0], &d);
+        char aw[160];
+        adapter_words(&d, aw, sizeof aw);
+        printf("%s: %s (its driver's defaults)\n", d.name, aw);
+        return 0;
+    }
+    if ((n - 1) % 2) return uargs_error(&PROG, "link: a SETTING without a VALUE");
+    struct net_linkcfg want;
+    memset(&want, 0, sizeof want);
+    for (int i = 1; i + 1 < n; i += 2) {
+        const char *k = v[i], *val = v[i + 1];
+        uint32_t bit = !strcmp(k, "speed") ? NET_LINK_RATES : !strcmp(k, "eee") ? NET_LINK_EEE :
+                       !strcmp(k, "flow") ? NET_LINK_FLOW : !strcmp(k, "moderation") ? NET_LINK_MODERATION : 0;
+        if (bit && !(d.link_caps & bit)) {
+            printf("%s: its driver (%s) does not offer %s\n", d.name, d.driver, k);
+            return 1;
+        }
+        if (!strcmp(k, "speed")) {
+            int64_t cap = unetlink_speed_parse(val);
+            uint32_t r = cap < 0 ? 0 : unetlink_rates_for((uint32_t)d.rates_supported, (uint32_t)cap);
+            if (!r) { printf("netctl: %s cannot link at %s\n", d.name, val); return 1; }
+            want.rates = r;
+            bit = NET_LINK_RATES;
+        } else if (!strcmp(k, "eee")) {
+            if (strcmp(val, "on") && strcmp(val, "off")) return uargs_error(&PROG, "link: eee is on or off");
+            want.eee = !strcmp(val, "on");
+            bit = NET_LINK_EEE;
+        } else if (!strcmp(k, "flow")) {
+            int f = unetlink_flow_parse(val);
+            if (f < 0) return uargs_error(&PROG, "link: flow is off, rx, tx or both");
+            want.flow = (uint32_t)f;
+            bit = NET_LINK_FLOW;
+        } else if (!strcmp(k, "moderation")) {
+            int m = unetlink_mod_parse(val);
+            if (m < 0) return uargs_error(&PROG, "link: moderation is off, low, medium or high");
+            want.moderation = (uint32_t)m;
+            bit = NET_LINK_MODERATION;
+        } else {
+            return uargs_error(&PROG, "link: unknown setting '%s'", k);
+        }
+        want.which |= bit;
+    }
+    if (unetlink_set(&d, &want) < 0) {
+        printf("netctl: %s: %s\n", d.name, sys_strerror(sys_errno()));
+        return 1;
+    }
+    find(v[0], &d);
+    char aw[160];
+    adapter_words(&d, aw, sizeof aw);
+    printf("%s: %s\n", d.name, aw);
+    return 0;
+}
+
 static int wrong(const char *cmd) {
     for (const struct uargs_cmd *c = CMDS; c->name; c++)
         if (!strcmp(c->name, cmd))
@@ -288,5 +394,6 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "renew"))   return n != 1 ? wrong(cmd) : cmd_control(NETCTL_RENEW, rest[0]);
     if (!strcmp(cmd, "down"))    return n != 1 ? wrong(cmd) : cmd_control(NETCTL_DOWN, rest[0]);
     if (!strcmp(cmd, "up"))      return n != 1 ? wrong(cmd) : cmd_control(NETCTL_UP, rest[0]);
+    if (!strcmp(cmd, "link"))    return n < 1 ? wrong(cmd) : cmd_link(rest, n);
     return wrong(cmd);
 }

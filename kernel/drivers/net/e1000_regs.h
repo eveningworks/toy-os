@@ -15,6 +15,7 @@
 #define REG_STATUS 0x0008
 #define REG_EERD   0x0014
 #define REG_ICR    0x00C0
+#define REG_ITR    0x00C4   // interrupt throttling: the minimum gap, in 256 ns units
 #define REG_IMS    0x00D0
 #define REG_IMC    0x00D8
 #define REG_RCTL   0x0100

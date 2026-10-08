@@ -2,6 +2,7 @@
 #define KERNEL_NETDEV_H
 
 #include <stdint.h>
+#include "net_abi.h"   // NET_LINK_*, NET_RATE_*: the adapter settings' values
 
 // The network-device class -- N cards, one stack, the same registry
 // shape block_device, display_driver, sound_device and clocksource
@@ -30,6 +31,17 @@
 #define NET_MTU        1500  // payload; the frame is this + 14
 #define NET_FRAME_MAX  1518  // 14 header + MTU + 4 FCS, the classic cap
 #define NET_MAC_LEN    6
+
+// One card's adapter settings, as applied (abi/net_abi.h names the
+// values). A driver that can change any of them sets link_caps and fills
+// `link` with what the hardware does BEFORE net_register(), which keeps a
+// copy as the card's defaults.
+struct net_link_values {
+    uint32_t rates;        // NET_RATE_*
+    uint32_t eee;          // 0/1
+    uint32_t flow;         // NET_FLOW_*
+    uint32_t moderation;   // NET_MOD_*
+};
 
 struct net_device {
     // ASSIGNED BY net_register(), NEVER THE DRIVER. A NAME IS AN
@@ -112,7 +124,33 @@ struct net_device {
     // --- counters, the core's ----------------------------------------
     uint64_t rx_packets, rx_bytes, rx_dropped;
     uint64_t tx_packets, tx_bytes, tx_dropped;
+
+    // --- adapter settings (SYS_NET_LINK), the driver's ----------------
+    //
+    // `link_caps` 0 means the card has none to change, and the rest is
+    // unused. set_link() gets EVERY value, merged by the core from what
+    // was asked and what is applied, and returns 0 having applied them
+    // all or a negative errno having applied none -- the core then
+    // records them in `link`. Called from a syscall, never an interrupt.
+    uint32_t link_caps;               // NET_LINK_*
+    uint32_t rates_supported;         // NET_RATE_*
+    struct net_link_values link;      // what the hardware does now
+    struct net_link_values link_default;   // OWNED by the core: `link` at registration
+    uint8_t eee_active;               // the link NEGOTIATED it (the driver's to keep)
+    int (*set_link)(struct net_device *dev, const struct net_link_values *v);
 };
+
+// Validates a request against what the card offers, merging it into
+// `out` from `cur`: -ENOTSUP for a field outside `caps`, -EINVAL for
+// a value out of range or rates the card cannot do (or none). Pure, so a
+// KTEST reaches it without a card.
+int net_link_merge(uint32_t caps, uint32_t supported, const struct net_link_values *cur,
+                   uint32_t which, const struct net_link_values *want,
+                   struct net_link_values *out);
+
+// SYS_NET_LINK's work: merge, hand the driver the result, record it.
+// NET_LINK_DEFAULTS in `which` asks for link_default instead.
+int net_link_set(struct net_device *dev, uint32_t which, const struct net_link_values *want);
 
 // Called by a driver once its device can transmit and its interrupt is
 // live. The core assigns `name` (from /etc/net.conf if that names this

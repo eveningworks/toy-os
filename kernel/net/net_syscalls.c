@@ -459,6 +459,23 @@ int sys_net_config(struct syscall_ctx *c) {
     return 0;
 }
 
+// A card's adapter settings: the core validates and merges, the driver
+// applies (net_link.c). Like a rename, policy -- what to ask for -- is
+// ring 3's: netd applies /etc/net.conf, the settings pages save to it.
+int sys_net_link(struct syscall_ctx *c) {
+    struct net_linkcfg req;
+    if (!vmm_copy_from_user(c->pml4, &req, c->a0, sizeof req)) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    req.name[sizeof req.name - 1] = 0;
+    struct net_device *d = net_device_by_name(req.name);
+    if (!d) { c->regs[14] = (uint64_t)(int64_t)-ENODEV; return 0; }
+    struct net_link_values want = { req.rates, req.eee, req.flow, req.moderation };
+    c->regs[14] = (uint64_t)(int64_t)net_link_set(d, req.which, &want);
+    return 0;
+}
+
 // Renaming is the whole of what the kernel lets ring 3 do to a name:
 // it validates and applies, and has no opinion about what the name
 // should be. /bin/netd holds the rules.

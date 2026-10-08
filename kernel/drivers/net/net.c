@@ -165,6 +165,7 @@ int net_register(struct net_device *dev) {
 
     driver_bound(dev->driver, dev->name);
     if (!dev->mtu) dev->mtu = NET_MTU;
+    dev->link_default = dev->link;   // what "Restore defaults" goes back to
 
     g_devs[g_count++] = dev;
     klog_printf("net: %s: %s %02x:%02x:%02x:%02x:%02x:%02x mtu %u\n",

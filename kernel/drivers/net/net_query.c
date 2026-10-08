@@ -44,6 +44,13 @@ static int netdev_fill(int index, void *out) {
     k_strlcpy(q->location, d->location, sizeof q->location);
     q->admin_down = d->admin_down;
     k_strlcpy(q->device_id, d->device_id, sizeof q->device_id);
+    q->link_caps = d->link_caps;
+    q->rates_supported = d->rates_supported;
+    q->rates = d->link.rates;
+    q->eee = d->link.eee;
+    q->flow = d->link.flow;
+    q->moderation = d->link.moderation;
+    q->eee_active = d->eee_active;
     return 1;
 }
 

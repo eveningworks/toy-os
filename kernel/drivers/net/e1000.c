@@ -152,6 +152,16 @@ static const struct pci_match e1000_matches[] = { PCI_MATCH_ID(E1000_VENDOR, E10
 
 // A decline AFTER an interrupt is registered must take it back first:
 // this is a module, and an unbound device does not stop it unloading.
+// The minimum gap between interrupts, in the 256 ns units ITR counts:
+// 20000, 8000 and 4000 a second -- Linux e1000's InterruptThrottleRate
+// default is the middle one.
+static int e1000_set_link(struct net_device *dev, const struct net_link_values *v) {
+    (void)dev;
+    static const uint32_t itr[4] = { 0, 195, 488, 976 };
+    reg_write(REG_ITR, itr[v->moderation <= NET_MOD_HIGH ? v->moderation : NET_MOD_OFF]);
+    return 0;
+}
+
 static int e1000_probe(const struct pci_device *pci) {
     if (g_probed) return pci_probe_decline(pci, "a second card; one is driven");
     g_probed = 1;
@@ -206,6 +216,14 @@ static int e1000_probe(const struct pci_device *pci) {
     reg_write(REG_TCTL, TCTL_EN | TCTL_PSP | (0x0Fu << 4) | (0x40u << 12));
 
     if (!read_mac(g_dev.mac)) return pci_probe_decline(pci, "could not read the MAC address");
+
+    // Interrupt moderation is the one adapter setting this card offers
+    // (SYS_NET_LINK). Off by default, as the chip resets -- the
+    // behaviour this driver always had.
+    reg_write(REG_ITR, 0);
+    g_dev.link_caps = NET_LINK_MODERATION;
+    g_dev.link.moderation = NET_MOD_OFF;
+    g_dev.set_link = e1000_set_link;
 
     net_location_pci(&g_dev, pci->bus, pci->device, pci->function);
     g_dev.driver = "e1000";

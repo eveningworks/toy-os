@@ -162,6 +162,25 @@ before real devices answered on a slow laptop, and every failure
 reported the ceiling rather than a device saying no — which reads as a
 device fault and is not one.
 
+## 7b. A network card's adapter settings
+
+A NIC whose hardware has knobs a person may want -- the rates it
+offers, Energy Efficient Ethernet, pause frames, interrupt moderation --
+offers them through `struct net_device` rather than through a command
+of its own: set `link_caps` (the `NET_LINK_*` it can change),
+`rates_supported`, `link` (what the hardware does NOW -- the core keeps
+it as the card's defaults at `net_register()`) and `set_link`. The core
+validates and merges a request (`net_link.c`), so `set_link` gets every
+value, already in range, and applies them all or returns an errno
+having applied none. `netctl link`, System Settings > Adapters and
+Device Manager then show exactly the rows `link_caps` names, and netd
+reapplies the saved ones at boot -- no ring-3 change for a new driver.
+`aq.c` offers all four through its firmware; `e1000.c` offers
+moderation alone (its ITR register), which is also what lets
+`tools/netadapter_test.py` drive the whole path under QEMU. Report
+`eee_active` when the link says EEE was negotiated; the request alone
+does not decide it.
+
 ## 8. Make the untestable half testable
 
 **QEMU emulates almost nothing you will want to drive.** The split that

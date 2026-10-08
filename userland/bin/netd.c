@@ -31,6 +31,7 @@
 #include "lib/udhcp.h"
 #include "lib/uchan.h"
 #include "lib/unetctl.h"
+#include "lib/unetlink.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -47,18 +48,14 @@ struct card {
     // an address and no lease, which the loop otherwise reads as an
     // address set by hand. Cleared once a lease is bound.
     int forced;
+    // The adapter settings last asked of the kernel from the file, so a
+    // request it refuses is said once, not every pass.
+    struct net_linkcfg link_asked;
     struct udhcp dhcp;
 };
 
 static struct card g_cards[MAX_CARDS];
 static int g_count;
-
-static void mac_str(char *out, uint64_t mac) {
-    unsigned long long m = (unsigned long long)mac;
-    snprintf(out, 18, "%02llx:%02llx:%02llx:%02llx:%02llx:%02llx",
-             m & 0xFF, (m >> 8) & 0xFF, (m >> 16) & 0xFF,
-             (m >> 24) & 0xFF, (m >> 32) & 0xFF, (m >> 40) & 0xFF);
-}
 
 // --- the rules ---------------------------------------------------------
 //
@@ -71,19 +68,10 @@ static void mac_str(char *out, uint64_t mac) {
 // and the pass is seconds apart, and the alternative is a daemon that
 // has to be restarted to pick up an edit -- which is the thing a rules
 // file exists to avoid.
-// The `i`-th way this card can be addressed, most specific first. NULL
-// where the card cannot answer that one (a driver reporting no
-// location), which is a SKIP rather than the end of the list.
-// `slot` holds the MAC string, which has to outlive the call.
-static const char *card_key(const struct query_netdev *d, int i,
-                            char *slot, uint32_t cap) {
-    (void)cap;
-    if (i == 0) { mac_str(slot, d->mac); return slot; }
-    if (i == 1) return d->location[0] ? d->location : 0;
-    if (i == 2) return d->driver;
-    return 0;
-}
-#define CARD_KEYS 3
+// The ways a card can be addressed, most specific first: lib/unetlink.h,
+// which the adapter settings read in the same order.
+#define card_key(d, i, slot, cap) unetlink_card_key((d), (i), (slot))
+#define CARD_KEYS UNETLINK_CARD_KEYS
 
 static int rule_name(const struct etc_config_buf *buf,
                      const struct query_netdev *d, char *out, uint32_t cap) {
@@ -215,6 +203,34 @@ static void serve_channel(void) {
     }
 }
 
+// THE FILE'S ADAPTER SETTINGS, RECONCILED EVERY PASS: what it names and
+// the card does not do is asked for -- at boot, after a driver reload
+// (the card comes back on its defaults), and after an edit by hand.
+// A change made from netctl or the settings pages is applied AND saved,
+// so it already matches and costs nothing here.
+static void apply_link(struct card *c, const struct etc_config_buf *conf,
+                       const struct query_netdev *d) {
+    if (!d->link_caps) return;
+    struct net_linkcfg want;
+    int bad = 0;
+    unetlink_load(conf, d, &want, &bad);
+    uint32_t differ = 0;
+    if ((want.which & NET_LINK_RATES) && want.rates != d->rates) differ |= NET_LINK_RATES;
+    if ((want.which & NET_LINK_EEE) && want.eee != d->eee) differ |= NET_LINK_EEE;
+    if ((want.which & NET_LINK_FLOW) && want.flow != d->flow) differ |= NET_LINK_FLOW;
+    if ((want.which & NET_LINK_MODERATION) && want.moderation != d->moderation)
+        differ |= NET_LINK_MODERATION;
+    if (!differ) { memset(&c->link_asked, 0, sizeof c->link_asked); return; }
+    want.which = differ;
+    if (!memcmp(&want, &c->link_asked, sizeof want)) return;   // refused already
+    c->link_asked = want;
+    if (bad) printf("netd: %s: %d adapter setting(s) in %s not understood\n", d->name, bad, NET_CONF);
+    if (sys_net_link(&want) < 0)
+        printf("netd: %s: the driver refused the adapter settings in %s\n", d->name, NET_CONF);
+    else
+        printf("netd: %s: adapter settings from %s applied\n", d->name, NET_CONF);
+}
+
 static int wants_dhcp(const struct etc_config_buf *buf,
                       const struct query_netdev *d, const char *global) {
     char key[24], v[8];
@@ -284,6 +300,8 @@ int main(int argc, char **argv) {
                 for (int b = 0; b < 6; b++) mac[b] = (uint8_t)(d.mac >> (b * 8));
                 udhcp_init(&c->dhcp, c->name, mac);
             }
+
+            if (have_conf) apply_link(c, &conf, &d);
 
             if (!wants_dhcp(&conf, &d, want_dhcp)) continue;
             if (d.admin_down) continue;   // `netctl down`: switched off on purpose

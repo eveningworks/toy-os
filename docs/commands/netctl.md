@@ -24,6 +24,20 @@
 - `up DEVICE` -- switch it back on; netd leases it at once, asking for
   the address it had. A card nobody leases (addressed by hand, or
   `dhcp = no`) is simply back, with the address it kept.
+- `link DEVICE [SETTING VALUE]... | DEVICE defaults` -- the card's
+  ADAPTER settings: with no pair, show them; with pairs, change them --
+  applied at once and saved in the card's own `/etc/net.conf` section,
+  which netd applies again at boot; `defaults` puts its driver's values
+  back and removes the keys. Each SETTING exists only where the card's
+  driver offers it, and one it does not is refused rather than ignored:
+  - `speed auto|10g|5g|2.5g|1g|100m|10m` -- the fastest rate to offer
+    when it negotiates (every rate it has at or below it); `auto` is all.
+  - `eee on|off` -- Energy Efficient Ethernet.
+  - `flow off|rx|tx|both` -- pause frames: honour them, send them, both.
+  - `moderation off|low|medium|high` -- interrupt moderation.
+
+  Every pair is read before anything is applied, so a typo in the third
+  changes nothing.
 - `--no-wait` -- `renew` and `up` return once netd has the request,
   instead of waiting up to 15 seconds for a FRESH lease -- one netd has
   acknowledged since the request (the lease file's `acked`), not merely
@@ -74,6 +88,26 @@ diagnosis.
 
 **Not where naming rules live** -- that is `/etc/net.conf`, read by netd.
 
+## Adapter settings
+
+`netctl link` is `ethtool`'s `-s`, `--set-eee`, `-A` and `-C` in one
+verb, and it is the same path System Settings' Network > Adapters page
+and Device Manager's Adapter settings section take (`lib/unetlink.h`):
+the kernel validates against what the driver declares and the driver
+applies (`SYS_NET_LINK`); the value is then saved, so a change survives
+a reboot without a second command.
+
+    /$ netctl link net-d7cb84
+    net-d7cb84: speed auto (up to 10 Gb/s), eee off, flow off, moderation medium
+    /$ netctl link net-d7cb84 speed 1g eee on
+    net-d7cb84: speed 1g, eee on, flow off, moderation medium
+
+`eee on (in use)` means the link NEGOTIATED it, which the request alone
+does not decide -- the switch must agree. A speed change takes the link
+down and back up, a few seconds; a session over that same card pauses
+for it. `aq` (the Aquantia 10G cards) offers all four, `e1000` only
+`moderation`, and a driver offering none says so.
+
 ## Output
 
     net-123456: e1000  52:54:00:12:34:56  at pci0.3  mtu 1500
@@ -82,7 +116,9 @@ diagnosis.
         rx 4 packets, 358 bytes, 0 dropped
         tx 5 packets, 414 bytes, 0 dropped
 
-A card switched off adds `switched off (netctl up net-123456)`. A
+A card switched off adds `switched off (netctl up net-123456)`. A card
+whose driver offers adapter settings adds an `adapter` line, the same
+words `netctl link` prints. A
 `link` line appears only when the driver can tell -- a card with no way
 to ask is not a card whose cable is out.
 

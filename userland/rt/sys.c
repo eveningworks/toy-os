@@ -687,6 +687,10 @@ int sys_net_admin(const char *dev, unsigned flags) {
     return (int)err(syscall1(SYS_NET_CONFIG, (uint64_t)(uintptr_t)&req));
 }
 
+int sys_net_link(const struct net_linkcfg *req) {
+    return (int)err(syscall1(SYS_NET_LINK, (uint64_t)(uintptr_t)req));
+}
+
 int sys_net_rename(const char *dev, const char *to) {
     struct net_rename req;
     for (unsigned i = 0; i < sizeof req.name; i++) req.name[i] = 0;
