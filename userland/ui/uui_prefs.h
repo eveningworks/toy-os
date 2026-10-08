@@ -39,7 +39,7 @@ struct uui_prefs_desc {
     // A row's `id` is its page's NUMBER, 0 .. page_count - 1.
     const struct uui_sidebar_row *pages;
     int page_count;
-    int w, h;                    // content size; 0 derives 96 'n' by 30 lines
+    int w, h;                    // content size, a FLOOR: grown to fit the largest page; 0 derives 96 'n' by 30 lines
     const char *log_prefix;      // the layout log's name for it, or NULL
     void (*on_defaults)(void);   // put the defaults INTO THE CONTROLS
     void (*on_ok)(void);         // read the controls back; the window is already gone

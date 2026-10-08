@@ -92,10 +92,23 @@ BTN = {
     "details": ("vb", 0), "icons": ("vb", 1),
 }
 STRIP_COUNT = {"nav": 4, "tb": 12, "vb": 2}
-# The View drop-down's rows, separators counted (files.c's view_items).
-VIEW_ROW = {"large": 0, "icons": 1, "details": 2, "dpane": 4, "panes": 5, "tree": 6}
+def menu_rows(table):
+    """Each label's row in files.c's `table`, separators counted -- READ
+    FROM THE SOURCE: hand-kept indices went stale twice as the menus grew,
+    and a click on the wrong row read as a dozen unrelated failures."""
+    import re
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                            "userland", "gui", "apps", "files.c")).read()
+    body = src.split(f"static const struct uui_menu_item {table}[] = {{", 1)[1].split("};", 1)[0]
+    rows = re.findall(r'UUI_MENU_SEP|UUI_MENU\("([^"]*)"', body)
+    return {label: i for i, label in enumerate(rows) if label}
+
+
+_VIEW, _MORE = menu_rows("view_items"), menu_rows("more_items")
+VIEW_ROW = {"large": _VIEW["Large icons"], "icons": _VIEW["Icons"], "details": _VIEW["Details"],
+            "dpane": _VIEW["Details pane"], "panes": _VIEW["Second pane"], "tree": _VIEW["Folder tree"]}
 NEW_ROW = {"folder": 0, "file": 1}
-MORE_ROW = {"options": 8}   # files.c's more_items, separators counted
+MORE_ROW = {"options": _MORE["Options..."]}
 K_INSERT = "0xf882"
 K_HOME = "0xf786"
 K_F2, K_F5, K_F6, K_F7, K_F8 = "0xf789", "0xf79b", "0xf79c", "0xf79d", "0xf79e"
@@ -1841,6 +1854,12 @@ def run(dbg, qmp, tmp, res):
             break
         rh = rh or 20
         first = opt_rect("start")   # the General page's first row, as it opened
+        # The window grows to its widest row: the four-way Scripts choice
+        # ran off the edge of a fixed-width window, its last labels cut.
+        rows = {k: opt_rect(k) for k in ("start", "click", "scripts", "programs")}
+        res.check("every General row fits inside the Options window",
+                  all(r and r[0] + r[2] <= oc["w"] for r in rows.values()),
+                  f"content w={oc['w']} rows={rows}")
         dbg.send(f"gui click {oc['x'] + pg[0] + 30} {oc['y'] + pg[1] + 2 * rh + rh // 2}")
         dbg.settle(0.6)
         # The pages share one column and HIDE the other pages' rows; a

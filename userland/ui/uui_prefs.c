@@ -62,6 +62,20 @@ static void show_page(int page) {
     for (int i = 0; i < g_rows; i++) g_page_items[1 + i].hidden = g_row[i].page != page;
 }
 
+// THE WINDOW FITS ITS LARGEST PAGE, not the one showing --
+// QStackedWidget's sizeHint. The caller's w/h is a floor: a segmented row
+// is as wide as its labels, and under a fixed width the last ones ran
+// off the window's edge. Leaves no page shown; the caller picks one.
+static void fit_pages(int *w, int *h) {
+    for (int p = 0; p < g_d.page_count; p++) {
+        show_page(p);
+        int nw = 0, nh = 0;
+        uui_layout_natural_size(&g_root_l, &nw, &nh);
+        if (nw > *w) *w = nw;
+        if (nh > *h) *h = nh;
+    }
+}
+
 static int *field_of(int b) { return (int *)((char *)g_d.edit + g_bound[b].field); }
 
 static void bound_to_controls(void) {
@@ -293,10 +307,15 @@ int uui_prefs_open(struct uapp *a) {
     uui_focus_init(&g_focus, g_focusables, g_nfocus);
     uui_focus_set(&g_focus, 0);
 
+    int w = g_d.w > 0 ? g_d.w : ugfx_char_advance('n') * 96;
+    int h = g_d.h > 0 ? g_d.h : ugfx_char_h() * 30;
+    fit_pages(&w, &h);
+    show_page(first);
+
     struct uapp_window_desc d = {
         .title = g_d.title,
-        .w = g_d.w > 0 ? g_d.w : ugfx_char_advance('n') * 96,
-        .h = g_d.h > 0 ? g_d.h : ugfx_char_h() * 30,
+        .w = w,
+        .h = h,
         .flags = UAPP_WIN_MODAL,
         .widgets = g_root_items,
         .widget_count = 2,
