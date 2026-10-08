@@ -399,7 +399,7 @@ No dependency on the phases above; ordered among themselves.
 - [x] ~~Report nothing mounted as NOTHING MOUNTED, instead of as an active backend that fails every call~~ done
 - [x] ~~Refuse a whole-disk volume: a drive's root must be a partition, and a flat image says so and boots to ramfs~~ done
 - [ ] The live CD unpacks into ramfs rather than mounting a RAM block device, retiring `block_ram.c`
-- [ ] Run the kernel suite on AHCI too -- CI covers ATA and virtio-blk, so an AHCI-only defect has no coverage
+- [x] ~~Run the kernel suite on AHCI too~~ DONE 2026-10-08 -- `ktest_run.py --ahci-disk`, a CI step; 977 pass
 - [ ] A sector cache on the AHCI and virtio paths -- `ata_cache.c` is wired only into `ata.c`, and `atac_ops` is already the seam
 - [ ] A block/buffer cache with write-back
 - [ ] The cache's write-back sends one sector per command -- `atac_flush()` walks slots, not LBAs, and never merges neighbours

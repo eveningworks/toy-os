@@ -153,6 +153,14 @@ jobs:
           cp --reflink=auto --sparse=always disk.img ci-virtio.img
           python3 tools/ktest_run.py -v --virtio-disk ci-virtio.img
 
+      # And on SATA: an AHCI-only defect had no coverage at all. The copy
+      # shares disk.img's PARTUUIDs, so AHCI's precedence makes it the
+      # root, and ktest_run.py fails the step if it did not.
+      - name: Kernel test suite (ktest, filesystem on AHCI)
+        run: |
+          cp --reflink=auto --sparse=always disk.img ci-ahci.img
+          python3 tools/ktest_run.py -v --ahci-disk ci-ahci.img
+
       # The same question one privilege ring out. ktest runs INSIDE the
       # kernel, so it cannot tell whether a /tests binary still links,
       # loads and passes its own checks -- which is exactly the gap

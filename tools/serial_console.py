@@ -56,7 +56,7 @@ DEFAULT_PORT = 4555
 PROMPT_MARK = "dbg> "   # the debug console listening again -- see send()
 
 
-def launch_cmd(iso, disk, port, virtio_disk=None, memory=256):
+def launch_cmd(iso, disk, port, virtio_disk=None, memory=256, ahci_disk=None):
     """The QEMU command line, as a list. No display, no QMP, no input
     head -- this channel needs none of them, which is most of why it is
     cheap enough to be the default for anything not about pixels."""
@@ -124,6 +124,17 @@ def launch_cmd(iso, disk, port, virtio_disk=None, memory=256):
             "-drive", f"file={virtio_disk},format=raw,if=none,id=vblk",
             "-device", "virtio-blk-pci,drive=vblk,disable-legacy=on",
         ]
+    # ...or on an ICH9 AHCI controller, for the same reason: the IDE drive
+    # stays for the [ata] KTESTs. A COPY of disk.img shares its PARTUUIDs,
+    # so `bootpart=` names both and AHCI's precedence over IDE makes it
+    # the root -- ktest_run.py checks that it did.
+    if ahci_disk:
+        at = cmd.index("-no-reboot")
+        cmd[at:at] = [
+            "-device", "ich9-ahci,id=ahci",
+            "-drive", f"file={ahci_disk},format=raw,if=none,id=sata0,discard=unmap",
+            "-device", "ide-hd,drive=sata0,bus=ahci.0",
+        ]
     return cmd
 
 
@@ -137,7 +148,8 @@ class SerialGuest:
     """
 
     def __init__(self, iso, disk, port=DEFAULT_PORT, qemu_log="serial_qemu.log",
-                 virtio_disk=None, memory=256):
+                 virtio_disk=None, memory=256, ahci_disk=None):
+        self.ahci_disk = ahci_disk
         self.iso = iso
         self.disk = disk
         self.port = port
@@ -159,7 +171,8 @@ class SerialGuest:
 
     def start(self):
         cmd = launch_cmd(self.iso, self.disk, self.port,
-                         virtio_disk=self.virtio_disk, memory=self.memory)
+                         virtio_disk=self.virtio_disk, memory=self.memory,
+                         ahci_disk=self.ahci_disk)
         self.started_at = time.time()
         self._log = open(self.qemu_log, "wb")
         self.proc = subprocess.Popen(cmd, stdout=self._log, stderr=subprocess.STDOUT)

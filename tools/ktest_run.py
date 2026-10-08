@@ -76,6 +76,10 @@ def main():
                     help="also attach PATH as a virtio-blk disk. With the `virtioblk` "
                          "boot flag baked into the ISO, the filesystem then lives on "
                          "virtio while the [ata] KTESTs keep the IDE drive.")
+    ap.add_argument("--ahci-disk", default=None,
+                    help="also attach PATH (a copy of disk.img) on an AHCI controller; the "
+                         "filesystem then lives on SATA, which is checked, while the [ata] "
+                         "KTESTs keep the IDE drive.")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT,
                     help="COM1's TCP port on the host")
     ap.add_argument("--mem", type=int, default=256, metavar="MIB",
@@ -91,7 +95,7 @@ def main():
 
     guest = SerialGuest(args.iso, args.disk, port=args.port,
                         qemu_log=args.qemu_log, virtio_disk=args.virtio_disk,
-                        memory=args.mem)
+                        memory=args.mem, ahci_disk=args.ahci_disk)
     verdict = None
     timeout_facts = []
     try:
@@ -120,6 +124,15 @@ def main():
         # `supervises no service called toywm` while the desktop starts
         # anyway. A boot with no desktop never prints the line, and the
         # bounded wait falls through with the role already free.
+        # THE ROOT IS WHERE IT WAS ASKED TO BE, or the run says nothing
+        # about that driver -- CI's first virtio attempt passed for weeks
+        # with virtio-blk never coming up at all.
+        if args.ahci_disk:
+            guest.wait_for("mounted at / on", deadline)
+        if args.ahci_disk and "mounted at / on ahci0" not in guest.transcript:
+            return fail("--ahci-disk was given but the root is not on ahci0",
+                        [l for l in guest.transcript.splitlines() if "mounted at /" in l][:3])
+
         guest.wait_for("toywm is ready", min(deadline, time.time() + 20))
         guest.send("sh service stop toywm")
         guest.wait_for("toywm stopped", min(deadline, time.time() + 10))

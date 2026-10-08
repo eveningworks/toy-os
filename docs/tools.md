@@ -25,6 +25,10 @@ non-GUI boot check — see `docs/testing.md`), `gen_version.sh`/`set_version.sh`
 it into an exit code -- what `make test` and CI run; `--virtio-disk
 PATH` attaches a second disk on virtio-blk, which then carries the
 filesystem while the IDE drive stays for the `[ata]`/`[atac]` suites,
+`--ahci-disk PATH` the same on an ICH9 AHCI controller -- a COPY of
+`disk.img`, whose shared PARTUUIDs plus AHCI's precedence make it the
+root, and the run FAILS if the root did not land on `ahci0` (control:
+the copy with `mkpart_test.regenerate_guids()` roots on IDE and fails),
 `--mem MIB` sizes the guest (256 by default, and the `mm` and `paging`
 above-4-GiB checks SKIP below 4096 -- `highmem_test.py` is the runner
 that refuses the skip), and `-v` prints the WHOLE transcript, boot
