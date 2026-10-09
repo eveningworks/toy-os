@@ -25,7 +25,11 @@ struct trace_ring_hdr {
     // How often the tracee found no room and waited for the tracer.
     // Nothing is ever dropped: a full ring re-issues the call.
     volatile uint32_t stalls;
-    uint32_t reserved[27];
+    // How many processes still write into this ring -- the KERNEL's. 0
+    // once the last one exits: a tracer following children (SPAWN_TRACE_
+    // FOLLOW) has seen everything when its child is reaped AND this is 0.
+    volatile uint32_t live;
+    uint32_t reserved[26];
 };
 
 // `kind`

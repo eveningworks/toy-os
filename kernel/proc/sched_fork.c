@@ -140,12 +140,6 @@ static int build_elf_image(const char *path, const char *argvec, size_t argvec_l
     uint64_t as = vmm_create_address_space();
     if (!as) { kfree(data); return 0; }
 
-    // Same one-line hook elf_run_from_fs() has -- a no-op unless the
-    // shell's `strace` armed tracing, which keeps the mechanism
-    // process-creation-path-agnostic rather than tied to the blocking
-    // loader (see kernel/proc/strace.c).
-    strace_claim(as);
-
     uint64_t entry = 0, image_end = 0;
     struct elf_dyn_info dyn;
     // On failure the address space is destroyed rather than leaked --
@@ -232,6 +226,11 @@ static int build_elf_image(const char *path, const char *argvec, size_t argvec_l
         return 0;
     }
     (void)argc; (void)argv; // argc/argv reach the process on its STACK
+    // The trace attaches HERE, once nothing can fail: a claim before a
+    // failed load left an entry for a destroyed address space, which the
+    // next process to reuse that CR3 inherited. Nothing has run yet, so
+    // the trace still starts at the first syscall (kernel/proc/strace.c).
+    strace_claim(as);
     *out_as = as;
     *out_entry = entry;
     *out_rsp = user_rsp;
@@ -690,6 +689,7 @@ int scheduler_fork(const uint64_t *regs) {
         return -1;
     }
     k_memcpy(&procs[slot].ext->cwd, &procs[leader].ext->cwd, sizeof procs[slot].ext->cwd);
+    strace_fork(procs[leader].pml4_phys, as);   // past the last failure path
     procs[slot].state = SCHED_READY;
     slot_unclaim(slot);
     alive_count++;

@@ -339,6 +339,10 @@ TESTS = [
     # ring. SPAWNED, because the legacy `run` loader's process has no
     # slot to arm a trace from (strace_claim() refuses pid 0).
     ("tracering_test", None, None, None),
+    # strace -f: two rings at once, a followed program's spawned, forked
+    # and orphaned children in its ring, and none of them in an unfollowed
+    # one. Spawned, for the same reason as tracering_test.
+    ("tracefollow_test", None, None, None),
     # lib/utrace, the decoding half of /bin/strace, from records built in
     # the test -- every branch reachable without a trace.
     ("utrace_test", 0, None, None),

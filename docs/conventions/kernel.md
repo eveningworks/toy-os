@@ -2380,7 +2380,23 @@ fd 2 is the terminal whenever there is one, and the kernel log under
 `/bin/spawn` (whose stderr is `SPAWN_FD_KMSG`) -- which is how a tool
 gets a trace into `dmesg`. `/tests/trace_test` (driven by a KTEST)
 checks the text reaches a pty on stderr; `/tests/utrace_test` the
-decoder; `/tests/tracering_test` the ring.
+decoder; `/tests/tracering_test` the ring; `/tests/tracefollow_test`
+two traces at once and following.
+
+**SEVERAL TRACES AT ONCE, AND A FOLLOWED ONE TAKES THE CHILDREN.**
+`strace.c` keeps a small table of traces (ring, owner, `follow`) and of
+the address spaces writing into each. With `SPAWN_TRACE_FOLLOW` a
+traced process's spawn (`strace_claim()`) and fork (`strace_fork()`)
+join its ring, the records told apart by pid. The header's `live` counts
+the writers: `strace -f` is done when its child is reaped AND `live` is
+0, because a grandchild can outlive it.
+
+**THE CLAIM COMES LAST IN THE LOADER**, past every failure path
+(`build_elf_image()`, `elf_run_from_fs()`): a failed load destroys the
+address space without the exit hooks, so a claim before it left an entry
+for a dead CR3 -- traced again by whichever process reused it, and with
+`-f` a `live` that never fell. Nothing has run before the claim, so the
+trace still starts at the first syscall.
 
 ## A PROCESS GROUP IS AN INT, AND SPAWN TAKES IT.
 

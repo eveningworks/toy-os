@@ -30,23 +30,25 @@
 #define MAX_ARGV   64
 
 static const char *g_out_path, *g_filter;
-static int g_count;
+static int g_count, g_follow;
 
 static const struct uargs_opt OPTS[] = {
     { "output",  'o', "FILE", "write the trace to FILE instead of stderr", 0, &g_out_path },
     { "trace",   'e', "LIST", "only these syscalls: trace=open,read or open,read", 0, &g_filter },
     { "summary", 'c', 0,      "count calls and errors per syscall, and print only that table", &g_count, 0 },
+    { "follow",  'f', 0,      "trace PROGRAM's children too, each line marked [pid N]", &g_follow, 0 },
     { 0 },
 };
 
 static const struct uargs_prog PROG = {
     .name = "strace",
-    .usage = "[-c] [-o FILE] [-e LIST] PROGRAM [ARG]...",
+    .usage = "[-c] [-f] [-o FILE] [-e LIST] PROGRAM [ARG]...",
     .summary = "Run PROGRAM and print every syscall it makes: its arguments as the\n"
                "kernel saw them and what it returned. Exits with PROGRAM's status.",
     .opts = OPTS,
-    .notes = "The trace goes to stderr; PROGRAM's own output is left alone. One traced\n"
-             "program at a time; its children are not traced.",
+    .notes = "The trace goes to stderr; PROGRAM's own output is left alone. Without -f\n"
+             "its children are not traced; with it, strace waits until the last of\n"
+             "them has exited too.",
     .first_operand_ends_options = 1,
 };
 
@@ -182,7 +184,7 @@ int main(int argc, char **argv) {
     sys_spawn_opts_init(&o);
     o.argv = cargv;
     o.env = environ;
-    o.flags = SPAWN_TRACE;
+    o.flags = SPAWN_TRACE | (g_follow ? SPAWN_TRACE_FOLLOW : 0);
     o.trace_ring = ring;
     int pid = sys_spawn_opts(path, &o);
     if (pid <= 0) {
@@ -191,13 +193,21 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    int code = 0;
+    if (g_follow) g_pr.main_pid = pid;
+
+    // DONE IS THE CHILD REAPED AND, with -f, NOTHING LEFT WRITING: a
+    // grandchild can outlive it, and its records still belong here. The
+    // kernel keeps `live`; Linux strace -f likewise waits for every tracee.
+    int code = 0, reaped = 0;
     for (;;) {
         uint32_t seen = word;
         drain(h);
         // SYS_RETRY ("still running") is negative too: only -1 is an error.
-        int r = sys_waitpid_nohang(pid, &code);
-        if (r == pid || r == -1) break;
+        if (!reaped) {
+            int r = sys_waitpid_nohang(pid, &code);
+            reaped = r == pid || r == -1;
+        }
+        if (reaped && (!g_follow || h->live == 0)) break;
         sys_futex_wait(&word, seen, 100);
     }
     drain(h);

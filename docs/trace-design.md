@@ -135,13 +135,24 @@ dynamic loader's opens near the top of the stack decode (the text trace
 showed them as pointers). The formatter KTESTs became
 `/tests/utrace_test`, over records built in the test.
 
-### Stage 3 -- more than one tracee
+### Stage 3 -- more than one tracee -- BUILT 2026-10-09
 
 One ring per tracer rather than one global: the tracer's pid owns the
 ring, records carry the pid, and **fork follows** (the open roadmap item
 "`strace` extended to follow a process's children once `fork()`
 exists") -- a forked child writes into its parent's ring, as `strace -f`
 shows.
+
+As built: up to 8 traces and 32 traced address spaces at once
+(`kernel/proc/strace.c`); a full table is `-EBUSY` at the spawn, never a
+child started untraced. Following is OPT-IN per trace
+(`SPAWN_TRACE_FOLLOW`, Linux's `-f`) and covers both ways a child is
+made -- spawn and fork. The ring header's `live` counts the address
+spaces still writing, so the tracer knows when an orphaned grandchild
+has finished too. `/bin/strace -f` prefixes another pid's lines
+`[pid N] `, as Linux's does. Found on the way: the loaders claimed the
+trace BEFORE the image could fail to load, leaving an entry for a
+destroyed address space -- the claim is now their last step.
 
 ### Stage 4 -- the debugger's half, when there is a compiler
 

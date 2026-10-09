@@ -996,13 +996,19 @@ struct spawn_msg {
 
 // With SPAWN_TRACE, and only with it: the ring `trace_ring` names
 // (abi/trace_abi.h). Either flag without the other, or a ring that is
-// missing, not the caller's own, or malformed, is refused; -EBUSY while
-// another trace runs (one at a time).
+// missing, not the caller's own, or malformed, is refused; -EBUSY when
+// the kernel's few trace slots are all taken.
 #define SPAWN_TRACE_RING 64
+
+// With SPAWN_TRACE: the trace FOLLOWS the child's children -- every
+// process it spawns or forks writes into the same ring, records told
+// apart by pid (`strace -f`).
+#define SPAWN_TRACE_FOLLOW 128
 
 // Every flag this kernel knows. Anything outside it is -EINVAL.
 #define SPAWN_FLAGS_ALL (SPAWN_TRACE | SPAWN_FOREGROUND | SPAWN_ARGV | SPAWN_SETSID | \
-                         SPAWN_STDERR | SPAWN_DETACH | SPAWN_TRACE_RING)
+                         SPAWN_STDERR | SPAWN_DETACH | SPAWN_TRACE_RING | \
+                         SPAWN_TRACE_FOLLOW)
 
 // The most an environment blob may be, including its terminator. It has
 // to fit the child's single argv/env stack page alongside the strings

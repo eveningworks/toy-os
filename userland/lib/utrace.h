@@ -9,6 +9,7 @@
 //     read(9, 0x8010003020, 4096) = -9 EBADF
 //     waitpid(23, 0x807ff00e10, 0) <unfinished ...>
 //     <... waitpid resumed> = 23
+//     [pid 41] getpid() = 41          (strace -f: any pid but the first)
 //
 // A formatter that runs out of room writes a shorter line, never past
 // `cap`, and always terminates.
@@ -27,7 +28,8 @@ int utrace_failed(const struct trace_rec *exit);
 // "name(args...)" from an ENTRY record. Returns the length.
 size_t utrace_format_call(char *out, size_t cap, const struct trace_rec *entry);
 // " = <value>" from an exit record of call `nr` -- decimal, hex for a
-// pointer, "-2 ENOENT" for an error, " = ?" for one that never returns.
+// pointer, "-2 ENOENT" for an error, " = ?" for one that never returns,
+// " = ? RETRY (re-issued)" for SYS_RETRY, which is not a result.
 size_t utrace_format_ret(char *out, size_t cap, int nr, const struct trace_rec *exit);
 
 // Pairs entries with their exits into whole lines. Feed it records in
@@ -37,6 +39,9 @@ struct utrace_printer {
     int have_pending;
     void (*emit)(void *ctx, const char *line);
     void *ctx;
+    // Records from any OTHER pid get a "[pid N] " prefix, as Linux
+    // strace -f writes them; 0 (the default) prefixes none.
+    int main_pid;
 };
 void utrace_printer_init(struct utrace_printer *p, void (*emit)(void *, const char *), void *ctx);
 void utrace_feed(struct utrace_printer *p, const struct trace_rec *r);

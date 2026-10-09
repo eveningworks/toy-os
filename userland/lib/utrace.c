@@ -116,13 +116,16 @@ size_t utrace_format_call(char *out, size_t cap, const struct trace_rec *e) {
 
 int utrace_failed(const struct trace_rec *x) {
     if (x->kind != TRACE_EXIT && x->kind != TRACE_RESUMED) return 0;
-    return x->ret < 0 && x->ret >= -4095;
+    return x->ret < 0 && x->ret > SYS_RETRY;
 }
 
 size_t utrace_format_ret(char *out, size_t cap, int nr, const struct trace_rec *x) {
     struct out o = { out, cap, 0 };
     if (cap) out[0] = 0;
     if (x->kind == TRACE_NORETURN) { put(&o, " = ?"); return o.len; }
+    // Not a result: libsys issues the call again, and that one's exit is
+    // the value (Linux strace's "= ? ERESTARTSYS").
+    if (x->ret == SYS_RETRY) { put(&o, " = ? RETRY (re-issued)"); return o.len; }
     const struct desc *d = row(nr);
     if (utrace_failed(x)) {
         putf(&o, " = %lld", x->ret);
@@ -144,9 +147,17 @@ void utrace_printer_init(struct utrace_printer *p, void (*emit)(void *, const ch
     p->ctx = ctx;
 }
 
+// "[pid N] " for a record that is not the main process's, or nothing.
+static size_t prefix(const struct utrace_printer *p, char *out, size_t cap, int pid) {
+    if (!p->main_pid || pid == p->main_pid) { out[0] = 0; return 0; }
+    int n = snprintf(out, cap, "[pid %d] ", pid);
+    return n < 0 || (size_t)n >= cap ? 0 : (size_t)n;
+}
+
 static void emit_unfinished(struct utrace_printer *p) {
     char line[384];
-    size_t n = utrace_format_call(line, sizeof line, &p->pending);
+    size_t n = prefix(p, line, sizeof line, p->pending.pid);
+    n += utrace_format_call(line + n, sizeof line - n, &p->pending);
     snprintf(line + n, sizeof line - n, " <unfinished ...>");
     p->emit(p->ctx, line);
     p->have_pending = 0;
@@ -161,14 +172,16 @@ void utrace_feed(struct utrace_printer *p, const struct trace_rec *r) {
         return;
     }
     // An exit: joined to its entry, or -- another call came between, a
-    // second thread's -- written as Linux strace does, "resumed".
+    // second thread's or (strace -f) a child's -- written as Linux strace
+    // does, "resumed".
+    size_t n = prefix(p, line, sizeof line, r->pid);
     if (p->have_pending && p->pending.nr == r->nr && p->pending.pid == r->pid) {
-        size_t n = utrace_format_call(line, sizeof line, &p->pending);
+        n += utrace_format_call(line + n, sizeof line - n, &p->pending);
         utrace_format_ret(line + n, sizeof line - n, r->nr, r);
         p->have_pending = 0;
     } else {
         const char *name = utrace_name(r->nr);
-        size_t n = (size_t)snprintf(line, sizeof line, "<... %s resumed>", name ? name : "syscall");
+        n += (size_t)snprintf(line + n, sizeof line - n, "<... %s resumed>", name ? name : "syscall");
         if (n < sizeof line) utrace_format_ret(line + n, sizeof line - n, r->nr, r);
     }
     p->emit(p->ctx, line);

@@ -96,6 +96,9 @@ int main(void) {
     ret_is(SYS_SBRK, &x, " = 0x8010000000", "a pointer is hex");
     x = leave(SYS_SBRK, TRACE_EXIT, -ENOMEM);
     ret_is(SYS_SBRK, &x, " = -12 ENOMEM", "...but a pointer call's error is an error");
+    x = leave(SYS_WAITPID, TRACE_RESUMED, SYS_RETRY);
+    ret_is(SYS_WAITPID, &x, " = ? RETRY (re-issued)", "SYS_RETRY is no result: the call goes again");
+    utest_check(!utrace_failed(&x), "...and is not counted as a failure");
     x = leave(SYS_EXIT, TRACE_NORETURN, 0);
     ret_is(SYS_EXIT, &x, " = ?", "a call that never returns says so");
 
@@ -127,6 +130,30 @@ int main(void) {
                 "...and its exit, later, resumed with its value");
     utest_check(g_n > 4 && !strcmp(g_lines[4], "exit(0) <unfinished ...>"),
                 "an entry with no exit at the end is flushed as unfinished");
+
+    // --- strace -f: a child's lines are marked, the main pid's are not --
+    g_n = 0;
+    utrace_printer_init(&p, collect, 0);
+    p.main_pid = 7;
+    e = entry(SYS_WAITPID, 23, 0x30, 0);
+    utrace_feed(&p, &e);
+    e = entry(SYS_GETPID, 0, 0, 0);
+    e.pid = 23;
+    utrace_feed(&p, &e);
+    x = leave(SYS_GETPID, TRACE_EXIT, 23);
+    x.pid = 23;
+    utrace_feed(&p, &x);
+    x = leave(SYS_WAITPID, TRACE_RESUMED, 23);
+    utrace_feed(&p, &x);
+    e = entry(SYS_EXIT, 0, 0, 0);
+    e.pid = 23;
+    utrace_feed(&p, &e);
+    utrace_flush(&p);
+    utest_checkf(g_n == 4 && !strcmp(g_lines[0], "waitpid(23, 0x30, 0) <unfinished ...>") &&
+                 !strcmp(g_lines[1], "[pid 23] getpid() = 23") &&
+                 !strcmp(g_lines[2], "<... waitpid resumed> = 23") &&
+                 !strcmp(g_lines[3], "[pid 23] exit(0) <unfinished ...>"),
+                 "another pid's lines -- whole, and unfinished -- start [pid N] (%d lines)", g_n);
 
     // --- a full line never overruns ----------------------------------
     char small[16];

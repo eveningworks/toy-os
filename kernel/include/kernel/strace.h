@@ -13,17 +13,19 @@
 int strace_ring_check(const char *name, int pid);
 
 // Asks that the next process THIS process spawns be traced into the ring
-// at `ring_idx` (from strace_ring_check()). Scoped to the caller: only
-// its own next spawn can collect the arm.
-void strace_arm_for_current(int ring_idx);
+// at `ring_idx` (from strace_ring_check()), and with `follow` its
+// children too. Scoped to the caller: only its own next spawn can collect
+// the arm. -EBUSY when every arm slot is taken.
+int strace_arm_for_current(int ring_idx, int follow);
 
 // Cancels the CALLER'S arm if no process claimed it (the spawn failed).
 // Another process's arm is left alone: a spawn can sleep, and every
 // spawn ends in this call.
 void strace_disarm(void);
 
-// Called once per new address space (elf_run.c, sched_fork.c). Claims
-// the arm if the process making it is the one that armed.
+// Called once per new address space, AFTER its image loaded (elf_run.c,
+// sched_fork.c): claims the arm if the process making it is the one that
+// armed, or joins a followed trace the maker is in.
 void strace_claim(uint64_t pml4_phys);
 
 // At process exit: stops tracing if this was the traced address space,
@@ -32,6 +34,8 @@ void strace_release(uint64_t pml4_phys);
 // An exec'd process keeps its trace: the address space changed, the
 // process did not.
 void strace_rekey(uint64_t old_pml4, uint64_t new_pml4);
+// A fork: the child joins its parent's trace when that trace follows.
+void strace_fork(uint64_t parent_pml4, uint64_t child_pml4);
 
 // Is the CURRENTLY running address space being traced? One global read
 // and a compare -- what an untraced process pays per syscall.

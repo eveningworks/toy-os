@@ -11,11 +11,12 @@
 // record per syscall entry and exit into it. Names, argument formatting,
 // filtering and counting are /bin/strace's (userland/lib/utrace.h).
 //
-// WHO is traced is an address space, named at the spawn:
-// strace_arm_for_current() records the pid that asked, strace_claim()
-// consumes the arm when the new address space is built, and
-// strace_release() drops it at exit. One traced address space at a time;
-// untraced code pays one global compare per syscall.
+// A TRACE is one ring and the ADDRESS SPACES writing into it: the spawned
+// child, and with SPAWN_TRACE_FOLLOW every process it spawns or forks
+// after (`strace -f`). Several traces run at once, each its own tracer's.
+// The trace ends -- the ring is let go -- when its last address space
+// exits; the header's `live` says how many are left, which is how a
+// tracer following children knows it has seen everything.
 //
 // **THE ARM IS THE ASKER'S, both ways**: only its own spawn can collect
 // it (a bare "next process anywhere" flag let somebody else's spawn
@@ -38,17 +39,28 @@
 #include "clocksource.h" // the monotonic clock sleep deadlines are on
 #include "trace_abi.h"
 
-// 0 = none; a real CR3 is never 0.
-static uint64_t g_traced_pml4 = 0;
-// The pid that asked for its next spawn to be traced, or 0.
-static int g_armed_by = 0;
+// Small fixed tables: a trace is a diagnostic, and a handful of tracers
+// with a few dozen followed processes between them is far past any use.
+#define TRACE_MAX    8    // traces (rings) at once
+#define TRACE_SPACES 32   // address spaces being traced, across all of them
 
-static int g_ring = -1;          // shm index of the active ring, or -1
-static int g_ring_owner;         // the tracer's pid: it drains, we wait on it
-static uint32_t g_ring_nrec;     // slots, clamped to what the object holds
-static int g_ring_armed = -1;    // a ring waiting for the spawn to claim it
+struct trace {
+    int used;
+    int ring;             // its shm index
+    int owner;            // the tracer's pid: it drains, a full ring waits on it
+    uint32_t nrec;        // slots, clamped to what the object holds
+    int follow;           // SPAWN_TRACE_FOLLOW: children join it
+    int spaces;           // address spaces still writing into it
+};
+static struct trace g_trace[TRACE_MAX];
 
-// ---- naming the tracee ------------------------------------------------------
+static struct { uint64_t pml4; int t; } g_space[TRACE_SPACES];   // pml4 0 = free
+static int g_nspaces;     // what an untraced syscall pays: one compare
+
+// A spawn that asked for a trace, waiting for its address space.
+static struct { int pid; int ring; int follow; } g_arm[TRACE_MAX];   // pid 0 = free
+
+// ---- the tables ---------------------------------------------------------------
 
 static struct trace_ring_hdr *ring_hdr(int idx) {
     return (struct trace_ring_hdr *)(uintptr_t)shm_frame(idx, 0);
@@ -65,11 +77,53 @@ static uint32_t ring_capacity(int idx) {
     return want < fit ? want : (uint32_t)fit;
 }
 
+static int space_of(uint64_t pml4) {
+    if (!g_nspaces || !pml4) return -1;
+    for (int i = 0; i < TRACE_SPACES; i++)
+        if (g_space[i].pml4 == pml4) return i;
+    return -1;
+}
+
+// The trace the CURRENT address space writes into, or -1.
+static int current_trace(void) {
+    int s = space_of(vmm_current_pml4());
+    return s < 0 ? -1 : g_space[s].t;
+}
+
+static void add_space(uint64_t pml4, int t) {
+    if (space_of(pml4) >= 0) return;
+    for (int i = 0; i < TRACE_SPACES; i++) {
+        if (g_space[i].pml4) continue;
+        g_space[i].pml4 = pml4;
+        g_space[i].t = t;
+        g_nspaces++;
+        g_trace[t].spaces++;
+        ring_hdr(g_trace[t].ring)->live = (uint32_t)g_trace[t].spaces;
+        return;
+    }
+    // No slot: this process runs untraced. A tracer that cares sees the
+    // gap as a pid that never appears.
+}
+
+static void drop_trace(int t) {
+    for (int i = 0; i < TRACE_SPACES; i++)
+        if (g_space[i].pml4 && g_space[i].t == t) { g_space[i].pml4 = 0; g_nspaces--; }
+    ring_hdr(g_trace[t].ring)->live = 0;
+    shm_put(g_trace[t].ring);
+    g_trace[t].used = 0;
+}
+
+static void remove_space(int s) {
+    int t = g_space[s].t;
+    g_space[s].pml4 = 0;
+    g_nspaces--;
+    if (--g_trace[t].spaces <= 0) drop_trace(t);
+    else ring_hdr(g_trace[t].ring)->live = (uint32_t)g_trace[t].spaces;
+}
+
+// ---- naming the tracee ------------------------------------------------------------
+
 int strace_ring_check(const char *name, int pid) {
-    // ONE TRACE AT A TIME (docs/trace-design.md's stage 3 lifts it): a
-    // second would take the first one's tracee over in silence, so it is
-    // refused while the first tracer lives.
-    if (g_traced_pml4 && g_ring >= 0 && scheduler_pid_alive(g_ring_owner)) return -EBUSY;
     int idx = shm_lookup(name);
     if (idx < 0) return -ENOENT;
     // THE TRACER'S OWN OBJECT ONLY: a ring somebody else made would let a
@@ -80,52 +134,72 @@ int strace_ring_check(const char *name, int pid) {
     return idx;
 }
 
-static void ring_drop(void) {
-    if (g_ring >= 0) shm_put(g_ring);
-    g_ring = -1;
-}
-
-void strace_arm_for_current(int ring_idx) {
-    g_armed_by = scheduler_current_pid();
-    if (g_ring_armed >= 0) shm_put(g_ring_armed);
+int strace_arm_for_current(int ring_idx, int follow) {
+    int pid = scheduler_current_pid(), slot = -1;
+    for (int i = 0; i < TRACE_MAX; i++) {
+        if (g_arm[i].pid == pid) { shm_put(g_arm[i].ring); slot = i; break; }
+        if (!g_arm[i].pid && slot < 0) slot = i;
+    }
+    if (slot < 0) return -EBUSY;
     shm_get(ring_idx);   // ours until the trace ends, whatever the tracer does
-    g_ring_armed = ring_idx;
+    g_arm[slot].pid = pid;
+    g_arm[slot].ring = ring_idx;
+    g_arm[slot].follow = follow;
+    return 0;
 }
 
 void strace_disarm(void) {
-    if (g_armed_by != scheduler_current_pid()) return;
-    g_armed_by = 0;
-    // An arm the spawn never collected: the spawn failed.
-    if (g_ring_armed >= 0) shm_put(g_ring_armed);
-    g_ring_armed = -1;
+    int pid = scheduler_current_pid();
+    for (int i = 0; i < TRACE_MAX; i++) {
+        if (g_arm[i].pid != pid) continue;
+        // An arm the spawn never collected: the spawn failed.
+        shm_put(g_arm[i].ring);
+        g_arm[i].pid = 0;
+    }
 }
 
 void strace_claim(uint64_t pml4_phys) {
-    if (!g_armed_by || !pml4_phys || g_ring_armed < 0) return;
-    // A kernel-context spawn reports pid 0, which can never match a real
-    // arm, so the legacy loader is excluded for free.
-    if (g_armed_by != scheduler_current_pid()) return;
-    ring_drop();
-    g_ring = g_ring_armed;
-    g_ring_armed = -1;
-    g_ring_owner = g_armed_by;
-    g_ring_nrec = ring_capacity(g_ring);
-    g_armed_by = 0;
-    g_traced_pml4 = pml4_phys;
+    if (!pml4_phys) return;
+    int pid = scheduler_current_pid();
+    for (int i = 0; pid && i < TRACE_MAX; i++) {
+        if (g_arm[i].pid != pid) continue;
+        g_arm[i].pid = 0;
+        int t = -1;
+        for (int k = 0; k < TRACE_MAX; k++) if (!g_trace[k].used) { t = k; break; }
+        if (t < 0) { shm_put(g_arm[i].ring); return; }   // no room: untraced
+        g_trace[t] = (struct trace){ 1, g_arm[i].ring, pid, ring_capacity(g_arm[i].ring),
+                                     g_arm[i].follow, 0 };
+        add_space(pml4_phys, t);
+        if (!g_trace[t].spaces) drop_trace(t);
+        return;
+    }
+    // A FOLLOWED TRACEE SPAWNING: its child joins the same ring. (A
+    // traced process exec'ing lands here too, with the new address
+    // space; strace_rekey() then drops the old one.)
+    int t = current_trace();
+    if (t >= 0 && g_trace[t].follow) add_space(pml4_phys, t);
+}
+
+void strace_fork(uint64_t parent_pml4, uint64_t child_pml4) {
+    int s = space_of(parent_pml4);
+    if (s >= 0 && g_trace[g_space[s].t].follow) add_space(child_pml4, g_space[s].t);
 }
 
 int strace_active(void) {
-    return g_traced_pml4 != 0 && vmm_current_pml4() == g_traced_pml4;
+    return g_nspaces && space_of(vmm_current_pml4()) >= 0;
 }
 
 void strace_rekey(uint64_t old_pml4, uint64_t new_pml4) {
-    if (g_traced_pml4 && g_traced_pml4 == old_pml4) g_traced_pml4 = new_pml4;
+    int s = space_of(old_pml4);
+    if (s < 0) return;
+    // Already claimed through the follow path: one entry, not two.
+    if (space_of(new_pml4) >= 0) remove_space(s);
+    else g_space[s].pml4 = new_pml4;
 }
 
 void strace_release(uint64_t pml4_phys) {
-    if (!g_traced_pml4 || g_traced_pml4 != pml4_phys) return;
-    g_traced_pml4 = 0;
-    ring_drop();
+    int s = space_of(pml4_phys);
+    if (s >= 0) remove_space(s);
 }
 
 // The table is the kernel's only list of syscall names, so anything else
@@ -138,32 +212,29 @@ const char *strace_syscall_name(int nr) {
 
 // ---- writing records ---------------------------------------------------------
 
-static uint32_t ring_room(void) {
-    struct trace_ring_hdr *h = ring_hdr(g_ring);
+static uint32_t ring_room(int t) {
+    struct trace_ring_hdr *h = ring_hdr(g_trace[t].ring);
     uint32_t used = h->head - h->tail;
     // A tail past the head is a tracer writing nonsense: no room, which
-    // stalls only its own tracee -- it could SIGSTOP that anyway.
-    return used > g_ring_nrec ? 0 : g_ring_nrec - used;
+    // stalls only its own tracees -- it could SIGSTOP them anyway.
+    return used > g_trace[t].nrec ? 0 : g_trace[t].nrec - used;
 }
 
-static void ring_put(struct trace_rec *r) {
-    if (g_ring < 0 || !ring_room()) return;
-    struct trace_ring_hdr *h = ring_hdr(g_ring);
+static void ring_put(int t, struct trace_rec *r) {
+    if (t < 0 || !ring_room(t)) return;
+    struct trace_ring_hdr *h = ring_hdr(g_trace[t].ring);
     uint32_t seq = h->head;
     r->seq = seq;
     // Records are 128 bytes after a 128-byte header, so one never
     // straddles a page: each is written through a single frame.
-    uint64_t off = TRACE_HDR_SIZE + (uint64_t)(seq % g_ring_nrec) * TRACE_REC_SIZE;
-    void *slot = (void *)(uintptr_t)(shm_frame(g_ring, off / 4096) + off % 4096);
+    uint64_t off = TRACE_HDR_SIZE + (uint64_t)(seq % g_trace[t].nrec) * TRACE_REC_SIZE;
+    void *slot = (void *)(uintptr_t)(shm_frame(g_trace[t].ring, off / 4096) + off % 4096);
     k_memcpy(slot, r, sizeof *r);
     __asm__ volatile ("" ::: "memory");   // the record before the head that publishes it
     h->head = seq + 1;
-    futex_note_ready(g_ring_owner);
+    futex_note_ready(g_trace[t].owner);
 }
 
-// The first path or buffer argument's bytes. `blob_arg` stays 0xFF
-// unless the copy succeeded, so the decoder can tell an empty path from
-// one it could not read (which it prints as a pointer).
 static void rec_blob(struct trace_rec *r, uint64_t nr, uint64_t pml4) {
     r->blob_arg = 0xFF;
     const struct syscall_desc *d = syscall_desc_at(nr);
@@ -202,7 +273,8 @@ static void rec_blob(struct trace_rec *r, uint64_t nr, uint64_t pml4) {
 }
 
 static void rec_exit(uint64_t nr, int kind, uint64_t rax) {
-    if (g_ring < 0) return;
+    int t = current_trace();
+    if (t < 0) return;
     struct trace_rec r;
     k_memset(&r, 0, sizeof r);
     r.pid = scheduler_current_pid();
@@ -210,19 +282,19 @@ static void rec_exit(uint64_t nr, int kind, uint64_t rax) {
     r.kind = (uint16_t)kind;
     r.blob_arg = 0xFF;
     r.ret = (int64_t)rax;
-    ring_put(&r);
+    ring_put(t, &r);
 }
 
 int strace_wait_for_room(uint64_t *regs) {
-    if (g_ring < 0 || !strace_active() || ring_room() >= 2) return 0;
-    // A tracer that is gone will never drain: the ring is abandoned and
-    // the tracee runs on untraced. Waiting would hang it for good.
-    if (!scheduler_pid_alive(g_ring_owner)) {
-        ring_drop();
-        g_traced_pml4 = 0;
+    int t = current_trace();
+    if (t < 0 || ring_room(t) >= 2) return 0;
+    // A tracer that is gone will never drain: its trace is abandoned and
+    // its tracees run on untraced. Waiting would hang them for good.
+    if (!scheduler_pid_alive(g_trace[t].owner)) {
+        drop_trace(t);
         return 0;
     }
-    ring_hdr(g_ring)->stalls++;
+    ring_hdr(g_trace[t].ring)->stalls++;
     // RE-ISSUE THE CALL rather than hold it: back over the 2-byte
     // `int $0x80`, sleep, and RAX (which a wake writes) back to the
     // number -- so it runs again once there is room for both its
@@ -236,7 +308,8 @@ int strace_wait_for_room(uint64_t *regs) {
 }
 
 void strace_begin(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2) {
-    if (g_ring < 0) return;
+    int t = current_trace();
+    if (t < 0) return;
     struct trace_rec r;
     k_memset(&r, 0, sizeof r);
     r.pid = scheduler_current_pid();
@@ -244,7 +317,7 @@ void strace_begin(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2) {
     r.kind = TRACE_ENTRY;
     r.a[0] = a0; r.a[1] = a1; r.a[2] = a2;
     rec_blob(&r, nr, vmm_current_pml4());
-    ring_put(&r);
+    ring_put(t, &r);
 }
 
 void strace_end(uint64_t nr, uint64_t rax)         { rec_exit(nr, TRACE_EXIT, rax); }

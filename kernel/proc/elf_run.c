@@ -257,12 +257,6 @@ int elf_run_from_fs(const char *path, const char *args) {
         return -1;
     }
 
-    // If the shell's `strace` armed tracing, this is the address space
-    // it attaches to (a no-op otherwise) -- claimed here rather than
-    // after elf_load() so the trace covers the process from its very
-    // first syscall. See kernel/proc/strace.c.
-    strace_claim(as);
-
     uint64_t entry = 0, image_end = 0;
     // `size` comes from fs_read() above and used to be discarded here;
     // it is what bounds every offset in the file. On failure the address
@@ -316,6 +310,10 @@ int elf_run_from_fs(const char *path, const char *args) {
         vga_write("\n");
         return -1;
     }
+
+    // Last, past every failure path, as build_elf_image() does: an armed
+    // trace attaches to an address space that will run.
+    strace_claim(as);
 
     klog_write("elf_run: calling process_run_ring3() for ");
     klog_write(path);
