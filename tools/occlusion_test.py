@@ -194,9 +194,14 @@ def calendar_closed_by_flyout(dbg, qmp, tmp, res):
               pts and not stale, f"{len(stale)} of {len(pts)} stale, first {stale[:1]}")
     dbg.send(f"gui click {n['tray']['cx']} {n['tray']['cy']}")   # close the flyout
     dbg.settle()
+    # THE VERIFIER'S CONTEXT, read before the report is consumed: where
+    # the cursor was, which colour became which, and whose pixels they
+    # are -- the summary line alone has never been enough to say why.
+    context = dbg.logs("wm:   ", clear=False)
     bugs = dbg.damage_bugs()
     res.check("...and the verifier saw nothing stale as it closed", bugs == [],
-              "; ".join(bugs)[:400])
+              ("; ".join(bugs) + (" | " + " | ".join(c.strip() for c in context[-3:])
+                                  if bugs and context else ""))[:900])
 
 
 # How soon after a click outside the flyout's close must be on screen. The

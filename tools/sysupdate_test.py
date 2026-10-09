@@ -90,8 +90,17 @@ def serve(throttle_kib, plain=False):
     base = update_server.make_handler({"": manifest}, throttle_kib)
 
     class Quiet(base):
-        def _say(self, *a):
-            pass
+        # Not printed, but KEPT: the server's side of a stalled fetch.
+        def do_GET(self):
+            REQS.append((time.time(), "GET", self.path, ""))
+            try:
+                super().do_GET()
+            except Exception as e:
+                REQS.append((time.time(), "raised", self.path, repr(e)))
+                raise
+
+        def _say(self, status, size=None):
+            REQS.append((time.time(), status, self.path, size))
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -99,6 +108,27 @@ def serve(throttle_kib, plain=False):
 
 
 LINES = []   # every app line views() has read: it clears the log as it goes
+REQS = []    # (time, what, path, size): every request the fixture saw
+
+
+def stall_evidence(qmp, dbg, t0):
+    """A stalled fetch, as each side of the connection tells it: the
+    server, QEMU's SLIRP (which the guest cannot fake), and the guest."""
+    print("  evidence -- a fetch that never finished:")
+    for t, what, path, size in REQS[-8:]:
+        print(f"    server {t - t0:7.1f}s  {what} {path} {size}")
+    try:
+        for ln in qmp.hmp("info usernet").splitlines():
+            if "TCP" in ln:
+                print(f"    slirp  {ln.strip()}")
+    except Exception as e:      # evidence only: never the verdict
+        print(f"    slirp  unavailable: {e!r}")
+    for cmd in ("sh netlog -n 6", "sh netctl", "sh ps"):
+        try:
+            for ln in (dbg.send(cmd) or "").strip().splitlines()[-14:]:
+                print(f"    guest  {ln}")
+        except Exception as e:
+            print(f"    guest  {cmd}: {e!r}")
 
 
 def views(dbg, seen):
@@ -212,6 +242,7 @@ def main():
         dbg.logs("sysupdate:", clear=True)
 
         seen, notes = [], []
+        t0 = time.time()
         win = dbg.spawn(APP, TITLE)
         first = wait_view(dbg, seen, 1)
         for line in LINES:
@@ -222,6 +253,8 @@ def main():
               notes[-1:] == [NOTES + (1,)], f"notes/hood/quiet/since {notes[-1:]}")
         if not check("it checks by itself and finds the two damaged files",
                      first == (V_AVAILABLE, len(DAMAGE)), f"view/changed {first}"):
+            if first is None:
+                stall_evidence(qmp, dbg, t0)
             return finish()
 
         from PIL import Image
@@ -292,8 +325,9 @@ def main():
         check("...and the row being fetched is tinted", sel > 4, f"{sel} tinted px rows")
 
         last = wait_view(dbg, seen, 2, timeout=180)
-        check("it ends on \"installed\", with no restart needed",
-              last == (V_INSTALLED, len(DAMAGE)), f"view/changed {last}")
+        if not check("it ends on \"installed\", with no restart needed",
+                     last == (V_INSTALLED, len(DAMAGE)), f"view/changed {last}") and last is None:
+            stall_evidence(qmp, dbg, t0)
         text, _ = manifest.build()
         want = {ln.split(" ")[2]: int(ln.split(" ")[0]) for ln in text.splitlines()
                 if not ln.startswith("#")}
