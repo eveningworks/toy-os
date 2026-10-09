@@ -857,6 +857,7 @@ USERLAND_RT = $(BUILD)/userland/rt/crt0.o $(BUILD)/userland/rt/sys.o \
 LIBUAPP_SRCS = $(shell find userland/ui userland/lib -name '*.c' 2>/dev/null | sort)
 LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/geom.o \
+               $(BUILD)/userland/shared/keyboard_layout.o \
                $(BUILD)/userland/shared/etc_config.o \
                $(BUILD)/userland/shared/fixed.o \
                $(BUILD)/userland/shared/ansi.o \

@@ -7,8 +7,8 @@ decisions: `docs/decisions/drivers.md`, "Dead keys compose in the kernel,
 behind every keyboard driver", and the injection entry's "two
 translators drift" (same file, `SYS_INPUT_INJECT`).
 
-**NOTHING HERE IS BUILT (written 2026-10-09).** The stage markers go on
-the headings when that changes.
+**STAGE 1 IS BUILT (2026-10-09); nothing after it is scheduled.** The
+stage markers are on the headings.
 
 ## The finding that shapes the plan
 
@@ -59,7 +59,7 @@ sits ABOVE evdev.
 | what the compositor gets | `WIN_EV_RAW_KEY`: a TRANSLATED Latin-1 byte or a `KEY_*` code plus modifier bits; and, beside it, `WIN_EV_RAW_KEY_PHYS` with the evdev keycode. The WM routes; it never translates |
 | layout switching | Super+Space sets `system.keyboard_layout` through the settings registry; the kernel reloads its table |
 | ring 3's copy | `userland/lib/ukeymap.c`, 110 lines -- reads a layout to SHOW it (`uui_keymap`); no compose pairs, no Caps, 128 keycodes where the kernel has 256 |
-| a third copy | the on-screen keyboard (`userland/wm/osk.c`) types its own US QWERTY whatever is configured -- an open roadmap item |
+| a third copy | the on-screen keyboard (`userland/wm/osk.c`) typed its own US QWERTY whatever was configured -- stage 1 removed it |
 | the 8-bit ceiling | symbols are Latin-1; "Keyboard layout files emitting codepoints" is an open roadmap item, and the console's tty is bytes |
 | the pointer | `mouse_feed_rel()` scales by `system.mouse_speed` and adds a per-event linear boost (`system.mouse_accel`); the compositor gets an absolute, clamped SCREEN position, never a delta |
 | autorepeat | PS/2 repeats in hardware (typematic). No software repeat was FOUND for USB or virtio keyboards -- to check on hardware before anything here relies on it |
@@ -92,7 +92,7 @@ sits ABOVE evdev.
 
 Each stage has a caller of its own before the next one needs it.
 
-### Stage 1 -- the translator compiled twice
+### Stage 1 -- the translator compiled twice -- BUILT 2026-10-09
 
 `keyboard_layout.c` joins `libuapp.a` (the shared-source rule; it keeps
 no kernel state but its tables), and `ukeymap.c` becomes a reader over

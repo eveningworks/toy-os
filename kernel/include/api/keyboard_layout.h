@@ -13,10 +13,16 @@
 // for why) and the one lookup keyboard.c's keyboard_feed_byte() calls
 // into. See docs/decisions.md for the full reasoning and
 // tools/gen_kbs.py for how the on-disk files are generated.
+//
+// **ONE SOURCE, TWO RINGS.** Everything below except keyboard_layout_load()
+// and keyboard_layout_current() (kernel/lib/keyboard_layout_load.c) is
+// also in libuapp.a, so the on-screen keyboard translates with the
+// kernel's own code. In ring 3 the tables are PER PROCESS: the last
+// layout a process parsed (lib/ukeymap.h) is the one it translates with.
 
 #define KB_LAYOUT_NAME_MAX 8
 
-// Loads scancode->character mappings for the named layout from
+// KERNEL ONLY. Loads keycode->character mappings for the named layout from
 // /usr/share/kbs/<name>, replacing whatever was previously loaded. Falls
 // back automatically (see keyboard_layout.c) to /usr/share/kbs/us, and if
 // even that's missing, to a small compiled-in US table -- so this
@@ -28,7 +34,7 @@
 // was applied).
 int keyboard_layout_load(const char *name);
 
-// The name of whatever layout actually ended up active (which may not
+// KERNEL ONLY. The name of whatever layout actually ended up active (which may not
 // be what was last requested, if that request fell back -- see
 // keyboard_layout_load()'s return value). Always a valid, non-null,
 // NUL-terminated string.
@@ -105,9 +111,18 @@ int keyboard_layout_dead_pending(void);
 void keyboard_layout_compose_reset(void);
 
 // Parses a layout from memory instead of /usr/share/kbs, replacing the active
-// tables; 1 if it mapped anything. For KTESTs, which restore the real
+// tables; 1 if it mapped anything. Ring 3's only way in (lib/ukeymap.c). For KTESTs, which restore the real
 // layout with keyboard_layout_load() afterwards. Does not change
 // keyboard_layout_current().
 int keyboard_layout_load_text(const char *data, uint32_t size);
+
+// The compiled-in US table, for when no layout file can be read.
+void keyboard_layout_use_fallback(void);
+
+// The RAW symbol on one level -- 0 base, 1 Shift, 2 AltGr, 3 Shift+AltGr
+// -- with none of translate()'s fallthrough, 0 where the file maps
+// nothing. For SHOWING a layout, where a level the file left empty must
+// read as empty rather than as the base character.
+int keyboard_layout_symbol(uint16_t keycode, int level);
 
 #endif

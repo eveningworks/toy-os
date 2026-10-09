@@ -199,6 +199,43 @@ def main():
               "ctrlok/" in after,
               "a literal 'c' would have made the command xyzcmkdir")
 
+        # --- THE CONFIGURED LAYOUT: Finnish, typed through ring 3's
+        # copy of the kernel's translator. AltGr+2 is @ there and Shift+7
+        # is /, so a panel still typing US produces neither directory.
+        k = dbg.json("gui osk --json")
+        check("the bar names the layout", k.get("layout") == "English (US)",
+              f"layout={k.get('layout')!r}")
+        dbg.send("sh config set system.keyboard_layout fi")
+        dbg.settle()
+        time.sleep(0.6)
+        k = dbg.json("gui osk --json")
+        check("...and follows the setting to Finnish", k.get("layout") == "Finnish",
+              f"layout={k.get('layout')!r}")
+        fi_slash = ["Space", "Shift", "7"]
+        kb.type_caps(list("mkdir") + fi_slash + ["a", "AltGr", "2", "b", "Enter"])
+        time.sleep(1.2)
+        after = listing(dbg)
+        check("AltGr types the layout's third level", "a@b/" in after,
+              "wanted a@b/ -- a2b/ means AltGr typed the base, no directory that / was US")
+
+        # THE DEAD KEY: acute, then e, is ONE character. A panel that never
+        # composed types the accent and the e (two characters), and one
+        # that swallowed the dead key types a bare e -- neither is one
+        # non-ASCII byte between x and y. (The listing is UTF-8-decoded,
+        # so a lone Latin-1 byte reads as U+FFFD.)
+        kb.type_caps(list("mkdir") + fi_slash + ["x", "kc13"])
+        k = dbg.json("gui osk --json")
+        check("a dead key latches until its letter", k.get("pending") == 13,
+              f"pending={k.get('pending')}")
+        kb.type_caps(["e", "y", "Enter"])
+        time.sleep(1.2)
+        after = listing(dbg)
+        check("dead acute then e composes to one character", "x\ufffdy/" in after,
+              "x\ufffdey/ means it never composed, xey/ that the accent was lost")
+        dbg.send("sh config set system.keyboard_layout us")
+        dbg.settle()
+        time.sleep(0.6)
+
         # --- FLOATING: dragged by its bar, docked, closed by its x ---
         k = dbg.json("gui osk --json")
         check("it opens floating, narrower than the screen", not k["docked"] and k["w"] < 1280,

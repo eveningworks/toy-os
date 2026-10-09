@@ -50,7 +50,7 @@
 | `uimg.h` | uimg -- decoding an image file into pixels, in RING 3. |
 | `uinflate.h` | DEFLATE, both directions, in ring 3 -- RFC 1951, plus the zlib (RFC 1950) and gzip (RFC 1952) wrappers around it. |
 | `uinitctl.h` | The control protocol between `/bin/service` and init, over uchan. |
-| `ukeymap.h` | A keyboard layout read from /usr/share/kbs/<name>, for SHOWING it -- which character each key gives on each level, and which keys are dead. |
+| `ukeymap.h` | A keyboard layout read from /usr/share/kbs/<name>: which character each key gives on each level, and which keys are dead -- a snapshot for SHOWING a layout. |
 | `ukeysym.h` | An X11 KEYSYM -- what a VNC viewer sends for a key (RFB 7.5.4) -- as something toy-os's input core takes: a Latin-1 character to type on the active layout, or an evdev keycode (abi/input_keys.h) fo... |
 | `uktest.h` | KTEST's assertions in ring 3, so a test can follow its code out of the kernel with its bodies unchanged: a case is a plain function, and KTEST_ASSERT / KTEST_ASSERT_EQ fail it and return, exactly a... |
 | `ulaunch.h` | ulaunch -- is this file something to RUN, and how should it run? |
@@ -143,7 +143,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_grid.h` | uui_grid -- a GRID OF EQUAL CELLS the caller paints, one selected: a character map's glyphs (the Character Map), an icon picker, a board. |
 | `uui_image.h` | A decoded picture, in a layout. |
 | `uui_keycapture.h` | A CONTROL THAT RECORDS A KEY COMBINATION BY HAVING YOU PRESS IT. |
-| `uui_keymap.h` | keymap -- a picture of a keyboard layout: the 105-key ISO board's four typing rows, each cap showing what its key types. |
+| `uui_keymap.h` | keymap -- a keyboard drawn from a layout, two ways: |
 | `uui_keysheet.h` | keysheet -- an app's keyboard shortcuts as a sheet: groups of rows, each an action on the left and its keys on the right, drawn as caps. |
 | `uui_label.h` | A line of text the LAYOUT knows about. |
 | `uui_layout.h` | uui_layout -- places widgets so apps stop doing coordinate arithmetic. |

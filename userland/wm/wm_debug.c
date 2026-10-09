@@ -1004,7 +1004,7 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
 // The on-screen keyboard: the panel, the tray item that toggles it, the
 // armed modifiers, and a keycap's box BY LABEL. `gui osk key <cap>` is
 // the one a test uses -- deriving a cap's centre from the panel rect
-// would be a second copy of osk.c's span walk.
+// would be a second copy of uui_keymap's walk.
 static void cmd_osk(struct dbg_out *o, const char *arg, int json) {
     struct osk_report r;
     osk_report(&r);
@@ -1026,7 +1026,8 @@ static void cmd_osk(struct dbg_out *o, const char *arg, int json) {
     }
 
     if (json) {
-        dbg_out_printf(o, "{\"open\":%s,\"mods\":%u,", osk_open ? "true" : "false", r.mods);
+        dbg_out_printf(o, "{\"open\":%s,\"mods\":%u,\"layout\":\"%s\",\"pending\":%d,",
+                     osk_open ? "true" : "false", r.mods, r.layout, r.pending_kc);
         dbg_out_printf(o, "\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,", r.x, r.y, r.w, r.h);
         dbg_out_printf(o, "\"docked\":%s,\"bar_h\":%d,\"dock\":{\"cx\":%d,\"cy\":%d},"
                      "\"close\":{\"cx\":%d,\"cy\":%d},", r.docked ? "true" : "false", r.bar_h,

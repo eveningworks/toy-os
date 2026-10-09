@@ -331,6 +331,10 @@ TESTS = [
     # lib/rubberband: the desktop's and the File Manager's drag selection.
     # A KTEST until the module left the kernel, its bodies unchanged.
     ("rubberband_test", 0, None, None),
+    # The keyboard translator's SECOND compilation, on the shipped Finnish
+    # layout: what the on-screen keyboard types with. input_test's KTESTs
+    # pass whether or not ring 3 links a byte of it.
+    ("keymap_test", 0, None, None),
     # lib/uappentry: the one desktop-entry reader (Task Manager, Crash
     # Reports), against the shipped entries and hand-written ones.
     ("appentry_test", 0, None, None),

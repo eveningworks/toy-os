@@ -9,6 +9,12 @@
 #include "ui/utheme.h"
 #include "ui/uui_primitives.h"
 #include "ui/uui_popup.h"
+#include "ui/uui_keymap.h"
+#include "lib/ukeymap.h"
+#include "lib/usetting.h"
+#include "lib/uconf.h"
+#include "keyboard_layout.h"
+#include "wm_conf.h"
 #include "wm_shadow.h"
 
 int osk_open = 0;
@@ -20,77 +26,45 @@ static int g_tray_id = -1;
 // ordinary key, which is what makes a one-pointer device able to type
 // Ctrl-C at all.
 static unsigned g_mods = 0;
-static int g_pressed_row = -1, g_pressed_col = -1;
+static int g_pressed = -1;
 
 // --- the layout -------------------------------------------------------
 //
-// US QWERTY, matching kernel/lib/keyboard_layout.c's FALLBACK_US tables
-// character for character. THE TWO MUST AGREE: this is a second copy of
-// a layout, so a key that disagrees types something the physical
-// keyboard would not, and only on this machine.
-//
-// `span` is in HALF key widths, so a plain key is 2 and every row sums
-// to OSK_ROW_SPAN. A row that does not sum to it is drawn short rather
-// than misaligned, which is a visible mistake instead of a silent one.
-#define OSK_ROWS      5
-#define OSK_ROW_SPAN  30
-#define OSK_MAX_COLS  15
+// THE CONFIGURED LAYOUT, typed with the kernel's own translator compiled
+// into this process (api/keyboard_layout.h, lib/ukeymap.h): loading the
+// snapshot the board draws from also loads the tables typing reads, so
+// a cap cannot show one character and type another. Reloaded when the
+// settings generation moves -- Super+Space, Settings, `config set`.
+#define OSK_ROWS 5
+#define SET_ACTIVE "system.keyboard_layout"
+#define SET_DEAD   "system.keyboard_dead_keys"
+#define NAMES_FILE "/etc/settings.d/system.keyboard_layout"
 
-struct osk_key {
-    const char *cap;      // label; the shifted label is derived for a letter
-    const char *cap_sh;   // label when shift is armed, or 0 for `cap`
-    int code;             // an ASCII character, or a KEY_* code (16 bits)
-    int code_sh;          // shifted, or 0 for `code`
-    unsigned char mod;    // nonzero: a sticky modifier, and `code` is unused
-    unsigned char span;
-};
+static struct ukeymap g_map;
+static struct uui_keymap g_board;
+static char g_layout_name[48] = "English (US)";
+static uint32_t g_layout_gen = 0xFFFFFFFFu;
+static int g_pending_kc;    // the dead key waiting for its letter, or 0
 
-#define K(c, s)     { c, s, c[0], s[0], 0, 2 }
-#define LTR(l, u)   { l, u, l[0], u[0], 0, 2 }
-#define WIDE(cap, code, span) { cap, 0, code, 0, 0, span }
-#define MOD(cap, bit, span)   { cap, 0, 0, 0, bit, span }
-
-static const struct osk_key g_row0[] = {
-    K("`","~"), K("1","!"), K("2","@"), K("3","#"), K("4","$"), K("5","%"),
-    K("6","^"), K("7","&"), K("8","*"), K("9","("), K("0",")"),
-    K("-","_"), K("=","+"), WIDE("Bksp", '\b', 4),
-};
-static const struct osk_key g_row1[] = {
-    WIDE("Tab", '\t', 4),
-    LTR("q","Q"), LTR("w","W"), LTR("e","E"), LTR("r","R"), LTR("t","T"),
-    LTR("y","Y"), LTR("u","U"), LTR("i","I"), LTR("o","O"), LTR("p","P"),
-    K("[","{"), K("]","}"),
-};
-static const struct osk_key g_row2[] = {
-    WIDE("Esc", 27, 4),
-    LTR("a","A"), LTR("s","S"), LTR("d","D"), LTR("f","F"), LTR("g","G"),
-    LTR("h","H"), LTR("j","J"), LTR("k","K"), LTR("l","L"),
-    K(";",":"), K("'","\""), WIDE("Enter", '\n', 4),
-};
-static const struct osk_key g_row3[] = {
-    MOD("Shift", KEY_MOD_SHIFT, 5),
-    LTR("z","Z"), LTR("x","X"), LTR("c","C"), LTR("v","V"), LTR("b","B"),
-    LTR("n","N"), LTR("m","M"), K(",","<"), K(".",">"), K("/","?"),
-    K("\\","|"), { "Del", 0, KEY_DELETE, 0, 0, 3 },
-};
-static const struct osk_key g_row4[] = {
-    MOD("Ctrl", KEY_MOD_CTRL, 4), MOD("Alt", KEY_MOD_ALT, 4),
-    // Named rather than drawn as glyphs: the caps double as the labels
-    // `gui osk key <cap>` looks a key up by, and a cap of " " or "<"
-    // cannot be passed as a debug-console token at all.
-    WIDE("Space", ' ', 10),
-    { "Left", 0, KEY_ARROW_LEFT, 0, 0, 3 }, { "Down", 0, KEY_ARROW_DOWN, 0, 0, 3 },
-    { "Up", 0, KEY_ARROW_UP, 0, 0, 3 },     { "Right", 0, KEY_ARROW_RIGHT, 0, 0, 3 },
-};
-
-static const struct osk_key *const g_rows[OSK_ROWS] = {
-    g_row0, g_row1, g_row2, g_row3, g_row4,
-};
-static const int g_row_len[OSK_ROWS] = {
-    (int)(sizeof g_row0 / sizeof g_row0[0]), (int)(sizeof g_row1 / sizeof g_row1[0]),
-    (int)(sizeof g_row2 / sizeof g_row2[0]), (int)(sizeof g_row3 / sizeof g_row3[0]),
-    (int)(sizeof g_row4 / sizeof g_row4[0]),
-};
+static void load_layout(void) {
+    uint32_t gen = wm_setting_generation();
+    if (gen == g_layout_gen) return;
+    g_layout_gen = gen;
+    char code[32], dead[8];
+    if (!usetting_get(SET_ACTIVE, code, sizeof code) || !code[0]) k_strlcpy(code, "us", sizeof code);
+    if (!ukeymap_load(&g_map, code) && !ukeymap_load(&g_map, "us")) {
+        // No file at all: the kernel's compiled-in table, so the panel
+        // still types rather than showing blank caps.
+        keyboard_layout_use_fallback();
+        ukeymap_snapshot(&g_map);
+    }
+    keyboard_layout_set_dead_keys(!(usetting_get(SET_DEAD, dead, sizeof dead) && !k_strcmp(dead, "off")));
+    g_pending_kc = 0;
+    char key[48];
+    k_snprintf(key, sizeof key, "Choice.%s", code);
+    if (!uconf_get(NAMES_FILE, key, g_layout_name, sizeof g_layout_name))
+        k_strlcpy(g_layout_name, code, sizeof g_layout_name);
+}
 
 // --- geometry ---------------------------------------------------------
 //
@@ -101,8 +75,8 @@ static const int g_row_len[OSK_ROWS] = {
 
 struct osk_geom {
     int x, y, w, h;
-    int pad, row_h, half_w;
-    int kx, ky;                       // the keys' origin
+    int pad, row_h;
+    int kx, ky, kw, kh;               // the keys' rect
     int bar_h;
     int dock_x, dock_w, close_x, close_w, btn_y, btn_h;
     int docked;
@@ -122,7 +96,6 @@ static void osk_geometry(struct osk_geom *g) {
     g->row_h = ch * 2 + 6;
     g->bar_h = ch + 14;
     g->w = g_docked ? screen_w : (ch * 56 < screen_w - 24 ? ch * 56 : screen_w - 24);
-    g->half_w = (g->w - 2 * g->pad) / OSK_ROW_SPAN;
     g->h = g->bar_h + OSK_ROWS * g->row_h + g->pad;
     if (g_docked) {
         g->x = 0;
@@ -136,8 +109,10 @@ static void osk_geometry(struct osk_geom *g) {
         if (y < 0) y = 0;
         g->x = x; g->y = y;
     }
-    g->kx = g->x + (g->w - OSK_ROW_SPAN * g->half_w) / 2;   // the rounding, split
+    g->kx = g->x + g->pad;
     g->ky = g->y + g->bar_h;
+    g->kw = g->w - 2 * g->pad;
+    g->kh = OSK_ROWS * g->row_h;
     g->btn_h = g->bar_h - 8;
     g->btn_y = g->y + 4;
     g->close_w = g->btn_h + 6;
@@ -146,30 +121,16 @@ static void osk_geometry(struct osk_geom *g) {
     g->dock_x = g->close_x - 4 - g->dock_w;
 }
 
-// The keycap's box. Walks the row's spans, which is the SAME walk that
-// draws it -- so a click cannot be told a different rect from the one
-// the cap was painted at, the rule wm_tray.c's tray_item_rect() follows.
-static void key_rect(const struct osk_geom *g, int row, int col,
-                     int *x, int *y, int *w, int *h) {
-    int span = 0;
-    for (int i = 0; i < col; i++) span += g_rows[row][i].span;
-    *x = g->kx + span * g->half_w;
-    *y = g->ky + row * g->row_h;
-    *w = g_rows[row][col].span * g->half_w;
-    *h = g->row_h;
-}
-
-static int key_at(const struct osk_geom *g, int mx, int my, int *out_row, int *out_col) {
-    for (int r = 0; r < OSK_ROWS; r++) {
-        for (int c = 0; c < g_row_len[r]; c++) {
-            int x, y, w, h;
-            key_rect(g, r, c, &x, &y, &w, &h);
-            if (!uui_hit(x, y, w - 1, h - 1, mx, my)) continue;
-            *out_row = r; *out_col = c;
-            return 1;
-        }
+// The board, placed where this geometry puts the keys. Every caller
+// that hit-tests or draws places it first, so the two cannot disagree.
+static struct uui_keymap *board(const struct osk_geom *g) {
+    load_layout();
+    if (!g_board.map) {
+        uui_keymap_init(&g_board, &g_map);
+        g_board.board = UUI_KEYMAP_TYPING;
     }
-    return 0;
+    uui_keymap_set_geometry(&g_board, g->kx, g->ky, g->kw, g->kh);
+    return &g_board;
 }
 
 // --- typing -----------------------------------------------------------
@@ -191,18 +152,11 @@ static void send_one(struct window *win, int code, unsigned mods) {
     wm_client_send_key_up(win, code, mods);
 }
 
-// Emits one keycap, encoded the way keyboard.c encodes the physical
+// Emits one character, encoded the way keyboard.c encodes the physical
 // key -- api/keyboard.h's contract, and getting it wrong is silent:
 // Ctrl-C as 'c' + KEY_MOD_CTRL reaches an app that (correctly) never
 // tests that bit for a letter.
-static void type_key(const struct osk_key *k) {
-    struct window *win = focused_client();
-    if (!win) return;
-
-    int shifted = (g_mods & KEY_MOD_SHIFT) != 0;
-    int code = shifted && k->code_sh ? k->code_sh : k->code;
-    if (!code) return;
-
+static void type_code(struct window *win, int code) {
     if (g_mods & KEY_MOD_CTRL) {
         // Ctrl folds a LETTER to its control code; anything else is the
         // key itself, with the bit.
@@ -217,6 +171,34 @@ static void type_key(const struct osk_key *k) {
     send_one(win, code, g_mods);
 }
 
+// One key of the board, as keyboard.c's key_event_body() handles the
+// physical one: a symbol from the layout, then, unless Ctrl or Alt makes
+// it a shortcut, through the dead-key composer -- 0, 1 or 2 characters.
+static void type_key(const struct uui_keymap_key *k) {
+    struct window *win = focused_client();
+    if (!win) return;
+    int shortcut = (g_mods & (KEY_MOD_CTRL | KEY_MOD_ALT)) != 0;
+    int sym = k->kc ? keyboard_layout_translate((uint16_t)k->kc, (g_mods & KEY_MOD_SHIFT) != 0,
+                                                (g_mods & KEY_MOD_ALTGR) != 0)
+                    : k->action;
+    if (!sym) return;
+    // A function key composes only where the physical one does: Space
+    // types a pending accent, Backspace and Esc take it back. The rest
+    // (Enter, Tab, the arrows) leave a pending accent pending.
+    int composes = k->kc || sym == ' ' || sym == '\b' || sym == 27;
+    if (shortcut || !composes) {
+        type_code(win, shortcut && k->kc ? keyboard_layout_spacing(sym) : sym);
+        return;
+    }
+    uint8_t out[2];
+    int pending_before = keyboard_layout_dead_pending();
+    int n = keyboard_layout_compose(sym, out);
+    for (int i = 0; i < n; i++) type_code(win, out[i]);
+    // Backspace or Esc with nothing pending is just itself.
+    if (!pending_before && n == 0 && !KB_SYM_IS_DEAD(sym)) type_code(win, sym);
+    g_pending_kc = keyboard_layout_dead_pending() ? k->kc : 0;
+}
+
 // --- what the debug console reports ------------------------------------
 
 void osk_report(struct osk_report *r) {
@@ -224,6 +206,9 @@ void osk_report(struct osk_report *r) {
     osk_geometry(&g);
     r->x = g.x; r->y = g.y; r->w = g.w; r->h = g.h;
     r->mods = g_mods;
+    load_layout();
+    k_strlcpy(r->layout, g_layout_name, sizeof r->layout);
+    r->pending_kc = g_pending_kc;
     r->docked = g.docked;
     r->bar_h = g.bar_h;
     r->dock_cx = g.dock_x + g.dock_w / 2;  r->dock_cy = g.btn_y + g.btn_h / 2;
@@ -237,13 +222,9 @@ int osk_key_box(const char *cap, int *x, int *y, int *w, int *h) {
     if (!cap) return 0;
     struct osk_geom g;
     osk_geometry(&g);
-    for (int r = 0; r < OSK_ROWS; r++)
-        for (int c = 0; c < g_row_len[r]; c++)
-            if (k_strcmp(g_rows[r][c].cap, cap) == 0) {
-                key_rect(&g, r, c, x, y, w, h);
-                return 1;
-            }
-    return 0;
+    struct uui_keymap *b = board(&g);
+    int i = uui_keymap_find(b, cap);
+    return i >= 0 && uui_keymap_key_rect(b, i, x, y, w, h);
 }
 
 // --- overlay ops ------------------------------------------------------
@@ -262,8 +243,10 @@ static void osk_close_panel(void) {
     osk_damage();          // while it is still up, so its rect repaints
     osk_open = 0;
     g_mods = 0;
+    keyboard_layout_compose_reset();
+    g_pending_kc = 0;
     g_drag = 0;
-    g_pressed_row = g_pressed_col = -1;
+    g_pressed = -1;
 }
 
 static void osk_open_panel(void) {
@@ -273,7 +256,7 @@ static void osk_open_panel(void) {
     // useless.
     osk_open = 1;
     g_mods = 0;
-    g_pressed_row = g_pressed_col = -1;
+    g_pressed = -1;
     osk_damage();
 }
 
@@ -286,9 +269,8 @@ int osk_hover_at(int mx, int my) {
     osk_geometry(&g);
     if (osk_open && uui_hit(g.dock_x, g.btn_y, g.dock_w, g.btn_h, mx, my)) return 10000;
     if (osk_open && uui_hit(g.close_x, g.btn_y, g.close_w, g.btn_h, mx, my)) return 10001;
-    int r, c;
-    if (!key_at(&g, mx, my, &r, &c)) return 0;
-    return r * OSK_MAX_COLS + c + 1;   // 0 means none, so bias by one
+    int i = uui_keymap_key_at(board(&g), mx, my);
+    return i + 1;   // 0 means none, so bias by one
 }
 
 void osk_update_press(int mx, int my, uint8_t buttons) {
@@ -310,16 +292,10 @@ void osk_update_press(int mx, int my, uint8_t buttons) {
         osk_damage();
         return;
     }
-    if (!(buttons & 0x1)) { g_pressed_row = g_pressed_col = -1; return; }
-    int r, c;
-    if (key_at(&g, mx, my, &r, &c)) {
-        if (r == g_pressed_row && c == g_pressed_col) return;
-        g_pressed_row = r; g_pressed_col = c;
-    } else if (g_pressed_row < 0) {
-        return;
-    } else {
-        g_pressed_row = g_pressed_col = -1;
-    }
+    if (!(buttons & 0x1)) { g_pressed = -1; return; }
+    int i = uui_keymap_key_at(board(&g), mx, my);
+    if (i == g_pressed) return;
+    g_pressed = i;
     osk_damage();
 }
 
@@ -354,32 +330,23 @@ int osk_handle_click(int mx, int my) {
         g_drag_dy = my - g.y;
         return 1;
     }
-    int r, c;
-    if (!key_at(&g, mx, my, &r, &c)) {
+    struct uui_keymap_key key;
+    int i = uui_keymap_key_at(board(&g), mx, my);
+    if (i < 0 || !uui_keymap_key(&g_board, i, &key)) {
         // A click outside the panel is NOT ours: it belongs to whatever
         // is beneath, which is how the caret gets placed in the field
         // being typed into.
         return uui_hit(g.x, g.y, g.w, g.h, mx, my);
     }
 
-    const struct osk_key *k = &g_rows[r][c];
-    if (k->mod) {
-        g_mods ^= k->mod;      // sticky: armed until the next ordinary key
-    } else {
-        type_key(k);
+    if (key.mod) {
+        g_mods ^= key.mod;     // sticky: armed until the next ordinary key
+    } else if (key.kc || key.action) {
+        type_key(&key);
         g_mods = 0;
     }
     osk_damage();
     return 1;
-}
-
-// A function key: the modifiers, the editing and navigation keys. Drawn
-// a step darker than a letter, as every touch keyboard does.
-static int is_fn(const struct osk_key *k) {
-    if (k->mod) return 1;
-    int c = k->code;
-    return c == '\b' || c == '\t' || c == 27 || c == KEY_DELETE || c == KEY_ARROW_LEFT ||
-           c == KEY_ARROW_RIGHT || c == KEY_ARROW_UP || c == KEY_ARROW_DOWN;
 }
 
 void osk_draw(int mx, int my) {
@@ -392,7 +359,6 @@ void osk_draw(int mx, int my) {
 
     uint32_t ground = ugfx_blend(uui_popup_bg(), UTHEME_CHROME, 64);
     uint32_t edge = uui_popup_border(), fg = UTHEME_TEXT;
-    uint32_t face = UTHEME_WHITE, fn_face = ugfx_blend(ground, UTHEME_CHROME, 200);
     if (g.docked) {
         ugfx_fill_rect(s, g.x, g.y, g.w, g.h, ground);
         ugfx_fill_rect(s, g.x, g.y, g.w, 1, edge);
@@ -405,7 +371,7 @@ void osk_draw(int mx, int my) {
 
     // THE BAR: what the keys type, a grip to drag by, Dock and close.
     int by = g.y + (g.bar_h - ch) / 2;
-    ugfx_draw_string_clipped(s, g.x + g.pad + 4, by, g.w / 3, "English (US)",
+    ugfx_draw_string_clipped(s, g.x + g.pad + 4, by, g.w / 3, g_layout_name,
                              ugfx_blend(fg, ground, 60), ground);
     if (!g.docked)
         uui_fill_round_rect(s, g.x + (g.w - 44) / 2, g.y + g.bar_h / 2 - 2, 44, 5, UUI_CAPSULE,
@@ -422,41 +388,12 @@ void osk_draw(int mx, int my) {
     ugfx_draw_line(s, cx - k, cy - k, cx + k, cy + k, fg, GEOM_AA);
     ugfx_draw_line(s, cx - k, cy + k, cx + k, cy - k, fg, GEOM_AA);
 
-    int shifted = (g_mods & KEY_MOD_SHIFT) != 0;
-    for (int r = 0; r < OSK_ROWS; r++) {
-        for (int c = 0; c < g_row_len[r]; c++) {
-            const struct osk_key *key = &g_rows[r][c];
-            int x, y, w, h;
-            key_rect(&g, r, c, &x, &y, &w, &h);
-
-            // An armed modifier reads as SELECTED, not as hovered --
-            // selection outranks hover, so the accent says "this is
-            // held" while the pointer is elsewhere. Enter is the accent
-            // too: the key that commits, as on every touch keyboard.
-            int armed = key->mod && (g_mods & key->mod);
-            int down = (r == g_pressed_row && c == g_pressed_col);
-            uint32_t cap_bg = is_fn(key) ? fn_face : face, cap_fg = fg;
-            if (armed || key->code == '\n') {
-                cap_bg = UTHEME_ACCENT;
-                cap_fg = UTHEME_ACCENT_TEXT;
-                if (down) cap_bg = uui_state_bg(cap_bg, UUI_STATE_PRESSED);
-            } else if (down) {
-                cap_bg = uui_state_bg(cap_bg, UUI_STATE_PRESSED);
-            } else if (uui_hit(x, y, w - 1, h - 1, mx, my)) {
-                cap_bg = uui_state_bg(cap_bg, UUI_STATE_HOVER);
-            }
-
-            int ix = x + 3, iy = y + 3, iw = w - 6, ih = h - 6;
-            // A cap is lifted by a hairline under it, not outlined.
-            uui_fill_round_rect(s, ix, iy + 1, iw, ih, 6, ugfx_blend(ground, UTHEME_TEXT, 40));
-            uui_fill_round_rect(s, ix, iy, iw, ih, 6, cap_bg);
-
-            const char *cap = (shifted && key->cap_sh) ? key->cap_sh : key->cap;
-            int tw = ugfx_text_width(cap);
-            int cap_x = ix + (iw - tw) / 2;
-            if (cap_x < ix + 2) cap_x = ix + 2;
-            ugfx_draw_string_clipped(s, cap_x, iy + (ih - ch) / 2, ix + iw - 2 - cap_x, cap,
-                                     cap_fg, cap_bg);
-        }
-    }
+    struct uui_keymap *b = board(&g);
+    b->bg = ground;
+    b->levels = g_mods & (KEY_MOD_SHIFT | KEY_MOD_ALTGR);
+    b->armed = g_mods;
+    b->pending_kc = g_pending_kc;
+    b->pressed = g_pressed;
+    b->hover = uui_keymap_key_at(b, mx, my);
+    uui_keymap_draw(s, b);
 }

@@ -872,9 +872,9 @@ run on, not by order.
 - [x] ~~Settings shows a picture of the chosen keyboard layout~~ DONE 2026-10-05 -- `uui_keymap`, with a Try it field
 - [x] ~~Several layouts at once, switched with a shortcut and shown in the tray~~ DONE 2026-10-05 -- Super+Space, `layout_popup.c`
 - [x] ~~Dead keys on or off~~ DONE 2026-10-05 -- `system.keyboard_dead_keys`, for every layout at once
-- [ ] The on-screen keyboard should draw the CONFIGURED layout, not its own copy of US QWERTY -- it still types US whatever is set
+- [x] ~~The on-screen keyboard should draw the CONFIGURED layout, not its own copy of US QWERTY~~ DONE 2026-10-09 -- the shared translator
 - [ ] A virtual-keyboard protocol, so the on-screen keyboard can be a ring-3 app instead of compositor code
-- [ ] The keyboard translator in ring 3 too, for the on-screen keyboard -- `docs/input-policy-design.md` stage 1
+- [x] ~~The keyboard translator in ring 3 too, for the on-screen keyboard~~ DONE 2026-10-09 -- `docs/input-policy-design.md` stage 1
 
 - [ ] `settings_init()` as initcalls too -- the last hand list; its order is the Settings sidebar's, so it needs an explicit order first
 

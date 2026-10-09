@@ -40,10 +40,13 @@ struct osk_report {
     int docked;                          // full width, or floating
     int bar_h;                           // the top bar it is dragged by
     int dock_cx, dock_cy, close_cx, close_cy;   // the bar's two buttons
+    char layout[48];                     // the name the bar shows
+    int pending_kc;                      // a dead key waiting, or 0
 };
 void osk_report(struct osk_report *r);
 
-// One keycap's box, found by its label ("a", "Enter", "Ctrl"). 0 when
+// One keycap's box, found by its label ("Enter", "Ctrl"), its base
+// character ("a", "/"), or "kc<keycode>" (uui_keymap_find()). 0 when
 // there is no such cap. Valid whether or not the panel is open.
 int osk_key_box(const char *cap, int *x, int *y, int *w, int *h);
 

@@ -4841,10 +4841,13 @@ Four things to know before editing it:
   Terminal and does nothing at all. Alt-B is `'b'` with `KEY_MOD_ALT`,
   one keystroke (the Terminal adds the ESC its pty wants), and Ctrl with
   a non-letter is the key with `KEY_MOD_CTRL`.
-- **ITS LAYOUT IS A SECOND COPY OF `FALLBACK_US`** in
-  `kernel/lib/keyboard_layout.c`, and the two must agree character for
-  character. A cap that disagrees types something the physical keyboard
-  would not, on this machine only.
+- **IT TYPES THE CONFIGURED LAYOUT WITH THE KERNEL'S OWN TRANSLATOR**,
+  `kernel/lib/keyboard_layout.c` compiled into ring 3, and draws through
+  `uui_keymap`'s typing board from the snapshot that loaded it
+  (`lib/ukeymap.h`) -- so a cap cannot show one character and type
+  another, and dead keys compose exactly as the physical keyboard's do.
+  Never give it a table of its own. It reloads when the settings
+  generation moves.
 - **THE MODIFIERS ARE STICKY**, armed by a click and consumed by the
   next ordinary key, because one pointer cannot hold Ctrl and click C.
   An armed modifier draws in the ACCENT rather than as hovered --
@@ -4868,7 +4871,10 @@ as a dead control.
 **`gui osk` and `gui osk key <cap>` report the panel, the tray item and
 any keycap's box**, so a test never derives a cap's position; the caps
 are named (`Space`, `Left`, `Enter`) partly for that reason, since a cap
-labelled `" "` cannot be passed as a console token.
+labelled `" "` cannot be passed as a console token. A character cap is
+found by its BASE character (`q`, `/`) or, for one that is not ASCII,
+`kc<keycode>` (`kc13`, Finnish's dead acute); `--json` adds the layout
+the bar names and a pending dead key.
 
 - **THE TERMINAL'S SCROLLBAR IS AN OVERLAY: THIN AT REST, FULL UNDER THE
   POINTER, AND THE GRID DOES NOT NARROW FOR IT.** It was a reserved
