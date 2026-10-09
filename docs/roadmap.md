@@ -675,6 +675,14 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Live wallpapers~~ DONE 2026-10-08 -- a background client (`wm_background.c`): six effects, and a GIF plays
 - [x] ~~Video wallpapers~~ DONE 2026-10-09 -- `players/video`, silent and looping, over `lib/uvid_play.h`; `dusk.mpg` ships
 - [ ] Live wallpaper previews in Settings that move -- the gallery shows one still frame per effect
+- [ ] Settings previews: transparency glass -- clear, frosted and wallpaper drawn over a crop of the real wallpaper
+- [ ] Settings previews: Start and taskbar layout as mini diagrams per choice -- Windows 11's Start-layout pictures
+- [ ] Settings previews: the minimize effects as looping thumbnails -- KDE's desktop-effect previews
+- [ ] Settings previews: wallpaper Fill vs Fit, drawn with the chosen wallpaper
+- [ ] Settings previews: cursor size, reusing the cursor-theme gallery's cards
+- [ ] Settings previews: icon size, sample icons at each size
+- [ ] Settings previews: menu spacing -- comfortable, compact and dense as a mini menu
+- [ ] Terminal Options: colour schemes as swatches, each a small sample of the terminal
 - [ ] Dropdown lists sized to the room they have -- `uui_dropdown` scrolls past six rows; Qt shows 10, Windows 11 about 20
 - [x] ~~Desktop icon repositioning/dragging~~ done
 - [x] ~~Desktop icons are a letter in a tile~~ DONE 2026-08-23 -- real artwork, composited, on the desktop, the Start menu and the taskbar
