@@ -756,6 +756,9 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Copy and move files between the desktop and the File Manager~~ DONE 2026-09-10 -- `/home/desktop`, over the clipboard both ways
 - [x] ~~Drag-and-drop between windows~~ DONE 2026-09-10 -- the compositor brokers it; the payload rides a slot beside the clipboard
 - [ ] Drag a file from the file manager (see Desktop productivity apps) into Notepad
+- [x] ~~Clipboard keys and a right-click edit menu in every text field~~ DONE 2026-10-09 -- `edit_target`, one menu per process
+- [ ] The edit menu in the WM's own fields (Start search, desktop rename), which have the keys only
+- [ ] Drag to select in a read-only text view (its menu has Select All only)
 - [ ] A clipboard that survives `clipboardd` restarting
 - [ ] Typed clipboard formats (an image kind), beyond files and text
 - [ ] A clipboard history ring

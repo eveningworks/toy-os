@@ -58,6 +58,7 @@ tier like `qemu_matrix.py`, never a gate.
 
 import atexit
 import os
+import re
 import socket
 import sys
 import time
@@ -286,7 +287,13 @@ class RemoteConsole(DebugConsole):
         return new
 
     def events(self, prefix="uidemo:"):
-        return [ln for ln in self._klog_delta() if ln.startswith(prefix)]
+        # INTO log_lines as well, as send() does on a VM: click() and key()
+        # call this, and a delta it kept to itself was gone for the next
+        # logs() -- an app's line after a click never reached the test.
+        # The prefix is matched past dmesg's "[secs] " stamp.
+        new = self._klog_delta()
+        self.log_lines.extend(new)
+        return [ln for ln in new if re.sub(r"^\[[0-9.]+\] ", "", ln).startswith(prefix)]
 
     def logs(self, match="", clear=True):
         self.log_lines.extend(self._klog_delta())

@@ -59,10 +59,7 @@ void utext_init_buf(struct utext *t, char *buf, int cap) {
     t->scroll_offset = 0;
     t->animate = 0;
     uui_scrollanim_init(&t->anim);
-    t->ed.cursor = 0;
-    t->ed.sel_anchor = 0;
-    t->ed.sel_active = 0;
-    t->ed.undo = 0;
+    uui_edit_init(&t->ed);
     t->wrap_cache.valid = 0;
     t->gutter = 0;
     t->line_highlight = 0;
@@ -885,6 +882,7 @@ int utext_insert_text(struct utext *t, const char *s, int n) {
 
 int utext_undo(struct utext *t) { return uui_edit_undo(&t->ed, &UTEXT_EDIT_OPS, t); }
 int utext_redo(struct utext *t) { return uui_edit_redo(&t->ed, &UTEXT_EDIT_OPS, t); }
+const struct uui_edit_ops *utext_edit_ops(void) { return &UTEXT_EDIT_OPS; }
 
 int utext_key(struct utext *t, int key, unsigned mods) {
     if (!uui_key_is_shortcut(key, mods) && key == '\t' && t->tab_spaces && t->tab_width > 1) {

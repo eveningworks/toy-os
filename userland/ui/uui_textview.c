@@ -2,6 +2,7 @@
 // scrolling belongs to the control rather than to each app.
 #include "ui/uui_textview.h"
 #include "ui/uui_widget.h"  // the ops table at the bottom of this file
+#include "ui/uui_route.h"   // UUI_NOWHERE
 
 #define DEFAULT_WHEEL_LINES 3
 
@@ -29,6 +30,7 @@ void uui_textview_init(struct uui_textview *tv, int x, int y, int w, int h,
     tv->wheel_lines = DEFAULT_WHEEL_LINES;
     tv->page_overlap = 1;
     tv->show_caret = 0;
+    tv->editable = 0;
     tv->bar_flags = 0;
     tv->fg = fg;
     tv->bg = bg;
@@ -286,6 +288,21 @@ static int tv_ops_cursor(const void *w, int cx, int cy) {
     return WIN_CURSOR_TEXT;
 }
 
+// The text, never the scrollbar beside it. No keyboard answer: a
+// routed view takes no focus, so the Menu key has nothing to name.
+static int tv_ops_edit_target(void *w, int cx, int cy, struct uui_edit_target *out) {
+    struct uui_textview *tv = (struct uui_textview *)w;
+    if (cx == UUI_NOWHERE || !uui_textview_hit(tv, cx, cy)) return 0;
+    if (bar_zone(tv, cx, cy) != UUI_SB_NONE) return 0;
+    tv->tb.ed.flags = tv->editable ? 0 : UUI_EDIT_READONLY;
+    out->ed = &tv->tb.ed;
+    out->ops = utext_edit_ops();
+    out->text = &tv->tb;
+    out->x = cx;
+    out->y = cy;
+    return 1;
+}
+
 static void tv_ops_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
     const struct uui_textview *s = (const struct uui_textview *)w;
     *x = s->x; *y = s->y; *ow = s->w; *oh = s->h;
@@ -302,4 +319,5 @@ const struct uui_widget_ops uui_textview_ops = {
     .wheel   = tv_ops_wheel,
     .cursor  = tv_ops_cursor,
     .bounds = tv_ops_bounds,
+    .edit_target = tv_ops_edit_target,
 };

@@ -95,6 +95,12 @@ struct uui_router {
     struct uui_drag dropped;   // the payload of that drop -- the live one
                                // is reset with the grab, and the app's
                                // handler runs after
+
+    // ONE ITEM THE TOOLKIT OWNS, above every one of the app's: the shared
+    // edit menu (ui/uui_editmenu.h). Consulted ONLY while its overlay is
+    // open, and then before anything else -- an overlay owner like a
+    // dropdown's, that no app had to declare. NULL for none.
+    struct uui_item *extra;
 };
 
 // Pointer motion past this many pixels from the press, with the button
@@ -202,6 +208,13 @@ int uui_router_wheel(struct uui_router *r, int cx, int cy, int notches,
 // Hidden items are skipped, so hiding a widget removes it from the
 // picture and from hit-testing with one flag.
 void uui_router_draw(struct uui_router *r, struct ugfx_surface *s);
+
+// The editable text at (cx, cy) -- the deepest visible item whose
+// edit_target answers, back to front through containers, as a press
+// would find it -- filling `out` and its item's id. 0 for none.
+struct uui_edit_target;
+int uui_router_edit_at(const struct uui_router *r, int cx, int cy,
+                       struct uui_edit_target *out, int *out_id);
 
 // Drops any grab -- for an app that tears down or replaces its widgets
 // while the button is held.

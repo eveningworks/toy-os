@@ -144,7 +144,7 @@ int uui_hit(int x, int y, int w, int h, int cx, int cy)
 // The theme, stubbed: a colour is not what this harness is about, but
 // uui_textbox.c resolves them at draw time now and so must link.
 struct utheme;
-static struct { uint32_t c[16]; } g_stub_theme;
+static struct { uint32_t c[256]; } g_stub_theme;   // >= sizeof(struct utheme)
 const struct utheme *utheme_current(void) { return (const struct utheme *)&g_stub_theme; }
 
 #include "ui/ugfx_text.c"
@@ -156,6 +156,16 @@ const struct utheme *utheme_current(void) { return (const struct utheme *)&g_stu
 #include "ui/uui_textbox.c"
 
 uint32_t uui_state_bg(uint32_t base, enum uui_state st) { (void)st; return base; }
+size_t k_strlen(const char *s) { size_t n = 0; while (s[n]) n++; return n; }
+
+// The clipboard verbs live in ui/uui_edit_clip.c, which needs the
+// clipboard service; nothing here copies or pastes.
+int uui_edit_copy(struct uui_edit *e, const struct uui_edit_ops *o, void *t)
+{ (void)e; (void)o; (void)t; return 0; }
+int uui_edit_cut(struct uui_edit *e, const struct uui_edit_ops *o, void *t)
+{ (void)e; (void)o; (void)t; return 0; }
+int uui_edit_paste(struct uui_edit *e, const struct uui_edit_ops *o, void *t)
+{ (void)e; (void)o; (void)t; return 0; }
 
 int main(void) {
     char line[512];
@@ -285,6 +295,7 @@ def build(tmp, control=False):
            "-I" + os.path.join(ROOT, "userland", "include"),
            "-I" + os.path.join(ROOT, "kernel", "include", "api"),
            "-I" + os.path.join(ROOT, "kernel", "include", "abi"),
+           "-I" + os.path.join(ROOT, "build", "gen"),   # kconfig.h, generated
            "-DUUI_TEXTBOX_HOSTCHECK=1"]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:

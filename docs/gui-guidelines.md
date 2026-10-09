@@ -501,6 +501,15 @@ WM_RBUTTONUP. And **the press should select what it points at first**
 (`uui_fileview_select_at()`): a menu that acts on some other row is how
 a file manager deletes the wrong file.
 
+**EDITABLE TEXT HAS ITS MENU ALREADY.** Every text field, editor and
+read-only text view gets the edit menu (Undo, Redo / Cut, Copy, Paste,
+Delete / Select All) from the toolkit, on the secondary release, the
+Menu key or Shift+F10 -- `ui/uui_editmenu.h`, opened by uapp for any
+widget whose `edit_target` answers. Do not add one to an app. A
+password field greys Cut and Copy, and read-only text shows only Copy
+and Select All, because rows the text can never use are left out, not
+greyed.
+
 **Per-item state is asked for, never stored in the menu.** The tree is
 `const`; an app sets `item_flags` and the widget queries it per item on
 every draw and hit test. There is deliberately no "refresh the menu"

@@ -912,6 +912,9 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
         if (WIN_MOUSE_BUTTONS(ev->mods) & 0x1) {
             top_press(&a->top, ev->a, ev->b, WIN_MOUSE_MODS(ev->mods));
             if (d->buttons && uui_button_group_press(d->buttons, ev->a, ev->b)) a->top.dirty = 1;
+        } else if ((WIN_MOUSE_BUTTONS(ev->mods) & 0x2) &&
+                   top_secondary(&a->top, ev->a, ev->b, 0)) {
+            break;   // over editable text: the shared edit menu's (uapp_window.c)
         }
         if (d->on_press) d->on_press(a, ev->a, ev->b, ev->mods);
         break;
@@ -950,7 +953,8 @@ static void dispatch(struct uapp *a, const struct win_event *in) {
     case WIN_EV_MOUSE_UP:
         a->top.mouse_x = ev->a;
         a->top.mouse_y = ev->b;
-        if (a->top.router.count) {
+        if (top_secondary(&a->top, ev->a, ev->b, 1)) break;
+        if (top_routes(&a->top)) {
             int was_dragging = uui_router_drag_active(&a->top.router);
             top_release(&a->top, ev->a, ev->b);
             // The slot stays: a target in another window reads it AFTER

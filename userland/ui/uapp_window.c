@@ -19,7 +19,7 @@ void top_paint(struct uapp_top *t, struct ugfx_surface *s, struct uui_layout *la
         a->desc->on_draw(a, &d);
     }
     if (layout) uui_layout_draw(s, layout);
-    if (t->router.count) uui_router_draw(&t->router, s);
+    if (top_routes(t)) uui_router_draw(&t->router, s);
     if (a && a->desc->on_draw_over) {
         struct uapp_draw d = { s, UTHEME_TEXT, UTHEME_PANEL_BG };
         a->desc->on_draw_over(a, &d);
@@ -54,6 +54,7 @@ void dlg_flush(struct uapp_window *w) {
         if (w->desc.layout) log_items(w->desc.log_prefix, w->desc.layout->items,
                                       w->desc.layout->count);
         if (w->top.router.count) log_items(w->desc.log_prefix, w->top.router.items, w->top.router.count);
+        if (w->top.router.extra && uui_editmenu_is_open()) log_items(w->desc.log_prefix, w->top.router.extra, 1);
         if (w->desc.on_log_layout) w->desc.on_log_layout(w);
     }
     top_paint(&w->top, &s->surface, w->desc.layout, 0);
@@ -200,6 +201,101 @@ static void win_key(struct uapp_top *t, int key, unsigned mods) {
 const struct uapp_top_ops APP_OPS = { app_tell, app_key };
 const struct uapp_top_ops WIN_OPS = { win_tell, win_key };
 
+// --- the shared edit menu (ui/uui_editmenu.h) ----------------------------
+//
+// THE ROUTER WHOSE `extra` IT HANGS ON, so a second window's router stops
+// offering it presses once it has opened somewhere else.
+static struct uui_router *g_menu_router;
+
+// Is there anything to route? The app's widgets, or the menu, which an
+// app that hand-routes everything (no widgets at all) still gets.
+int top_routes(const struct uapp_top *t) {
+    return t->router.count || (t->router.extra && uui_editmenu_is_open());
+}
+
+static void top_size(const struct uapp_top *t, int *w, int *h) {
+    if (t == &g_app.top) { *w = g_app.w; *h = g_app.h; return; }
+    *w = g_surf[t->slot].w;
+    *h = g_surf[t->slot].h;
+}
+
+static void menu_open(struct uapp_top *t, const struct uui_edit_target *tg, int id, int x, int y) {
+    if (g_menu_router && g_menu_router != &t->router) g_menu_router->extra = 0;
+    g_menu_router = &t->router;
+    t->router.extra = uui_editmenu_item();
+    int w, h;
+    top_size(t, &w, &h);
+    uui_editmenu_open(tg, id, x, y, w, h);
+    t->dirty = 1;
+}
+
+// The menu changed a widget's text: the app hears it as a typed change,
+// so a search field filters and a setting field applies as if typed.
+static void menu_changed(struct uapp_top *t, int id) {
+    t->dirty = 1;
+    if (id) t->ops->tell(t, id, UUI_REASON_KEY, 1);
+}
+
+// The editable text at (x, y): a routed widget, else one the app draws
+// itself but registered with its focus ring. The router's id, or 0.
+static int edit_at(struct uapp_top *t, int x, int y, struct uui_edit_target *tg) {
+    int id = 0;
+    if (uui_router_edit_at(&t->router, x, y, tg, &id)) return id ? id : -1;
+    if (!t->focus) return 0;
+    for (int i = 0; i < t->focus->count; i++) {
+        const struct uui_focusable *f = &t->focus->items[i];
+        if (f->ops && f->ops->edit_target && f->ops->edit_target(f->widget, x, y, tg)) {
+            id = uui_router_id_of(&t->router, f->widget);
+            return id ? id : -1;
+        }
+    }
+    return 0;
+}
+
+// A SECONDARY PRESS OVER EDITABLE TEXT IS THE TOOLKIT'S: it focuses the
+// field and arms; the RELEASE opens the menu (uui_menubar_open_at()'s
+// rule -- a menu opened on the press would be handed that release).
+// Returns 1 when taken, and then the app's on_press/on_release do not
+// hear it -- QLineEdit accepts its contextMenuEvent the same way, so a
+// window's own right-click menu does not open on top of this one.
+static struct uapp_top *g_armed;
+static struct uui_edit_target g_armed_tg;
+static int g_armed_id;
+
+int top_secondary(struct uapp_top *t, int x, int y, int up) {
+    if (!up) {
+        g_armed = 0;
+        if (uui_editmenu_is_open()) uui_editmenu_close();
+        int id = edit_at(t, x, y, &g_armed_tg);
+        if (!id) return 0;
+        if (t->focus && uui_focus_click(t->focus, x, y)) t->dirty = 1;
+        g_armed = t;
+        g_armed_id = id > 0 ? id : 0;
+        return 1;
+    }
+    if (g_armed != t) return 0;
+    g_armed = 0;
+    // Re-asked at the release: the press may have moved focus, and a
+    // widget answers again with the state it is in now.
+    struct uui_edit_target tg;
+    int id = edit_at(t, x, y, &tg);
+    if (id) menu_open(t, &tg, id > 0 ? id : 0, x, y);
+    else menu_open(t, &g_armed_tg, g_armed_id, x, y);   // released off it: still the menu it asked for
+    return 1;
+}
+
+// The Menu key, or Shift+F10: the menu at the FOCUSED field's caret.
+static int menu_key(struct uapp_top *t) {
+    if (!t->focus || t->focus->current < 0) return 0;
+    const struct uui_focusable *f = &t->focus->items[t->focus->current];
+    struct uui_edit_target tg;
+    if (!f->ops || !f->ops->edit_target ||
+        !f->ops->edit_target(f->widget, UUI_NOWHERE, UUI_NOWHERE, &tg))
+        return 0;
+    menu_open(t, &tg, uui_router_id_of(&t->router, f->widget), tg.x, tg.y);
+    return 1;
+}
+
 // A SHORTCUT SKIPS THE WIDGETS (uui_widget.h): Ctrl+1 goes to the app, and
 // a focused field does not type a 1. Then AN OPEN POPUP OUTRANKS the focus
 // ring -- it is drawn over everything and is what the user is looking at,
@@ -207,6 +303,19 @@ const struct uapp_top_ops WIN_OPS = { win_tell, win_key };
 // ring, then the app, which still hears a key the ring took so it can
 // re-read the widget whose value just changed.
 void top_key(struct uapp_top *t, const struct win_event *ev) {
+    // The edit menu outranks everything while it is up: it is the
+    // grabbing popup the compositor sends keys for.
+    if (g_menu_router == &t->router && uui_editmenu_is_open()) {
+        int tid = 0;
+        int r = uui_editmenu_key(ev->a, &tid);
+        if (r) {
+            t->dirty = 1;
+            if (r == 2) menu_changed(t, tid);
+            return;
+        }
+    }
+    if ((ev->a == KEY_MENU || (ev->a == KEY_F10 && (ev->mods & KEY_MOD_SHIFT))) && menu_key(t))
+        return;
     if (uui_key_is_shortcut(ev->a, ev->mods)) { t->ops->key(t, ev->a, ev->mods); return; }
     if (t->router.count) {
         int changed = 0;
@@ -233,8 +342,9 @@ void top_key(struct uapp_top *t, const struct win_event *ev) {
 // press choosing its row.
 void top_press(struct uapp_top *t, int x, int y, unsigned kmods) {
     int changed = 0;
-    int id = t->router.count ? uui_router_press(&t->router, x, y, kmods, &changed) : 0;
+    int id = top_routes(t) ? uui_router_press(&t->router, x, y, kmods, &changed) : 0;
     if (changed) t->dirty = 1;
+    if (id == UUI_EDITMENU_ID) return;   // a row armed; the release commits
     t->ops->tell(t, id, UUI_REASON_PRESS, 0);
     if (t->focus && !g_press_slot && uui_focus_click(t->focus, x, y)) t->dirty = 1;
 }
@@ -243,28 +353,36 @@ void top_press(struct uapp_top *t, int x, int y, unsigned kmods) {
 // drag goes to whoever took the press, wherever the cursor is); with none
 // it is hover. A hover is not the app's unless it asked (motion_wanted).
 void top_motion(struct uapp_top *t, int x, int y, unsigned held, unsigned kmods) {
-    if (!t->router.count) return;
+    if (!top_routes(t)) return;
     int changed = 0;
     int id = uui_router_motion(&t->router, x, y, held, kmods, &changed);
     if (changed) t->dirty = 1;
+    if (id == UUI_EDITMENU_ID) return;
     if (motion_wanted(&t->router, id, held)) t->ops->tell(t, id, UUI_REASON_MOTION, 0);
 }
 
 void top_release(struct uapp_top *t, int x, int y) {
-    if (!t->router.count) return;
+    if (!top_routes(t)) return;
     int changed = 0;
     int id = uui_router_release(&t->router, x, y, &changed);
     if (changed) t->dirty = 1;
+    if (id == UUI_EDITMENU_ID) {
+        int tid = 0;
+        if (uui_editmenu_take(&tid)) menu_changed(t, tid);
+        t->dirty = 1;
+        return;
+    }
     t->ops->tell(t, id, UUI_REASON_RELEASE, changed);
 }
 
 // To the widget UNDER THE CURSOR, not down a fixed chain (ui/uui_route.h).
 // The id, or 0 when no widget took it.
 int top_wheel(struct uapp_top *t, int notches) {
-    if (!t->router.count) return 0;
+    if (!top_routes(t)) return 0;
     int changed = 0;
     int id = uui_router_wheel(&t->router, t->mouse_x, t->mouse_y, notches, &changed);
     if (changed) t->dirty = 1;
+    if (id == UUI_EDITMENU_ID) return id;   // the menu ate it: nobody else scrolls
     t->ops->tell(t, id, UUI_REASON_WHEEL, 0);
     return id;
 }
@@ -342,12 +460,14 @@ void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
         w->top.mouse_y = ev->b;
         if (WIN_MOUSE_BUTTONS(ev->mods) & 0x1)
             top_press(&w->top, ev->a, ev->b, WIN_MOUSE_MODS(ev->mods));
+        else if (WIN_MOUSE_BUTTONS(ev->mods) & 0x2)
+            top_secondary(&w->top, ev->a, ev->b, 0);
         return;
     case WIN_EV_MOUSE_MOVE: {
         if (ev->a < 0 || ev->b < 0) return;   // a leave carries no position
         w->top.mouse_x = ev->a;
         w->top.mouse_y = ev->b;
-        if (!w->top.router.count) return;
+        if (!top_routes(&w->top)) return;
         top_motion(&w->top, ev->a, ev->b, ev->mods & 0x1, WIN_MOUSE_MODS(ev->mods));
         int want = uui_router_cursor(&w->top.router, ev->a, ev->b);
         if (want != w->top.cursor && want >= 0 && want < WIN_CURSOR_COUNT) {
@@ -359,6 +479,7 @@ void dlg_dispatch(struct uapp_window *w, const struct win_event *ev) {
     case WIN_EV_MOUSE_UP:
         w->top.mouse_x = ev->a;
         w->top.mouse_y = ev->b;
+        if (top_secondary(&w->top, ev->a, ev->b, 1)) return;
         top_release(&w->top, ev->a, ev->b);
         return;
     case WIN_EV_WHEEL:

@@ -170,6 +170,9 @@ void utext_clear(struct utext *t);
 // edits, and forget the history.
 int utext_undo(struct utext *t);
 int utext_redo(struct utext *t);
+// The edit core's view of a utext (ui/uui_edit.h) -- for a widget that
+// hands one to the shared edit menu.
+const struct uui_edit_ops *utext_edit_ops(void);
 
 // Logical lines ('\n' count + 1). Cached by revision.
 int utext_line_count(struct utext *t);

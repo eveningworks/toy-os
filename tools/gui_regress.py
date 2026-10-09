@@ -119,6 +119,7 @@ TOOLS = [
     ("calculator", "calculator_client_test.py", "Calculator in ring 3"),
     ("notepad", "notepad_client_test.py", "Notepad in ring 3"),
     ("clipboard", "clipboard_test.py", "the system text clipboard, across two apps"),
+    ("editmenu", "editmenu_test.py", "clipboard keys + the right-click edit menu in every text field"),
     ("uterm", "uterm_test.py", "Terminal + the ring-3 shell"),
     ("crt", "crt_test.py", "the Terminal's screen effect: toggle, Options, the curve's pointer"),
     ("crashview", "crashview_test.py", "the crash report viewer: a real crash, its backtrace against the host's"),

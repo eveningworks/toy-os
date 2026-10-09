@@ -53,6 +53,8 @@ struct uui_drag {
     int accepted;        // the widget under the pointer said yes
 };
 
+struct uui_edit_target;   // ui/uui_edit.h
+
 struct uui_widget_ops {
     // The preferred minimum -- see uui_primitives.h. 0 in either axis
     // means "no preference", and a container reads that as "give me
@@ -87,6 +89,19 @@ struct uui_widget_ops {
     int (*key)(void *w, int key, unsigned mods);
     void (*set_focused)(void *w, int focused);
     int (*accepts_focus)(const void *w);
+
+    // --- editable text, for the shared right-click menu ---------------
+    //
+    // "Is there editable text HERE, and how is it reached?" -- at
+    // (cx, cy), or with UUI_NOWHERE the text that has the keyboard (the
+    // Menu key). Fill `out` (ui/uui_edit.h) and return 1, or 0 for none:
+    // a disabled field, or a composite whose field is not showing.
+    // Filling it is all a widget does: uapp owns the one menu, opens it
+    // on a secondary click, and runs Cut/Copy/Paste through the edit
+    // core -- the Win32 EDIT control's and QLineEdit's built-in menu,
+    // with no app code. A COMPOSITE (a find bar, a spinbox) delegates to
+    // its inner field.
+    int (*edit_target)(void *w, int cx, int cy, struct uui_edit_target *out);
 
     // --- pointer input, routed by uui_route.h -----------------------
     //

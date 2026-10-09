@@ -29,6 +29,7 @@
 #include "ui/uui_focus.h"   // desc.focus -- keyboard focus ring
 #include "ui/uui_button.h"  // a lone button commits through on_action
 #include "ui/uui_dialog.h"  // uapp_question_open()
+#include "ui/uui_editmenu.h" // the right-click menu every text field gets
 #include "ui/ulog.h"        // uapp_log_layout()
 #include "setting_abi.h" // desktop.layout_log -- the gate below
 #include "lib/usetting.h" // ...and the MERGED registry that can see it
@@ -228,6 +229,8 @@ UAPP_HIDDEN void top_key(struct uapp_top *t, const struct win_event *ev);
 UAPP_HIDDEN void top_press(struct uapp_top *t, int x, int y, unsigned kmods);
 UAPP_HIDDEN void top_motion(struct uapp_top *t, int x, int y, unsigned held, unsigned kmods);
 UAPP_HIDDEN void top_release(struct uapp_top *t, int x, int y);
+UAPP_HIDDEN int  top_secondary(struct uapp_top *t, int x, int y, int up);
+UAPP_HIDDEN int  top_routes(const struct uapp_top *t);
 UAPP_HIDDEN int  top_wheel(struct uapp_top *t, int notches);
 UAPP_HIDDEN void tell_app(struct uapp *a, int id, int reason, int committed);
 UAPP_HIDDEN int  ids_unique(const struct uui_router *r, const char *who);

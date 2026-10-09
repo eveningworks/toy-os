@@ -3,6 +3,7 @@
 #include <string.h>
 #include "ui/uui_caret.h"
 #include "ui/uui_widget.h"  // the ops tables at the bottom of this file
+#include "ui/uui_route.h"   // UUI_NOWHERE, for edit_target
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
 // Caret width in pixels -- a bar, not a block, so it sits between
@@ -182,6 +183,16 @@ int uui_textbox_index_at_x(const struct uui_textbox *f0, int cx) {
     return idx;
 }
 
+// What the edit core needs re-asserted before every call: the history
+// (re-pointed, so a struct copied by value records into its own copy)
+// and `masked`, which an app sets by assignment after init.
+static void tb_sync(struct uui_textbox *f) {
+    f->undo.buf = f->undo_mem;
+    f->undo.cap = sizeof f->undo_mem;
+    f->ed.undo = &f->undo;
+    f->ed.flags = f->masked ? UUI_EDIT_MASKED : 0;
+}
+
 int uui_textbox_key_mods(struct uui_textbox *f, int key, unsigned mods) {
     if (!f->active) return 0;
     // The whole keymap -- Ctrl+A, Shift+arrows, backspace-deletes-the-
@@ -189,9 +200,7 @@ int uui_textbox_key_mods(struct uui_textbox *f, int key, unsigned mods) {
     // with the multi-line editor. This widget used to carry its own,
     // which had none of that: the caret moved with arrows and nothing
     // else, so you could not select anything in a text field at all.
-    f->undo.buf = f->undo_mem;
-    f->undo.cap = sizeof f->undo_mem;
-    f->ed.undo = &f->undo;
+    tb_sync(f);
     return uui_edit_key(&f->ed, &TB_EDIT_OPS, f, key, mods);
 }
 
@@ -201,9 +210,7 @@ int uui_textbox_key(struct uui_textbox *f, int key) {
 
 int uui_textbox_insert(struct uui_textbox *f, const char *s) {
     if (f->disabled || !s) return 0;
-    f->undo.buf = f->undo_mem;
-    f->undo.cap = sizeof f->undo_mem;
-    f->ed.undo = &f->undo;
+    tb_sync(f);
     uui_edit_delete_selection(&f->ed, &TB_EDIT_OPS, f);
     int n = (int)strlen(s);
     if (f->len + n > UUI_TEXTBOX_MAX - 1) return 0;   // all of it or none
@@ -323,11 +330,33 @@ static int ops_accepts_focus(const void *w) {
     return !((const struct uui_textbox *)w)->disabled;
 }
 
+int uui_textbox_edit_target(struct uui_textbox *f, int cx, int cy,
+                            struct uui_edit_target *out) {
+    if (f->disabled) return 0;
+    if (cx == UUI_NOWHERE ? !f->active : !uui_textbox_hit(f, cx, cy)) return 0;
+    tb_sync(f);
+    out->ed = &f->ed;
+    out->ops = &TB_EDIT_OPS;
+    out->text = f;
+    // The caret's foot, measured on what is drawn -- draw()'s arithmetic.
+    static struct uui_textbox tmp;
+    const struct uui_textbox *d = shown_field(f, &tmp);
+    int start = field_window_start(d, field_avail(d));
+    int at = f->ed.cursor > start ? f->ed.cursor : start;
+    out->x = f->x + UUI_TEXTBOX_PAD + ugfx_text_width_n(d->buf + start, at - start);
+    out->y = f->y + f->h;
+    return 1;
+}
+static int ops_edit_target(void *w, int cx, int cy, struct uui_edit_target *out) {
+    return uui_textbox_edit_target((struct uui_textbox *)w, cx, cy, out);
+}
+
 const struct uui_widget_ops uui_textbox_focus_ops = {
     .hit = ops_hit,
     .key = ops_key,
     .set_focused = ops_set_focused,
     .accepts_focus = ops_accepts_focus,
+    .edit_target = ops_edit_target,
 };
 
 // --- routed pointer input (ui/uui_route.h) ----------------------------
@@ -414,4 +443,5 @@ const struct uui_widget_ops uui_textbox_ops = {
     .press         = tb_ops_press,
     .motion        = tb_ops_motion,
     .cursor        = tb_ops_cursor,
+    .edit_target   = ops_edit_target,
 };

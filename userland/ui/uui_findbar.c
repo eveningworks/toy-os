@@ -237,6 +237,12 @@ static void ops_describe(const void *w, const struct uui_describe *d) {
     uui_describe_int(d, "current", f->current);
 }
 
+// The inner field's, for the shared edit menu (ui/uui_widget.h).
+static int findbar_edit_target(void *w, int cx, int cy, struct uui_edit_target *out) {
+    struct uui_findbar *p = (struct uui_findbar *)w;
+    return uui_textbox_edit_target(&p->field, cx, cy, out);
+}
+
 const struct uui_widget_ops uui_findbar_ops = {
     .natural_size = ops_natural,
     .set_geometry = ops_geometry,
@@ -248,4 +254,5 @@ const struct uui_widget_ops uui_findbar_ops = {
     .release      = fb_release,
     .cursor       = fb_cursor,
     .describe     = ops_describe,
+    .edit_target = findbar_edit_target,
 };

@@ -8,6 +8,7 @@
 void uui_router_init(struct uui_router *r, struct uui_item *items, int count) {
     r->items = items;
     r->count = count;
+    r->extra = NULL;
     uui_router_reset(r);
 }
 
@@ -91,6 +92,15 @@ static struct uui_item *overlay_owner(struct uui_item *items, int count) {
     return NULL;
 }
 
+// The router's own item first, while its overlay is open -- it is drawn
+// above everything the app declared.
+static struct uui_item *owner(const struct uui_router *r) {
+    struct uui_item *x = r->extra;
+    if (x && !x->hidden && x->ops->overlay_active && x->ops->overlay_active(x->widget))
+        return x;
+    return overlay_owner(r->items, r->count);
+}
+
 int uui_router_press(struct uui_router *r, int cx, int cy, unsigned mods,
                       int *out_changed) {
     int changed = 0;
@@ -99,7 +109,7 @@ int uui_router_press(struct uui_router *r, int cx, int cy, unsigned mods,
     // Through press_item(), not the owner's press directly: an owner
     // with children (a dialog's body) offers them the press first and
     // its own press only takes what they declined.
-    struct uui_item *ov = overlay_owner(r->items, r->count);
+    struct uui_item *ov = owner(r);
     if (ov) taken = press_item(ov, cx, cy, mods, &changed);
 
     if (!taken) {
@@ -330,7 +340,7 @@ int uui_router_motion(struct uui_router *r, int cx, int cy, unsigned buttons,
     // row in an open popup would ever highlight. Same precedence press
     // and wheel already give it -- and it is skipped in the walk below,
     // since hearing the move twice would light a row and clear it again.
-    struct uui_item *ov = overlay_owner(r->items, r->count);
+    struct uui_item *ov = owner(r);
     if (ov && motion_item(ov, cx, cy, buttons, NULL, &id)) changed = 1;
 
     // AN OPEN POPUP OWNS THE POINTER: everyone else is told "nowhere",
@@ -371,7 +381,7 @@ static int cursor_item(struct uui_item *it, int cx, int cy) {
 int uui_router_cursor(const struct uui_router *r, int cx, int cy) {
     // An open popup answers first: its rows are outside its own `hit`,
     // so the walk below would never reach them.
-    struct uui_item *ov = overlay_owner(r->items, r->count);
+    struct uui_item *ov = owner(r);
     if (ov) {
         int n = 0;
         struct uui_item *sub = nested(ov, &n);
@@ -470,7 +480,7 @@ int uui_router_overlay_key(struct uui_router *r, int key, unsigned mods,
                             int *out_changed) {
     int changed = 0;
     int id = 0;
-    struct uui_item *ov = overlay_owner(r->items, r->count);
+    struct uui_item *ov = owner(r);
     if (ov && ov->ops->key && ov->ops->key(ov->widget, key, mods)) {
         changed = 1;
         id = ov->id;
@@ -548,6 +558,7 @@ static void draw_overlays(struct ugfx_surface *s, struct uui_item *items, int co
 void uui_router_draw(struct uui_router *r, struct ugfx_surface *s) {
     draw_items(s, r->items, r->count);
     draw_overlays(s, r->items, r->count);
+    if (owner(r) == r->extra && r->extra) draw_overlays(s, r->extra, 1);
     // The ghost, above everything: what is being carried, at the pointer.
     if (r->dragging && r->grab_ops->drag_draw)
         r->grab_ops->drag_draw(s, r->grab, &r->drag);
@@ -586,7 +597,7 @@ int uui_router_wheel(struct uui_router *r, int cx, int cy, int notches,
     // subtree) takes the notches or nobody does. Letting the walk run
     // scrolled the list UNDER an open menu, which no desktop's grab
     // allows -- and would scroll the document behind a modal.
-    struct uui_item *ov = overlay_owner(r->items, r->count);
+    struct uui_item *ov = owner(r);
     if (ov) {
         wheel_item(ov, cx, cy, notches, &changed, &id);
     } else {
@@ -596,4 +607,30 @@ int uui_router_wheel(struct uui_router *r, int cx, int cy, int notches,
     }
     if (out_changed) *out_changed = changed;
     return id;
+}
+
+// The same walk as target_item(), for the edit_target slot.
+static struct uui_item *edit_item(struct uui_item *it, int cx, int cy,
+                                  struct uui_edit_target *out) {
+    if (it->hidden) return NULL;
+    int n = 0;
+    struct uui_item *sub = nested(it, &n);
+    if (sub) {
+        if (!container_admits(it, cx, cy)) return NULL;
+        for (int i = n - 1; i >= 0; i--) {
+            struct uui_item *hit = edit_item(&sub[i], cx, cy, out);
+            if (hit) return hit;
+        }
+    }
+    if (!it->ops || !it->ops->edit_target) return NULL;
+    return it->ops->edit_target(it->widget, cx, cy, out) ? it : NULL;
+}
+
+int uui_router_edit_at(const struct uui_router *r, int cx, int cy,
+                       struct uui_edit_target *out, int *out_id) {
+    for (int i = r->count - 1; i >= 0; i--) {
+        struct uui_item *hit = edit_item(&r->items[i], cx, cy, out);
+        if (hit) { if (out_id) *out_id = hit->id; return 1; }
+    }
+    return 0;
 }

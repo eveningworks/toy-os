@@ -398,6 +398,13 @@ static void op_describe(const void *w, const struct uui_describe *d) {
     uui_describe_int(d, "editing", p->editing);
 }
 
+// The inner field's, for the shared edit menu (ui/uui_widget.h).
+static int pathbar_edit_target(void *w, int cx, int cy, struct uui_edit_target *out) {
+    struct uui_pathbar *p = (struct uui_pathbar *)w;
+    if (!p->editing) return 0;   // the field shows only then
+    return uui_textbox_edit_target(&p->edit, cx, cy, out);
+}
+
 const struct uui_widget_ops uui_pathbar_ops = {
     .natural_size  = op_natural,
     .set_geometry  = op_geometry,
@@ -412,4 +419,5 @@ const struct uui_widget_ops uui_pathbar_ops = {
     .set_focused   = op_set_focused,
     .cursor        = op_cursor,
     .describe      = op_describe,
+    .edit_target = pathbar_edit_target,
 };

@@ -139,6 +139,12 @@ int uui_textbox_hit(const struct uui_textbox *f, int cx, int cy);
 // nearest gap, so clicking a glyph's right half lands after it.
 int uui_textbox_index_at_x(const struct uui_textbox *f, int cx);
 
+// The edit_target slot (ui/uui_widget.h), for a composite whose inner
+// field it is: the field at (cx, cy), or with UUI_NOWHERE the field if
+// it is active. 0 when disabled or not there.
+int uui_textbox_edit_target(struct uui_textbox *f, int cx, int cy,
+                            struct uui_edit_target *out);
+
 void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f);
 
 // The focus ring's ops table for a field: hit/key/set_focused only, the

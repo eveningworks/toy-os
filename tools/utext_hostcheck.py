@@ -120,6 +120,15 @@ void ugfx_clip_intersect(struct ugfx_surface *s, int x, int y, int w, int h)
 // the ordinary white-box move and it keeps the oracle honest.
 #include "ui/utext.c"
 
+// The clipboard verbs live in ui/uui_edit_clip.c, which needs the
+// clipboard service; nothing here copies or pastes.
+int uui_edit_copy(struct uui_edit *e, const struct uui_edit_ops *o, void *t)
+{ (void)e; (void)o; (void)t; return 0; }
+int uui_edit_cut(struct uui_edit *e, const struct uui_edit_ops *o, void *t)
+{ (void)e; (void)o; (void)t; return 0; }
+int uui_edit_paste(struct uui_edit *e, const struct uui_edit_ops *o, void *t)
+{ (void)e; (void)o; (void)t; return 0; }
+
 #define CW 8
 #define CH 16
 

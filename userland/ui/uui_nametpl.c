@@ -167,6 +167,12 @@ static int ops_cursor(const void *w, int cx, int cy) {
     return uui_textbox_hit(&t->field, cx, cy) ? WIN_CURSOR_TEXT : WIN_CURSOR_DEFAULT;
 }
 
+// The inner field's, for the shared edit menu (ui/uui_widget.h).
+static int nametpl_edit_target(void *w, int cx, int cy, struct uui_edit_target *out) {
+    struct uui_nametpl *p = (struct uui_nametpl *)w;
+    return uui_textbox_edit_target(&p->field, cx, cy, out);
+}
+
 const struct uui_widget_ops uui_nametpl_ops = {
     .natural_size  = ops_natural_size,
     .set_geometry  = ops_set_geometry,
@@ -180,4 +186,5 @@ const struct uui_widget_ops uui_nametpl_ops = {
     .set_focused   = ops_set_focused,
     .accepts_focus = ops_accepts_focus,
     .cursor        = ops_cursor,
+    .edit_target = nametpl_edit_target,
 };

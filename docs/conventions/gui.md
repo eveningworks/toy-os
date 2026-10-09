@@ -1114,12 +1114,47 @@ this the obvious way), not from how much history it accumulated.
   `uapp_desc.on_clipboard` still fires. And **the keys are the APP's,
   not the WM's**: `Ctrl+C` is INTR in a terminal, so a compositor that
   routed it globally would take that away -- which is why Notepad binds
-  `Ctrl+C/X/V` and the Terminal binds `Ctrl+Shift+V`.
+  `Ctrl+C/X/V`, the Terminal binds `Ctrl+Shift+V`, and every text field
+  gets them from the edit core (next entry).
 
   **HOLD A `struct uclip` STATICALLY.** It is a snapshot with the
   payload in it, far past the ring-3 frame budget; a local is a build
   warning rather than a crash, which is the only reason the struct is
   allowed to stay that shape.
+
+- **EVERY EDITABLE TEXT GETS THE CLIPBOARD KEYS AND A RIGHT-CLICK EDIT
+  MENU FROM THE TOOLKIT; A WIDGET FILLS `edit_target` AND NOTHING
+  ELSE.** `uui_edit_key()` takes `Ctrl+X/C/V` and the CUA trio
+  (`Shift+Delete`, `Ctrl+Insert`, `Shift+Insert`), so `uui_textbox`,
+  `utext` and everything built on them have them. The menu (Undo, Redo /
+  Cut, Copy, Paste, Delete / Select All -- `ui/uui_editmenu.h`) is ONE
+  per process and uapp's: a secondary press over a widget whose
+  `uui_widget_ops.edit_target` answers arms it, the release opens it,
+  the Menu key and `Shift+F10` open it at the focused field's caret,
+  and the router offers it every event first through its `extra` item
+  while it is up. The Win32 EDIT control and `QLineEdit` carry this menu
+  built in; before it, only Notepad had one.
+
+  Five things follow. **A COMPOSITE DELEGATES**: a find bar, spinbox,
+  path bar, option list, name template or file view's rename box
+  answers with `uui_textbox_edit_target()` on its inner field, and only
+  while the field is showing. **A FIELD THE APP DRAWS ITSELF IS FOUND
+  THROUGH THE FOCUS RING** (`uui_textbox_focus_ops` fills the slot too).
+  **THE SECONDARY CLICK IS THEN THE TOOLKIT'S** -- the app's
+  `on_press`/`on_release` do not hear it, as Qt's accepted
+  `contextMenuEvent` stops propagating, so a window's own right-click
+  menu cannot open on top. **A CHANGE THE MENU MADE REACHES THE APP AS
+  `UUI_REASON_KEY`** on the widget's id, exactly as typing does; an app
+  that hand-routes keys into a widget (Boot Manager's text) handles that
+  reason too. And **`UUI_EDIT_MASKED` refuses Cut and Copy, while
+  `UUI_EDIT_READONLY` leaves only Copy and Select All** -- a routed
+  `uui_textview` is read-only unless its app sets `editable`. A paste
+  into a field with no line ops takes the clipboard's FIRST LINE, as a
+  single-line Win32 EDIT does.
+
+  Not covered: the WM's own fields (the Start menu's search, a desktop
+  rename) have the keys but not the menu, because the compositor is not
+  a uapp client.
 
 - **`uui_splitter` IS THE DRAGGABLE DIVIDER, AND IT OWNS A FRACTION
   RATHER THAN A PIXEL COLUMN.** Qt's `QSplitter`, GTK's `GtkPaned`,

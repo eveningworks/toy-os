@@ -1893,6 +1893,13 @@ static void ops_describe(const void *w, const struct uui_describe *d) {
     uui_describe_int(d, "selected", ((const struct uui_fileview *)w)->table.selected);
 }
 
+// The inner field's, for the shared edit menu (ui/uui_widget.h).
+static int fileview_edit_target(void *w, int cx, int cy, struct uui_edit_target *out) {
+    struct uui_fileview *p = (struct uui_fileview *)w;
+    if (!p->renaming) return 0;   // the field shows only then
+    return uui_textbox_edit_target(&p->rename_box, cx, cy, out);
+}
+
 const struct uui_widget_ops uui_fileview_ops = {
     .natural_size = fv_ops_natural_size,
     .set_geometry = fv_ops_set_geometry,
@@ -1912,4 +1919,5 @@ const struct uui_widget_ops uui_fileview_ops = {
     .drag_over  = fv_ops_drag_over,
     .drop       = fv_ops_drop,
     .drag_draw  = fv_ops_drag_draw,
+    .edit_target = fileview_edit_target,
 };

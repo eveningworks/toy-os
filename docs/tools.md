@@ -2760,6 +2760,20 @@ window without going through it will find its layout polls timing out.
   Positive control: making `uclip_set_text()` return 0 without sending
   reddens four of the five checks and leaves the empty-clipboard one
   green, which is the right split.
+- **`editmenu_test.py`** -- the clipboard keys and the shared
+  right-click edit menu (`ui/uui_editmenu.h`) in text fields that
+  declare nothing about either. It drives UI Demo's field and reads it
+  back from the app's own `key N text=` and `edit text=` lines, not
+  pixels. It checks the keys, including the CUA trio, then each menu row
+  (Select All, Delete, Paste, Undo). It also checks the read-only
+  scrollback's three-row menu, whose copy pastes into the one-line field
+  as the FIRST LINE only, and the Menu key in Help's search. Menu rows
+  are found by INDEX in `uui_editmenu.c`'s table, separators included.
+  It assumes a fresh VM, because a second UI Demo confuses
+  `window_settled()`. Positive controls: breaking the core's Ctrl-V
+  turns the four paste checks red, breaking the menu's Paste turns Paste
+  and Undo red, breaking the Menu key turns its check red, and dropping
+  the single-line rule turns the read-only paste check red.
 - **`uiclient_test.py`** -- drives `userland/tests/uiclient.c`, the ring-3
   client that renders real text with `userland/ui/ugfx.c`, and asserts on
   it (8 checks: text actually rendered, the button drew, a click and a

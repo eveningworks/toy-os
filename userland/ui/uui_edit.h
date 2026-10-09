@@ -58,7 +58,18 @@ struct uui_edit {
     // The edit HISTORY (ui/uui_undo.h), or NULL for none. Every change
     // this core makes is recorded there, and Ctrl+Z / Ctrl+Y walk it.
     struct uui_undo *undo;
+
+    // UUI_EDIT_* below. Re-asserted by the widget before each call, the
+    // way `undo` is, because uui_edit_init() clears it.
+    unsigned flags;
 };
+
+// A PASSWORD: nothing leaves it through the clipboard -- Cut and Copy
+// are refused, Paste is not (Win32's ES_PASSWORD, GTK's invisible entry).
+#define UUI_EDIT_MASKED   0x01u
+// Selectable and copyable, never changed: typing, deletion, Cut, Paste
+// and the history are all declined.
+#define UUI_EDIT_READONLY 0x02u
 
 // How this core reaches the caller's characters. Four slots, all
 // required: a widget that cannot answer these is not editable text.
@@ -130,10 +141,42 @@ int uui_edit_redo(struct uui_edit *e, const struct uui_edit_ops *ops, void *text
 
 // One keypress, with the modifiers as delivered (KEY_MOD_*). Returns 1
 // if it was consumed. Ctrl+Z and Ctrl+Y are undo and redo when there
-// is a history, and declined when there is none. Deliberately does NOT consume Enter: whether a
+// is a history, and declined when there is none. Ctrl+X/C/V and the CUA
+// trio (Shift+Delete, Ctrl+Insert, Shift+Insert) are the clipboard,
+// below. Deliberately does NOT consume Enter: whether a
 // field commits, inserts a newline or ignores it is the widget's
 // decision, not this core's.
 int uui_edit_key(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
                   int key, unsigned mods);
+
+// --- the system clipboard (lib/uclip.h), in ui/uui_edit_clip.c ---------
+//
+// A file of its own so the host checks that compile this core
+// (tools/utext_hostcheck.py) need no clipboard service.
+//
+// Copy: 1 = the selection is on the clipboard; 0 = nothing selected, a
+// masked field, or the clipboard refused (too big, no clipboardd).
+// Cut: copy, then delete -- and only if the copy landed. Paste: the
+// characters inserted, replacing the selection as ONE undo step; a
+// field with no line ops takes the clipboard's FIRST LINE only (Win32's
+// single-line EDIT does the same), and '\r' never goes in.
+int uui_edit_copy(struct uui_edit *e, const struct uui_edit_ops *ops, void *text);
+int uui_edit_cut(struct uui_edit *e, const struct uui_edit_ops *ops, void *text);
+int uui_edit_paste(struct uui_edit *e, const struct uui_edit_ops *ops, void *text);
+// Does the clipboard hold text right now? One shared-memory read.
+int uui_edit_clip_has_text(void);
+
+// --- a widget's editable text, as the shared edit menu sees it ---------
+//
+// What uui_widget_ops.edit_target fills: enough for the toolkit's
+// right-click menu (ui/uui_editmenu.h) to run Cut/Copy/Paste/Undo on
+// a widget it knows nothing else about. (x, y) is the caret's foot in
+// content coordinates -- where the Menu key opens that menu.
+struct uui_edit_target {
+    struct uui_edit *ed;
+    const struct uui_edit_ops *ops;
+    void *text;
+    int x, y;
+};
 
 #endif

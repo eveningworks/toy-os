@@ -1586,6 +1586,10 @@ static const struct { int key; unsigned mods; int cmd; } g_keys[] = {
     { KEY_PAGE_UP,   KEY_MOD_CTRL, CMD_PREV_TAB },
     { KEY_F3, KEY_MOD_SHIFT, CMD_FIND_PREV },
     { KEY_F3, 0, CMD_FIND_NEXT },
+    // CUA's clipboard keys, which the shared edit core gives every field.
+    { KEY_INSERT, KEY_MOD_CTRL,  CMD_COPY },
+    { KEY_INSERT, KEY_MOD_SHIFT, CMD_PASTE },
+    { KEY_DELETE, KEY_MOD_SHIFT, CMD_CUT },
 };
 
 static int accelerator(struct uapp *a, int key, unsigned mods) {

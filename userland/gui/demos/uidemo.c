@@ -76,6 +76,7 @@
 //   uidemo: radio <name>
 //   uidemo: focus <textbox|dropdown|listbox|none>
 //   uidemo: key <code> text="<contents>"
+//   uidemo: edit text="<contents>"      -- the right-click edit menu changed it
 //   uidemo: scroll <offset> <wheel|page|thumb|pan>
 //   uidemo: list_scroll <top> <thumb|page>   -- the LISTBOX's own bar
 //   uidemo: list <n> <label>
@@ -503,7 +504,12 @@ static void on_widget(struct uapp *a, int id, int reason) {
         log_and_status(m);
         break;
     case ID_TEXTBOX:
-        set_status("textbox focused");
+        if (reason == UUI_REASON_KEY) {   // the shared edit menu changed it
+            snprintf(m, sizeof m, "edit text=\"%s\"", g.textbox.buf);
+            log_and_status(m);
+        } else {
+            set_status("textbox focused");
+        }
         break;
     case ID_DROPDOWN: {
         // open / close / value-changed, told apart by comparing with

@@ -10,6 +10,7 @@ void uui_edit_init(struct uui_edit *e) {
     e->sel_anchor = 0;
     e->sel_active = 0;
     e->undo = 0;
+    e->flags = 0;
 }
 
 int uui_edit_insert(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
@@ -149,6 +150,32 @@ int uui_edit_key(struct uui_edit *e, const struct uui_edit_ops *ops, void *text,
     if (uui_key_is_shortcut(key, mods)) return 0;
     int len = ops->len(text);
     e->cursor = clamp(e->cursor, 0, len);
+    int ro = (e->flags & UUI_EDIT_READONLY) != 0;
+
+    // ---- the clipboard. Consumed even when there is nothing to do (no
+    //      selection, a masked field): a Ctrl+C that fell through to the
+    //      app would reach whatever else it binds the key to.
+    //      Shift+Delete and Shift+Insert are matched before the plain
+    //      keys below; Ctrl+Insert is unambiguous.
+    if (key == 0x03 || (key == KEY_INSERT && (mods & KEY_MOD_CTRL))) {   // Ctrl-C
+        uui_edit_copy(e, ops, text);
+        return 1;
+    }
+    if (key == 0x18 || (key == KEY_DELETE && (mods & KEY_MOD_SHIFT))) {  // Ctrl-X
+        if (ro) uui_edit_copy(e, ops, text);   // a read-only view still copies
+        else uui_edit_cut(e, ops, text);
+        return 1;
+    }
+    if (key == 0x16 || (key == KEY_INSERT && (mods & KEY_MOD_SHIFT))) {  // Ctrl-V
+        if (!ro) uui_edit_paste(e, ops, text);
+        return 1;
+    }
+
+    // Nothing below changes a read-only text except by selecting: decline
+    // the rest of the editing keys so they stay the app's.
+    if (ro && (key == 0x1A || key == 0x19 || key == '\b' || key == KEY_DELETE ||
+               IS_PRINTABLE_KEY(key)))
+        return 0;
 
     switch (key) {
     // ---- selection ------------------------------------------------

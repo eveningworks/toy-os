@@ -85,6 +85,11 @@ struct uui_textview {
     int pan_last_y;
     int pan_remainder;
     int panning;
+    // 1 = the app edits this text (through utext_key), so the shared
+    // right-click menu offers Cut, Paste and Undo too, and the app hears
+    // a change as UUI_REASON_KEY. 0, as init leaves it: a viewer, whose
+    // menu is Copy and Select All.
+    int editable;
 };
 
 // `buf`/`cap` are the text's storage, and they are the CALLER's for the

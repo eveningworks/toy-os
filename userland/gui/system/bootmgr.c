@@ -18,6 +18,7 @@
 #include "rt/sys.h"
 #include "keyboard.h"
 #include "ui/uapp.h"
+#include "ui/uui_route.h"   // UUI_REASON_KEY
 #include "ui/ugfx.h"
 #include "ui/utheme.h"
 #include "ui/ulog.h"
@@ -778,8 +779,16 @@ static void drain_words(void) {
 }
 
 static void on_widget(struct uapp *a, int id, int reason) {
-    (void)reason;
     switch (id) {
+    case ID_TEXT:
+        // The shared edit menu changed the text (a paste, an undo): what
+        // on_key does after a typed key.
+        if (reason == UUI_REASON_KEY && g_text_mode) {
+            if (cfg_from_text() == 0) recheck();
+            update_status();
+            uapp_redraw(a);
+        }
+        return;
     case ID_MENU: {
         int code = uui_menubar_take_code(&g_menu);
         if (code > 0) do_command(a, code); else uapp_redraw(a);
@@ -935,6 +944,7 @@ int main(void) {
     uui_textview_init(&g_text, 0, 0, 0, 0, UTHEME_TEXT, UTHEME_WHITE, UTHEME_PANEL_BG,
                       UTHEME_OUTLINE, UTHEME_SELECTION, g_textbuf, sizeof g_textbuf);
     g_text.show_caret = 1;
+    g_text.editable = 1;   // its keys are text_key()'s; the menu edits too
     utext_set_wrap(&g_text.tb, UTEXT_WRAP_OFF);
     uui_button_init(&g_save, 0, 0, 0, 0, "Save", UTHEME_ACCENT, UTHEME_ACCENT_TEXT, ID_SAVE);
     uui_button_init(&g_revert, 0, 0, 0, 0, "Revert", UTHEME_BUTTON_BG, UTHEME_TEXT, ID_REVERT);

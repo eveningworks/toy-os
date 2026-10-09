@@ -10899,3 +10899,38 @@ tips and the ball gets flat facets with the same code. Each cut is kept
 as a direction and a depth, and the solid is rebuilt from its uncut
 form when one deepens. A hit in about the same direction as an earlier
 one deepens that cut, so slivers do not pile up beside each other.
+
+## A text field's edit menu is the toolkit's, reached through one widget slot
+
+**2026-10-09.** Text fields had no clipboard keys and no right-click
+menu. Only Notepad had either, because it wrote its own. The Win32 EDIT
+control carries Undo / Cut / Copy / Paste / Delete / Select All built in
+(`WM_CONTEXTMENU`), and so do Qt's `QLineEdit` and GTK's `GtkEntry`.
+Apps write nothing for it. toy-os follows that shape and differs only
+in where the one menu lives.
+
+**The keys went into the edit core** (`uui_edit_key()`), beside Ctrl+A
+and Ctrl+Z, so `uui_textbox`, `utext` and every widget built on them
+behave the same. The clipboard calls sit in their own file
+(`uui_edit_clip.c`) so that a host build of the core needs no
+clipboard.
+
+**The menu is one per process and uapp's, not one per widget.** A
+`uui_menubar` embedded in every text box would cost a menu's state per
+field across about twenty apps, and only one menu can be open at a
+time anyway. A helper that each app calls from its own right-click
+handler was the other option the maintainer was shown. It was turned
+down because about twenty apps would need the call and a new app could
+forget it, which is how every field ended up without a menu in the
+first place. So a widget answers one question,
+`uui_widget_ops.edit_target`: "is there editable text here, and how is
+it reached?" uapp opens the menu, and the router offers it every event
+first through an `extra` item, exactly as it offers an open dropdown.
+That made the GTK/Qt behaviour cheap: a composite (find bar, spinbox)
+delegates to its inner field, and a field an app draws itself is found
+through its focus ring.
+
+**The secondary click is then consumed**, as an accepted Qt
+`contextMenuEvent` is. If the app also heard it, a window with its own
+right-click menu, such as the File Manager's, could open that menu on
+top of the edit menu.

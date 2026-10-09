@@ -336,6 +336,12 @@ static void spinbox_bounds_op(const void *w, int *x, int *y, int *ow, int *oh) {
     *x = c->x; *y = c->y; *ow = c->w; *oh = c->h;
 }
 
+// The inner field's, for the shared edit menu (ui/uui_widget.h).
+static int spinbox_edit_target(void *w, int cx, int cy, struct uui_edit_target *out) {
+    struct uui_spinbox *p = (struct uui_spinbox *)w;
+    return uui_textbox_edit_target(&p->field, cx, cy, out);
+}
+
 const struct uui_widget_ops uui_spinbox_ops = {
     .bounds = spinbox_bounds_op,
     .draw = draw_op,
@@ -349,4 +355,5 @@ const struct uui_widget_ops uui_spinbox_ops = {
     .key = key_op,
     .natural_size = natural_op,
     .set_geometry = set_geometry_op,
+    .edit_target = spinbox_edit_target,
 };

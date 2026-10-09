@@ -577,6 +577,13 @@ static void op_describe(const void *w, const struct uui_describe *d) {
     }
 }
 
+// The inner field's, for the shared edit menu (ui/uui_widget.h).
+static int optlist_edit_target(void *w, int cx, int cy, struct uui_edit_target *out) {
+    struct uui_optlist *p = (struct uui_optlist *)w;
+    if (!p->editing) return 0;   // the field shows only then
+    return uui_textbox_edit_target(&p->edit, cx, cy, out);
+}
+
 const struct uui_widget_ops uui_optlist_ops = {
     .natural_size  = op_natural_size,
     .set_geometry  = op_set_geometry,
@@ -592,4 +599,5 @@ const struct uui_widget_ops uui_optlist_ops = {
     .wheel         = op_wheel,
     .cursor        = op_cursor,
     .describe      = op_describe,
+    .edit_target = optlist_edit_target,
 };
