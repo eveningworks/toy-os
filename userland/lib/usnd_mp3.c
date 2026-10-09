@@ -246,13 +246,7 @@ struct mp3 {
 
     float xr[2][GRANULE];
     float overlap[2][GRANULE];
-    float vbuf[2][1024];
-    int vpos[2];
-    // The synthesis window's 512 taps, gathered per 32-sample block. It
-    // lives HERE rather than on the stack because 512 floats is 2 KiB and
-    // ring 3 has a 2 KiB frame budget (USERLAND_CFLAGS' -Wframe-larger-than):
-    // as a local it overran the budget by 48 bytes and failed the build.
-    float u[512];
+    struct usnd_mpsynth synth[2];   // the filterbank's history, per channel
 
     int32_t out[2 * GRANULE * 2];   // two granules, interleaved, s32
     int out_frames, out_pos;
@@ -261,7 +255,6 @@ struct mp3 {
 
 // --- 5. derived constants, computed rather than tabled -----------------
 
-static float g_synth_cos[64][32];
 static float g_imdct_long[36][18];
 static float g_imdct_short[12][6];
 static float g_win[4][36];
@@ -271,10 +264,6 @@ static int g_consts_ready;
 
 static void build_consts(void) {
     if (g_consts_ready) return;
-    for (int i = 0; i < 64; i++)
-        for (int k = 0; k < 32; k++)
-            g_synth_cos[i][k] = (float)cos((16 + i) * (2 * k + 1) * M_PI / 64.0);
-
     for (int i = 0; i < 36; i++)
         for (int k = 0; k < 18; k++)
             g_imdct_long[i][k] =
@@ -611,44 +600,8 @@ static void imdct(struct mp3 *m, int ch, const struct granule *g, float *sb) {
 }
 
 // --- 12. the polyphase synthesis filterbank ----------------------------
-
-// Full scale onto s32. Compared in float BEFORE the cast: a float at or
-// past 2^31 converted to an integer is undefined, not clamped.
-static int32_t clip32(float v) {
-    float x = v * 2147483648.0f;
-    if (x >= 2147483647.0f) return INT32_MAX;
-    if (x <= -2147483648.0f) return INT32_MIN;
-    return (int32_t)(int64_t)(x + (x >= 0 ? 0.5f : -0.5f));
-}
-
-static void synth(struct mp3 *m, int ch, const float *sb, int32_t *out, int stride) {
-    float *V = m->vbuf[ch];
-    for (int slot = 0; slot < SSLIMIT; slot++) {
-        const float *S = sb + slot * SBLIMIT;
-        m->vpos[ch] = (m->vpos[ch] + 1024 - 64) & 1023;
-        int base = m->vpos[ch];
-        for (int i = 0; i < 64; i++) {
-            float acc = 0.0f;
-            for (int k = 0; k < 32; k++) acc += S[k] * g_synth_cos[i][k];
-            V[(base + i) & 1023] = acc;
-        }
-        // U is the 512 taps the window multiplies, gathered out of the
-        // 1024-sample history in the standard's own interleave.
-        float *u = m->u;
-        for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 32; j++) {
-                u[i * 64 + j] = V[(base + i * 128 + j) & 1023];
-                u[i * 64 + 32 + j] = V[(base + i * 128 + 96 + j) & 1023];
-            }
-        }
-        for (int j = 0; j < 32; j++) {
-            float acc = 0.0f;
-            for (int i = 0; i < 16; i++)
-                acc += u[j + 32 * i] * mp3_synth_window[j + 32 * i];
-            out[(slot * 32 + j) * stride] = clip32(acc);
-        }
-    }
-}
+//
+// Shared with Layer II: usnd_mpsynth.c.
 
 // --- putting a frame through all twelve --------------------------------
 
@@ -748,7 +701,7 @@ static int decode_frame(struct mp3 *m, const uint8_t *frame, int nbytes) {
             reorder(m, ch, &m->gr[gr][ch]);
             antialias(m, ch, &m->gr[gr][ch]);
             imdct(m, ch, &m->gr[gr][ch], sb);
-            synth(m, ch, sb, m->out + gr * GRANULE * nch + ch, nch);
+            usnd_mpsynth_run(&m->synth[ch], sb, SSLIMIT, m->out + gr * GRANULE * nch + ch, nch);
         }
     }
 
@@ -945,8 +898,8 @@ static int mp3_seek(struct usnd_stream *s, uint64_t frame) {
     m->res_len = 0;
     m->out_frames = m->out_pos = 0;
     memset(m->overlap, 0, sizeof m->overlap);
-    memset(m->vbuf, 0, sizeof m->vbuf);
-    m->vpos[0] = m->vpos[1] = 0;
+    usnd_mpsynth_reset(&m->synth[0]);
+    usnd_mpsynth_reset(&m->synth[1]);
     return 0;
 }
 

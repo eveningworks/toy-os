@@ -1060,7 +1060,8 @@ run on, not by order.
 - [x] ~~Release the card when no client plays, PipeWire's suspend-on-idle~~ DONE 2026-09-21
 - [ ] HDMI/DisplayPort audio -- `00:03.0` went to ring-3 stage 3, so this reclaims it or moves to ring 3 too
 - [x] ~~One volume taper for every card~~ DONE 2026-09-23 -- `ac97.c` joined the 40 dB convention on its master attenuator (2340e1ef)
-- [ ] MPEG-2/2.5 Layer III (the half-rate sample rates), and Layer I/II -- refused with -ENOTSUP today
+- [ ] MPEG-2/2.5 Layer III (the half-rate sample rates), and Layer I -- refused with -ENOTSUP today
+- [x] ~~Layer II~~ DONE 2026-10-09 -- `usnd_mp2.c`, for `.mp2` and the sound in an MPEG-1 video
 - [ ] Intensity stereo in the MP3 decoder -- refused, because nothing available encodes it to test against
 - [ ] An MP3 seek index, so seeking lands exactly rather than by average frame size
 - [x] ~~MIDI playback~~ DONE 2026-09-28 -- a SoundFont synth as `usnd`'s third codec row, a generated GM bank, a real one via `EXTRAS=1`

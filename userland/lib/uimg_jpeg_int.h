@@ -22,6 +22,14 @@
 // them; it is the same permutation read in the same direction.
 extern const uint8_t uimg_jpeg_zigzag[64];
 
+// Annex K.3's standard Huffman tables, counts indexed 1..16 (entry 0 is
+// unused): the encoder writes them, and the decoder falls back to them
+// for a scan whose table the file never defined (Motion JPEG).
+extern const uint8_t uimg_jpeg_std_dc_lum_bits[17], uimg_jpeg_std_dc_chr_bits[17];
+extern const uint8_t uimg_jpeg_std_dc_vals[12];
+extern const uint8_t uimg_jpeg_std_ac_lum_bits[17], uimg_jpeg_std_ac_lum_vals[162];
+extern const uint8_t uimg_jpeg_std_ac_chr_bits[17], uimg_jpeg_std_ac_chr_vals[162];
+
 // uimg.c owns the one-string-per-process error sink (uimg.h).
 void uimg_set_error(const char *msg);
 

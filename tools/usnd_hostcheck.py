@@ -537,7 +537,8 @@ def main():
         cc += ["-DUSND_MP3_POISON=1"]
     cc += [
           "-I" + inc, "-I" + os.path.join(REPO, "userland"),
-          os.path.join(REPO, "userland", "lib", "usnd_mp3.c"), main_c,
+          os.path.join(REPO, "userland", "lib", "usnd_mp3.c"),
+          os.path.join(REPO, "userland", "lib", "usnd_mpsynth.c"), main_c,
           "-o", binary, "-lm"]
     r = subprocess.run(cc, capture_output=True, text=True)
     if r.returncode != 0:

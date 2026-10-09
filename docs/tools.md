@@ -2294,6 +2294,20 @@ window without going through it will find its layout polls timing out.
 
   It is a registry rather than a script per item, the same shape
   `display_driver` and `block_device` use: the tenth extra is a row.
+- **`uvid_hostcheck.py`** -- `userland/lib/uvid*.c` (MPEG-1 video, the
+  MPEG program stream) and `usnd_mp2.c` (Layer II), compiled with the
+  host gcc and compared with FFmpeg's decode: ten encodes covering the
+  quantiser ends, I-only, no-B and 60-frame GOPs, big motion, custom
+  matrices, a size that is not a multiple of 16, skipped macroblocks and
+  the rate-distortion search; seven MP2 encodes across rates and modes;
+  then one muxed file's sound, pictures and four exact seeks. **Video is
+  judged by PSNR, not equality** -- MPEG-1 defines a decoder by IDCT
+  accuracy, and no frame matches FFmpeg bit for bit -- **and the bar was
+  set by `--positive-control`, not by eye**: at 40 dB a half-pel
+  rounding bias passed every case; the clean decoder's worst frame is
+  ~60 dB and the biased one's ~49, so the default is 55. Also runs the
+  decoder's own table self-test (every VLC table a prefix code). In
+  `ondemand_sweep.py`; needs gcc and ffmpeg.
 - **`usnd_hostcheck.py`** -- the same `userland/lib/usnd_mp3.c`, compiled
   with the host gcc and run against eight lame-encoded files (CBR and
   VBR, mono/stereo/joint stereo, 32 to 320 kbps), every sample compared
@@ -2423,6 +2437,21 @@ window without going through it will find its layout polls timing out.
   `data/tests/ramp24.flac`, whose every sample is a formula of its index
   so `/tests/usnd_test` checks exactness with no reference decoder.
   Needs `lame` (not for `--midi-only`); nothing in the build runs it.
+- **`gen_video.py`** -- generates the videos that ship, into
+  `data/usr/share/videos/` (and `dusk.mpg` into
+  `data/wallpapers/animated/`), plus `/tests`' fixtures. The call
+  `gen_music.py` made: drawn here (ffmpeg's lavfi sources, our fonts,
+  our music) and tracked, so a clean checkout has video and `LICENSE`
+  needs no entry. **Each clip is a different path through the decoders**
+  -- I/P/B MPEG-1 with MP2 at 44.1 kHz, the same at 48 kHz, Motion JPEG
+  with 22.05 kHz mono PCM in AVI -- and **every frame carries its number
+  and timecode burnt in**, because identical content moving is
+  pixel-identical and a dropped frame must be told from a repeated one.
+  `av-sync.mpg` puts a white frame and a 1 kHz beep at every second, for
+  `vplay --sync`. The fixtures: `tiny.mpg` (72x40, not a multiple of
+  16) with `tiny.yuv`, FFmpeg's decode of it, as `uvid_test`'s
+  reference; `tiny.avi`, whose PCM is a formula of the sample index.
+  Needs ffmpeg with libfreetype; nothing in the build runs it.
 - **`gen_cursors.py`** -- generates the shipped cursor themes into
   `data/cursors/`, which the Makefile's `seed` target stages onto the
   image. **Into `data/`, NOT `seed/sync/`** -- that tree is gitignored

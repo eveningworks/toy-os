@@ -22,11 +22,14 @@
 // bytes at offset 0 while MP3's is a sync pattern that a stray 0xFF can
 // imitate -- the cheaper, stricter test should get the first look.
 // MIDI's `MThd` and FLAC's `fLaC` are as strict as WAV's `RIFF`, so they
-// go ahead of MP3 too.
+// go ahead of MP3 too, and so does a video's sound (RIFF 'AVI ', or an
+// MPEG pack header).
 static const struct usnd_codec *const g_codecs[] = {
     &usnd_codec_wav,
     &usnd_codec_mid,
     &usnd_codec_flac,
+    &usnd_codec_vid,
+    &usnd_codec_mp2,
     &usnd_codec_mp3,
 };
 #define CODEC_COUNT ((int)(sizeof g_codecs / sizeof g_codecs[0]))

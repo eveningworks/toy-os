@@ -10,7 +10,9 @@
 
 ## Description
 
-Play an audio file, or say what one contains. WAV, FLAC, MP3 and MIDI, and
+Play an audio file, or say what one contains. WAV, FLAC, MP3, MP2 and
+MIDI -- and the sound of a video (`.mpg`, `.avi`), whose audio track is
+a row in the same table -- and
 each arrived exactly as the codec table (`userland/lib/usnd.h`)
 promised it would: a file and a row, not a second mechanism.
 
@@ -26,9 +28,9 @@ bits wide from decoder to driver, and only a 16-bit card rounds it down.
 Seeking lands on the exact sample. More than two channels is refused,
 as for every format here.
 
-The MP3 side is MPEG-1 Layer III only. Layer I/II, the half-rate
-MPEG-2/2.5 sample rates, free-format and intensity stereo are refused by
-name rather than played wrongly — a good file this build will not play
+MPEG audio is MPEG-1 Layer III (`.mp3`) and Layer II (`.mp2`). Layer I,
+the half-rate MPEG-2/2.5 sample rates, free-format and intensity stereo
+are refused by name rather than played wrongly — a good file this build will not play
 reads differently from a broken one, which is what the library's
 three-way refusal exists for.
 

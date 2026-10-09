@@ -18,4 +18,9 @@
 // 1 and *out_ms on success; 0 and *out_ms untouched on anything else.
 int uduration_parse_ms(const char *s, uint64_t *out_ms);
 
+// The other direction, as a player's clock shows a position: "0:07",
+// "1:17", "1:02:03" -- whole seconds, truncated, so a clock never shows
+// a second that has not arrived yet.
+void uduration_clock(uint64_t ms, char *out, unsigned long cap);
+
 #endif

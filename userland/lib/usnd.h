@@ -175,8 +175,10 @@ void usnd_close(struct usnd_stream *s);
 // The codec table. Adding MP3 is one .c file and one row in usnd.c.
 extern const struct usnd_codec usnd_codec_wav;
 extern const struct usnd_codec usnd_codec_mp3;
+extern const struct usnd_codec usnd_codec_mp2;   // MPEG-1 Layer II
 extern const struct usnd_codec usnd_codec_mid;   // renders through a SoundFont
 extern const struct usnd_codec usnd_codec_flac;  // lossless, every depth to 32 bits
+extern const struct usnd_codec usnd_codec_vid;   // a video file's sound (lib/uvid.h)
 
 // --- playback ---------------------------------------------------------
 //

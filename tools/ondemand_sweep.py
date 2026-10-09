@@ -72,6 +72,10 @@ TOOLS = [
     # a decoder that shares no code with it.
     ("usnd_host",   "usnd_hostcheck.py",       "MP3 vs ffmpeg, FLAC exact vs flac -d", False,
      ("host_audio_flac", "needs gcc, lame, ffmpeg and flac on PATH"),                       False),
+    # MPEG-1 video, the program stream and MP2 against ffmpeg's decode,
+    # with a measured PSNR bar (the script says why it is not bit-exact).
+    ("uvid_host",   "uvid_hostcheck.py",       "MPEG-1 video + MP2 vs ffmpeg",       False,
+     ("host_video", "needs gcc and ffmpeg on PATH"),                                        False),
     # The MIDI codec and SoundFont synth against FluidSynth, plus an ASan
     # fuzz of both parsers. On the built-in bank only: a fetched one is
     # the maintainer's to pass with --sf2.
@@ -495,6 +499,9 @@ def precondition_met(kind):
     if key == "host_audio_flac":
         # host_audio plus Xiph's `flac`, the FLAC half's oracle. A skip.
         return all(shutil.which(t) for t in ("gcc", "lame", "ffmpeg", "flac")), why
+    if key == "host_video":
+        # ffmpeg is both the encoder of the sweep and its oracle. A skip.
+        return all(shutil.which(t) for t in ("gcc", "ffmpeg")), why
     if key == "host_fluidsynth":
         # FluidSynth is the ORACLE: without it the check would run only
         # its fuzz half and still print a pass. A skip, like lame and

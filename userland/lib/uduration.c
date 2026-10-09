@@ -1,6 +1,8 @@
 // lib/uduration.h -- a typed duration as milliseconds.
 #include "lib/uduration.h"
 
+#include <stdio.h>
+
 #define FRAC_DIGITS 9   // 10^9 * the largest unit (a day, 8.64e7 ms) fits in 64 bits
 
 int uduration_parse_ms(const char *s, uint64_t *out_ms) {
@@ -42,4 +44,12 @@ int uduration_parse_ms(const char *s, uint64_t *out_ms) {
     if (ms > UINT64_MAX - add) return 0;
     *out_ms = ms + add;
     return 1;
+}
+
+void uduration_clock(uint64_t ms, char *out, unsigned long cap) {
+    uint64_t s = ms / 1000;
+    if (s >= 3600)
+        snprintf(out, cap, "%u:%02u:%02u", (unsigned)(s / 3600), (unsigned)(s / 60 % 60), (unsigned)(s % 60));
+    else
+        snprintf(out, cap, "%u:%02u", (unsigned)(s / 60), (unsigned)(s % 60));
 }
