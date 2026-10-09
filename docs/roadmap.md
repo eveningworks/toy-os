@@ -25,7 +25,6 @@ buildable now. Something that MISBEHAVES is not here -- that is
 `docs/bugs.md`.
 
 - [ ] Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured  *(USB)*
-- [ ] Why toy-os's power-off needs two presses to restart the ASUS -- the `acpimode=`/`gpewake=` experiments, then the fix  *(USB)*
 - [ ] The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN  *(USB)*
 - [ ] Restore trust in the GUI suite: harness faults first, then the deterministic reds, intermittents kept with a rate  *(Kernel test harness)*
 <!-- END next-up -->
@@ -961,7 +960,7 @@ run on, not by order.
 - [x] ~~An RTL8153 vendor driver for USB Ethernet~~ DONE 2026-08-31 -- `rtl_usb.c` + `rtl8153.c` now; DHCP, ICMP, 730 KB of HTTP on a UE300
 - [x] ~~An RTL8156 driver, the 2.5G USB part~~ DONE 2026-09-09 -- `rtl8156.c`, an ops table over the core; 2.5G link, DHCP, a fetch
 - [ ] **NEXT** Receive aggregation on the RTL8156: one frame per bulk transfer caps a 2.5G link at ~450 frames/s -- measured
-- [ ] **NEXT** Why toy-os's power-off needs two presses to restart the ASUS -- the `acpimode=`/`gpewake=` experiments, then the fix
+- [x] ~~The ASUS needed two presses to start after a toy-os power-off~~ DONE 2026-10-09 -- the ACPI-mode switch
 - [ ] **NEXT** The UAC2 feedback endpoint: an asynchronous sink drifts against the bus without it, and `xhci.c` has no isochronous IN
 - [x] ~~USB Ethernet (CDC-ECM), and the BULK transfer type it needed~~ DONE 2026-08-31 -- `net_usb_ecm.c`; RX untested, see `docs/bugs.md`
 - [x] ~~Remote access: a shell and file transfer over the network~~ DONE 2026-08-31 -- `telnetd`, `tftpd`, `tools/remote.py`

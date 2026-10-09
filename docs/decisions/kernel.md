@@ -6694,6 +6694,22 @@ toy-os's path does or skips -- entering ACPI mode at the last moment,
 or not running `_PTS` -- and the boot words `acpimode=` and `gpewake=`
 isolate it one boot at a time.
 
+**The answer, measured the same day: the ACPI-mode switch.** Same build,
+same machine, one boot word apart: entering ACPI mode and then writing
+S5 needed two presses to start again; writing S5 in legacy mode needed
+one. So when the firmware leaves ACPI mode off at boot, `acpi_poweroff()`
+now writes S5 in legacy mode first -- the path the firmware's own
+power-button shutdown takes, which on many chipsets is an SMI trap of
+the sleep write, where the firmware does its own preparation -- and
+enters ACPI mode only if the machine is still running half a second
+later. In ACPI mode the firmware expects the OS to have run `_PTS`
+first; on that DSDT `_PTS` tells the embedded controller the sleep
+state and sets two chipset bits, and toy-os, with no interpreter, cannot
+run it. Linux and Windows do the opposite -- ACPI mode from boot, `_PTS`
+run -- and toy-os deliberately differs because the half of that it can
+do is the half that broke the machine. `acpimode=poweroff` keeps the old
+order for an A/B on the next machine.
+
 **One thing that was missing throughout and is now fixed regardless:
 the sleep write is TWO writes**, the sleep type first and the enable
 second, as `acpi_hw_legacy_sleep()` does. One write carrying both is

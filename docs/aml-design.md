@@ -161,7 +161,9 @@ machine it was for, all 17 `_PRW`s are Methods -- 12 `Return (GPRW (gpe,
 state))`, 3 `Return (Package)`, 2 conditional -- so a reader of constant
 Names finds none of them. And none wakes from S5, so the wake set this
 stage would compute there is empty, which is what toy-os already does.
-The two-press power button has another cause (`docs/bugs.md`).
+The two-press power button had another cause: entering ACPI mode
+just before the S5 write, fixed by letting the firmware's legacy path
+power the machine off (`docs/decisions.md`).
 `tools/aml_walk.py --prw` is the measurement. What follows is the
 original plan, kept for the record.
 

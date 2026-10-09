@@ -350,16 +350,15 @@ static void pm1_clear_status(const struct acpi_state *s) {
 
 // --- the S5 EXPERIMENTS: boot words that change one thing per boot ----
 //
-// The ASUS takes two presses to start after toy-os powers it off, and
-// ONE after the firmware does (a press while toy-os runs, which -- with
-// ACPI mode off -- the firmware handles itself). Its power button is the
-// fixed PM1 one, not a GPE, and no `_PRW` wakes from S5, so the wake set
-// is not the difference (docs/bugs.md). These isolate what is, one boot
-// each, the way `nogpe` did for the reboot:
+// Built to find why the ASUS took two presses to start after toy-os
+// powered it off and one after the firmware did; `acpimode=never` found
+// it (acpi_poweroff() below). Kept, as `nogpe` is, because the next
+// machine is a different machine -- one boot each:
 //
-//   acpimode=never  power off WITHOUT entering ACPI mode first, as the
-//                   firmware's own path does
-//   acpimode=boot   enter ACPI mode at boot, as Linux does
+//   acpimode=never     the legacy-mode S5 write, with no ACPI-mode fallback
+//   acpimode=poweroff  the OLD order: enter ACPI mode, then write S5 --
+//                      what needed two presses (acpi_poweroff() below)
+//   acpimode=boot      enter ACPI mode at boot, as Linux does
 //   gpewake=A,B,..  after masking every GPE, re-arm these (hex or decimal)
 //
 // The value after `word=`, up to the next space, or NULL when absent.
@@ -494,7 +493,7 @@ static void debug_pause(const struct acpi_state *s) {
     vga_printf("\nacpi: about to write S5 type %d to PM1a 0x%x\n",
                (int)s->slp_typ_a, s->pm1a_cnt);
     vga_printf("acpi: ACPI mode %s, smi 0x%x enable 0x%x\n",
-               (s->flags & ACPI_F_ENABLED) ? "ON" : "OFF (SCI_EN never came up)",
+               (s->flags & ACPI_F_ENABLED) ? "ON" : "OFF (the firmware's legacy path first)",
                s->smi_cmd, s->acpi_enable);
     vga_printf("acpi: pm1_sts 0x%x  gpe0 0x%x/%u  gpe1 0x%x/%u\n",
                s->pm1a_evt, s->gpe0_blk, s->gpe0_len, s->gpe1_blk, s->gpe1_len);
@@ -506,16 +505,47 @@ static void debug_pause(const struct acpi_state *s) {
     for (uint32_t i = 0; i < 10000000; i++) io_wait();
 }
 
+// The PM1 path's quiesce and write: every GPE masked and cleared, the
+// wake statuses cleared, then the sleep type and enable.
+static void pm1_s5(const struct acpi_state *s) {
+    if (!gpes_left_alone()) {
+        gpe_block_off(s->gpe0_blk, s->gpe0_len);
+        gpe_block_off(s->gpe1_blk, s->gpe1_len);
+        gpe_rearm_named(s->gpe0_blk, s->gpe0_len, 0);   // GPE0 only: no GPE1 base is parsed
+    }
+    pm1_clear_status(s);
+    // LAST, so that one photograph of a machine about to reboot
+    // shows everything that was done to it.
+    debug_pause(s);
+    klog_printf("acpi: S5 via PM1a 0x%x type %d%s in %s mode, status cleared at 0x%x\n",
+                s->pm1a_cnt, (int)s->slp_typ_a, s->pm1b_cnt ? " (and PM1b)" : "",
+                (s->flags & ACPI_F_ENABLED) ? "ACPI" : "legacy", s->pm1a_evt);
+    pm1_sleep_write((uint16_t)s->pm1a_cnt, s->slp_typ_a);
+    if (s->pm1b_cnt) pm1_sleep_write((uint16_t)s->pm1b_cnt, s->slp_typ_b);
+}
+
+// A port-I/O delay, `n` of about a microsecond each: no tick advances on
+// some of the paths that reach this.
+static void s5_grace(uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) io_wait();
+}
+
+// THE FIRMWARE'S S5 FIRST, WHEN IT LEFT ACPI MODE OFF. A firmware still
+// in legacy mode at boot has its own sleep path behind the PM1 write --
+// on many chipsets an SMI trap of SLP_EN -- and it is the path its own
+// power-button shutdown takes. Entering ACPI mode first takes that away
+// and hands the firmware an S5 it expects `_PTS` to have prepared, which
+// toy-os cannot run. MEASURED on the ASUS UX305FA, same build, one switch:
+// entering ACPI mode first, and starting again took two presses of the
+// power button; powering off in legacy mode, and it took one
+// (docs/decisions.md). Linux and Windows always enter ACPI mode at boot
+// and do run `_PTS`; with no interpreter, the firmware's own path is the
+// honest substitute. ACPI mode remains the FALLBACK, for firmware whose
+// legacy write does nothing. `acpimode=poweroff` is the old order, for an
+// A/B; `acpimode=never` is the legacy write with no fallback.
 int acpi_poweroff(void) {
     struct acpi_state *s = acpi_state_mut();
     if (!(s->flags & ACPI_F_S5)) return 0;
-
-    if (acpimode_is("never")) {
-        vga_printf("acpi: powering off in legacy mode (acpimode=never)\n");
-        klog_write("acpi: powering off in legacy mode (acpimode=never)\n");
-    } else {
-        enable_acpi_mode(s);
-    }
 
     if (s->flags & ACPI_F_HW_REDUCED) {
         if (!gas_usable(&s->sleep_control)) return 0;
@@ -527,30 +557,32 @@ int acpi_poweroff(void) {
         klog_printf("acpi: S5 via SLEEP_CONTROL_REG, type %d\n", (int)s->slp_typ_a);
         gas_write8(&s->sleep_control,
                    (uint8_t)(((s->slp_typ_a & 7) << SLP_CTL_TYP_SHIFT) | SLP_CTL_SLP_EN));
-    } else {
-        if (!s->pm1a_cnt) return 0;
-        if (!gpes_left_alone()) {
-            gpe_block_off(s->gpe0_blk, s->gpe0_len);
-            gpe_block_off(s->gpe1_blk, s->gpe1_len);
-            gpe_rearm_named(s->gpe0_blk, s->gpe0_len, 0);   // GPE0 only: no GPE1 base is parsed
-        }
-        pm1_clear_status(s);
-        // LAST, so that one photograph of a machine about to reboot
-        // shows everything that was done to it. It used to run before
-        // the quiesce, and the screen then said nothing about the part
-        // under suspicion.
-        debug_pause(s);
-        klog_printf("acpi: S5 via PM1a 0x%x type %d%s, status cleared at 0x%x\n",
-                    s->pm1a_cnt, (int)s->slp_typ_a,
-                    s->pm1b_cnt ? " (and PM1b)" : "", s->pm1a_evt);
-        pm1_sleep_write((uint16_t)s->pm1a_cnt, s->slp_typ_a);
-        if (s->pm1b_cnt) pm1_sleep_write((uint16_t)s->pm1b_cnt, s->slp_typ_b);
+        s5_grace(1000);
+        klog_write("acpi: the S5 write did not stop the machine\n");
+        return 0;
     }
+    if (!s->pm1a_cnt) return 0;
+
+    int legacy_first = !(s->flags & ACPI_F_ENABLED) && !acpimode_is("poweroff");
+    if (legacy_first) {
+        pm1_s5(s);
+        // The firmware's path may talk to its embedded controller before
+        // it cuts power: half a second, where the hardware's own write
+        // takes microseconds.
+        s5_grace(500000);
+        if (acpimode_is("never")) {
+            klog_write("acpi: the legacy S5 write did not stop the machine (acpimode=never)\n");
+            return 0;
+        }
+        klog_write("acpi: the legacy S5 write did not stop the machine -- entering ACPI mode\n");
+    }
+    enable_acpi_mode(s);
+    pm1_s5(s);
 
     // The chipset acts on the write asynchronously; a few hundred
     // microseconds of port-I/O delay is the conventional grace period
     // before deciding it did not take.
-    for (int i = 0; i < 1000; i++) io_wait();
+    s5_grace(1000);
     klog_write("acpi: the S5 write did not stop the machine\n");
     return 0;
 }
