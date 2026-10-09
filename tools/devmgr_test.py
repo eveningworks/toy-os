@@ -123,11 +123,16 @@ def click(dbg, win, x, y):
     dbg.settle(0.5)
 
 
+RAW = {}   # id -> the last `devctl` line read for it, for a failure's detail
+
+
 def devices(dbg):
     """`devctl list`, as {id: (type, driver, state)} -- the independent
     reader: the app's report says what the APP believes."""
     out = {}
     for line in dbg.send("sh devctl").splitlines():
+        if line.split()[:1]:
+            RAW[line.split()[0]] = line.strip()
         parts = line.split()
         if len(parts) >= 4 and re.match(r"(pci|usb|ps2|cpu|blk|mon):", parts[0]):
             # TYPE is two words in a fixed 12-column field ("Network adap").
@@ -237,6 +242,7 @@ def main():
     wait_layout(dbg, lambda l: l.get("view") == "type")
 
     devs = devices(dbg)
+    raw_before = dict(RAW)
     nic = next((d for d, v in devs.items() if v[0].startswith("Network") and v[1] != "-"), None)
     store = next((d for d, v in devs.items() if v[0].startswith("Storage") and v[1] != "-"), None)
     if not check("devctl lists a network card and a storage controller with drivers",
@@ -336,8 +342,10 @@ def main():
     lay = wait_layout(dbg, lambda l: False, 1.0)
     check("the storage controller's toggle opens no dialog",
           lay.get("ask", (0, 0, 0, 0))[2] == 0, f"ask={lay.get('ask')}")
-    check("...and it keeps its driver", devices(dbg).get(store, ("", "", ""))[1] == devs[store][1],
-          f"{store}: {devices(dbg).get(store)}")
+    after = devices(dbg).get(store, ("", "", ""))
+    check("...and it keeps its driver", after[1] == devs[store][1],
+          f"{store}: before {devs[store]} {raw_before.get(store)!r}, after {after} "
+          f"{RAW.get(store)!r}")
 
     pane_and_events(dbg, win, nic)
     filter_and_copy(dbg, win, nic, nic_driver)
