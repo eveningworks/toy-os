@@ -169,5 +169,7 @@ ring 0, and a record format the debugger's `catch syscall` reuses.
 
 ## Decided so far
 
-Nothing. The choices above carry recommendations, and the maintainer
-picks before stage 1.
+Picked 2026-10-09: **1A, a record stream**, and **2A, a full ring
+stops the tracee** at its return edge. Choice 3 was not put to the
+maintainer and takes its recommendation, **3A, a generated table**,
+unless reopened. The debugger's stage 4 is not scheduled.

@@ -156,5 +156,8 @@ remote typing on the same path as local typing.
 
 ## Decided so far
 
-Nothing. The choices above carry recommendations, and the maintainer
-picks before stage 1.
+Picked 2026-10-09: **stage 1 only** -- the translator compiled into both
+rings, for the on-screen keyboard and Settings' picture -- and **3A, the
+pointer stays in the kernel**. Choices 1 and 2 stand at today's answers
+(the kernel translates for the desktop; the console keeps its layout)
+until stage 2 is asked for.
