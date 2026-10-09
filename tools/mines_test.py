@@ -511,7 +511,8 @@ def run(dbg, qmp, tmp, res):
         dbg.settle()
         time.sleep(0.4)
         menu = Layout(win["content"], dbg.logs("mines:", clear=True))
-        row = menu.items.get((0, 6))
+        # Game menu rows: New Game, ---, three levels, ---, Sound, ---, Best Times...
+        row = menu.items.get((0, 8))
         res.check("the Game menu has Best Times...", row is not None, f"rows={sorted(menu.items)}")
         if row:
             dbg.send("gui click %d %d" % lay.rect_centre(row))
@@ -525,6 +526,24 @@ def run(dbg, qmp, tmp, res):
                 st = state_after(dbg, lambda: dbg.send("gui click %d %d" % lay.rect_centre(reset)))
                 res.check("Reset clears the best time", st is not None
                           and st["what"] == "best-reset" and st["best"] == 0, f"state={st}")
+
+        # --- Game > Sound: S turns it off, and a new process remembers ---
+        dbg.logs("mines:", clear=True)
+        dbg.key(ord("s"))
+        time.sleep(0.4)
+        off = [l for l in dbg.logs("mines:", clear=True) if "sound" in l]
+        res.check("S turns the sound off", any("mines: sound off" in l for l in off), f"{off}")
+        res.check("...the game closes", close(dbg, win))
+        win, lines, lay = spawn(dbg)
+        res.check("...and a new Minesweeper starts with it off",
+                  win is not None and any("mines: sound off" in l for l in lines),
+                  f"{[l for l in lines if 'sound' in l]}")
+        if not win or not lay.complete():
+            return
+        dbg.key(ord("s"))
+        time.sleep(0.4)
+        on = [l for l in dbg.logs("mines:", clear=True) if "sound" in l]
+        res.check("...and S turns it back on", any("mines: sound on" in l for l in on), f"{on}")
 
     # --- the title bar still opens the WINDOW MENU --------------------
     #

@@ -50,6 +50,7 @@
 #include "ui/uui_dialog.h"
 #include "ui/uui_toast.h"
 #include "lib/usnd.h"
+#include "lib/uconf.h"
 #include "ui/uapp.h"
 #include "ui/utheme.h"
 
@@ -408,6 +409,13 @@ enum { SFX_CLICK, SFX_FLAG, SFX_BOOM, SFX_WIN, SFX_COUNT };
 static struct usnd_clip g_sfx[SFX_COUNT];
 static int g_have_sound;
 
+// Game > Sound, remembered in this app's own preferences. OFF RELEASES
+// THE CARD rather than playing silence: the stream is exclusive without
+// the sound daemon, and a muted game holding it would keep the Audio
+// Player quiet too.
+#define MINES_CONF "/etc/mines.conf"
+static int g_sound_on = 1;
+
 static void sound_init(void) {
     static const char *const files[SFX_COUNT] = {
         SFX_DIR "click.wav", SFX_DIR "flag.wav",
@@ -424,6 +432,15 @@ static void sound_free(void) {
     if (!g_have_sound) return;
     for (int i = 0; i < SFX_COUNT; i++) usnd_clip_free(&g_sfx[i]);
     usnd_shutdown();
+    g_have_sound = 0;
+}
+
+static void sound_set(int on) {
+    g_sound_on = on;
+    if (on && !g_have_sound) sound_init();
+    if (!on) sound_free();
+    uconf_set(MINES_CONF, "sound", on ? "on" : "off");
+    ulogf("mines: sound %s\n", on ? "on" : "off");
 }
 
 // Gains are per effect and deliberately not equal: a reveal happens
@@ -909,7 +926,7 @@ static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
 
 // --- input -----------------------------------------------------------
 
-enum { CMD_NEW = 1, CMD_LEVEL_0, CMD_LEVEL_1, CMD_LEVEL_2, CMD_BEST, CMD_EXIT };
+enum { CMD_NEW = 1, CMD_LEVEL_0, CMD_LEVEL_1, CMD_LEVEL_2, CMD_BEST, CMD_EXIT, CMD_SOUND };
 enum { DLG_OK = 1, DLG_RESET };
 
 static void relayout(struct uapp *a) {
@@ -1002,6 +1019,7 @@ static void dialog_answered(struct uapp *a) {
 static unsigned menu_item_flags(int code) {
     if (code >= CMD_LEVEL_0 && code <= CMD_LEVEL_2)
         return (code - CMD_LEVEL_0 == g_level) ? UUI_MI_CHECKED : 0;
+    if (code == CMD_SOUND) return g_sound_on ? UUI_MI_CHECKED : 0;
     return 0;
 }
 
@@ -1013,6 +1031,7 @@ static void do_command(struct uapp *a, int code) {
     case CMD_LEVEL_2: set_level(a, 2); break;
     case CMD_BEST:    open_best(a); break;
     case CMD_EXIT:    uapp_quit(a, 0); break;
+    case CMD_SOUND:   sound_set(!g_sound_on); uapp_redraw(a); break;
     default: break;
     }
 }
@@ -1142,6 +1161,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         return;
     }
     if (key == KEY_F2) new_game(a);
+    if (key == 's' || key == 'S') do_command(a, CMD_SOUND);
 }
 
 // Once a second, and it BLOCKS in between -- see uapp.h's tick_ms. The
@@ -1183,6 +1203,8 @@ int main(void) {
         UUI_MENU("Intermediate", CMD_LEVEL_1, "16x16, 40"),
         UUI_MENU("Expert",       CMD_LEVEL_2, "30x16, 99"),
         UUI_MENU_SEP,
+        UUI_MENU("Sound",        CMD_SOUND,   "S"),
+        UUI_MENU_SEP,
         UUI_MENU("Best Times...", CMD_BEST,   0),
         UUI_MENU_SEP,
         UUI_MENU("Exit",         CMD_EXIT,    "Alt+F4"),
@@ -1215,7 +1237,10 @@ int main(void) {
         .on_tick      = on_tick,
         .on_resize    = on_resize,
     };
-    sound_init();
+    char v[8];
+    g_sound_on = !(uconf_get(MINES_CONF, "sound", v, sizeof v) && !strcmp(v, "off"));
+    if (g_sound_on) sound_init();
+    else ulogf("mines: sound off\n");
     int rc = uapp_run(&desc);
     sound_free();
     return rc;
