@@ -60,6 +60,9 @@ Third-party code
 This repository vendors four third-party programs. None is covered by
 the MIT License above, and each keeps its own license file in its own
 directory.
+A built image carries each of those license files, and this file, in
+/usr/share/licenses/ (<port>.txt and toy-os.txt), so the notices travel
+with the binaries as their licenses require.
 
   userland/ports/doom/    doomgeneric, a portable Doom source port
                           derived from id Software's Doom, under the

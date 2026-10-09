@@ -2097,6 +2097,19 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	# copy of the image handed on still says where to get the source.
 	mkdir -p $(SEED_DIR)/sync/usr/share/licenses
 	cp build/gen/SOURCE $(SEED_DIR)/sync/usr/share/licenses/SOURCE
+	# THE NOTICES TRAVEL WITH THE BINARIES: MIT's "all copies", BSD's
+	# "documentation and/or other materials provided with the
+	# distribution", Apache's copy of the licence, the GPL's copy with the
+	# program. toy-os's own LICENSE (which carries the notices of code
+	# adapted into it, such as ure(4)'s), then each vendored port's licence
+	# file as <port>.txt -- every port, by the same file names
+	# tools/check_licenses.py requires one of, so a new port needs no
+	# line here. NOGPL=1 leaves out a GPL-only port's, as it does the port.
+	cp LICENSE $(SEED_DIR)/sync/usr/share/licenses/toy-os.txt
+	$(foreach p,$(filter-out $(if $(NOGPL),$(GPL_ONLY_PORTS)),$(PORTS)),\
+	    cp $(firstword $(wildcard $(addprefix userland/ports/$(p)/,LICENSE LICENSE.txt LICENSE.md COPYING COPYING.txt))) \
+	       $(SEED_DIR)/sync/usr/share/licenses/$(p).txt;)
+	$(if $(NOGPL),rm -f $(foreach p,$(GPL_ONLY_PORTS),$(SEED_DIR)/sync/usr/share/licenses/$(p).txt))
 	# The layouts are generated from the host's xkeyboard-config, so its
 	# notices travel with them: an image that has /usr/share/kbs has
 	# /usr/share/licenses/xkeyboard-config.txt (see LICENSE).

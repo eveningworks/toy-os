@@ -38,6 +38,10 @@ WHAT IT CHECKS
      names is the one its licence file is written in, a file carrying
      the GPL's preamble is not declared as something else, and a
      GPL-only port names the programs built from it (PORT_PROGRAMS_<name>).
+  9. The Makefile copies each port's licence file onto the image
+     (/usr/share/licenses/<port>.txt) by the SAME list of file names
+     check 1 accepts -- a name only one of the two knew would pass here
+     and ship no notice.
 
 WHAT IT DOES NOT CHECK, and cannot: whether the license NAMED is the
 license the code is actually under, beyond its family (check 8). Nothing static can read a
@@ -142,6 +146,14 @@ def main():
 
     problems, checked = [], 0
     decl_lic, decl_progs = port_declarations()
+
+    # --- the notices the image carries (check 9) ----------------------
+    mk = open(os.path.join(REPO, "Makefile")).read()
+    m = re.search(r"addprefix userland/ports/\$\(p\)/,([^)]*)\)", mk)
+    seeded = tuple(m.group(1).split()) if m else ()
+    if seeded != LICENSE_FILENAMES:
+        problems.append(f"the Makefile seeds port licences named {seeded or 'nothing'}, "
+                        f"and this check accepts {LICENSE_FILENAMES} -- they must be one list")
 
     # --- vendored ports ------------------------------------------------
     if os.path.isdir(PORTS):
