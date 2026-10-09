@@ -174,11 +174,17 @@ def run_inhibitor(dbg, res):
         res.check("System Settings opened", False, "no window")
         return
     content = win["content"]
+    # THE LINE, NOT THE WINDOW: the window exists before Settings has laid
+    # out and logged its search box, and under load the gap is long
+    # enough to read nothing -- so wait for the line itself.
     search = None
-    for line in dbg.logs("settings: layout search", clear=False):
-        m = re.search(r"settings: layout search (-?\d+) (-?\d+) (\d+) (\d+)", line)
-        if m:
-            search = [int(v) for v in m.groups()]
+    while time.time() < deadline and not search:
+        for line in dbg.logs("settings: layout search", clear=False):
+            m = re.search(r"settings: layout search (-?\d+) (-?\d+) (\d+) (\d+)", line)
+            if m:
+                search = [int(v) for v in m.groups()]
+        if not search:
+            time.sleep(0.3)
     if not search:
         res.check("Settings reported its search box", False, "no layout line")
         return
