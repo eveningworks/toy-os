@@ -1,2 +1,4 @@
 Description=The face terminals and code views draw with. It needs a fixed cell, or columns stop lining up.
 Order=25
+Widget=gallery
+Preview=fontmono

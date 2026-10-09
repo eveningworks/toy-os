@@ -370,6 +370,9 @@ manual steps to be worth automating:
   command before its sweep began. On a one-port guest there is no log
   socket and it reads the one wire as before. See docs/decisions.md,
   "The kernel log and the debug console are two serial ports".
+  **`close_window(title)`** asks a window to close as its close button
+  does and waits for it to go (False if it refused) -- `gui close` takes
+  a z-order index, which callers used to look up by hand.
   `send(cmd)` runs a debug command, `json(cmd)` parses one with
   `--json`, `sh <cmd>` runs a KERNEL-shell command, and `settle()` waits
   for injected input to drain (never replace it with a fixed sleep --
@@ -4693,7 +4696,14 @@ window without going through it will find its layout polls timing out.
   the arrow keys moving it like a radio group, and Apply writing it to
   `/etc/toyos.conf` (read with `cat`) with the compositor's own `cursor:
   theme "amber"` line. **The card rects are CONTENT-relative**; the tool
-  adds the window's content origin. In `gui_regress.py`.
+  adds the window's content origin. Then the FONT galleries (3 checks): a
+  card per face named by family, Liberation Sans's and DejaVu's Interface
+  tiles inked AND different (one face painted everywhere fails), and the
+  proportional face's Monospace card carrying the warning ink while
+  DejaVu's carries none. **To scroll, warp the REAL pointer first** -- an
+  injected `gui move` lasts one compositor iteration and the wheel goes
+  where the pointer is; the card lines are re-logged after a scroll, so
+  read the fresh ones. In `gui_regress.py`.
 - **`settings_test.py`** -- the ring-3 System Settings app and, through
   it, the settings registry. Run it after touching
   `kernel/lib/setting.c`, `SYS_SETTING`/`SYS_SYSINFO`, or

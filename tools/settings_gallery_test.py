@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/settings_gallery_test.py -- System Settings' cursor theme gallery.
+"""tools/settings_gallery_test.py -- System Settings' cursor theme and font galleries.
 
 WHAT THIS IS
 ------------
@@ -22,6 +22,16 @@ app's own report (`settings: gallery ... card i x y w h tile 1 shown
 
     python3 tools/vm.py start
     python3 tools/settings_gallery_test.py --instance 0
+
+THE FONT GALLERIES (Appearance > Fonts, `Preview=font` / `fontmono`,
+drawn by ui/uui_fontsample in each face from its own .ttf):
+  5. both settings are galleries, a card per face, named by the FAMILY
+     the file gives ("DejaVu Sans Mono"), never the stem;
+  6. the pictures are the faces: Liberation Sans's and DejaVu Sans
+     Mono's Interface tiles both carry ink and differ -- one painter
+     drawing the same face everywhere is red;
+  7. the proportional face's Monospace card says "Not fixed-width" in
+     the warning colour, and DejaVu's (the control) does not.
 
 POSITIVE CONTROL, run when this was written: the cursor painter drawing
 the backdrop and no shapes (`if (!c->loaded) continue;` made
@@ -157,6 +167,121 @@ def run(dbg, qmp, tmp, res):
               stored(dbg) == "amber" and loaded, f"stored={stored(dbg)} loaded={loaded}")
 
 
+FONT_WANT = {"Built-in", "Liberation Sans", "DejaVu Sans Mono"}
+
+
+def font_cards(logs, key):
+    rx = re.compile(r"settings: gallery \d+ " + re.escape(key) +
+                    r" card (\d+) (-?\d+) (-?\d+) (\d+) (\d+) tile (\d) shown (.+)")
+    out = {}
+    for line in logs:
+        m = rx.search(line)
+        if m:
+            out[m.group(7).strip()] = {"x": int(m.group(2)), "y": int(m.group(3)),
+                                       "w": int(m.group(4)), "h": int(m.group(5)),
+                                       "tile": m.group(6) == "1"}
+    return out
+
+
+def on_image(img, c):
+    """Is the whole card inside the screenshot? A card below the fold is
+    reported with coordinates past the screen's edge."""
+    return c["x"] >= 0 and c["y"] >= 0 and c["x"] + c["w"] <= img.width and c["y"] + c["h"] <= img.height
+
+
+def ink_map(img, c):
+    """The dark pixels of a card's TILE (above its label), as a set."""
+    ink = set()
+    for y in range(c["y"] + 4, c["y"] + c["h"] * 2 // 3):
+        for x in range(c["x"] + 4, c["x"] + c["w"] - 4):
+            r, g, b = img.getpixel((x, y))
+            if r + g + b < 300:
+                ink.add((x - c["x"], y - c["y"]))
+    return ink
+
+
+def warning_ink(img, c):
+    n = 0
+    for y in range(c["y"] + 4, c["y"] + c["h"] - 4):
+        for x in range(c["x"] + 4, c["x"] + c["w"] - 4):
+            r, g, b = img.getpixel((x, y))
+            if r > 130 and 60 < g < 130 and b < 40:   # the theme's warning, (160, 92, 0)
+                n += 1
+    return n
+
+
+def run_fonts(dbg, qmp, tmp, res):
+    from PIL import Image
+    dbg.logs()
+    dbg.send("gui spawn /bin/wm/system/settings system.font_face")
+    win = None
+    for _ in range(30):
+        win = dbg.window("System Settings")
+        if win:
+            break
+        time.sleep(0.3)
+    if not win:
+        res.check("System Settings opened on the Fonts page", False)
+        return
+    ui, mono, logs = {}, {}, []
+    for _ in range(30):
+        logs = dbg.logs(clear=False)
+        ui, mono = font_cards(logs, "system.font_face"), font_cards(logs, "system.font_mono")
+        if FONT_WANT <= set(ui) and FONT_WANT <= set(mono):
+            break
+        time.sleep(0.3)
+    stems = [n for n in list(ui) + list(mono) if "-" in n and n == n.lower()]
+    res.check("both font settings are galleries, a card per face, named by family",
+              FONT_WANT <= set(ui) and FONT_WANT <= set(mono) and not stems and
+              all(c["tile"] for c in list(ui.values()) + list(mono.values())),
+              f"interface={sorted(ui)} monospace={sorted(mono)}")
+    if not (FONT_WANT <= set(ui)):
+        return
+    ox, oy = win["content"]["x"], win["content"]["y"]
+    dbg.warp_cursor(qmp, win["x"] + 20, win["y"] + win["h"] - 20)
+    dbg.settle()
+    path = os.path.join(tmp, "fonts.png")
+    qmp.stable_pixels(path)
+    img = Image.open(path).convert("RGB")
+    def on_screen(c):
+        return dict(c, x=c["x"] + ox, y=c["y"] + oy)
+    lib, dvu = ink_map(img, on_screen(ui["Liberation Sans"])), ink_map(img, on_screen(ui["DejaVu Sans Mono"]))
+    differ = len(lib ^ dvu)
+    res.check("each Interface card is drawn in its own face: both inked, and different",
+              len(lib) > 60 and len(dvu) > 60 and differ > 60,
+              f"liberation={len(lib)} dejavu={len(dvu)} differing={differ}")
+
+    # The Monospace row with the proportional face sits below the fold:
+    # scroll, then read the cards from the lines the page logs AFTER it --
+    # the earlier ones still carry the old positions.
+    # The REAL pointer, over the page: an injected `gui move` lasts one
+    # compositor iteration, and the wheel goes where the pointer is.
+    dbg.warp_cursor(qmp, win["x"] + win["w"] * 2 // 3, win["y"] + win["h"] // 2)
+    dbg.settle()
+    dbg.logs()
+    dbg.wheel(-6)
+    mono = {}
+    for _ in range(20):
+        time.sleep(0.3)
+        mono = font_cards(dbg.logs(clear=False), "system.font_mono")
+        if "Liberation Sans" in mono and "DejaVu Sans Mono" in mono:
+            break
+    dbg.warp_cursor(qmp, win["x"] + 20, win["y"] + win["h"] - 20)
+    dbg.settle()
+    qmp.stable_pixels(path)
+    img = Image.open(path).convert("RGB")
+    if ("Liberation Sans" not in mono or "DejaVu Sans Mono" not in mono or
+            not on_image(img, on_screen(mono["Liberation Sans"])) or
+            not on_image(img, on_screen(mono["DejaVu Sans Mono"]))):
+        res.check("the proportional face's Monospace card says it is not fixed-width", False,
+                  f"cards={sorted(mono)}")
+        return
+    w_lib = warning_ink(img, on_screen(mono["Liberation Sans"]))
+    w_dvu = warning_ink(img, on_screen(mono["DejaVu Sans Mono"]))
+    res.check("the proportional face's Monospace card says it is not fixed-width; DejaVu's does not",
+              w_lib > 20 and w_dvu == 0, f"liberation={w_lib} dejavu={w_dvu}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     port_guard.add_instance_args(ap)
@@ -174,6 +299,8 @@ def main():
     print("settings_gallery_test: checks")
     try:
         run(dbg, qmp, tmp, res)
+        dbg.close_window("System Settings")
+        run_fonts(dbg, qmp, tmp, res)
     finally:
         dbg.close()
     print(f"\nsettings_gallery_test: {len(res.passes)} passed, {len(res.fails)} failed")

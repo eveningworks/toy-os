@@ -8,6 +8,7 @@
 #include "lib/ulivewall.h"
 #include "lib/uimg.h"
 #include "lib/uvid.h"
+#include "ui/uui_fontsample.h"
 #include <stdlib.h>
 
 // --- cursor: five shapes of the theme, on a light half and a dark half --
@@ -26,9 +27,11 @@ static char g_pv_theme[PREVIEW_THEMES][SETTING_ABI_VALUE_MAX];
 static int g_pv_loaded[PREVIEW_THEMES];
 
 static void pictures_reset(void);
+static void fonts_reset(void);
 
 void preview_reset(void) {
     pictures_reset();
+    fonts_reset();
     for (int t = 0; t < PREVIEW_THEMES; t++) {
         for (int k = 0; k < CURSOR_SAMPLE_N; k++) ucursor_release(&g_pv_shape[t][k]);
         g_pv_loaded[t] = 0;
@@ -221,6 +224,68 @@ static void colour_tile(struct ugfx_surface *s, int i, int x, int y, int w, int 
     uui_fill_round_rect(s, x, y, w, h, ugfx_char_h() / 3, c);
 }
 
+// --- fonts: each face's sample, drawn in the face itself ------------------
+//
+// Opened once per page and shared by both galleries (Interface and
+// Monospace offer the same faces), keyed by stem. `builtin` has no file:
+// it draws through the baked tables (ugfx_font_baked()).
+#define PREVIEW_FACES 16
+static struct uui_fontface g_faces[PREVIEW_FACES];
+static int g_nfaces;
+
+static void fonts_reset(void) {
+    for (int i = 0; i < g_nfaces; i++) uui_fontface_close(&g_faces[i]);
+    g_nfaces = 0;
+}
+
+static struct uui_fontface *face_for(const char *stem) {
+    if (!strcmp(stem, "builtin")) return 0;
+    for (int i = 0; i < g_nfaces; i++)
+        if (!strcmp(g_faces[i].stem, stem)) return &g_faces[i];
+    if (g_nfaces < PREVIEW_FACES && uui_fontface_open(&g_faces[g_nfaces], UUI_FONT_DIR, stem))
+        return &g_faces[g_nfaces++];
+    return 0;
+}
+
+static void font_paint(struct ugfx_surface *s, int i, int x, int y, int w, int h,
+                       const struct slot *sl, int mono) {
+    if (i < 0 || i >= sl->choice_count) return;
+    struct uui_fontface *f = face_for(sl->choice_raw[i]);
+    uui_fill_round_rect(s, x, y, w, h, ugfx_char_h() / 3, UTHEME_WHITE);
+    if (!mono) {
+        uui_fontsample_draw(s, f, UUI_FONTSAMPLE_CARD, x, y, w, h, UTHEME_WHITE, 0);
+        return;
+    }
+    // A PROPORTIONAL FACE AS MONOSPACE is allowed -- ring 0 cannot tell --
+    // and ruins every column: dimmed, and said so under its sample.
+    int prop = f && !f->mono;
+    int ch = ugfx_char_h(), note = prop ? ch + ch / 3 : 0;
+    uui_fontsample_draw(s, f, UUI_FONTSAMPLE_TERMINAL, x + 4, y + 4, w - 8, h - 8 - note,
+                        UTHEME_WHITE, prop);
+    if (prop)
+        ugfx_draw_string_clipped(s, x + 6, y + h - ch - 4, w - 12, "Not fixed-width",
+                                 utheme_current()->severity[UTHEME_SEV_WARNING], UTHEME_WHITE);
+}
+
+static void font_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h, void *ctx) {
+    font_paint(s, i, x, y, w, h, ctx, 0);
+}
+
+static void fontmono_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h, void *ctx) {
+    font_paint(s, i, x, y, w, h, ctx, 1);
+}
+
+// A card is named by the family the file calls itself, not its stem:
+// "DejaVu Sans Mono", not "dejavu-sans-mono".
+static void font_labels(struct slot *sl) {
+    for (int i = 0; i < sl->choice_count; i++) {
+        struct uui_fontface *f = face_for(sl->choice_raw[i]);
+        if (f) snprintf(sl->choice[i], sizeof sl->choice[i], "%s", f->family);
+        else if (!strcmp(sl->choice_raw[i], "builtin"))
+            snprintf(sl->choice[i], sizeof sl->choice[i], "Built-in");
+    }
+}
+
 // --- the table -----------------------------------------------------------
 
 static const struct {
@@ -232,6 +297,8 @@ static const struct {
     { "live", live_tile },
     { "colour", colour_tile },
     { "saver", saver_tile },
+    { "font", font_tile },
+    { "fontmono", fontmono_tile },
 };
 
 void preview_attach(struct slot *sl, int idx) {
@@ -248,4 +315,5 @@ void preview_attach(struct slot *sl, int idx) {
     // Seven savers on a page half as wide as the wallpapers': smaller
     // cards, four across, under the monitor that shows the chosen one big.
     if (!strcmp(word, "saver")) sl->gallery.min_w = ugfx_char_h() * 8;
+    if (!strcmp(word, "font") || !strcmp(word, "fontmono")) font_labels(sl);
 }

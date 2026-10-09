@@ -487,6 +487,23 @@ class DebugConsole:
                 return w
         return None
 
+    def close_window(self, title, timeout=5.0):
+        """Ask the window titled `title` to close, the way its close button
+        does, and wait until it is gone. True when it went, False when there
+        was no such window or it is still up (an app may refuse, as
+        `on_close` lets it). `gui close` takes a z-order index, which is
+        what every caller used to look up by hand."""
+        w = self.window(title)
+        if not w:
+            return False
+        self.send(f"gui close {w['z']}")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.window(title) is None:
+                return True
+            time.sleep(0.2)
+        return False
+
     def window_settled(self, title, timeout=8.0):
         """window(title) once its rect has stopped changing, or None. A NEW
         window may be moved and asked to shrink right after it opens (the

@@ -48,7 +48,8 @@ Choice.slow=Slow
 | Key | Meaning |
 |---|---|
 | `Description` | One line, shown under the setting's label. Not a paragraph. |
-| `Widget` | `auto` (default), `radio`, `dropdown`, `slider`. A **hint** — a client with no such control still shows the setting some other way. `slider` suits an ORDERED enum (off/low/medium/high), where a radio list says nothing about the order. System Settings honours `dropdown` and `slider`; `auto` and `radio` both let it pick from the values — a switch for an on/off pair, side-by-side buttons for a few short names, a list for a few long ones, a dropdown for many. |
+| `Preview` | With `Widget=gallery`: what each card's picture shows -- `cursor`, `picture`, `live`, `colour`, `saver`, `font`, `fontmono` (System Settings' `set_preview.c`). An unknown word draws cards with no picture. |
+| `Widget` | `auto` (default), `radio`, `dropdown`, `slider`, `gallery`. A **hint** — a client with no such control still shows the setting some other way. `slider` suits an ORDERED enum (off/low/medium/high), where a radio list says nothing about the order. System Settings honours `dropdown` and `slider`; `auto` and `radio` both let it pick from the values — a switch for an on/off pair, side-by-side buttons for a few short names, a list for a few long ones, a dropdown for many. |
 | `Choice.<value>` | The display name for one choice. The stored value is still `<value>`; only what is shown differs. |
 | `Applies` | `now` (default) or `reboot` — whether the change takes effect immediately. |
 | `Advanced` | `1` keeps it behind a disclosure in a UI that has one. |

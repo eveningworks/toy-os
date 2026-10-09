@@ -1492,8 +1492,9 @@ this the obvious way), not from how much history it accumulated.
   key, never after a click (Windows' focus-visible rule) -- and calls `draw_tile(surface, i, x, y, w, h, ctx)` for each
   tile, clipped to it; it knows nothing of what it shows. In System
   Settings a `Widget=gallery` setting's `Preview=<word>` picks the
-  painter from `set_preview.c`'s table (`cursor` today; a wallpaper
-  picker adds a row), read by the app itself with
+  painter from `set_preview.c`'s table (`cursor`, `picture`, `live`,
+  `colour`, `saver`, `font`, `fontmono` -- a new picker adds a row), read
+  by the app itself with
   `uschema_text_word()` -- no ABI field carries it. A painter that
   decodes anything CACHES it per page (`preview_reset()` from
   `open_group()`): the page repaints on every hover. A gallery stages

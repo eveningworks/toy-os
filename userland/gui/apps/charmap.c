@@ -28,6 +28,7 @@
 #include "lib/uunicode.h"
 #include "ui/uapp.h"
 #include "ui/uglyph.h"
+#include "ui/uui_fontsample.h"
 #include "ui/ulog.h"
 #include "ui/utheme.h"
 #include "ui/uui.h"
@@ -55,10 +56,8 @@ enum {
 };
 
 struct face {
-    char stem[48];              // the file's name without .ttf: what the settings name
-    char family[48];
-    struct uglyph_face reg, bold;
-    int has_bold, mono, named;  // `named`: characters with a Unicode name it maps
+    struct uui_fontface ff;     // the file, its bold weight, family and mono-ness
+    int named;                  // characters with a Unicode name it maps
     char licence[48];           // the LICENSE-*.txt beside it, or empty
     unsigned long bytes;
 };
@@ -100,42 +99,32 @@ static int g_page_x;
 // --- fonts -----------------------------------------------------------------
 
 static int by_family(const void *a, const void *b) {
-    return strcmp(((const struct face *)a)->family, ((const struct face *)b)->family);
+    return strcmp(((const struct face *)a)->ff.family, ((const struct face *)b)->ff.family);
 }
 
 static void load_faces(void) {
     static struct sys_dirent e[64];
     int n = sys_listdir(FONT_DIR, e, 64);
     for (int i = 0; i < n && g_nfaces < MAX_FACES; i++) {
-        size_t len = strlen(e[i].name);
-        if (len < 5 || strcmp(e[i].name + len - 4, ".ttf")) continue;
-        if (len > 9 && !strcmp(e[i].name + len - 9, "-bold.ttf")) continue;   // a weight, not a family
+        char stem[48];
+        if (!uui_fontface_family_file(e[i].name, stem, sizeof stem)) continue;
         struct face *f = &g_faces[g_nfaces];
         memset(f, 0, sizeof *f);
-        snprintf(f->stem, sizeof f->stem, "%.*s", (int)(len - 4), e[i].name);
-        char path[128];
-        snprintf(path, sizeof path, "%s/%s", FONT_DIR, e[i].name);
-        if (!uglyph_open(&f->reg, path)) continue;
-        f->bytes = (unsigned long)f->reg.len;
-        snprintf(path, sizeof path, "%s/%s-bold.ttf", FONT_DIR, f->stem);
-        f->has_bold = uglyph_open(&f->bold, path);
-        if (f->has_bold) f->bytes += (unsigned long)f->bold.len;
-        if (!uglyph_family(&f->reg, f->family, sizeof f->family))
-            snprintf(f->family, sizeof f->family, "%s", f->stem);
-        f->mono = uglyph_text_width(&f->reg, "i", 20) == uglyph_text_width(&f->reg, "W", 20);
+        if (!uui_fontface_open(&f->ff, FONT_DIR, stem)) continue;
+        f->bytes = (unsigned long)f->ff.reg.len + (f->ff.has_bold ? (unsigned long)f->ff.bold.len : 0);
         for (int k = 0; k < uunicode_named_count(); k++)
-            f->named += uglyph_has(&f->reg, uunicode_named(k));
+            f->named += uglyph_has(&f->ff.reg, uunicode_named(k));
         // The licence its stem names up to the first dash:
         // dejavu-sans-mono -> LICENSE-DejaVu.txt, vera-mono -> LICENSE-Vera.txt.
-        size_t w = strcspn(f->stem, "-");
+        size_t w = strcspn(f->ff.stem, "-");
         for (int k = 0; k < n; k++)
-            if (!strncmp(e[k].name, "LICENSE-", 8) && !strncasecmp(e[k].name + 8, f->stem, w) &&
+            if (!strncmp(e[k].name, "LICENSE-", 8) && !strncasecmp(e[k].name + 8, f->ff.stem, w) &&
                 !strcmp(e[k].name + 8 + w, ".txt"))
                 snprintf(f->licence, sizeof f->licence, "%s", e[k].name);
         g_nfaces++;
     }
     qsort(g_faces, (size_t)g_nfaces, sizeof g_faces[0], by_family);
-    for (int i = 0; i < g_nfaces; i++) g_font_names[i] = g_faces[i].family;
+    for (int i = 0; i < g_nfaces; i++) g_font_names[i] = g_faces[i].ff.family;
     ulogf("charmap: %d font famil%s, %d names\n", g_nfaces, g_nfaces == 1 ? "y" : "ies", uunicode_named_count());
 }
 
@@ -163,7 +152,7 @@ static void list_blocks(void) {
         int any = 0;
         for (int k = 0; k < uunicode_named_count() && !any; k++) {
             uint32_t cp = uunicode_named(k);
-            any = cp >= bl->lo && cp <= bl->hi && uglyph_has(&f->reg, cp);
+            any = cp >= bl->lo && cp <= bl->hi && uglyph_has(&f->ff.reg, cp);
         }
         if (!any) continue;
         g_block_ids[g_nblocks] = b;
@@ -192,15 +181,15 @@ static void fill(void) {
         g_shown_block = -1;
         if (n > MAX_CPS) n = MAX_CPS;
         for (int i = 0; i < n; i++)
-            if (uglyph_has(&f->reg, found[i])) g_cps[g_ncps++] = found[i];
-        snprintf(g_note, sizeof g_note, "%d match%s in %s", g_ncps, g_ncps == 1 ? "" : "es", f->family);
+            if (uglyph_has(&f->ff.reg, found[i])) g_cps[g_ncps++] = found[i];
+        snprintf(g_note, sizeof g_note, "%d match%s in %s", g_ncps, g_ncps == 1 ? "" : "es", f->ff.family);
     } else if (f && g_nblocks) {
         int b = uui_dropdown_selected(&g_block);
         g_shown_block = b;
         const struct uunicode_block *bl = uunicode_block(g_block_ids[b < 0 ? 0 : b]);
         for (int k = 0; k < uunicode_named_count() && g_ncps < MAX_CPS; k++) {
             uint32_t cp = uunicode_named(k);
-            if (cp >= bl->lo && cp <= bl->hi && uglyph_has(&f->reg, cp)) g_cps[g_ncps++] = cp;
+            if (cp >= bl->lo && cp <= bl->hi && uglyph_has(&f->ff.reg, cp)) g_cps[g_ncps++] = cp;
         }
         snprintf(g_note, sizeof g_note, "%s, %d characters", bl->name, g_ncps);
     }
@@ -254,8 +243,8 @@ static void cell(struct ugfx_surface *s, void *ctx, int index, int x, int y, int
     struct face *f = cur();
     if (!f || index < 0 || index >= g_ncps) return;
     uint32_t ink = (state & UUI_GRID_SELECTED) ? UTHEME_ACCENT_TEXT : UTHEME_TEXT;
-    if (uglyph_draw(s, &f->reg, g_cps[index], h * 11 / 20, x, y, w, h, ink) == UGLYPH_NO_INK)
-        blank_mark(s, &f->reg, g_cps[index], x, y, w, h, ink);
+    if (uglyph_draw(s, &f->ff.reg, g_cps[index], h * 11 / 20, x, y, w, h, ink) == UGLYPH_NO_INK)
+        blank_mark(s, &f->ff.reg, g_cps[index], x, y, w, h, ink);
 }
 
 static uint32_t selected_cp(void) {
@@ -350,8 +339,8 @@ static void choose_font(int i) {
     uui_dropdown_set_selected(&g_fontlist, i);
     list_blocks();
     fill();
-    snprintf(g_status_font, sizeof g_status_font, "%s", g_faces[i].family);
-    ulogf("charmap: font %s, %d named characters\n", g_faces[i].family, g_faces[i].named);
+    snprintf(g_status_font, sizeof g_status_font, "%s", g_faces[i].ff.family);
+    ulogf("charmap: font %s, %d named characters\n", g_faces[i].ff.family, g_faces[i].named);
 }
 
 // --- layout ------------------------------------------------------------------
@@ -404,7 +393,7 @@ static void layout(int cw, int ch) {
         uui_button_set_geometry(&g_use_ui, rx, by, b1, bh);
         uui_button_set_geometry(&g_use_mono, rx + b1 + pad, by, b2, bh);
         // Terminals need a fixed cell; a proportional face is not offered.
-        g_fonts_items[W_USE_MONO].hidden = !(cur() && cur()->mono);
+        g_fonts_items[W_USE_MONO].hidden = !(cur() && cur()->ff.mono);
     }
 }
 
@@ -422,8 +411,8 @@ static void draw_detail(struct ugfx_surface *s, int cw) {
     uapp_logf_layout("charmap: layout tile %d %d %d %d\n", tx, ty, tile, tile);
     uint32_t dark = ugfx_rgb(29, 36, 51);
     uui_fill_round_rect(s, tx, ty, tile, tile, 8, dark);
-    if (uglyph_draw(s, &f->reg, cp, tile * 2 / 3, tx, ty, tile, tile, ugfx_rgb(255, 255, 255)) == UGLYPH_NO_INK)
-        blank_mark(s, &f->reg, cp, tx, ty, tile, tile, ugfx_rgb(255, 255, 255));
+    if (uglyph_draw(s, &f->ff.reg, cp, tile * 2 / 3, tx, ty, tile, tile, ugfx_rgb(255, 255, 255)) == UGLYPH_NO_INK)
+        blank_mark(s, &f->ff.reg, cp, tx, ty, tile, tile, ugfx_rgb(255, 255, 255));
     int x = tx + tile + pad * 2, room = g_copy.x - x - pad * 2;
     const char *name = uunicode_name(cp);
     const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
@@ -438,9 +427,9 @@ static void draw_detail(struct ugfx_surface *s, int cw) {
     char in[160] = "In ";
     int first = 1;
     for (int i = 0; i < g_nfaces; i++)
-        if (uglyph_has(&g_faces[i].reg, cp)) {
+        if (uglyph_has(&g_faces[i].ff.reg, cp)) {
             size_t l = strlen(in);
-            snprintf(in + l, sizeof in - l, "%s%s", first ? "" : ", ", g_faces[i].family);
+            snprintf(in + l, sizeof in - l, "%s%s", first ? "" : ", ", g_faces[i].ff.family);
             first = 0;
         }
     ugfx_draw_string_clipped(s, x, ty + lh * 2 + pad, room, in, dim, panel);
@@ -463,8 +452,8 @@ static void draw_text_line(struct ugfx_surface *s, int cw) {
     int x = bx + pad, cell = lh + 2;
     for (int i = 0; i < g_ntext && f && x + cell < bx + bw; i++) {
         struct face *g = f;
-        for (int k = 0; k < g_nfaces && !uglyph_has(&g->reg, g_text[i]); k++) g = &g_faces[k];
-        uglyph_draw(s, &g->reg, g_text[i], lh, x, g_text_y + pad, cell, g_text_h - pad * 2, UTHEME_TEXT);
+        for (int k = 0; k < g_nfaces && !uglyph_has(&g->ff.reg, g_text[i]); k++) g = &g_faces[k];
+        uglyph_draw(s, &g->ff.reg, g_text[i], lh, x, g_text_y + pad, cell, g_text_h - pad * 2, UTHEME_TEXT);
         x += cell;
     }
     if (!g_ntext)
@@ -480,14 +469,14 @@ static void card(struct ugfx_surface *s, void *ctx, int index, int x, int y, int
     int sel = state & UUI_GRID_SELECTED;
     uint32_t ink = sel ? UTHEME_ACCENT_TEXT : UTHEME_TEXT, ground = sel ? UTHEME_ACCENT : g_cards.bg;
     int aa = h * 2 / 5;
-    uglyph_text(s, &f->reg, "Aa", aa, x + pad, y + (h + uglyph_ascent(&f->reg, aa)) / 2, ink);
+    uglyph_text(s, &f->ff.reg, "Aa", aa, x + pad, y + (h + uglyph_ascent(&f->ff.reg, aa)) / 2, ink);
     int tx = x + pad * 2 + aa * 3 / 2, room = w - (tx - x) - pad, ty = y + (h - lh * 2 - 2) / 2;
     const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
-    ugfx_draw_string_clipped(s, tx, ty, room, f->family, ink, ground);
+    ugfx_draw_string_clipped(s, tx, ty, room, f->ff.family, ink, ground);
     ugfx_set_font(was);
     char sub[64];
-    const char *use = !strcmp(g_ui_face, f->stem) ? ", interface" : !strcmp(g_term_face, f->stem) ? ", terminals" : "";
-    snprintf(sub, sizeof sub, "%d style%s%s", f->has_bold ? 2 : 1, f->has_bold ? "s" : "", use);
+    const char *use = !strcmp(g_ui_face, f->ff.stem) ? ", interface" : !strcmp(g_term_face, f->ff.stem) ? ", terminals" : "";
+    snprintf(sub, sizeof sub, "%d style%s%s", f->ff.has_bold ? 2 : 1, f->ff.has_bold ? "s" : "", use);
     ugfx_draw_string_clipped(s, tx, ty + lh + 2, room, sub, sel ? ink : uui_state_bg(UTHEME_TEXT, UUI_STATE_DISABLED),
                              ground);
 }
@@ -505,10 +494,10 @@ static void draw_font_page(struct ugfx_surface *s, int cw) {
     const char *text = uui_textbox_text(&g_sample)[0] ? uui_textbox_text(&g_sample) : SAMPLE;
     static const int SIZES[] = { 12, 16, 24, 36 };
     int lx = x + ugfx_text_width("Bold") + pad * 2;
-    for (int i = 0; i < (int)(sizeof SIZES / sizeof SIZES[0]) + f->has_bold; i++) {
+    for (int i = 0; i < (int)(sizeof SIZES / sizeof SIZES[0]) + f->ff.has_bold; i++) {
         int bold = i == (int)(sizeof SIZES / sizeof SIZES[0]);
         int px = bold ? 24 : SIZES[i];
-        struct uglyph_face *g = bold ? &f->bold : &f->reg;
+        struct uglyph_face *g = bold ? &f->ff.bold : &f->ff.reg;
         char sz[8];
         snprintf(sz, sizeof sz, "%d", px);
         y += uglyph_ascent(g, px) + pad;
@@ -520,8 +509,8 @@ static void draw_font_page(struct ugfx_surface *s, int cw) {
     ugfx_fill_rect(s, x, y, right - x, 1, UTHEME_SEPARATOR);
     y += pad;
     char files[96], chars[64];
-    snprintf(files, sizeof files, "%s.ttf%s, %lu KB", f->stem, f->has_bold ? " and -bold.ttf" : "", f->bytes / 1024);
-    snprintf(chars, sizeof chars, "%d with a Unicode name%s", f->named, f->mono ? ", monospaced" : "");
+    snprintf(files, sizeof files, "%s.ttf%s, %lu KB", f->ff.stem, f->ff.has_bold ? " and -bold.ttf" : "", f->bytes / 1024);
+    snprintf(chars, sizeof chars, "%d with a Unicode name%s", f->named, f->ff.mono ? ", monospaced" : "");
     const char *rows[][2] = {
         { "Files", files }, { "Characters", chars },
         { "Licence", f->licence[0] ? f->licence : "No licence file beside it" },
@@ -594,10 +583,10 @@ static void on_action(struct uapp *a, int code) {
     case ID_USE_UI:
     case ID_USE_MONO: {
         const char *key = code == ID_USE_UI ? "system.font_face" : "system.font_mono";
-        int rc = usetting_set(key, cur()->stem);
+        int rc = usetting_set(key, cur()->ff.stem);
         snprintf(g_note, sizeof g_note, rc == SETTING_SAVED ? "%s now use %s" : "Could not change what %s use",
-                 code == ID_USE_UI ? "The interface" : "Terminals", cur()->family);
-        ulogf("charmap: %s = %s (%d)\n", key, cur()->stem, rc);
+                 code == ID_USE_UI ? "The interface" : "Terminals", cur()->ff.family);
+        ulogf("charmap: %s = %s (%d)\n", key, cur()->ff.stem, rc);
         read_usage();
         break;
     }
@@ -659,7 +648,7 @@ int main(void) {
     // The interface's face first, as GNOME Characters opens on the system font.
     read_usage();
     int first = 0;
-    for (int i = 0; i < g_nfaces; i++) if (!strcmp(g_faces[i].stem, g_ui_face)) first = i;
+    for (int i = 0; i < g_nfaces; i++) if (!strcmp(g_faces[i].ff.stem, g_ui_face)) first = i;
     choose_font(first);
 
     struct uapp_desc desc = {
@@ -679,8 +668,8 @@ int main(void) {
     };
     int rc = uapp_run(&desc);
     for (int i = 0; i < g_nfaces; i++) {
-        uglyph_close(&g_faces[i].reg);
-        if (g_faces[i].has_bold) uglyph_close(&g_faces[i].bold);
+        uglyph_close(&g_faces[i].ff.reg);
+        if (g_faces[i].ff.has_bold) uglyph_close(&g_faces[i].ff.bold);
     }
     return rc;
 }

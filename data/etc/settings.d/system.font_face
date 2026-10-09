@@ -1,2 +1,4 @@
 Description=The face menus, labels and titles draw with. May be proportional; terminals use the monospace face.
 Order=20
+Widget=gallery
+Preview=font

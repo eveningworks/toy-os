@@ -178,7 +178,7 @@ TOOLS = [
     ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
     ("osk", "osk_test.py", "the on-screen keyboard types, floats, drags, docks and closes"),
     ("settings", "settings_test.py", "the settings registry, in ring 3"),
-    ("galleryset", "settings_gallery_test.py", "System Settings' cursor theme gallery: cards, preview, stage, apply"),
+    ("galleryset", "settings_gallery_test.py", "System Settings' galleries: cursor themes (stage, apply) and the font faces"),
     ("smooth", "smooth_scroll_test.py", "smooth scrolling glides, and desktop.smooth_scroll turns it off"),
     ("shadow", "shadow_test.py", "drop shadows under windows and menus, and desktop.shadows turns them off"),
     ("glass", "glass_test.py", "transparency: clear/frosted/wallpaper glass on the taskbar, Start, menus and windows"),

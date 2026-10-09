@@ -271,6 +271,11 @@ int ugfx_font_recheck(void);
 // fonts, by design" from a mapping that disagrees with its source.
 const char *ugfx_font_session_face(void);
 
+// The kernel's BAKED face (the `builtin` choice) at the session size,
+// whichever face the session uses -- for showing it beside the others.
+// NULL when the kernel will not hand it over.
+const struct ugfx_font *ugfx_font_baked(void);
+
 // The fontd beacon generation this process has mapped, 0 before any.
 // Compared with `diag font`'s, it says whether a client has caught up
 // with a republish -- fontd bumping is not the screen having changed.

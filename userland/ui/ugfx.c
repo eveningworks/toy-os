@@ -486,12 +486,17 @@ static int map_fontd_font(int slot, struct ugfx_font *out) {
 // baked tables are monospace, so a mono slot falling back to them is
 // exactly right, and a UI slot falling back to them is what every
 // client did before this existed. Only the WEIGHT crosses that seam.
+static int map_kernel_font(int weight, struct ugfx_font *out);
+
 static int map_session_font(int slot, struct ugfx_font *out) {
     if (map_fontd_font(slot, out)) return 1;
-    int weight = slot % UGFX_FONT_WEIGHTS;
     g_from_fontd[slot] = 0;
     ulogf("ugfx: session font slot %d from the KERNEL (no fontd atlas)\n", slot);
+    return map_kernel_font(slot % UGFX_FONT_WEIGHTS, out);
+}
 
+// The kernel's baked tables at the session size, for one weight.
+static int map_kernel_font(int weight, struct ugfx_font *out) {
     struct win_request_msg req;
     for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
     req.type = WIN_REQ_FONT;
@@ -531,6 +536,14 @@ static int map_session_font(int slot, struct ugfx_font *out) {
 // It exists because WIN_EV_FONT arrives when the SETTING changes and
 // fontd republishes on its own poll a moment later -- so an app that
 // only re-mapped on the event would map the OLD atlas again and keep it.
+const struct ugfx_font *ugfx_font_baked(void) {
+    // Mapped once; the kernel serves the same mapping whatever fontd does.
+    static struct ugfx_font baked;
+    static int mapped;
+    if (!mapped) mapped = map_kernel_font(0, &baked) ? 1 : -1;
+    return mapped > 0 ? &baked : 0;
+}
+
 const char *ugfx_font_session_face(void) {
     const struct font_shm *h =
         (const struct font_shm *)g_map_base[UGFX_FONT_SLOT_UI_REGULAR];
