@@ -169,6 +169,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_scrollbar.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |
 | `uui_scrollview.h` | uui_scrollview -- a viewport onto a layout that is taller than it. |
 | `uui_seek.h` | --- type-ahead, shared by every list-shaped widget ------------------- |
+| `uui_segbar.h` | uui_segbar -- a WHOLE split into SEGMENTS side by side, each as wide as its share and one selected: a disk's partitions and its free space (Disks), the way GNOME Disks' volume map and Windows' Disk... |
 | `uui_segmented.h` | A SEGMENTED CONTROL: two to four mutually-exclusive choices as one row of joined buttons, the chosen one filled -- macOS's NSSegmentedControl, Windows' and KDE's view switchers. |
 | `uui_setting_row.h` | ONE SETTING AS A CARD: its name and a line or two of description on the left, its control on the right -- or, for a control too wide to sit beside the text (a radio list, a long field), under it. |
 | `uui_sidebar.h` | A NAVIGATION SIDEBAR: bold section headings with selectable items under them. |

@@ -1,0 +1,6 @@
+# Disks -- see this directory's README.md for the format.
+Name=Disks
+Exec=/bin/wm/apps/disks
+Category=system
+Comment=Drives, partitions and what is on them
+Icon=disks

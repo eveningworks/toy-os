@@ -635,6 +635,21 @@ def drive():
     return finish(shadow(im))
 
 
+def disks():
+    # A drive with its partition map over it: the Disks app.
+    im = canvas()
+    m = m_rr(6, 28, 58, 52, 6)
+    fill(im, m, ((236, 239, 244), (188, 196, 210)))
+    edge(im, m, (150, 160, 178))
+    d = D4(im)
+    d.ellipse((47, 41, 52, 46), fill=(60, 190, 110, 255))
+    bars = canvas()
+    fill(bars, m_rr(8, 10, 19, 22, 2.5), ((255, 200, 120), (230, 150, 60)))
+    fill(bars, m_rr(21, 10, 56, 22, 2.5), ((96, 160, 236), (52, 104, 200)))
+    im = Image.alpha_composite(im, shadow(bars, dy=1, blur=1.2, alpha=60))
+    return finish(shadow(im))
+
+
 def drive_ram():
     im = canvas()
     d = D4(im)
@@ -860,7 +875,7 @@ ART = {
     "notepad": notepad, "files": files, "terminal": terminal, "calculator": calculator,
     "imgview": imgview, "player": player, "video": video, "settings": settings, "taskmgr": taskmgr,
     "mines": mines, "screenshot": screenshot, "about": about, "help": help_app,
-    "logview": logview, "crashreports": crashreports, "shapes": shapes, "fontdemo": fontdemo, "charmap": charmap,
+    "logview": logview, "crashreports": crashreports, "shapes": shapes, "fontdemo": fontdemo, "charmap": charmap, "disks": disks,
     "uidemo": uidemo, "doom": doom, "devmgr": devmgr, "bootmgr": bootmgr,
     "sysupdate": sysupdate, "diskmark": diskmark, "properties": properties,
     "folder": plain_folder, "file": plain_file, "drive": drive, "drive-ram": drive_ram,

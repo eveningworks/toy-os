@@ -84,6 +84,7 @@ app; one shaped around an app's data stays in that app (CLAUDE.md).
 | `uui_slider` | An ORDERED enum, where "more" and "less" is the point |
 | `uui_gallery` | A few choices whose difference is SEEN -- a card per choice, its picture painted by the caller (a cursor theme's shapes; a wallpaper) |
 | `uui_listbox`, `uui_table` | Rows; rows with columns, a header and sorting |
+| `uui_segbar` | A WHOLE in SEGMENTS side by side, each as wide as its share with a floor: a title, a corner note, an optional usage meter, a detail line; empty space dashed; one selected (an accent border) -- Disks' partition map |
 | `uui_grid` | Equal CELLS in rows that reflow with the width, each painted by the caller; one selected (solid accent), arrows and Page keys, a double-click or Enter parked for the app -- the Character Map's glyphs and font cards |
 | `uui_tree` | Rows at a DEPTH, with collapsible parents -- navigation. A `UUI_TREE_HEADER` row is a section caption; a node may carry a right-hand `note` and a usage meter; `UUI_SEL_ROUNDED` is the design language's selection (the File Manager's side column) |
 | `uui_fileinfo` | A file's preview and facts from `lib/ufileinfo.h`: a hero (its picture on a tinted stage, else its icon; a folder's volume bar) over collapsible sections, with SLOTS for an app's own controls -- Properties, and the File Manager's details pane in `compact` form |

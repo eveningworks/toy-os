@@ -1,9 +1,7 @@
-// parttable -- the attached disk's MBR/GPT partition table.
+// parttable -- a disk's MBR/GPT partition table: the boot disk's, or the one named.
 //
-// READ-ONLY. This repo's stock disk.img has NO partition table at all
-// -- one raw filesystem volume -- so "none" is the normal answer here
-// rather than a failure, and saying that clearly is most of the
-// program's job. `/bin/mkpart` is what writes one.
+// READ-ONLY. A blank disk has NO partition table, so "none" is an
+// answer rather than a failure, and says so. `/bin/mkpart` writes one.
 //
 // It reads the WHOLE DISK, not the mounted volume, so it answers the
 // same way whether the running system booted flat or from inside a
@@ -18,6 +16,8 @@
 #include "rt/sys.h"
 #include "lib/cmd.h"
 #include "lib/human.h"
+#include "lib/uargs.h"
+#include <string.h>
 #include <stdio.h>
 
 #define SECTOR_BYTES 512
@@ -41,12 +41,25 @@ static const char *kind_name(unsigned long long k) {
     }
 }
 
-int main(int argc, char **argv) {
-    (void)argc; (void)argv;
+static const struct uargs_prog PROG = {
+    .name = "parttable",
+    .usage = "[DISK]",
+    .summary = "Print a disk's partition table: the boot disk's, or DISK's (`lsblk` names them).",
+};
 
+int main(int argc, char **argv) {
+    struct uargs a;
+    if (uargs_parse(&a, &PROG, argc, argv)) return a.status;
+    if (a.argc > 1) return uargs_error(&PROG, "one disk at most");
+
+    // One record per whole disk, the boot disk's first.
     struct query_parttable t;
-    int n = sys_query_record(QUERY_PARTTABLE, 0, &t, sizeof t);
-    if (n < (int)sizeof t) {
+    int found = 0;
+    QUERY_FOREACH(QUERY_PARTTABLE, t, k) {
+        if (a.argc == 0 || !strcmp(t.disk, a.argv[0])) { found = 1; break; }
+    }
+    if (!found) {
+        if (a.argc) return uargs_error(&PROG, "%s is not a disk (`lsblk` lists them)", a.argv[0]);
         cmd_fail("parttable", 0);
         return 1;
     }
@@ -82,11 +95,12 @@ int main(int argc, char **argv) {
     // between reads. Same rule every other list consumer here follows.
     struct query_partition p;
     QUERY_FOREACH(QUERY_PARTITION, p, i) {
+        if (strcmp(p.disk, t.disk) != 0) continue;   // every disk's are listed
         human_size(size, sizeof size, p.lba_count * (unsigned long long)SECTOR_BYTES);
         if (p.kind == QUERY_PART_GPT) {
             put_guid(guid, sizeof guid, p.type_guid);
             snprintf(line, sizeof line, "  %u: lba %llu +%llu  %-8s  %s\n",
-                     i + 1, (unsigned long long)p.lba_start,
+                     (unsigned)p.number, (unsigned long long)p.lba_start,
                      (unsigned long long)p.lba_count, size,
                      p.name[0] ? p.name : "(unnamed)");
             sys_print(line);
@@ -94,7 +108,7 @@ int main(int argc, char **argv) {
             sys_print(line);
         } else {
             snprintf(line, sizeof line, "  %u: lba %llu +%llu  %-8s  type 0x%02llx\n",
-                     i + 1, (unsigned long long)p.lba_start,
+                     (unsigned)p.number, (unsigned long long)p.lba_start,
                      (unsigned long long)p.lba_count, size,
                      (unsigned long long)p.mbr_type);
             sys_print(line);

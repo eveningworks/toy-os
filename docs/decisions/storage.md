@@ -3642,3 +3642,46 @@ writes random GUIDs when it partitions a blank image, but `cp disk.img`
 copies them, exactly as cloning a disk does on Linux. Precedence decides
 between such copies; `mkpart_test.regenerate_guids()` is `sgdisk -G` for
 a test that needs them distinct.
+
+## Disks changes any disk but the system's, and rewrites a table only when it can keep it
+
+**Every disk's partition table is a query, not only the boot disk's.**
+`QUERY_PARTTABLE` was a scalar for `blk_root_disk()`, so a second disk
+was visible only as the windows `QUERY_BLKDEV` lists: start and size,
+no type, no GPT name. Disks has to rewrite a disk's whole table to add
+or remove a partition (`SYS_MKPART` takes a table, not an edit), and a
+rewrite from that much would have dropped every GPT name and type on
+the disk. Both classes now report every whole disk, the boot disk's
+first, so a reader of record 0 alone gets what it always did; the same
+compatible move `QUERY_FSINFO` made when it went per-mount. Linux
+shows the same in sysfs (`/sys/block/<disk>/<part>`); libblkid reads
+the tables in user space instead. A walk re-reads each disk's table per
+record, a few sectors per disk, for a diagnostic, as the boot disk's
+already did.
+
+**What Disks refuses, and why each is a refusal rather than a
+warning:**
+
+- **The system disk, for everything but Check.** `SYS_MKPART` re-reads
+  a table only on a disk nothing runs from (Linux's `BLKRRPART` rule),
+  so a change there takes effect at the next boot, under a running
+  system. Formatting there is formatting the running system.
+- **A disk with anything mounted**, for a new or deleted partition:
+  the same rule. The new partition would get no device until a
+  restart, so the format that follows it could not run.
+- **A partition whose type Disks cannot write back.** A table entry is
+  rewritten from its ROLE (data, ESP, BIOS boot), so a Linux-filesystem
+  or swap GUID would come back as basic data. Such a disk is left to
+  `mkpart`, and Disks says so.
+- **The last partition**, and a fifth: `SYS_MKPART` writes one to four
+  entries, so an empty table cannot be written and a fifth cannot fit.
+
+**GNOME Disks asks the same questions through UDisks**, which runs as
+root on its behalf and refuses a busy device the same way. Windows'
+Disk Management changes the system disk live, which a partition table
+of windows created at boot cannot do here.
+
+Mount uses `/mnt/<device>`, made at mount and removed at unmount, so
+two volumes never fight over `/mnt` itself. GNOME uses
+`/run/media/$USER/<label>`; toy-os has no per-user runtime directory
+and labels are optional.

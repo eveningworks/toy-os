@@ -254,6 +254,13 @@ of throughput over the run, its phases marked -- benchmarks any
 writable disk volume, can be stopped, and keeps every run in a history
 compared with the one before.
 
+**Disks** shows every drive -- model, size, partition table -- and a
+map of its partitions and free space, GNOME Disks' shape. On any disk
+but the system's it makes a partition in free space (a new GPT on a
+blank disk), formats one tfs3 or FAT32, mounts and unmounts it under
+`/mnt`, and deletes one, each behind a confirm; any mounted volume can
+be checked, and repaired when the check finds a problem.
+
 **Character Map** finds any character the installed fonts can draw --
 by name ("arrow" finds the arrows as it is typed), by `U+2192`, or by
 pasting the character itself -- in a grid by Unicode block, with its

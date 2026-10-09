@@ -845,6 +845,32 @@ def icon_tb_speed():
     return im
 
 
+def icon_tb_format():
+    # A brush laying down a stroke: Format, which paints a new filesystem on.
+    im, d = _tb()
+    d.line([(56, 6), (36, 26)], fill=TB_INK, width=8)
+    d.polygon([(30, 22), (42, 34), (36, 40), (24, 28)], fill=TB_INK)
+    d.polygon([(22, 30), (34, 42), (22, 50), (8, 52), (12, 40)], fill=TB_INK)
+    d.rounded_rectangle([30, 52, 60, 58], radius=3, fill=TB_INK)
+    return im
+
+
+def icon_tb_check():
+    # A tick in a ring: Check the filesystem.
+    im, d = _tb()
+    d.ellipse([6, 6, 58, 58], outline=TB_INK, width=6)
+    d.line([(19, 33), (28, 42), (45, 23)], fill=TB_INK, width=7, joint="curve")
+    return im
+
+
+def icon_tb_eject():
+    # The eject mark: Mount and Unmount.
+    im, d = _tb()
+    d.polygon([(32, 8), (56, 36), (8, 36)], fill=TB_INK)
+    d.rounded_rectangle([8, 44, 56, 54], radius=3, fill=TB_INK)
+    return im
+
+
 def icon_tb_omega():
     # An omega: Character Map's Characters page.
     im, d = _tb()
@@ -1219,6 +1245,9 @@ ICONS = {
     "tb-camera": icon_tb_camera,
     "tb-speed": icon_tb_speed,
     "tb-omega": icon_tb_omega,
+    "tb-format": icon_tb_format,
+    "tb-check": icon_tb_check,
+    "tb-eject": icon_tb_eject,
     "tb-font": icon_tb_font,
     "tb-fullscreen": icon_tb_fullscreen,
     "tb-unfullscreen": icon_tb_unfullscreen,

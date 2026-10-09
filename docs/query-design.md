@@ -296,7 +296,8 @@ the rest:
   of the `random` command -- the numbers look equally random whatever
   produced them. A fact answers it without putting a promise on the
   syscall that this kernel cannot keep.
-- `QUERY_PARTTABLE` (scalar) + `QUERY_PARTITION` (list) -- **two
+- `QUERY_PARTTABLE` (a list, one per disk since 2026-10-09; it was a scalar
+  for the boot disk) + `QUERY_PARTITION` (list) -- **two
   classes for one command, and the split is the point.** A list alone
   cannot distinguish "a table with no partitions" from "no partition
   table at all": both are zero records, and the second is what this

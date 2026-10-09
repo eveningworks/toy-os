@@ -1,4 +1,4 @@
-// The disk's partition table, as queryable FACTS.
+// Every disk's partition table, as queryable FACTS.
 //
 // TWO CLASSES, and the split is the design. QUERY_PARTTABLE is the
 // TABLE (which kind, how many entries, the GPT disk GUID);
@@ -39,41 +39,85 @@ static uint64_t abi_kind(enum partition_table_kind k) {
     }
 }
 
-static int parttable_count(void) { return 1; } // scalar
+// EVERY WHOLE DISK, THE BOOT DISK FIRST. Record 0 of both classes is
+// still the boot disk's, so a reader that only asks for record 0 -- or
+// walks QUERY_PARTITION while `disk` is empty or the boot disk's --
+// gets what it always did; QUERY_FSINFO went per-mount the same way.
+static const struct block_device *disk_at(int i) {
+    const struct block_device *boot = blk_root_disk();
+    if (boot && i == 0) return boot;
+    int k = boot ? 1 : 0;
+    for (int n = 0; n < blk_device_count(); n++) {
+        const struct blk_entry *e = blk_device_at(n);
+        if (!e || e->parent != e->dev || e->dev == boot) continue;
+        if (k++ == i) return e->dev;
+    }
+    return 0;
+}
+
+static int parttable_count(void) {
+    int n = 0;
+    while (disk_at(n)) n++;
+    return n ? n : 1;   // no disk at all still answers "no table"
+}
 
 static int parttable_fill(int index, void *out) {
-    if (index != 0) return 0;
+    const struct block_device *disk = disk_at(index);
+    if (!disk && index != 0) return 0;
     struct query_parttable *t = out;
     k_memset(t, 0, sizeof *t);
+    if (!disk) return 1;
     // A read FAILURE and "no table here" both leave kind NONE, and that
     // is the honest answer either way: this reports what is on the
     // disk, and an unreadable disk has nothing to report.
-    partition_read_table(&g_table);
+    if (!partition_read_table_of(disk, &g_table)) g_table.kind = PART_TABLE_NONE, g_table.entry_count = 0;
     t->kind = abi_kind(g_table.kind);
     t->entry_count = (uint64_t)g_table.entry_count;
-    // The disk, not the mounted volume -- blkdev_sector_count(blk_root_disk())
-    // ignores any partition window, which is the point.
-    t->disk_sectors = (uint64_t)blkdev_sector_count(blk_root_disk());
-    t->block_size = blkdev_block_size(blk_root_disk());
+    // The disk, not a mounted volume: a partition window is never asked.
+    t->disk_sectors = (uint64_t)blkdev_sector_count(disk);
+    t->block_size = blkdev_block_size(disk);
+    k_strlcpy(t->disk, blk_device_name(disk), sizeof t->disk);
     if (g_table.kind == PART_TABLE_GPT) {
         k_memcpy(t->disk_guid, g_table.disk_guid, sizeof t->disk_guid);
     }
     return 1;
 }
 
+// Which disk's table holds entry `index` of the flat list, read into
+// g_table; *first is that disk's first index. A walk re-reads a table
+// per record -- a handful of sectors per disk, for a diagnostic.
+static const struct block_device *entry_disk(int index, int *first) {
+    int base = 0;
+    for (int d = 0;; d++) {
+        const struct block_device *disk = disk_at(d);
+        if (!disk) return 0;
+        if (!partition_read_table_of(disk, &g_table)) continue;
+        if (index < base + g_table.entry_count) {
+            *first = base;
+            return disk;
+        }
+        base += g_table.entry_count;
+    }
+}
+
 static int partition_count(void) {
-    partition_read_table(&g_table);
-    return g_table.entry_count;
+    int n = 0;
+    for (int d = 0; disk_at(d); d++)
+        if (partition_read_table_of(disk_at(d), &g_table)) n += g_table.entry_count;
+    return n;
 }
 
 static int partition_fill(int index, void *out) {
-    partition_read_table(&g_table);
-    if (index < 0 || index >= g_table.entry_count) return 0;
-    const struct partition_entry *e = &g_table.entries[index];
+    int first = 0;
+    const struct block_device *disk = index >= 0 ? entry_disk(index, &first) : 0;
+    if (!disk) return 0;
+    const struct partition_entry *e = &g_table.entries[index - first];
     struct query_partition *p = out;
     k_memset(p, 0, sizeof *p);
 
     p->kind = abi_kind(g_table.kind);
+    k_strlcpy(p->disk, blk_device_name(disk), sizeof p->disk);
+    p->number = (uint64_t)(index - first + 1);
     if (g_table.kind == PART_TABLE_GPT) {
         p->lba_start = e->gpt_lba_start;
         // GPT stores an inclusive END; the ABI carries a LENGTH,
@@ -103,7 +147,7 @@ static const struct query_provider parttable_provider = {
     .cls = QUERY_PARTTABLE,
     .name = "parttable",
     .record_size = sizeof(struct query_parttable),
-    .flags = 0, // scalar
+    .flags = QUERY_F_LIST,   // one per disk, the boot disk first
     .count = parttable_count,
     .fill = parttable_fill,
     .fields = parttable_fields,

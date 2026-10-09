@@ -67,7 +67,7 @@ that turned out wrong. It boots on real hardware and under QEMU.
   **updates itself** from a build server.
 - **A desktop outside the kernel** — the window manager and every app run in
   ring 3: a file manager, a tabbed terminal, an image viewer, an audio
-  player, a video player, a character map, a task manager, System Settings,
+  player, a video player, a character map, Disks, a task manager, System Settings,
   Minesweeper and **DOOM**.
 - **Networking** — IPv4, ICMP, UDP and TCP on six NIC drivers, with DHCP,
   DNS, `wget` and an `httpd` serving the machine's own files.

@@ -2307,6 +2307,16 @@ window without going through it will find its layout polls timing out.
   picture changed while paused -- invisible on KVM, where the decoder is
   never behind. Positive control: a widget that never draws the frame
   fails exactly the two drawn-and-moving checks.
+- **`disks_test.py`** -- Disks on a guest of its own: the system disk
+  pinned as the root and a BLANK 256 MiB virtio disk beside it, in
+  `ondemand_sweep.py` (it boots its own hardware). On the system disk
+  Format and Mount do nothing and Delete says why; on the blank one a
+  new GPT and partition (believed from `lsblk`), mount (from `df`, and
+  a file written through it), Check, unmount, a second partition, a
+  format to FAT32 (believed because it then MOUNTS as fat32), a delete;
+  then the HOST reads the GPT: the first partition is still 'data' at
+  LBA 2048, kept across two table rewrites. Positive control: a
+  rewrite that drops the entries it should keep fails "the first kept".
 - **`charmap_test.py`** -- the Character Map, in `gui_regress.py`: it
   opens on the interface's font with the names loaded and the grid DRAWN
   (a cell with "!" has ink, one past the last has none); "rightwards

@@ -107,11 +107,11 @@ struct query_msg {
 // Where the random bytes SYS_GETRANDOM returns are coming from. SCALAR.
 #define QUERY_RANDOM    5
 
-// The attached disk's partition table itself -- which kind, how many
-// entries. SCALAR. The entries are QUERY_PARTITION.
+// Each whole disk's partition table -- which kind, how many entries.
+// LIST, one per disk, the boot disk first. The entries are QUERY_PARTITION.
 #define QUERY_PARTTABLE 6
 
-// One record per partition. LIST.
+// One record per partition, every disk's. LIST.
 #define QUERY_PARTITION 7
 
 // The kernel heap: what kmalloc has, what it has handed out, and what
@@ -1190,7 +1190,9 @@ struct query_parttable {
     // The disk's logical block, bytes. The table's own LBAs count these;
     // every LBA a query reports is still 512-byte units, so a partition
     // on a 4096 disk starts and ends on a multiple of 8.
-    uint64_t block_size;
+    uint64_t block_size;    // WHICH DISK: one record per whole disk, the boot disk's first, so a
+    // reader of record 0 alone still gets the boot disk ("ahci0").
+    char disk[16];
 };
 
 // QUERY_PARTITION's record -- one partition.
@@ -1207,6 +1209,11 @@ struct query_partition {
     uint8_t  type_guid[16];   // GPT only
     uint8_t  unique_guid[16]; // GPT only
     char     name[40];     // GPT only; "" for MBR
+    // WHICH DISK, and the entry's 1-based slot in that disk's table --
+    // the `<disk>p<number>` a rescan names it. Records run disk by disk,
+    // the boot disk's first.
+    char     disk[16];
+    uint64_t number;
 };
 
 // QUERY_USB's record -- one enumerated USB device.
