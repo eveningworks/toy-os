@@ -2307,6 +2307,19 @@ window without going through it will find its layout polls timing out.
   picture changed while paused -- invisible on KVM, where the decoder is
   never behind. Positive control: a widget that never draws the frame
   fails exactly the two drawn-and-moving checks.
+- **`charmap_test.py`** -- the Character Map, in `gui_regress.py`: it
+  opens on the interface's font with the names loaded and the grid DRAWN
+  (a cell with "!" has ink, one past the last has none); "rightwards
+  arrow" selects U+2192 -- an exact name wins over U+0362, which sorts
+  first -- and the selected cell and detail tile draw it; Copy, then
+  PASTE INTO THE SEARCH BOX finds the same character alone, for the
+  arrow (UTF-8) and for e-acute (one Latin-1 byte); a double-click adds
+  to the text line and Backspace removes it; "G" on the focused Block
+  list shows Greek; the Fonts page's card switch redraws the size
+  ladder; "Use for terminals" writes `system.font_mono`, put back
+  after. **It caught the grid drawing nothing after any search** (a
+  refill cleared the cell callback): the drawn-after-search check is
+  red on that build.
 - **`uvid_hostcheck.py`** -- `userland/lib/uvid*.c` (MPEG-1 video, the
   MPEG program stream) and `usnd_mp2.c` (Layer II), compiled with the
   host gcc and compared with FFmpeg's decode: ten encodes covering the
@@ -2465,6 +2478,13 @@ window without going through it will find its layout polls timing out.
   16) with `tiny.yuv`, FFmpeg's decode of it, as `uvid_test`'s
   reference; `tiny.avi`, whose PCM is a formula of the sample index.
   Needs ffmpeg with libfreetype; nothing in the build runs it.
+- **`gen_unicode_names.py`** -- Unicode's names and blocks for exactly
+  the code points `data/fonts/*.ttf` map, into
+  `data/usr/share/unicode/{names,blocks}` (tracked) for
+  `lib/uunicode.h` and the Character Map. Names from Python's
+  `unicodedata`, blocks from Perl's copy of `Blocks.txt`: nothing is
+  fetched. Re-run when a font is added; the Unicode License travels as
+  `data/licenses/unicode.txt`.
 - **`fetch_video.py`** -- Big Buck Bunny (the Blender Foundation, CC BY
   3.0) for the Video Player, as an `EXTRAS=1` item in
   `fetch_extras.py`'s registry: the Foundation's own 640x360 release,

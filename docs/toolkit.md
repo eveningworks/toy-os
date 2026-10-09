@@ -91,6 +91,7 @@
 | `utmppath.h` | A SCRATCH PATH IN ONE EXPRESSION, for ring 3. |
 | `utrash.h` | THE RECYCLE BIN: a delete that can be taken back, on the freedesktop Trash specification's layout so a Linux desktop reading the same disk sees the same bin. |
 | `utween.h` | An integer that moves from one value to another over a fixed time, eased -- the one interpolator the desktop has, shared by the toolkit (a scroll that glides) and the window manager (an effect that... |
+| `uunicode.h` | The Unicode NAMES and BLOCKS of the characters this system's fonts can draw ("LATIN SMALL LETTER E WITH ACUTE", "Latin-1 Supplement"), and the UTF-8 encoding of a code point. |
 | `uvid.h` | uvid -- decoding video files into frames, in RING 3. |
 | `uvid_play.h` | uvid_play -- PLAYING a video: a thread decoding a few frames ahead, the sound through lib/usnd.h, and the frame due now for whoever draws. |
 | `uwalk.h` | A DIRECTORY TREE WALK, one directory at a time, for a caller that has to stop, report progress or share a thread: the File Manager's search into subfolders and its folder sizes. |
@@ -108,6 +109,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `ucrt.h` | A CRT SCREEN EFFECT, as CPU passes over one rect of a surface: phosphor glow, scanlines, a phosphor mask, a vignette, flicker, static noise, and a curved tube in a bezel. |
 | `ugfx.h` | ugfx -- the userland drawing runtime for ring-3 window clients. |
 | `ugfx_tex.h` | ugfx_tex.h -- a perspective-correct textured triangle. |
+| `uglyph.h` | ANY character of a font file, drawn at any size -- what the session font cannot do: it carries ASCII and Latin-1 only (font_ttf.h's 191 slots), and a character map needs the arrow, the Greek and th... |
 | `ulog.h` | Toolkit diagnostics: one line to the app's stderr, which the kernel routes to its log and to a QMP test's console (CLAUDE.md's "diagnostics go to stderr"). |
 | `umonofont.h` | umonofont -- the desktop's MONOSPACE face at a size an app chooses, or the session's own when it chooses none: what a terminal grid or a text document draws in. |
 | `utext.h` | utext -- a wrapped, scrollable, editable text buffer with a cursor and a selection. |
@@ -135,6 +137,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_findbar.h` | uui_findbar -- a find control: a lens, a query field, an "N of M" readout, previous / next, and close. |
 | `uui_focus.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |
 | `uui_gallery.h` | uui_gallery -- one choice out of a few, each shown as a CARD: a picture the caller paints and a label under it. |
+| `uui_grid.h` | uui_grid -- a GRID OF EQUAL CELLS the caller paints, one selected: a character map's glyphs (the Character Map), an icon picker, a board. |
 | `uui_image.h` | A decoded picture, in a layout. |
 | `uui_keycapture.h` | A CONTROL THAT RECORDS A KEY COMBINATION BY HAVING YOU PRESS IT. |
 | `uui_keymap.h` | keymap -- a picture of a keyboard layout: the 105-key ISO board's four typing rows, each cap showing what its key types. |

@@ -1131,7 +1131,7 @@ the same slight accent and descender clipping every fixed-cell terminal
 font accepts.
 
 **The atlas is the BAKED glyph set, and that is a bound rather than an
-oversight.** A runtime atlas rasterizes exactly the 101 slots
+oversight.** A runtime atlas rasterizes exactly the 191 slots
 `font_ttf.h` describes, in the same order, so a loaded face's remaining
 thousands of glyphs are parsed and unreachable. Two reasons it is drawn
 here. The slot order is ABI -- `WIN_REQ_FONT` shares it, and a client

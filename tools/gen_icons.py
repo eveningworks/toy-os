@@ -845,6 +845,24 @@ def icon_tb_speed():
     return im
 
 
+def icon_tb_omega():
+    # An omega: Character Map's Characters page.
+    im, d = _tb()
+    d.arc([12, 6, 52, 46], 125, 415, fill=TB_INK, width=7)
+    d.line([(6, 55), (22, 55), (18, 42)], fill=TB_INK, width=7, joint="curve")
+    d.line([(58, 55), (42, 55), (46, 42)], fill=TB_INK, width=7, joint="curve")
+    return im
+
+
+def icon_tb_font():
+    # A capital A over its baseline: Character Map's Fonts page.
+    im, d = _tb()
+    d.polygon([(8, 52), (27, 6), (37, 6), (56, 52), (46, 52), (32, 16), (18, 52)], fill=TB_INK)
+    d.rectangle([20, 34, 44, 40], fill=TB_INK)
+    d.rectangle([4, 56, 60, 60], fill=TB_INK)
+    return im
+
+
 def icon_tb_fullscreen():
     # Four corners pointing out.
     im, d = _tb()
@@ -1200,6 +1218,8 @@ ICONS = {
     "tb-playlist": icon_tb_playlist,
     "tb-camera": icon_tb_camera,
     "tb-speed": icon_tb_speed,
+    "tb-omega": icon_tb_omega,
+    "tb-font": icon_tb_font,
     "tb-fullscreen": icon_tb_fullscreen,
     "tb-unfullscreen": icon_tb_unfullscreen,
     "tb-minimize": icon_tb_minimize,

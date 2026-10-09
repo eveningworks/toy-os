@@ -1,0 +1,6 @@
+# Character Map -- see this directory's README.md for the format.
+Name=Character Map
+Exec=/bin/wm/apps/charmap
+Category=utility
+Comment=Find any character the fonts have, and copy it
+Icon=charmap

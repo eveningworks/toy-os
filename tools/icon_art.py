@@ -431,6 +431,18 @@ def fontdemo():
     return finish(shadow(im))
 
 
+def charmap():
+    # A card of characters with an omega on it: the Character Map.
+    im = canvas()
+    m = m_rr(8, 8, 56, 56, 9)
+    fill(im, m, ((86, 156, 236), (44, 98, 196)))
+    d = D4(im)
+    d.arc((17, 14, 47, 44), 125, 415, fill=WHITE, width=4.5)
+    d.line([(14, 47), (25, 47), (22, 40)], fill=WHITE, width=4.5)
+    d.line([(50, 47), (39, 47), (42, 40)], fill=WHITE, width=4.5)
+    return finish(shadow(im))
+
+
 def uidemo():
     im, m = window(bar=(120, 96, 220))
     d = D4(im)
@@ -848,7 +860,7 @@ ART = {
     "notepad": notepad, "files": files, "terminal": terminal, "calculator": calculator,
     "imgview": imgview, "player": player, "video": video, "settings": settings, "taskmgr": taskmgr,
     "mines": mines, "screenshot": screenshot, "about": about, "help": help_app,
-    "logview": logview, "crashreports": crashreports, "shapes": shapes, "fontdemo": fontdemo,
+    "logview": logview, "crashreports": crashreports, "shapes": shapes, "fontdemo": fontdemo, "charmap": charmap,
     "uidemo": uidemo, "doom": doom, "devmgr": devmgr, "bootmgr": bootmgr,
     "sysupdate": sysupdate, "diskmark": diskmark, "properties": properties,
     "folder": plain_folder, "file": plain_file, "drive": drive, "drive-ram": drive_ram,

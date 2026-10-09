@@ -10934,3 +10934,44 @@ through its focus ring.
 `contextMenuEvent` is. If the app also heard it, a window with its own
 right-click menu, such as the File Manager's, could open that menu on
 top of the edit menu.
+
+## The Character Map ships its own names, and copies Latin-1 when it can
+
+**Characters and fonts are one app with a rail, not two.** GNOME
+splits them (Characters, Fonts); Windows' `charmap` has a font list
+inside the character window. The maintainer chose one window with a
+Characters | Fonts rail from mockups (2026-10-09, C3): finding a
+character is mostly asking which font has it, and that question goes
+both ways.
+
+**The names are a generated subset, shipped as two text files.** GNOME
+Characters reads libunistring's compiled tables; Windows asks
+`GetCharacterName`'s resource DLL. Both carry every assigned character,
+about 150,000 names, roughly 2 MB. toy-os ships only the code points
+its fonts map (`tools/gen_unicode_names.py`), a few thousand names in a
+file small enough to slurp. A name for a character no font here can
+draw would be a row the app hides. A font added later needs the
+generator re-run, which is the cost. The data is Unicode's own, from
+the host's `unicodedata` and `Blocks.txt`, so nothing is fetched and
+the licence travels as `/usr/share/licenses/unicode.txt`.
+
+**Glyphs come from the font files, in the app.** The session font is
+the 191-slot ASCII + Latin-1 atlas, and widening it is a protocol
+change (the "atlas is the BAKED glyph set" entry in
+`docs/decisions/drivers.md`). `ui/uglyph.h` instead rasterizes any code
+point from the `.ttf` itself, with `lib/ttf.h`, into a small cache in
+the client: a Wayland client's own text rendering, at a client's own
+memory cost.
+
+**Copy puts Latin-1 on the clipboard when every character fits, and
+UTF-8 only when one does not.** Text on this system is Latin-1 (the
+"Latin-1, not UTF-8" entry in `docs/decisions/drivers.md`), so UTF-8
+"é" would paste into Notepad as "Ã©". X11 offers both a `STRING`
+(Latin-1) and a `UTF8_STRING` target, and Windows both `CF_TEXT` and
+`CF_UNICODETEXT`. This clipboard holds one text entry, so the copy
+picks: Latin-1 bytes when it can, because they paste as themselves
+everywhere today; UTF-8 when it cannot, because it is the only encoding
+here that carries an arrow at all, and the one the UTF-8 migration will
+read. Replacing the character with "?" would lose it outright. The
+status bar says "as UTF-8" when that happened. Search accepts a pasted
+character in either form.

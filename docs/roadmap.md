@@ -1353,7 +1353,7 @@ this to be better?".
 - [x] ~~The shell's command dispatch is a long `if/else` chain, and the fix is not the obvious one~~ DONE 2026-10-07 -- `SHELL_BUILTINS`
 - [ ] Settings: a ring-3 settings daemon (stage 2)
 - [x] ~~The ring-3 WM busy-waits instead of sleeping~~ DONE 2026-08-29 -- `SYS_WAIT_READY`, a wait with a deadline that consumes nothing
-- [ ] There is no `uui_grid` widget until a second grid-shaped app (beside Minesweeper) wants one
+- [x] ~~There is no `uui_grid` widget until a second grid-shaped app wants one~~ DONE 2026-10-09 -- the Character Map
 - [x] ~~The kernel ships ~62 KB of `.eh_frame` unwind tables nothing can ever read~~ DONE 2026-09-12
 - [ ] The in-kernel test suite is ~30% of `.text` and ships in release images
 - [ ] Two win-server KTESTs only run on a `target=text` boot, since a live desktop removes what they test

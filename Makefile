@@ -2012,6 +2012,12 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	mkdir -p $(SEED_DIR)/sync/usr/share/videos
 	cp data/usr/share/videos/*.mpg data/usr/share/videos/*.avi $(SEED_DIR)/sync/usr/share/videos/
 	cp data/tests/tiny.avi data/tests/tiny.mpg data/tests/tiny.yuv $(SEED_DIR)/sync/tests/
+	# Unicode's names and blocks for the characters the fonts can draw
+	# (tools/gen_unicode_names.py, tracked), for the Character Map --
+	# Unicode, Inc.'s data, so its notice travels with it.
+	mkdir -p $(SEED_DIR)/sync/usr/share/unicode $(SEED_DIR)/sync/usr/share/licenses
+	cp data/usr/share/unicode/names data/usr/share/unicode/blocks $(SEED_DIR)/sync/usr/share/unicode/
+	cp data/licenses/unicode.txt $(SEED_DIR)/sync/usr/share/licenses/
 	# A FILM, and only under EXTRAS=1: tools/fetch_video.py's Big Buck
 	# Bunny is the Blender Foundation's (CC BY), transcoded on this
 	# machine into data/videos-extra/ (gitignored), its credit beside it.

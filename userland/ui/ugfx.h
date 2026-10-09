@@ -335,7 +335,7 @@ int ugfx_kern(int prev, int c);
 // --- a private font, rasterized by this app (tier 2) ------------------
 //
 // Loads `path` (a .ttf on the filesystem) and rasterizes the same
-// 101-slot glyph set the session font uses, at `px`, into memory the
+// 191-slot glyph set the session font uses, at `px`, into memory the
 // CALLER owns. Returns 1 on success.
 //
 // `arena` must be at least ugfx_font_arena_size(px) bytes and must stay

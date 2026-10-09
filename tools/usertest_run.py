@@ -295,6 +295,9 @@ TESTS = [
     # against ffmpeg's own decode in tiny.yuv.
     ("uvid_test", 0,
      None, None),
+    # lib/uunicode.h, the Character Map's names: the three search forms,
+    # UTF-8 both ways, blocks. tools/charmap_test.py is the app.
+    ("uunicode_test", 0, None, None),
     # The MIDI codec and the SoundFont synth, over a bank and songs built
     # byte by byte -- a 1 kHz sine sample, so pitches and onsets are
     # exact. A REAL bank is judged against FluidSynth on the host

@@ -254,6 +254,15 @@ of throughput over the run, its phases marked -- benchmarks any
 writable disk volume, can be stopped, and keeps every run in a history
 compared with the one before.
 
+**Character Map** finds any character the installed fonts can draw --
+by name ("arrow" finds the arrows as it is typed), by `U+2192`, or by
+pasting the character itself -- in a grid by Unicode block, with its
+name, code point, UTF-8 bytes and which fonts have it, and a line of
+text to build up and copy. Its **Fonts** page shows each family at a
+ladder of sizes with its files, coverage and licence, and sets it for
+the interface or for terminals. The names are Unicode's own, shipped
+for exactly the characters the fonts map.
+
 **Images are decoded in ring 3, and the kernel never sees one.** JPEG
 (baseline and progressive), PNG, QOI, BMP (every Windows and OS/2
 header, RLE and bit masks) and GIF sit behind a codec table keyed on

@@ -421,6 +421,19 @@ that generates the layouts.
 
 ---
 
+Unicode character names and blocks (data/usr/share/unicode/)
+
+data/usr/share/unicode/names and blocks -- the Unicode name of each
+character the shipped fonts can draw, and the blocks they fall in, read
+by the Character Map -- are extracted by tools/gen_unicode_names.py from
+the Unicode Character Database (Python's unicodedata module and the
+database's Blocks.txt). That data is (c) Unicode, Inc. under the
+Unicode License v3, a permissive licence whose one condition is that
+its notice travel with copies: it is tracked at data/licenses/unicode.txt
+and seeded to /usr/share/licenses/unicode.txt beside the data.
+
+---
+
 Everything else
 
 The MIT License at the top of this file governs the rest of this
