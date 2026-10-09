@@ -90,7 +90,7 @@ indexed by headline in the next section.
 **Check `kernel/lib/` before hand-rolling a digit loop, a formatter, a
 path join or a rasteriser.** Reachable through `kapi.h`, each with
 KTESTs: `string.h`, `knum.h`, `kfmt.h`, `kpath.h`, `fixed.h`, `geom.h`,
-`rubberband.h`, `krandom.h`, `hid_parse.h`. **In ring 3, check
+`krandom.h`, `hid_parse.h`. **In ring 3, check
 `docs/toolkit.md` first** -- every `userland/lib/` and `userland/ui/`
 header in one line, GENERATED from the headers (`gen_toolkit_index.py`;
 a new header needs a top comment saying what it is). What bites:
@@ -110,11 +110,13 @@ a new header needs a top comment saying what it is). What bites:
   `userland/lib/ttf.c`, for `/bin/fontd`; the kernel parses no font
   (f34019fc). Every read is bounds-checked, and it allocates NOTHING (a
   caller's `struct ttf_scratch`).
-- **Draw through `gfx_draw_line()`/`gfx_draw_circle()`/
-  `gfx_fill_ellipse()` in the kernel and `uui_canvas` in ring 3**, not
-  `geom_*`. `geom.c`/`rubberband.c` compile TWICE from one source, so
-  neither may name anything kernel-only; `geom.h` draws through a
-  callback, never into a framebuffer.
+- **Draw through `uui_canvas` in ring 3, and `gfx_fill_circle()` in the
+  kernel** -- the one shape ring 0 draws; bind another in `gfx.c` when a
+  kernel caller needs it. Not `geom_*` directly. `geom.c` compiles TWICE
+  from one source, so it may name nothing kernel-only; `geom.h` draws
+  through a callback, never into a framebuffer. **Code with no ring-0
+  caller lives in `userland/lib/`**, not shared (`rubberband.c`,
+  `icon_grid.c`).
 - **No `k_strcpy`: `k_strlcpy` with the DESTINATION's size**, never
   guessed. The `write_dec`/`write_hex` chains are FROZEN per file by
   `tools/check_chains.py`, a ratchet; new number formatting is

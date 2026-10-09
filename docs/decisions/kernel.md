@@ -1763,7 +1763,10 @@ scrollbar, the ring-3 Notepad's scrollbar grab). So it takes the path
 `kernel/lib/geom.c` and `apps/calc_engine.c` already take: one source
 file, built once into the kernel and once into `libuapp.a`. The Makefile
 rule already existed; the only cost is that the file must stay
-freestanding (`<stdint.h>` only, no allocator, no drawing).
+freestanding (`<stdint.h>` only, no allocator, no drawing). **Both
+callers ended up in ring 3** (the desktop moved there), so it lives in
+`userland/lib/` now, with `icon_grid.c`: shared source is for code BOTH
+rings call, and ring 0 kept no caller.
 
 **What it owns: the behaviour, not the items.** The caller answers "how
 many?" and "where is item i?" through a `struct rb_ops` and does its own

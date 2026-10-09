@@ -9,7 +9,7 @@
 #include "lib/udate.h"  // the Modified column, in the locale's spelling
 #include "lib/icon_cache.h" // icon_get() -- the icons view's artwork
 #include "lib/ufiletype.h"  // a row's type, in words and as an icon
-#include "icon_grid.h"      // cell math, shared with the desktop
+#include "lib/icon_grid.h"      // cell math, shared with the desktop
 #include <string.h>
 #include <stdio.h>
 #include "keyboard.h"   // KEY_* codes, as delivered by WIN_EV_KEY

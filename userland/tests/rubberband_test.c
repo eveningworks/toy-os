@@ -1,11 +1,13 @@
-// Rubber-band selection: the behaviour, tested without a screen.
+// Rubber-band selection: the behaviour, tested without a screen. A
+// KTEST until the module left the kernel with its last ring-0 caller;
+// the bodies are unchanged, over lib/uktest.h.
 //
 // This is the payoff of the module owning behaviour rather than the
 // desktop owning it -- every rule below (what a shrinking band does, how
 // a modifier composes, what a click means) is assertable against a grid
 // of made-up rectangles, with no compositor, no cursor and no pixels.
-#include "ktest.h"
-#include "rubberband.h"
+#include "lib/rubberband.h"
+#include "lib/uktest.h"
 
 // A 4x4 grid of 20x20 items on a 40px pitch: item i sits at
 // (col*40, row*40). Chosen so there is a real GAP between items -- a
@@ -35,7 +37,7 @@ static void drag(struct rubberband *rb, int x0, int y0, int x1, int y1,
     rb_motion(rb, x1, y1, &GRID, 0);
 }
 
-KTEST("rubberband", "a band selects exactly what it touches") {
+static void case_1(void) {
     struct rubberband rb;
     rb_clear(&rb);
 
@@ -51,7 +53,7 @@ KTEST("rubberband", "a band selects exactly what it touches") {
     KTEST_ASSERT_EQ(rb_selected_count(&rb), 2);
 }
 
-KTEST("rubberband", "pulling the band BACK off an item deselects it") {
+static void case_2(void) {
     struct rubberband rb;
     rb_clear(&rb);
 
@@ -68,7 +70,7 @@ KTEST("rubberband", "pulling the band BACK off an item deselects it") {
     rb_end(&rb);
 }
 
-KTEST("rubberband", "a band dragged up-and-left is an ordinary band") {
+static void case_3(void) {
     struct rubberband rb;
     rb_clear(&rb);
 
@@ -85,7 +87,7 @@ KTEST("rubberband", "a band dragged up-and-left is an ordinary band") {
     rb_end(&rb);
 }
 
-KTEST("rubberband", "RB_ADD keeps what was already selected") {
+static void case_4(void) {
     struct rubberband rb;
     rb_clear(&rb);
 
@@ -99,7 +101,7 @@ KTEST("rubberband", "RB_ADD keeps what was already selected") {
     KTEST_ASSERT_EQ(rb_selected_count(&rb), 3);
 }
 
-KTEST("rubberband", "RB_REPLACE drops what was already selected") {
+static void case_5(void) {
     struct rubberband rb;
     rb_clear(&rb);
 
@@ -113,7 +115,7 @@ KTEST("rubberband", "RB_REPLACE drops what was already selected") {
     KTEST_ASSERT_EQ(rb_selected_count(&rb), 2);
 }
 
-KTEST("rubberband", "RB_TOGGLE flips only what the band covers") {
+static void case_6(void) {
     struct rubberband rb;
     rb_clear(&rb);
 
@@ -127,7 +129,7 @@ KTEST("rubberband", "RB_TOGGLE flips only what the band covers") {
     KTEST_ASSERT(rb_is_selected(&rb, 8));  // untouched
 }
 
-KTEST("rubberband", "a click is not a band, and clears the selection") {
+static void case_7(void) {
     struct rubberband rb;
     rb_clear(&rb);
     rb_select(&rb, 3, 1);
@@ -141,7 +143,7 @@ KTEST("rubberband", "a click is not a band, and clears the selection") {
     KTEST_ASSERT_EQ(rb_selected_count(&rb), 0);
 }
 
-KTEST("rubberband", "a modified click leaves the selection alone") {
+static void case_8(void) {
     struct rubberband rb;
     rb_clear(&rb);
     rb_select(&rb, 3, 1);
@@ -154,7 +156,7 @@ KTEST("rubberband", "a modified click leaves the selection alone") {
     KTEST_ASSERT(rb_is_selected(&rb, 3));
 }
 
-KTEST("rubberband", "the threshold is what separates a click from a band") {
+static void case_9(void) {
     struct rubberband rb;
     rb_clear(&rb);
 
@@ -167,7 +169,7 @@ KTEST("rubberband", "the threshold is what separates a click from a band") {
     KTEST_ASSERT_EQ(rb_end(&rb), 1);
 }
 
-KTEST("rubberband", "an over-large item count cannot walk off the bitset") {
+static void case_10(void) {
     struct rubberband rb;
     rb_clear(&rb);
 
@@ -186,7 +188,7 @@ KTEST("rubberband", "an over-large item count cannot walk off the bitset") {
     KTEST_ASSERT_EQ(rb_selected_count(&rb), RB_MAX_ITEMS);
 }
 
-KTEST("rubberband", "an empty band and empty items touch nothing") {
+static void case_11(void) {
     // rb_overlaps() is the one piece of geometry a caller may use
     // itself, so its edge convention is pinned here rather than left to
     // each caller to rediscover.
@@ -204,7 +206,7 @@ KTEST("rubberband", "an empty band and empty items touch nothing") {
 // list, so there is nothing to select and no ops table to describe it.
 // Refusing that case made the band never go active, and a rectangle
 // that never exists reads to the app as a drag that did nothing.
-KTEST("rubberband", "a band with no selection model still has a rect") {
+static void case_12(void) {
     struct rubberband rb;
     rb_clear(&rb);
 
@@ -220,4 +222,25 @@ KTEST("rubberband", "a band with no selection model still has a rect") {
     KTEST_ASSERT_EQ(h, 150);
     KTEST_ASSERT(rb_end(&rb) == 1);       // a band, not a click
     KTEST_ASSERT_EQ(rb_selected_count(&rb), 0);
+}
+
+static const struct uktest_case CASES[] = {
+    { "a band selects exactly what it touches", case_1 },
+    { "pulling the band BACK off an item deselects it", case_2 },
+    { "a band dragged up-and-left is an ordinary band", case_3 },
+    { "RB_ADD keeps what was already selected", case_4 },
+    { "RB_REPLACE drops what was already selected", case_5 },
+    { "RB_TOGGLE flips only what the band covers", case_6 },
+    { "a click is not a band, and clears the selection", case_7 },
+    { "a modified click leaves the selection alone", case_8 },
+    { "the threshold is what separates a click from a band", case_9 },
+    { "an over-large item count cannot walk off the bitset", case_10 },
+    { "an empty band and empty items touch nothing", case_11 },
+    { "a band with no selection model still has a rect", case_12 },
+};
+
+int main(void) {
+    utest_begin("rubberband_test", "rubber-band selection, without a screen", 0);
+    uktest_run(CASES, (int)(sizeof CASES / sizeof CASES[0]));
+    return utest_end();
 }

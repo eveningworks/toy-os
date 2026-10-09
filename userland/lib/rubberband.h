@@ -11,16 +11,13 @@
 // selection is, and how a modifier changes the answer. It never learns
 // what an item is, where the items live, or how they are drawn -- the
 // caller answers "how many?" and "where is item i?" through struct
-// rb_ops and does its own drawing. That split is what lets the kernel's
-// desktop and a ring-3 file manager use one implementation instead of
+// rb_ops and does its own drawing. That split is what lets the desktop
+// and the File Manager use one implementation instead of
 // two that drift, which is this project's standing rule for widget
 // behaviour (docs/gui-guidelines.md).
 //
-// **It is SHARED SOURCE compiled twice** -- once into the kernel and
-// once into libuapp.a (see the Makefile's build/userland/shared/ rule),
-// the same arrangement kernel/lib/geom.c already uses. So it must stay
-// freestanding: <stdint.h> only, no kernel state, no allocator, no
-// drawing.
+// Freestanding: <stdint.h> only, no allocator, no drawing -- which is
+// what lets userland/tests/rubberband_test.c drive it with no screen.
 //
 // It deliberately does NOT do group DRAGGING (moving every selected item
 // together). That is the natural next layer and this is the piece it

@@ -6,7 +6,7 @@
 #include "ui/uui_table.h"
 #include "syscall_abi.h"  // struct sys_dirent
 #include "lib/dirsort.h"  // enum dirsort_key, dirsort_cmp()
-#include "rubberband.h"   // the icons view's drag selection
+#include "lib/rubberband.h"   // the icons view's drag selection
 #include "ui/uui_scrollanim.h"
 #include "ui/uui_textbox.h"
 

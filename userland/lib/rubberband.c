@@ -1,9 +1,8 @@
-// Rubber-band selection -- see api/rubberband.h for the design and for
-// why this is shared source compiled twice.
+// Rubber-band selection -- see lib/rubberband.h for the design.
 //
 // Freestanding on purpose: <stdint.h> only. Nothing here allocates,
 // draws, or knows what an item is.
-#include "rubberband.h"
+#include "lib/rubberband.h"
 
 // --- bitset -----------------------------------------------------------
 //

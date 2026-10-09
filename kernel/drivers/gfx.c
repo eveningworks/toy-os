@@ -1,4 +1,5 @@
 #include "gfx.h"
+#include "geom.h"
 #include "display.h"
 #include "heap.h"
 #include "multiboot.h"
@@ -982,9 +983,9 @@ void gfx_draw_string(int x, int y, const char *s, uint32_t fg, uint32_t bg) {
 
 // --- geometry bindings ------------------------------------------------
 //
-// Everything below is one line over kernel/lib/geom.c, which is SHARED
-// with the ring-3 clients (see geom.h). The only kernel-specific part
-// is this plot function: opaque pixels go through gfx_put_pixel() and
+// One line over kernel/lib/geom.c, which is SHARED with the ring-3
+// clients (see geom.h). The only kernel-specific part is this plot
+// function: opaque pixels go through gfx_put_pixel() and
 // partial ones through gfx_blend_pixel(), so anti-aliased geometry
 // composites against whatever is already on screen -- and both honour
 // the clip rect and the damage tracking, which is why geometry needed
@@ -997,29 +998,8 @@ static void gfx_geom_plot(void *ctx, int x, int y, uint32_t color, uint8_t alpha
 
 static const struct geom_target GFX_TARGET = { gfx_geom_plot, 0 };
 
-void gfx_draw_line(int x0, int y0, int x1, int y1, uint32_t color, enum geom_aa aa) {
-    geom_line(&GFX_TARGET, x0, y0, x1, y1, color, aa);
-}
-
-void gfx_draw_polyline(const int *xs, const int *ys, int count, int closed,
-                        uint32_t color, enum geom_aa aa) {
-    geom_polyline(&GFX_TARGET, xs, ys, count, closed, color, aa);
-}
-
-void gfx_draw_circle(int cx, int cy, int r, uint32_t color, enum geom_aa aa) {
-    geom_circle(&GFX_TARGET, cx, cy, r, color, aa);
-}
-
-void gfx_draw_ellipse(int cx, int cy, int rx, int ry, uint32_t color, enum geom_aa aa) {
-    geom_ellipse(&GFX_TARGET, cx, cy, rx, ry, color, aa);
-}
-
 void gfx_fill_circle(int cx, int cy, int r, uint32_t color) {
     geom_fill_circle(&GFX_TARGET, cx, cy, r, color);
-}
-
-void gfx_fill_ellipse(int cx, int cy, int rx, int ry, uint32_t color) {
-    geom_fill_ellipse(&GFX_TARGET, cx, cy, rx, ry, color);
 }
 
 

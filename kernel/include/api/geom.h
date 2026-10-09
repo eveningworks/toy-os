@@ -11,8 +11,8 @@
 // WHY IT TAKES A PLOT CALLBACK INSTEAD OF DRAWING
 // -----------------------------------------------
 // This file is compiled TWICE -- into the kernel (where it backs
-// gfx_draw_line() and friends, writing to the framebuffer through the
-// clip and damage machinery) and into ring-3 clients (where it backs
+// gfx_fill_circle(), writing to the framebuffer through the clip and
+// damage machinery) and into ring-3 clients (where it backs
 // ugfx_draw_line(), writing into a client's own window buffer). The two
 // have nothing in common except "put a colour at a coordinate", so that
 // is the entire interface between them.

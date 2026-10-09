@@ -7,12 +7,12 @@
 #include "context_menu.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"
-#include "rubberband.h"
+#include "lib/rubberband.h"
 #include "build_date.h" // GENERATED, and included ONLY here -- see gen_version.sh
 #include "kapi.h"
 #include "rt/sys.h"
 #include "wm/wm_rawin.h"
-#include "icon_grid.h"
+#include "lib/icon_grid.h"
 #include <stdio.h>
 #include "wm/wm_conf.h"
 #include "lib/icon_cache.h"
@@ -79,7 +79,7 @@ static int g_file_count;
 #define WALLPAPER_DEFAULT "aurora"
 
 // Selection AND the in-progress band, both owned by the shared module
-// (api/rubberband.h) rather than by this file. That is what lets a
+// (lib/rubberband.h) rather than by this file. That is what lets a
 // future ring-3 file manager get identical behaviour from the identical
 // source rather than a second implementation -- and it is why the rules
 // (a shrinking band deselects, Ctrl adds, a plain click on empty space

@@ -1,5 +1,5 @@
-// See ui_icon_grid.h for the design writeup.
-#include "icon_grid.h"
+// See lib/icon_grid.h for the design writeup.
+#include "lib/icon_grid.h"
 
 void icon_grid_cell_rect(const struct icon_grid *grid, int col, int row,
                           int *out_x, int *out_y) {

@@ -5429,7 +5429,7 @@ refer to them by number.
 
 **Items, in full.**
 
-- [ ] **Group DRAG for a rubber-band selection** -- moving every selected item together as one gesture. The selection half is built and shared (`kernel/lib/rubberband.c`, both surfaces); this is the layer above it. What it needs: a per-item commit callback so the module can offer "item i moved by (dx, dy)" without learning what an item is, and a decision about how it composes with the desktop's existing single-icon drag (which currently arms on any press over an icon, including one that is already selected).
+- [ ] **Group DRAG for a rubber-band selection** -- moving every selected item together as one gesture. The selection half is built and shared (`userland/lib/rubberband.c`, both surfaces); this is the layer above it. What it needs: a per-item commit callback so the module can offer "item i moved by (dx, dy)" without learning what an item is, and a decision about how it composes with the desktop's existing single-icon drag (which currently arms on any press over an icon, including one that is already selected).
 
 - [ ] **A ring-3 file manager**, the second caller the rubber-band module was shaped for. Until it exists, `RB_ADD`/`RB_TOGGLE` and the whole shared-source arrangement have exactly one caller -- which is this project's usual bar not yet met, recorded honestly rather than presented as vindicated.
 

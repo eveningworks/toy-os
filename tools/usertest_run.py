@@ -328,6 +328,9 @@ TESTS = [
     # every one would pass whether or not libuapp.a linked a byte of it
     # -- which is what /bin/netd and the File Manager read /etc through.
     ("etc_config_test", 0, None, None),
+    # lib/rubberband: the desktop's and the File Manager's drag selection.
+    # A KTEST until the module left the kernel, its bodies unchanged.
+    ("rubberband_test", 0, None, None),
     # lib/uappentry: the one desktop-entry reader (Task Manager, Crash
     # Reports), against the shipped entries and hand-written ones.
     ("appentry_test", 0, None, None),

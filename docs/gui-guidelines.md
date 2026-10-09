@@ -413,11 +413,11 @@ appears, so this is the specification. Windows, KDE, macOS and GTK agree
 on every point below; they differ only on whether the band is drawn as a
 translucent fill or an outline.
 
-The implementation is `kernel/lib/rubberband.c`, shared source compiled
-into both the kernel and ring 3 -- so there is one of these, not one per
-surface. A caller supplies item geometry through `struct rb_ops` and
-does its own drawing; everything below belongs to the module, not to the
-app. Each point is a KTEST in `kernel/lib/rubberband_test.c`.
+The implementation is `userland/lib/rubberband.c`, shared by every ring-3
+surface -- so there is one of these, not one per surface. A caller
+supplies item geometry through `struct rb_ops` and does its own drawing;
+everything below belongs to the module, not to the app. Each point is a
+case in `userland/tests/rubberband_test.c`.
 
 **1. Selection updates LIVE as the band sweeps.** Items highlight the
 moment the band touches them, not on release. Anything else makes the
@@ -944,12 +944,12 @@ Three corollaries:
 Lines, curves and rotation come from `kernel/lib/geom.c` (see
 `api/geom.h`). Don't call it directly if a wrapper fits:
 
-- **In the kernel**, use `gfx_draw_line()`, `gfx_draw_polyline()`,
-  `gfx_draw_circle()`, `gfx_draw_ellipse()`, `gfx_fill_circle()`,
-  `gfx_fill_ellipse()`. They install the plot callback that routes
-  opaque pixels to `gfx_put_pixel()` and partial ones to
-  `gfx_blend_pixel()` -- get that wrong by hand and anti-aliased edges
-  come out as hard pixels against the wrong background.
+- **In the kernel**, use `gfx_fill_circle()` -- the one shape ring 0
+  draws (the held frame's card); add a binding beside it in `gfx.c` for
+  another. It installs the plot callback that routes opaque pixels to
+  `gfx_put_pixel()` and partial ones to `gfx_blend_pixel()` -- get that
+  wrong by hand and anti-aliased edges come out as hard pixels against
+  the wrong background.
 - **In a ring-3 app**, use `uui_canvas` (`userland/ui/uui_canvas.h`). It
   owns the drawing rect, converts local to surface coordinates, and
   CLIPS. A shape drawn without clipping does not fail visibly at first

@@ -12,6 +12,8 @@
 | `dirsort.h` | Ordering a directory listing, in one place. |
 | `human.h` | "1.2K", "4.0M" -- a byte count a person reads, for `-h`-style output, with the LC_NUMERIC locale's decimal mark ("1,2K" in Finland). |
 | `icon_cache.h` | Application icons: name -> a decoded, scaled picture, kept. |
+| `icon_grid.h` | A small reusable icon-grid geometry + drag-to-reposition helper. |
+| `rubberband.h` | Rubber-band selection: drag a rectangle over a set of items and select what it touches, the way every desktop and file manager does it. |
 | `tosh.h` | tosh -- the toy-os shell (t + OS + h), running in ring 3. |
 | `tosh_jobs.h` | The shell's JOB TABLE: what `jobs`, `fg` and `bg` are lists of. |
 | `tunable.h` | Reading and writing a kernel TUNABLE from ring 3 -- the write half of the commands whose read half is a query provider (`heap`, `ata`, `kstack`). |
@@ -50,6 +52,7 @@
 | `uinitctl.h` | The control protocol between `/bin/service` and init, over uchan. |
 | `ukeymap.h` | A keyboard layout read from /usr/share/kbs/<name>, for SHOWING it -- which character each key gives on each level, and which keys are dead. |
 | `ukeysym.h` | An X11 KEYSYM -- what a VNC viewer sends for a key (RFB 7.5.4) -- as something toy-os's input core takes: a Latin-1 character to type on the active layout, or an evdev keycode (abi/input_keys.h) fo... |
+| `uktest.h` | KTEST's assertions in ring 3, so a test can follow its code out of the kernel with its bodies unchanged: a case is a plain function, and KTEST_ASSERT / KTEST_ASSERT_EQ fail it and return, exactly a... |
 | `ulaunch.h` | ulaunch -- is this file something to RUN, and how should it run? |
 | `uline.h` | uline -- the PAINTING half of a ring-3 line-editing front end. |
 | `ulivewall.h` | LIVE WALLPAPERS: the effects, their options, and a wallpaper program's whole main(). |
