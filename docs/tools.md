@@ -7136,7 +7136,7 @@ runs first**: a `doom1.wad` with one
   `gen_signames.py`'s parser, so dash's table and this one agree on what
   counts as a signal. Run by `preflight.sh`.
 
-- **`check_syscalls.py`** -- NO TWO ROWS OF `syscall_table.c` RESOLVE TO
+- **`check_syscalls.py`** -- NO TWO ROWS OF `abi/syscall_rows.h` RESOLVE TO
   THE SAME NUMBER. The table is built with designated initializers, so a
   row's index IS its syscall number -- a good property with one hole: C
   lets the same index be written twice and silently keeps the LAST one.

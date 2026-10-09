@@ -92,6 +92,7 @@
 | `utest.h` | The harness every self-checking /tests program reports through: a banner, one line per check, and ONE epilogue line in the shape tools/usertest_run.py knows by default -- |
 | `uthumb.h` | uthumb -- thumbnails: a LOOKUP on the draw path, a decode on a WORKER THREAD, and a copy on disk (/var/cache/thumbnails) that outlives the process. |
 | `utmppath.h` | A SCRATCH PATH IN ONE EXPRESSION, for ring 3. |
+| `utrace.h` | strace's records (abi/trace_abi.h) as text -- the decoding half of /bin/strace, kdump's to the kernel's ktrace. |
 | `utrash.h` | THE RECYCLE BIN: a delete that can be taken back, on the freedesktop Trash specification's layout so a Linux desktop reading the same disk sees the same bin. |
 | `utween.h` | An integer that moves from one value to another over a fixed time, eased -- the one interpolator the desktop has, shared by the toolkit (a scroll that glides) and the window manager (an effect that... |
 | `uunicode.h` | The Unicode NAMES and BLOCKS of the characters this system's fonts can draw ("LATIN SMALL LETTER E WITH ACUTE", "Latin-1 Supplement"), and the UTF-8 encoding of a code point. |

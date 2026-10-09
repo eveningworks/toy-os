@@ -339,6 +339,9 @@ TESTS = [
     # ring. SPAWNED, because the legacy `run` loader's process has no
     # slot to arm a trace from (strace_claim() refuses pid 0).
     ("tracering_test", None, None, None),
+    # lib/utrace, the decoding half of /bin/strace, from records built in
+    # the test -- every branch reachable without a trace.
+    ("utrace_test", 0, None, None),
     # lib/uappentry: the one desktop-entry reader (Task Manager, Crash
     # Reports), against the shipped entries and hand-written ones.
     ("appentry_test", 0, None, None),

@@ -545,6 +545,11 @@ at all, so the distinction that rule protected no longer exists.
 
 ## `strace` is a `/bin` program, and the trace goes to the tracer's terminal
 
+**SUPERSEDED IN PART, 2026-10-09** (`docs/trace-design.md`, stages 1-2): the
+kernel now writes RECORDS into a ring the tracer created and `/bin/strace`
+decodes them and prints to its stderr -- fd 2 has been the terminal's since
+"stderr is the terminal's". The spawn flag and its arm, below, stand.
+
 Tracing is the kernel's and always was -- every ring-3 syscall funnels
 through one dispatcher, so three hooks cover all of them and a tracer
 has nothing to instrument. What `strace` had to be, then, was whatever

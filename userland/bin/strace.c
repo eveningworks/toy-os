@@ -1,99 +1,215 @@
-// /bin/strace -- run a program with syscall tracing on.
+// /bin/strace -- run a program and print the syscalls it makes.
 //
-// **THE WHOLE PROGRAM IS A SPAWN AND A WAIT**, and that is the point of
-// where the work went. Tracing is the kernel's -- every ring-3 syscall
-// funnels through one dispatcher (kernel/proc/syscall.c), so three
-// hooks in that one function cover all of them and a tracer has nothing
-// to instrument. What a tracer has to do is name the process to trace,
-// and this asks for that AT THE SPAWN, through SYS_SPAWN's SPAWN_TRACE
-// flag.
+// THE KERNEL RECORDS, THIS DECODES (docs/trace-design.md): the program
+// is spawned with SPAWN_TRACE and a ring this process created, the
+// kernel writes an entry and an exit record per syscall into it
+// (abi/trace_abi.h), and lib/utrace.h turns them into lines -- FreeBSD's
+// ktrace and kdump in one program. Filtering (-e), counting (-c) and a
+// file (-o) are ring 3's for free: they are things a reader does to a
+// stream it already has.
 //
-// IT WAS A SHELL BUILTIN, IN RING 0. That was fine while the only shell
-// was the kernel's own, and it stopped being fine for the reasons every
-// other builtin moved out: it could only be typed at the physical
-// console, its output went to the physical screen whoever ran it was
-// looking at or not, and it was ring-0 code maintained forever for a
-// job a program does perfectly well. `apps/` holds no applications; see
-// CLAUDE.md's rule about what a builtin has to be.
+// THE TRACE GOES TO STDERR, as real strace's does, so `strace foo |
+// grep x` greps foo's output and never the trace -- fd 2 is the terminal
+// whenever there is one (and the kernel log under /bin/spawn, which is
+// where a background trace belongs).
 //
-// **WHAT THIS DELIBERATELY DOES NOT DO: print the trace.** The lines
-// come out of the kernel, into the terminal this process's fd 1 names,
-// resolved once when the child is created (kernel/proc/strace.c) -- fd 1
-// and not fd 2, because fd 2 in this OS is the kernel log rather than a
-// second terminal stream (userland/lib/cmd.h says so at length). A
-// tracer that relayed them would need the kernel to hand it every line
-// through a pipe, which is a channel to build when something needs the
-// text rather than the sight of it -- `dmesg` already answers that,
-// since every line is klogged too. So there is nothing here between the
-// spawn and the wait, and that is not a stub: it is the design.
-//
-// The summary line is the kernel's for the same reason -- only the
-// kernel can count the calls, and asking for the number back would be a
-// syscall for one integer.
+// A FULL RING STALLS THE TRACEE, never drops a record: the kernel
+// re-issues the call until this has drained. So this drains promptly --
+// it sleeps on its wakeword, which the kernel bumps per record -- and a
+// slow output only slows the program being traced.
 #include "rt/sys.h"
+#include "syscall_abi.h"
+#include "trace_abi.h"
 #include "lib/upath.h"
-#include "lib/cmd.h"   // cmd_usage()/cmd_fail() -- the words every /bin command shares
+#include "lib/uargs.h"
+#include "lib/utrace.h"
 #include <stdio.h>
 #include <string.h>
 
-int main(int argc, char **argv) {
-    if (argc < 2) {
-        // The literal here is what docs/commands/strace.md must carry
-        // VERBATIM -- tools/check_docs.py reads it straight out of this
-        // call, so a flag added to one and not the other fails the build.
-        cmd_usage("strace <program> [args...]");
-        printf("Runs <program> with syscall tracing on: one decoded line per\n");
-        printf("syscall, plus a count when it exits. The trace goes to this\n");
-        printf("terminal and to `dmesg`.\n");
-        return 2;
+#define RING_BYTES (64 * 1024)   // header + 511 records
+#define MAX_ARGV   64
+
+static const char *g_out_path, *g_filter;
+static int g_count;
+
+static const struct uargs_opt OPTS[] = {
+    { "output",  'o', "FILE", "write the trace to FILE instead of stderr", 0, &g_out_path },
+    { "trace",   'e', "LIST", "only these syscalls: trace=open,read or open,read", 0, &g_filter },
+    { "summary", 'c', 0,      "count calls and errors per syscall, and print only that table", &g_count, 0 },
+    { 0 },
+};
+
+static const struct uargs_prog PROG = {
+    .name = "strace",
+    .usage = "[-c] [-o FILE] [-e LIST] PROGRAM [ARG]...",
+    .summary = "Run PROGRAM and print every syscall it makes: its arguments as the\n"
+               "kernel saw them and what it returned. Exits with PROGRAM's status.",
+    .opts = OPTS,
+    .notes = "The trace goes to stderr; PROGRAM's own output is left alone. One traced\n"
+             "program at a time; its children are not traced.",
+    .first_operand_ends_options = 1,
+};
+
+static int g_out = 2;
+static unsigned char g_want[1024];   // -e: syscall numbers to show; empty = all
+static int g_filtering;
+static unsigned g_calls[1024], g_errors[1024];
+
+static void emit(void *ctx, const char *line) {
+    (void)ctx;
+    char buf[400];
+    int n = snprintf(buf, sizeof buf, "%s\n", line);
+    if (n > (int)sizeof buf - 1) n = (int)sizeof buf - 1;
+    sys_write(g_out, buf, (size_t)n);
+}
+
+static int parse_filter(const char *s) {
+    if (!strncmp(s, "trace=", 6)) s += 6;
+    while (*s) {
+        char name[32];
+        size_t n = strcspn(s, ",");
+        if (n == 0 || n >= sizeof name) return uargs_error(&PROG, "bad -e list near '%s'", s);
+        memcpy(name, s, n);
+        name[n] = 0;
+        int nr = utrace_lookup(name);
+        if (nr < 0 || nr >= (int)sizeof g_want) return uargs_error(&PROG, "no syscall named '%s'", name);
+        g_want[nr] = 1;
+        s += n + (s[n] == ',');
     }
+    g_filtering = 1;
+    return 0;
+}
+
+static struct utrace_printer g_pr;
+
+static void take(const struct trace_rec *r) {
+    if (g_filtering && (r->nr >= sizeof g_want || !g_want[r->nr])) return;
+    if (g_count) {
+        if (r->nr < sizeof g_calls / sizeof g_calls[0]) {
+            if (r->kind == TRACE_ENTRY) g_calls[r->nr]++;
+            else if (utrace_failed(r)) g_errors[r->nr]++;
+        }
+        return;
+    }
+    utrace_feed(&g_pr, r);
+}
+
+static void drain(struct trace_ring_hdr *h) {
+    const char *base = (const char *)h + TRACE_HDR_SIZE;
+    while (h->tail != h->head) {
+        const struct trace_rec *r =
+            (const struct trace_rec *)(base + (h->tail % h->nrec) * TRACE_REC_SIZE);
+        take(r);
+        h->tail++;
+    }
+}
+
+// Linux's -c table, without its time columns: the records carry none.
+static void summary(void) {
+    char line[96];
+    unsigned calls = 0, errors = 0;
+    emit(0, "calls  errors syscall");
+    emit(0, "------ ------ ----------------");
+    // Most-called first; a selection sort over a table this small.
+    static unsigned char done[1024];
+    for (;;) {
+        int best = -1;
+        for (int i = 0; i < 1024; i++)
+            if (g_calls[i] && !done[i] && (best < 0 || g_calls[i] > g_calls[best])) best = i;
+        if (best < 0) break;
+        done[best] = 1;
+        const char *name = utrace_name(best);
+        if (g_errors[best])
+            snprintf(line, sizeof line, "%6u %6u %s", g_calls[best], g_errors[best], name ? name : "?");
+        else
+            snprintf(line, sizeof line, "%6u        %s", g_calls[best], name ? name : "?");
+        emit(0, line);
+        calls += g_calls[best];
+        errors += g_errors[best];
+    }
+    emit(0, "------ ------ ----------------");
+    snprintf(line, sizeof line, "%6u %6u total", calls, errors);
+    emit(0, line);
+}
+
+int main(int argc, char **argv) {
+    struct uargs a;
+    if (uargs_parse(&a, &PROG, argc, argv)) return a.status;
+    if (a.argc < 1) return uargs_error(&PROG, "a PROGRAM to run");
+    if (g_filter && parse_filter(g_filter)) return UARGS_USAGE;
 
     char path[UPATH_MAX];
-    int found = upath_find_program(argv[1], path, sizeof path);
-    if (found < 0) {
-        // NOT "no such executable". The search could not be COMPLETED --
-        // a full descriptor table, say -- and reporting that as "not
-        // found" is how a machine tells you a program is missing when it
-        // is sitting right there. See upath.h.
-        cmd_fail("strace", argv[1]);
+    int found = upath_find_program(a.argv[0], path, sizeof path);
+    if (found <= 0) {
+        fprintf(stderr, "strace: %s: no such program\n", a.argv[0]);
         return 1;
     }
-    if (!found) {
-        printf("strace: no such executable: %s\n", argv[1]);
+    if (g_out_path) {
+        g_out = sys_open(g_out_path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+        if (g_out < 0) {
+            fprintf(stderr, "strace: %s: %s\n", g_out_path, sys_strerror(sys_errno()));
+            return 1;
+        }
+    }
+
+    // THE RING: ours, so the kernel accepts it (only a ring the tracer
+    // created can be named) and gone when we unlink it.
+    char ring[32];
+    snprintf(ring, sizeof ring, "strace.%d", sys_getpid());
+    int fd = sys_shm_open(ring, RING_BYTES, SHM_CREATE | SHM_EXCL);
+    void *p = fd >= 0
+        ? sys_mmap(0, RING_BYTES, SYS_PROT_READ | SYS_PROT_WRITE, SYS_MAP_SHARED, fd, 0) : 0;
+    if (fd >= 0) sys_close(fd);
+    if (!p || p == (void *)-1) {
+        fprintf(stderr, "strace: no memory for the trace ring\n");
         return 1;
     }
+    struct trace_ring_hdr *h = p;
+    h->magic = TRACE_RING_MAGIC;
+    h->nrec = (RING_BYTES - TRACE_HDR_SIZE) / TRACE_REC_SIZE;
 
-    // The program's OWN arguments, rejoined into the single
-    // whitespace-separated string SYS_SPAWN takes. argv[0] is this
-    // program and argv[1] is the one being traced, so the child's
-    // arguments start at 2.
-    //
-    // Rejoining loses nothing today because the shell that produced
-    // this argv split on spaces in the first place -- there is no
-    // quoting anywhere in this tree yet (docs/roadmap.md). When there
-    // is, this is one of the places that has to stop flattening.
-    char args[256];
-    size_t n = 0;
-    for (int i = 2; i < argc; i++) {
-        size_t len = strlen(argv[i]);
-        if (n + len + 2 > sizeof args) break; // REFUSE to half-pass an argument
-        if (n) args[n++] = ' ';
-        memcpy(args + n, argv[i], len);
-        n += len;
-    }
-    args[n] = '\0';
+    static volatile uint32_t word;
+    sys_wakeword(&word);
+    utrace_printer_init(&g_pr, emit, 0);
 
-    int pid = sys_spawn_flags(path, n ? args : 0, -1, environ, 0, SPAWN_TRACE);
+    char *cargv[MAX_ARGV + 1];
+    int n = a.argc < MAX_ARGV ? a.argc : MAX_ARGV;
+    cargv[0] = path;
+    for (int i = 1; i < n; i++) cargv[i] = a.argv[i];
+    cargv[n] = 0;
+
+    struct sys_spawn_opts o;
+    sys_spawn_opts_init(&o);
+    o.argv = cargv;
+    o.env = environ;
+    o.flags = SPAWN_TRACE;
+    o.trace_ring = ring;
+    int pid = sys_spawn_opts(path, &o);
     if (pid <= 0) {
-        cmd_fail("strace", path);
+        fprintf(stderr, "strace: %s: %s\n", path, sys_strerror(sys_errno()));
+        sys_shm_unlink(ring);
         return 1;
     }
 
-    // The child is in THIS process's group and this process is not the
-    // shell's foreground job holder, so a Ctrl-C at the terminal reaches
-    // both of us together -- which is what you want from a tracer: the
-    // trace ends when the traced program does.
     int code = 0;
-    sys_waitpid(pid, &code);
+    for (;;) {
+        uint32_t seen = word;
+        drain(h);
+        // SYS_RETRY ("still running") is negative too: only -1 is an error.
+        int r = sys_waitpid_nohang(pid, &code);
+        if (r == pid || r == -1) break;
+        sys_futex_wait(&word, seen, 100);
+    }
+    drain(h);
+    sys_shm_unlink(ring);
+
+    if (g_count) {
+        summary();
+    } else {
+        utrace_flush(&g_pr);
+        char line[48];
+        snprintf(line, sizeof line, "+++ exited with %d +++", code);
+        emit(0, line);
+    }
     return code;
 }

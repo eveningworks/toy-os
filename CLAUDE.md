@@ -371,8 +371,9 @@ mode, and alone blurs the font), `LIVE=1`, `BOOT=cd|disk`, `STRIP=0`,
   prove it isn't yours. **A test that applies a setting changes the
   machine for every later tool** (`settings_test`'s pointer speed made
   unrelated hover tools fail).
-- **`strace <binary>`** beats temporary `klog_write()` calls; it is a
-  `/bin` program, so `spawn` it at a `#` prompt.
+- **`strace <binary>`** beats temporary `klog_write()` calls (`-e`
+  filters, `-c` counts); it is a `/bin` program, so `spawn` it at a `#`
+  prompt, where its trace lands in `dmesg`.
 - **READ THE ABI COMMENT OF ANY CALL YOU SWAP IN** -- the ring-3 GUI
   port swapped a non-blocking `scheduler_poll()` for `sys_waitpid()`,
   whose first line said **BLOCKS**.
@@ -528,7 +529,7 @@ the network BUILT, on QEMU's e1000 and on real r8169s -- the Lenovo,
 the desktop),
 `netstack-design.md` (the network stack in ring 3, PLANNED -- before
 socket or `kernel/net/` work), `trace-design.md` (`strace` decoding in
-ring 3 and a debugger's stop, stage 1 BUILT -- before `strace.c` or
+ring 3 and a debugger's stop, stages 1-2 BUILT -- before `strace.c` or
 `ptrace` work), `input-policy-design.md` (keymaps in the compositor, the pointer
 kept, stage 1 BUILT -- before `keyboard_layout.c` or `WIN_EV_RAW_KEY`
 work).

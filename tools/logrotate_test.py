@@ -187,8 +187,12 @@ def run(inst, res, control):
     guest(inst, "config set storage.log_max 1", "config set storage.log_keep 50")
     vm(inst, "stop")
     vm(inst, "--reboot", "start")
+    # Under `spawn` strace's stderr -- its trace -- is the kernel log,
+    # which is the point: a trace is the bulk that fills the share. One
+    # at a time (a run takes about a second): tracing is one process at
+    # a time, so overlapping runs take each other's trace.
     for _ in range(8):
-        guest(inst, "strace ls /bin")
+        guest(inst, "spawn /bin/strace ls /bin", "sleep 2")
     out = guest(inst, "log -n 2")
     res.check("a boot that fills its share stops, and says so",
               "share of storage.log_max" in out,

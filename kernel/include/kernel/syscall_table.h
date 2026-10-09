@@ -21,19 +21,8 @@
 // nothing tied the two together. Dispatch and tracing now cannot
 // disagree, and `kstack syscalls` reads the same rows.
 
-// How `strace` prints one argument. Order matters only in that A_END
-// must be 0, so an unlisted argument is absent rather than garbage.
-enum sc_arg {
-    A_END = 0, // no more arguments
-    A_INT,     // signed decimal
-    A_HEX,     // pointer/opaque, as hex
-    A_FD,      // a file descriptor -- decimal, but named for readability
-    A_PATH,    // pointer to a NUL-terminated path, printed as a quoted string
-    A_BUF,     // pointer to a byte buffer whose length is the NEXT argument
-    A_OFLAGS,  // SYS_O_* bitmask
-};
+#include "syscall_meta.h" // enum sc_arg / sc_ret -- shared with ring 3
 
-enum sc_ret { R_DEC = 0, R_HEX };
 
 // One of these is built per syscall entry and handed to the handler.
 // It exists so a handler is a function of its ARGUMENTS rather than of

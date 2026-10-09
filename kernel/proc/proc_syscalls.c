@@ -671,10 +671,12 @@ int sys_spawn(struct syscall_ctx *c) {
     // THE RECORD RING, checked before anything is created: a spawn that
     // asked for records and cannot have them must not start the child
     // untraced.
+    // A TRACE NEEDS THE RING: the kernel writes records and nothing
+    // else, so SPAWN_TRACE alone would trace into nowhere.
     int trace_ring = -1;
-    if (msg.flags & SPAWN_TRACE_RING) {
+    if (msg.flags & (SPAWN_TRACE | SPAWN_TRACE_RING)) {
         char ring_name[SHM_NAME_MAX];
-        if (!(msg.flags & SPAWN_TRACE) ||
+        if ((msg.flags & (SPAWN_TRACE | SPAWN_TRACE_RING)) != (SPAWN_TRACE | SPAWN_TRACE_RING) ||
             !vmm_copy_string_from_user(pml4, ring_name, (uint64_t)(uintptr_t)msg.trace_ring,
                                        sizeof ring_name)) {
             c->regs[14] = (uint64_t)(int64_t)-EINVAL;
@@ -761,8 +763,7 @@ int sys_spawn(struct syscall_ctx *c) {
         // window between these two lines is not a race: nobody
         // else's spawn can collect it. The disarm covers the spawn
         // having failed before an address space existed.
-        if (msg.flags & SPAWN_TRACE) strace_arm_for_current();
-        if (trace_ring >= 0) strace_arm_ring(trace_ring);
+        if (trace_ring >= 0) strace_arm_for_current(trace_ring);
         int pid = scheduler_spawn_group(a.path, a.args, a.args_len, stdout_desc,
                                          stdin_desc, stderr_desc, a.env, msg.pgid,
                                          c->pml4);

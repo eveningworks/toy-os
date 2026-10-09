@@ -3136,6 +3136,13 @@ bytes, not even local echo, until the IER bit was added.
 
 ## The syscall table is hand-written, and one row carries the handler AND the trace description
 
+**Where the rows live now (2026-10-09):** `kernel/include/abi/syscall_rows.h`,
+an X-macro list `syscall_table.c` expands with each handler and
+`/bin/strace`'s decoder (`userland/lib/utrace.c`) expands without it --
+still ONE row per syscall, now readable by both rings, because decoding
+moved to ring 3 (`docs/trace-design.md`). Everything below about one
+merged row still holds.
+
 `kernel/proc/syscall_table.c` holds one row per syscall number --
 `{ name, handler, argument kinds, return kind }` -- and
 `syscall_dispatch()` is a bounds-checked call through it. Before this,

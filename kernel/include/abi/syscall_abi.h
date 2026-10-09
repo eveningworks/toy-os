@@ -931,8 +931,9 @@ struct spawn_msg {
     const char *trace_ring;
 };
 
-// The child is TRACED: every syscall it makes is decoded and printed
-// (kernel/proc/strace.c). `/bin/strace` is the only caller.
+// The child is TRACED: every syscall it makes is written as records into
+// the ring `trace_ring` names, which this flag REQUIRES with
+// SPAWN_TRACE_RING (kernel/proc/strace.c). `/bin/strace` decodes them.
 //
 // **A PROPERTY OF THE SPAWN, NOT A MODE THE TRACER TURNS ON.** The
 // alternative was an arm-then-spawn pair -- "the next process created is
@@ -993,10 +994,10 @@ struct spawn_msg {
 // rest on the screen (tools/ansi_cursor_test.py drew half a picture).
 #define SPAWN_DETACH 32
 
-// With SPAWN_TRACE: the trace also goes, as records, into the ring
-// `trace_ring` names (abi/trace_abi.h) -- for a tracer that decodes in
-// ring 3. The text lines go to the terminal as before. A ring that is
-// missing, not the caller's own, or malformed is -EINVAL.
+// With SPAWN_TRACE, and only with it: the ring `trace_ring` names
+// (abi/trace_abi.h). Either flag without the other, or a ring that is
+// missing, not the caller's own, or malformed, is refused; -EBUSY while
+// another trace runs (one at a time).
 #define SPAWN_TRACE_RING 64
 
 // Every flag this kernel knows. Anything outside it is -EINVAL.

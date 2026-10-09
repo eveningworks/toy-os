@@ -214,6 +214,7 @@ int uargs_parse(struct uargs *a, const struct uargs_prog *p, int argc, char **ar
             continue;
         }
         argv[npos++] = s;
+        if (p->first_operand_ends_options) opts_done = 1;
     }
     a->argc = npos;
     a->argv = argv;

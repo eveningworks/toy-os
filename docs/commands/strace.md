@@ -6,18 +6,35 @@
 
 ## Synopsis
 
-    strace <program> [args...]
+    strace [-c] [-o FILE] [-e LIST] PROGRAM [ARG]...
 
 ## Description
 
-Linux-style syscall tracing: runs `<program>` with tracing on and prints one decoded line per syscall it makes — `open("notes.txt", O_WRITE\ | O_CREAT) = 3` — plus a `+++ N syscalls traced +++` summary when it exits. Every line is also written to the kernel log, so `dmesg` has the whole trace afterwards and `python3 tools/vm.py exec "strace <program>"` returns text you can assert on rather than a screenshot you have to read.
+Linux-style syscall tracing: runs `PROGRAM` and prints one line per syscall it makes, then `+++ exited with N +++`, and exits with `PROGRAM`'s status:
 
-**The program is a spawn and a wait and nothing else** — the tracing itself is the kernel's, because every ring-3 syscall funnels through one dispatcher and there is nothing for a tracer to instrument.
+    open("/etc/motd", 0) = -2 ENOENT
+    write(1, "hello\n", 6) = 6
+    waitpid(23, 0x807ff00e10, 0) <unfinished ...>
+    <... waitpid resumed> = 23
+    exit(0) = ?
+    +++ exited with 0 +++
 
-**The trace goes to the terminal your fds name, not into any of them.** So `strace foo | grep x` greps `foo`'s output and never the trace, and `strace foo > out.txt` puts `foo`'s output in the file and leaves the trace on your terminal — the same separation real strace gets by writing its stderr. This OS reaches it the other way round, from when fd 2 was the kernel log for every process: the terminal is found from fd 1, and from fd 0 when fd 1 has been redirected. Only with both ends redirected is there no terminal to name, and the trace falls back to the physical console; `dmesg` always has it either way.
+**The trace goes to stderr**, as real strace's does, so `strace foo | grep x` greps `foo`'s output and never the trace, and `strace foo 2> trace.txt` keeps it. Started with `spawn`, a program's stderr is the kernel log, so `spawn /bin/strace foo` leaves the trace in `dmesg`.
 
-**One traced process at a time**, and tracing is a property of the spawn (`SPAWN_TRACE` on `SYS_SPAWN`'s message) rather than a mode you switch on. That is what makes it race-free: there is no window between "arm" and "start" for somebody else's spawn to fall into.
+**What a line shows.** The arguments as the kernel saw them at the call: a path or a buffer as the bytes it held then (up to 80, `...` after a longer one), a pointer the kernel could not read as the pointer. A failed call's value is the errno and its name (`-2 ENOENT`). A call that waited -- a `read` on an empty pipe, `waitpid` -- prints `<unfinished ...>` when something else is traced in between, and its value later as `<... name resumed>`.
 
-**What it cannot do:** attach to a program that is already running, trace a program's own children, or filter by syscall. There is no `ptrace` here — a tracer names the child it creates, and that is the whole interface.
+**How it works**: the kernel writes each call's entry and exit as a record into a ring this program created (`SPAWN_TRACE` with `SPAWN_TRACE_RING`, `abi/trace_abi.h`), and `strace` decodes them with `lib/utrace.h` -- FreeBSD's `ktrace` and `kdump` in one program. **A full ring slows the traced program rather than losing calls**: the kernel holds the next call until `strace` has caught up.
 
-**Not reachable from the kernel shell with a bare name.** `strace` needs a scheduler slot of its own (it spawns and waits), which the legacy `run` loader does not have — so at a `#` prompt use `spawn /bin/strace <program>`. At a `$` prompt, in `/bin/tosh` or a Terminal window, it is an ordinary command.
+## Options
+
+- `-c`, `--summary` -- count calls and failed calls per syscall and print only that table at the end, most-called first (Linux's `strace -c`, without its time columns: the records carry no times).
+- `-o FILE`, `--output FILE` -- write the trace to `FILE` instead of stderr.
+- `-e LIST`, `--trace LIST` -- only the syscalls named in `LIST`, comma-separated: `-e trace=open,read` or `-e open,read`. An unknown name is refused.
+
+Options end at `PROGRAM`: `strace ls -l` gives `-l` to `ls`.
+
+## Limits
+
+**One traced program at a time** -- a second `strace` while one runs is refused (`device or resource busy`) -- and tracing is a property of the spawn rather than something you attach to a running program. It cannot attach, and does not follow a program's own children; both are later stages of `docs/trace-design.md`.
+
+**Not reachable from the kernel shell with a bare name.** `strace` needs a scheduler slot of its own (it spawns and waits), which the legacy `run` loader does not have -- at a `#` prompt use `spawn /bin/strace PROGRAM`. At a `$` prompt, in `/bin/tosh` or a Terminal window, it is an ordinary command.

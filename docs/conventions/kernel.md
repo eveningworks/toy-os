@@ -2337,66 +2337,50 @@ point may restart; the trap-tail one must not, or a completed syscall
 runs twice. The two call sites pass an explicit `at_syscall_entry` for
 exactly that reason. See `docs/decisions.md`.
 
-## A TRACER NAMES ITS CHILD AT THE SPAWN, AND THE TRACE GOES TO ITS TERMINAL.
+## A TRACER NAMES ITS CHILD AT THE SPAWN; THE KERNEL RECORDS, `/bin/strace` DECODES.
 
-`SPAWN_TRACE` on `SYS_SPAWN`'s `struct spawn_msg` (`abi/syscall_abi.h`),
-`kernel/proc/strace.c` for the tracing, `userland/bin/strace.c` for the
-program -- which is a spawn and a wait and nothing else.
+`SPAWN_TRACE` + `SPAWN_TRACE_RING` on `SYS_SPAWN`'s `struct spawn_msg`
+(`abi/syscall_abi.h`), `kernel/proc/strace.c` for the records,
+`userland/lib/utrace.h` for the text, `userland/bin/strace.c` for the
+program. FreeBSD's ktrace/kdump split; `docs/trace-design.md` is the plan.
 
 **TRACING IS THE KERNEL'S, SO A TRACER ONLY HAS TO NAME A PROCESS.**
-Every ring-3 syscall funnels through one dispatcher, so three hooks in
+Every ring-3 syscall funnels through one dispatcher, so hooks in
 `syscall_dispatch()` cover all of them and a syscall added later is
-traced the moment its number appears in the table. There is nothing for
-a tracer to instrument; there is only the question of WHICH address
-space, and the answer is decided when that address space is built.
+traced the moment its row exists. There is only the question of WHICH
+address space, decided when that address space is built.
 
-**A FLAG ON THE SPAWN, NOT AN ARM-THEN-RUN PAIR.** The builtin's
-mechanism was "the next process created is traced", which has a window
-in it: a spawner preempted between arming and creating has its trace
-claimed by whoever else spawns. Naming the child at creation has no
-window. The arm that remains inside the kernel records WHO asked
-(`strace_arm_for_current()`), so even that one line cannot be collected
-by somebody else -- **nor cleared by somebody else**: the spawn can SLEEP
-loading the ELF, and every other spawn ends in `strace_disarm()`, which
-therefore touches only its caller's arm (on the ASUS a tracer started
-from a remote session lost its arm this way every time).
+**A FLAG ON THE SPAWN, NOT AN ARM-THEN-RUN PAIR.** "The next process
+created is traced" has a window a preempted spawner's trace falls into.
+The arm records WHO asked (`strace_arm_for_current()`), so nobody else's
+spawn can collect it -- **nor clear it**: the spawn can SLEEP loading the
+ELF, and every other spawn ends in `strace_disarm()`, which therefore
+touches only its caller's arm (on the ASUS a tracer started from a
+remote session lost its arm this way every time).
 
-**AN UNKNOWN SPAWN FLAG IS -EINVAL, NOT IGNORED.** A flag word that
-drops what it does not recognise can never be extended safely: an old
-kernel would accept a new flag and do nothing, which is the worst
-available answer. Same reasoning as the "reserved must be zero" check
-`pgid` replaced.
+**AN UNKNOWN SPAWN FLAG IS -EINVAL, NOT IGNORED**, and so is
+`SPAWN_TRACE` without its ring: an old kernel accepting a new flag would
+do nothing, the worst available answer.
 
-**THE TRACE GOES TO THE TRACER'S fd 1 -- AND fd 2 IS THE WRONG ANSWER
-HERE EVEN THOUGH IT IS REAL STRACE'S.** fd 2 in this OS is the KERNEL
-LOG, not a second terminal stream, so a trace written there is perfectly
-recorded in `dmesg` and invisible to whoever typed the command. That is
-the trap `userland/lib/cmd.h` and `/bin/ls` already document. fd 0 is
-asked next, because a redirected stdout does not move the person; only a
-tracer with both ends redirected falls back to the physical console.
-
-Two things about the resolution. It happens ONCE, AT THE SPAWN, because
-by the time a line is produced the traced process is the one running and
-a lookup would find ITS descriptors. And it is stored as a tty INDEX,
-not a pointer, so a terminal destroyed under a running trace cannot
-leave a dangling one -- tty0's output hook is `vga_putc()`, so the
-console is index 0 rather than a special case.
-
-**A TRACER CAN ALSO TAKE THE TRACE AS RECORDS, AND A FULL RING NEVER
-DROPS ONE.** `SPAWN_TRACE_RING` names an shm object the tracer created
-(`abi/trace_abi.h`); the kernel writes an entry and an exit record per
-call beside the text line, with path and buffer bytes copied at the
-call. With no room for both records the call is RE-ISSUED -- RIP back
+**THE KERNEL WRITES RECORDS AND NO TEXT.** An entry and an exit record
+per call into the ring the tracer created (`abi/trace_abi.h`), with a
+path copied to its terminator and a buffer's first bytes copied AT THE
+CALL. With no room for both records the call is RE-ISSUED -- RIP back
 over `int $0x80`, a 1 ms sleep on `clocksource_now_ns()` (NOT
 `ktime_now_ns()`, which is wall time: a deadline on it never comes), RAX
 restored -- so nothing has run and nothing is lost. A parked call's exit
-is written when it resumes, with the woken value. `/tests/tracering_test`
-checks all of it; `docs/trace-design.md` is the plan it is stage 1 of.
+is written when it resumes, with the woken value.
 
-**THE SUMMARY LINE IS THE KERNEL'S, because only the kernel can count.**
-`+++ N syscalls traced +++` is printed at `strace_release()`, the one
-moment the count is final and the sink is still known. A ring-3 tracer
-asking for the number back would be a syscall for one integer.
+**THE NAMES ARE ONE LIST FOR BOTH RINGS**: `abi/syscall_rows.h`, an
+X-macro the kernel expands with each handler and `lib/utrace.c` without
+it, so dispatch and decoding cannot disagree about what a syscall is.
+
+**THE TRACE GOES TO `/bin/strace`'s STDERR**, as real strace's does:
+fd 2 is the terminal whenever there is one, and the kernel log under
+`/bin/spawn` (whose stderr is `SPAWN_FD_KMSG`) -- which is how a tool
+gets a trace into `dmesg`. `/tests/trace_test` (driven by a KTEST)
+checks the text reaches a pty on stderr; `/tests/utrace_test` the
+decoder; `/tests/tracering_test` the ring.
 
 ## A PROCESS GROUP IS AN INT, AND SPAWN TAKES IT.
 

@@ -2,108 +2,57 @@
 #define KERNEL_STRACE_H
 
 #include <stdint.h>
-#include <stddef.h>
 
-// Syscall tracing. All of it is kernel-internal: `strace` is a RING-3
-// PROGRAM now (userland/bin/strace.c) and asks for a trace through
-// SYS_SPAWN's SPAWN_TRACE flag, so nothing under apps/ needs any of
-// this and there is no api/ half any more. This header is on the
-// kernel's include path only, per kernel/include/README.md. See
-// kernel/proc/strace.c for the design.
-//
-// **THERE USED TO BE TWO HEADERS AND ONE OF THEM WAS `api/strace.h`**,
-// carrying arm/disarm/count for the kernel shell's `strace` builtin.
-// The builtin is gone -- ring 0 contains no applications -- so the
-// audience split it existed for is gone with it, and one header is what
-// is left. kapi.h no longer mentions tracing at all.
+// Syscall tracing, the kernel half: naming the traced process at its
+// spawn and writing its syscalls as RECORDS into the tracer's ring
+// (abi/trace_abi.h). Decoding them is /bin/strace's. Kernel-internal --
+// see kernel/proc/strace.c for the design.
 
-// Asks that the next process THIS process spawns be traced. SYS_SPAWN
-// calls it when the message carries SPAWN_TRACE, and nothing else does.
-//
-// **SCOPED TO THE CALLER, WHICH IS WHAT MAKES IT RACE-FREE.** It used
-// to be a bare global -- "the next process created anywhere" -- and a
-// spawner preempted between arming and creating had its trace claimed
-// by whoever else spawned in the window. Recording WHO armed it means
-// somebody else's spawn cannot consume it; the arm is a promise to one
-// process, and only that process's own next spawn can collect.
-void strace_arm_for_current(void);
+// SYS_SPAWN's SPAWN_TRACE_RING: the shm index of a ring the caller
+// created and that is shaped right, or a negative errno.
+int strace_ring_check(const char *name, int pid);
 
-// Cancels an arm that was never consumed -- the binary did not exist,
-// so no process was ever created. A no-op once a process has claimed
-// it, since that process's own exit clears it (strace_release()).
+// Asks that the next process THIS process spawns be traced into the ring
+// at `ring_idx` (from strace_ring_check()). Scoped to the caller: only
+// its own next spawn can collect the arm.
+void strace_arm_for_current(int ring_idx);
+
+// Cancels the CALLER'S arm if no process claimed it (the spawn failed).
+// Another process's arm is left alone: a spawn can sleep, and every
+// spawn ends in this call.
 void strace_disarm(void);
 
-// Called once per new address space, from wherever a process is about
-// to be created (kernel/proc/elf_run.c, kernel/proc/sched_fork.c).
-// Claims the arm if the process making it is the one that armed;
-// otherwise a no-op. This is also where the trace's SINK is decided --
-// see kernel/proc/strace.c.
+// Called once per new address space (elf_run.c, sched_fork.c). Claims
+// the arm if the process making it is the one that armed.
 void strace_claim(uint64_t pml4_phys);
 
-// Called from syscall_process_exit_cleanup() -- stops tracing if this
-// was the traced address space, so a later, unrelated process running
-// under a recycled CR3 can't inherit the trace. Also where the
-// "N syscalls traced" summary is printed, because this is the one
-// moment the kernel knows the traced process is finished and still
-// knows where its trace was going.
+// At process exit: stops tracing if this was the traced address space,
+// so a later process under a recycled CR3 cannot inherit it.
 void strace_release(uint64_t pml4_phys);
 // An exec'd process keeps its trace: the address space changed, the
 // process did not.
 void strace_rekey(uint64_t old_pml4, uint64_t new_pml4);
 
-// Is the CURRENTLY running address space (CR3) being traced? One read
-// of a global plus a compare -- what an untraced process pays per
-// syscall.
+// Is the CURRENTLY running address space being traced? One global read
+// and a compare -- what an untraced process pays per syscall.
 int strace_active(void);
 
-// The three dispatcher hooks, all no-ops unless strace_active().
-// strace_begin() formats "name(args...)" into an internal line buffer
-// BEFORE the handler runs (so it sees the arguments as passed, not as
-// the handler left them); strace_end() appends " = <ret>" and emits
-// the whole line at once, after the handler is done -- which is why a
-// traced write()'s own output appears above its trace line rather than
-// spliced into the middle of it. strace_end_noreturn() closes the line
-// as " = ?" for a handler that produces no return value to print: it
-// was written for SYS_EXIT (which may never come back at all) and is
-// also what a handler that PARKS its caller uses (SYS_WAIT_EVENT --
-// the value is written into the saved trapframe by the eventual wake,
-// long after this line would have been emitted). A blocking wait
-// therefore reads as one " = ?" per park, followed by a fresh call
-// line with the real result once the client re-enters the syscall.
+// The dispatcher's hooks, for a traced call only. strace_wait_for_room()
+// comes first: with no room for the call's two records it rewinds the
+// call and sleeps, returns 1, and the dispatcher must return at once.
+// strace_begin() writes the ENTRY record before the handler runs (so it
+// sees the arguments as passed); one of the three ends writes the exit:
+// strace_end() for a value, strace_end_resumed() for a call that parked
+// and has been woken (the value the wake wrote), strace_end_noreturn()
+// for SYS_EXIT / SYS_THREAD_EXIT.
+int strace_wait_for_room(uint64_t *regs);
 void strace_begin(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2);
 void strace_end(uint64_t nr, uint64_t rax);
 void strace_end_noreturn(uint64_t nr);
-// A call that PARKED and has now been woken: the text still says "= ?"
-// (stage 1 keeps the line as it was), the record carries `rax`.
 void strace_end_resumed(uint64_t nr, uint64_t rax);
 
-// THE RECORD RING (abi/trace_abi.h). strace_ring_check() resolves a
-// SPAWN_TRACE_RING name to an shm index the caller created, or a
-// negative errno; strace_arm_ring() hands it to the next claim, with the
-// arm. strace_wait_for_room() is the dispatcher's first call for a
-// traced syscall: with no room for its two records it rewinds the call
-// and sleeps, returns 1, and the dispatcher must return at once.
-int strace_ring_check(const char *name, int pid);
-void strace_arm_ring(int idx);
-int strace_wait_for_room(uint64_t *regs);
-
-// The pure formatting core, exposed for kernel/proc/strace_test.c.
-// Writes "name(args...)" (no return value, no newline) into `out` and
-// returns its length. `pml4_phys` is the address space user pointers
-// belong to -- pass 0 to format without dereferencing any of them,
-// which is what makes this callable from a test with no live process.
-size_t strace_format_call(char *out, size_t cap, uint64_t nr,
-                           uint64_t a0, uint64_t a1, uint64_t a2,
-                           uint64_t pml4_phys);
-
-// Formats " = <ret>" for `nr`'s return convention (decimal for most,
-// hex for the one syscall that returns a pointer). Returns its length.
-size_t strace_format_ret(char *out, size_t cap, uint64_t nr, uint64_t rax);
-
 // The name for a syscall number, or NULL if this kernel has none. The
-// strace table is the one list of these; a second copy would drift.
-// `kstack syscalls` reads it too, which is why it is not private to
-// strace.c.
+// syscall table is the one list of these; `kstack syscalls` reads it.
 const char *strace_syscall_name(int nr);
 
 #endif

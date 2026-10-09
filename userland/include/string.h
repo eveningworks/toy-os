@@ -138,6 +138,8 @@ static inline size_t strlcat(char *dst, const char *src, size_t n) { return k_st
 // codes it names (rt/sys.h). A second table here is exactly the drift
 // this repo's shared-source rule exists to prevent.
 static inline char *strerror(int e) { return (char *)sys_strerror(e); }
+// glibc's: the macro name ("ENOENT"), or NULL for an unknown code.
+static inline const char *strerrorname_np(int e) { return sys_errname(e); }
 
 // A memset() the optimiser is not allowed to delete. An ordinary
 // memset() over a buffer that is dead afterwards -- a key, a

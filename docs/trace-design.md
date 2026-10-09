@@ -7,8 +7,8 @@ decision rather than starting from nothing: `docs/decisions/shell.md`,
 "`strace` is a `/bin` program, and the trace goes to the tracer's
 terminal".
 
-**STAGE 1 IS BUILT (2026-10-09).** The stage markers are on the
-headings.
+**STAGES 1 AND 2 ARE BUILT (2026-10-09).** The stage markers are on
+the headings.
 
 ## The finding that shapes the plan
 
@@ -116,14 +116,24 @@ tracee a millisecond and puts RAX back, so the call is re-issued once
 the tracer has drained -- the signal path's SA_RESTART rewind. Nothing
 has run, so nothing is lost, and nothing parks with interrupts off.
 
-### Stage 2 -- `/bin/strace` decodes, and the kernel's formatter goes
+### Stage 2 -- `/bin/strace` decodes, and the kernel's formatter goes -- BUILT 2026-10-09
 
-`/bin/strace` prints the records to its own fd 1, from the generated
-table, and `strace.c`'s formatting is deleted (the arming, the hooks
-and the string copy stay). **What it gains for free**: `-o FILE`, `-e
-trace=open,read`, `-c` for a count per call, and errno names from
-`errno.h` rather than a 14-entry switch. Its tests are the existing
-`kernel/proc/strace_test.c` cases, moved to `/tests` with the decoder.
+`/bin/strace` prints the records to its stderr, as real strace does
+(fd 2 is the terminal's), and `strace.c`'s formatting is deleted (the
+arming, the hooks and the copy at the call stay). **What it gains for
+free**: `-o FILE`, `-e trace=open,read`, `-c` for a count per call, and
+errno names from libsys's one table (`sys_errname()`, glibc's
+`strerrorname_np()`) rather than a 14-entry switch.
+
+As built: choice 3A is an X-MACRO rather than a generator --
+`abi/syscall_rows.h` holds each syscall's row once, the kernel expands
+it with the handler and `lib/utrace.c` without (an unused macro argument
+is never looked up), so `check_syscalls.py`'s duplicate-number check
+still has one list to read. `SPAWN_TRACE` without a ring is refused. A
+path argument is copied to its terminator, a byte at a time, so the
+dynamic loader's opens near the top of the stack decode (the text trace
+showed them as pointers). The formatter KTESTs became
+`/tests/utrace_test`, over records built in the test.
 
 ### Stage 3 -- more than one tracee
 

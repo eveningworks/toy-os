@@ -70,6 +70,11 @@ int sys_errno(void);
 // table rather than a libc copy that can drift from it.
 const char *sys_strerror(int e);
 
+// The code's MACRO name -- "ENOENT" for ENOENT -- from the same table, or
+// NULL for a code it does not know. What a tracer prints after a
+// failed call; glibc's strerrorname_np().
+const char *sys_errname(int e);
+
 // --- the raw escape hatch --------------------------------------------
 
 // The syscall instruction itself, with a number and three arguments.

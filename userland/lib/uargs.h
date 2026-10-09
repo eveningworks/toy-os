@@ -44,6 +44,11 @@ struct uargs_prog {
     const struct uargs_cmd *cmds;  // ditto; NULL for a program with no commands
     const char *notes;             // after Options, verbatim
     const char *(*more)(void);     // printed last, NULL for none (the pager's keys)
+    // The first operand ENDS the options, so everything after it is the
+    // operand's own: `strace ls -l` gives -l to ls. A program that runs
+    // another program needs it -- GNU getopt's leading '+', env's and
+    // sudo's shape.
+    int first_operand_ends_options;
 };
 
 struct uargs {
