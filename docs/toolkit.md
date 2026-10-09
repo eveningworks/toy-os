@@ -92,6 +92,7 @@
 | `utrash.h` | THE RECYCLE BIN: a delete that can be taken back, on the freedesktop Trash specification's layout so a Linux desktop reading the same disk sees the same bin. |
 | `utween.h` | An integer that moves from one value to another over a fixed time, eased -- the one interpolator the desktop has, shared by the toolkit (a scroll that glides) and the window manager (an effect that... |
 | `uvid.h` | uvid -- decoding video files into frames, in RING 3. |
+| `uvid_play.h` | uvid_play -- PLAYING a video: a thread decoding a few frames ahead, the sound through lib/usnd.h, and the frame due now for whoever draws. |
 | `uwalk.h` | A DIRECTORY TREE WALK, one directory at a time, for a caller that has to stop, report progress or share a thread: the File Manager's search into subfolders and its folder sizes. |
 | `uwmchan.h` | TWP over a channel: a client's request reaching the compositor DIRECTLY instead of through the kernel. |
 | `uzip.h` | Reading ONE member out of a .zip archive into a file -- PKWARE's APPNOTE, the subset every archiver writes: stored (method 0) and deflated (method 8) members, no encryption, no zip64. |
@@ -143,6 +144,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_listbox.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |
 | `uui_loglist.h` | uui_loglist -- a log's lines (lib/ulogset.h) as a list: Time, Level, Source and the message with its subsystem in bold, a severity drawn as a shape AND a theme colour, errors marked on the scrollba... |
 | `uui_markdown.h` | uui_markdown -- a Markdown DOCUMENT, drawn as a document: proportional text, headings at real sizes, code in a monospace face on a tinted ground, lists with hanging indents, rules, and tables. |
+| `uui_medialist.h` | uui_medialist -- a PLAYLIST: one row per item, a 16:9 picture, a title with a detail line under it, and a length at the right. |
 | `uui_menubar.h` | uui_menubar -- a menu bar with nested pull-down menus, the control Windows and KDE both put across the top of an application window. |
 | `uui_meter.h` | A MEASURED VALUE, shown big: a caption, a number, its unit, an optional detail line and an optional fill bar. |
 | `uui_nametpl.h` | uui_nametpl -- a FILE-NAME TEMPLATE FIELD: a text field, a row of chips that each type a <token> at the caret, and the name the template gives today under them ("Next file: shot-20261007-...qoi"),... |
@@ -184,6 +186,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_transport.h` | uui_transport -- previous, play/pause, next: a media transport, the round play button in the middle (Windows 11 Media Player's, Amberol's). |
 | `uui_tree.h` | A TREE: rows at a depth, with collapsible parents. |
 | `uui_undo.h` | uui_undo -- an edit HISTORY for editable text: what Ctrl+Z and Ctrl+Y step through, for every buffer the shared edit core (ui/uui_edit.h) drives. |
+| `uui_video.h` | uui_video -- a playing video's picture: the frame lib/uvid_play.h says is due, scaled into the widget's rect, letterboxed (`fit`) or cropped to fill it (`cover`, a wallpaper's placement). |
 | `uui_widget.h` | uui_widget_ops -- the ONE table a widget exports to be handled generically: laid out, drawn, hit-tested, focused. |
 | `uvterm.h` | uvterm -- ONE TERMINAL: a pty and the program on it, the reader thread that drains it, the ANSI parser, the grid, its scrollback and alternate screen, the cursor, a selection, and drawing all of th... |
 

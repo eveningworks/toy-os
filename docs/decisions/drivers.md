@@ -3314,3 +3314,60 @@ to end (`kernel/input.h`'s history of the keycode-to-scancode table).
   keeps the remote mask apart and OR's it in.
 - **A crashed server must not leave Shift down for the whole machine**:
   what it holds is released from `scheduler_on_exit()`.
+
+## Video: MPEG-1 and Motion JPEG first, decoded in ring 3, timed by the sound
+
+Decided 2026-10-09, with the Video Player. **What real systems do:**
+FFmpeg (libavformat + libavcodec), GStreamer and Windows' Media
+Foundation are all user-mode frameworks with the same two tables --
+containers that find each stream's packets and their times, codecs that
+turn packets into frames -- and none decodes in the kernel. toy-os
+follows: `userland/lib/uvid.h` has both tables, beside `usnd` and
+`uimg`, for the same reason those are in ring 3 (a parser of files
+anyone downloads belongs in the process that opened them).
+
+**Which codecs.** What every video is today is H.264 (or VP9/AV1), and
+every real system decodes it in HARDWARE; toy-os has no video-decode
+engine driver and decodes on the CPU. An H.264 decoder is roughly ten
+times MPEG-1's code (CABAC, multiple reference lists, intra prediction
+modes, the in-loop deblocking filter) and its patents expired only in
+part. **MPEG-1** is the smallest real codec with I/P/B pictures and
+motion compensation -- the shape every later one has -- at about 900
+lines here, plays 640x360 with room to spare on the ASUS's Core M, and
+is what the roadmap's video wallpaper already asked for. **Motion
+JPEG** costs almost nothing beside it (a frame is a JPEG; `uimg_jpeg.c`
+decodes it) and is what cameras and capture cards write. Anything else
+is transcoded on another machine (`ffmpeg -c:v mpeg1video`) -- or
+waits for the roadmap's H.264 item, which this does not foreclose: a
+codec is a row.
+
+**The sound is the clock.** Every player times pictures by the audio
+device (mpv's default, GStreamer's audio sink as the pipeline clock,
+Media Foundation's presentation clock): a late picture is DROPPED, never
+waited for, because a dropped frame is invisible and a gap in the sound
+is not. `usnd_position()` already reports what has been HEARD (the
+ring's queue subtracted), so `lib/uvid_play.h` uses it directly. With no
+sound device, or muted, the monotonic clock stands in. At speeds other
+than 1x the sound is SILENCED rather than played at the wrong pitch:
+usnd has no time stretch (WSOLA, what mpv's scaletempo does), and is on
+the roadmap.
+
+**A video's sound is a row in usnd's codec table, not pushed by the
+player.** The alternative -- demux once, push the audio packets into
+`usnd_push()` -- is FFmpeg's shape and reads the file once. It was
+rejected because usnd's pushed stream has no seek and no position, and
+both would have had to be rebuilt for it; as a codec row, `usnd_play()`
+/ `usnd_seek_to()` / `usnd_position()` work unchanged, and `aplay` and
+the Audio Player play a video's sound for nothing. The cost is that the
+file is opened twice and each reader skips the other's packets -- about
+a megabit a second of extra reading, against a disk that streams a
+hundred times that.
+
+**Decoding is on a thread, displaying on the main one.**
+`uvid_play_tick()` only picks, from frames the decoder already copied
+into slots of their own, the one due now; the decoder parks by sleeping,
+because a condition variable spins here (`lib/uthumb.c`'s measurement).
+**Paused is what is on screen**: a slow machine's decoder runs behind
+the clock, and before this rule it caught up behind a pause, so the
+picture moved while paused (found by `video_test.py` under TCG).
+

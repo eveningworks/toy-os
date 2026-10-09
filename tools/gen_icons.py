@@ -827,6 +827,24 @@ def icon_tb_playlist():
     return im
 
 
+def icon_tb_camera():
+    # A camera body, its lens and the bump on top: Save frame.
+    im, d = _tb()
+    d.rounded_rectangle([4, 18, 60, 54], radius=7, outline=TB_INK, width=5)
+    d.polygon([(20, 18), (24, 10), (40, 10), (44, 18)], fill=TB_INK)
+    d.ellipse([20, 24, 44, 48], outline=TB_INK, width=5)
+    return im
+
+
+def icon_tb_speed():
+    # A dial with its needle past the middle: playback speed.
+    im, d = _tb()
+    d.arc([6, 12, 58, 64], 180, 360, fill=TB_INK, width=6)
+    d.line([(32, 38), (46, 22)], fill=TB_INK, width=6)
+    d.ellipse([27, 33, 37, 43], fill=TB_INK)
+    return im
+
+
 def icon_tb_fullscreen():
     # Four corners pointing out.
     im, d = _tb()
@@ -1180,6 +1198,8 @@ ICONS = {
     "tb-shuffle": icon_tb_shuffle,
     "tb-repeat": icon_tb_repeat,
     "tb-playlist": icon_tb_playlist,
+    "tb-camera": icon_tb_camera,
+    "tb-speed": icon_tb_speed,
     "tb-fullscreen": icon_tb_fullscreen,
     "tb-unfullscreen": icon_tb_unfullscreen,
     "tb-minimize": icon_tb_minimize,

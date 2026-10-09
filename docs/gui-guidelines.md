@@ -89,6 +89,8 @@ app; one shaped around an app's data stays in that app (CLAUDE.md).
 | `uui_optlist` | A LIST of on/off options, each with a name, an optional value edited in place (a hint shown while empty) and a one-line description -- the Boot Manager's kernel words. Changes queue on the row; drain `uui_optlist_take_change()` in `on_widget` |
 | `uui_thumbstrip` | A filmstrip: one row of thumbnails, one selected (the pictures come from `lib/uthumb.h`) |
 | `uui_transport` | Previous / play-pause / next, the round play button in the middle -- media (the Audio Player's stage, the Image Viewer's slideshow pill); `dark` for a dark or ambient ground |
+| `uui_video` | A playing video's picture (a `lib/uvid_play.h` player the app owns): letterboxed or cropped to fill, scaled once per frame, a click and a double-click parked for the app -- the Video Player's stage, the video wallpaper |
+| `uui_medialist` | A playlist: a 16:9 picture, a title, a detail line and a length per row; a click or Enter plays; `current` drawn selected -- the Video Player's "Up next" |
 | `uui_label` | A line of text the LAYOUT reserves a row for |
 | `uui_textbox`, `utext` | One line of editable text; a document |
 | `uui_findbar` | Find: a query, "N of M", previous / next, close. It reports what was asked; the app searches and sets the count (the Terminal's floating find) |

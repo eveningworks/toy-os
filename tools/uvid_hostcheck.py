@@ -379,6 +379,23 @@ def main():
             report(ok, "seek to %d ms" % ms, "%s, frame %d PSNR %s" % (
                 got_pts[0] if got_pts else "no frame", idx, "inf" if p == float("inf") else "%.1f" % p))
 
+        # EVERY 10 ms through a SHORT-GOP file with small packets: most
+        # pictures carry no PTS of their own, so a seek that lands mid-GOP
+        # must date them from the GOP -- a wrongly dated frame is "the
+        # frame showing then" by its label and not by its content.
+        tiny = os.path.join(REPO, "data", "tests", "tiny.mpg")
+        bad = []
+        for ms in range(0, 600, 10):
+            r = run([binary, "seek", tiny, str(ms)])
+            got = [l.split() for l in r.stderr.decode().split("\n") if l.startswith("frame")]
+            if r.returncode != 0 or not got:
+                bad.append((ms, "none"))
+                continue
+            pts = int(got[0][1])
+            if not (pts <= max(ms, 15) and pts + 40 > ms):
+                bad.append((ms, pts))
+        report(not bad, "seek sweep, tiny.mpg", "60 seeks, every 10 ms" if not bad else "wrong: %s" % bad[:6])
+
     print("\nuvid_hostcheck: %d passed, %d failed" % (passes, fails))
     if args.positive_control:
         print("uvid_hostcheck: positive control %s" % ("FAILED as it must" if fails else

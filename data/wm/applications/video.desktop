@@ -1,0 +1,7 @@
+# Video Player -- see this directory's README.md for the format.
+Name=Video Player
+Exec=/bin/wm/apps/video
+Category=multimedia
+Comment=Plays video files, with their sound
+Icon=video
+Handles=.mpg .mpeg .avi

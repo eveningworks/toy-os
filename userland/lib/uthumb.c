@@ -3,6 +3,7 @@
 // draw through it.
 #include "lib/uthumb.h"
 #include "lib/ufile.h"
+#include "lib/uvid.h"
 #include "kpath.h"
 #include "caltime.h"   // cal_rtc_to_epoch -- the KERNEL's, linked into ring 3
 #include "ui/ulog.h"
@@ -200,7 +201,16 @@ static int thumb_produce(struct thumb_job *j) {
     // files in a directory are not images.
     uint8_t head[16];
     size_t got = ufile_read_head(j->path, head, sizeof head);
-    if (got < 4 || !uimg_probe(head, got)) return -1;
+    if (got < 4) return -1;
+    if (!uimg_probe(head, got)) {
+        if (!uvid_probe(head, got)) return -1;
+        // A VIDEO's picture is a frame a tenth of the way in (at most
+        // 3 s): the first is black as often as not, a fade's start.
+        struct uvid_info in;
+        uint32_t at = uvid_load_info(j->path, &in) == 0 ? in.ms / 10 : 0;
+        if (at > 3000) at = 3000;
+        return uvid_still(j->path, at, j->px, j->px, &j->im) == 0 ? 0 : -1;
+    }
 
     struct uimg full;
     if (uimg_load(j->path, &full) != 0) return -1;  // broken or refused

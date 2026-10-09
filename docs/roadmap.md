@@ -1073,6 +1073,15 @@ run on, not by order.
 - [ ] RMID (`.rmi`), SF3 and DLS banks, GS/XG SysEx beyond a reset, linked SF2 modulators
 - [ ] Dither when a 16-bit card narrows the s32 stream -- it rounds today; TPDF dither is what foobar2000 and SoX add
 - [ ] Float WAV (`WAVE_FORMAT_IEEE_FLOAT`), refused by name now that the path is wide enough to carry it
+
+### Video
+
+- [x] ~~Decoding video: a container table and a codec table~~ DONE 2026-10-09 -- `lib/uvid.h`: Motion JPEG in AVI, MPEG-1 in .mpg
+- [x] ~~A Video Player app~~ DONE 2026-10-09 -- `/bin/wm/apps/video`: playlist, full screen, seek preview, Save frame; `/bin/vplay`
+- [ ] MPEG-2 video (DVD, DVB) -- the program stream reads it; the decoder refuses it by name
+- [ ] H.264 in MP4 -- what nearly every video is; a decoder ~10x MPEG-1's, the case against in `docs/decisions/drivers.md`
+- [ ] Sound at other speeds without the pitch -- a time stretch (WSOLA); other speeds play silent today
+- [ ] Subtitles (SRT beside the file)
 - [ ] An Ogg reader, for `.oga` FLAC and for Opus -- the codec table has no container layer
 - [ ] A proper resampler -- usnd interpolates linearly; windowed-sinc or polyphase, as speexdsp, soxr and PipeWire use
 - [ ] 44.1 kHz through the ring-3 USB driver -- `SYS_USB_ISOCH_POST` posts a group at one length, and 44.1 needs 5- and 6-frame packets

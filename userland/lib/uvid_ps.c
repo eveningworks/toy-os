@@ -15,10 +15,13 @@
 // file's tail -- a program stream has no index.
 //
 // **A SEEK IS A BISECTION ON THE FILE OFFSET**, reading the PTS of the
-// first packet after each probe. For video it aims a margin EARLIER than
+// first packet after each probe. For video it aims TWO GOPs EARLIER than
 // asked, because a decoder can only start at a GOP and a picture's time
 // says nothing about where its GOP began; uvid.c's exact seek decodes
-// forward the rest of the way.
+// forward the rest of the way. The GOP's length is MEASURED at open --
+// the span of video scanned over the GOP headers in it: a fixed margin
+// would be either too short for a long-GOP file or seconds of wasted
+// decoding (and a keyframe seconds early) for a short one.
 #include "lib/uvid_internal.h"
 #include "lib/ubytes.h"
 #include "rt/sys.h"
@@ -31,10 +34,11 @@
 #define BUF        (72 * 1024)   // > the largest PES packet, 6 + 65535 bytes
 #define SCAN_LIMIT (1024 * 1024)  // how far open looks for the streams' headers
 #define TAIL       (512 * 1024)   // how much of the end holds the last PTS
-#define SEEK_MARGIN_MS 1500       // > one GOP at ordinary settings
+#define SEEK_MARGIN_MS 1500       // when the GOP length could not be measured
 
 struct ps {
     int vid, aid;               // the stream ids read, 0 for none
+    int64_t margin_ms;          // how far before a video target a seek aims
     int64_t origin;             // 90 kHz ticks: the first PTS of either stream
     // The buffered reader. `base` is the file offset of buf[0].
     uint8_t buf[BUF];
@@ -212,7 +216,8 @@ static int ps_open(struct uvid_src *c) {
     if (!p) return -ENOMEM;
     c->priv = p;
     at(c, 0);
-    int64_t vfirst = -1, afirst = -1;
+    int64_t vfirst = -1, afirst = -1, vlast = -1;
+    int gops = 0;
     struct unit u;
     while (tell(c) < SCAN_LIMIT && next_unit(c, &u)) {
         const uint8_t *d = p->buf + u.payload;
@@ -220,12 +225,27 @@ static int ps_open(struct uvid_src *c) {
             if (!p->vid) p->vid = u.id;
             if (!c->vcodec) video_header(c, d, u.plen);
             if (vfirst < 0) vfirst = u.pts;
+            if (u.pts > vlast) vlast = u.pts;
+            // GOP headers, counted: with the span of video they came in,
+            // the GOP's length. (A packet's own PTS is NOT its GOP's time:
+            // it belongs to the first picture starting in it, often a B
+            // picture of the GOP before.)
+            for (int i = 0; i + 3 < u.plen; i++)
+                if (!d[i] && !d[i + 1] && d[i + 2] == 1 && d[i + 3] == 0xB8) gops++;
         } else if (is_audio(u.id) && (!p->aid || u.id == p->aid)) {
             if (!p->aid) p->aid = u.id;
             if (!c->acodec) audio_header(c, d, u.plen);
             if (afirst < 0) afirst = u.pts;
         }
-        if (c->vcodec && c->acodec && vfirst >= 0 && afirst >= 0) break;
+        if (c->vcodec && c->acodec && vfirst >= 0 && afirst >= 0 && gops >= 4) break;
+    }
+    // TWO GOPs: the seek may land just past one GOP's start, and the
+    // pictures it lands among may be dated only from the one after.
+    p->margin_ms = SEEK_MARGIN_MS;
+    if (gops >= 3 && vlast > vfirst) {
+        int64_t gop = (vlast - vfirst) / 90 / (gops - 1);
+        p->margin_ms = gop * 2 + 100;
+        if (p->margin_ms > 10000) p->margin_ms = 10000;
     }
     if (!p->vid && !p->aid) { uvid_fail("MPEG file holds no audio or video"); return -EINVAL; }
     if (p->vid && !c->vcodec) { c->vcodec = UVID_VC_UNKNOWN; strlcpy(c->vfourcc, "video", sizeof c->vfourcc); }
@@ -285,7 +305,7 @@ static int64_t ps_seek(struct uvid_src *c, int kind, int64_t ms) {
     struct ps *p = c->priv;
     int id = kind == UVID_VIDEO ? p->vid : p->aid;
     if (!id) return -EINVAL;
-    int64_t target = kind == UVID_VIDEO ? ms - SEEK_MARGIN_MS : ms;
+    int64_t target = kind == UVID_VIDEO ? ms - p->margin_ms : ms;
     uint64_t lo = 0, hi = c->size, best = 0;
     int64_t best_t = 0;
     if (target > 0) {

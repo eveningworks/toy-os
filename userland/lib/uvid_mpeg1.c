@@ -405,6 +405,8 @@ struct pic {
     uint8_t *y, *cb, *cr;
     int64_t pts;            // -1 when the stream gave none
     char type;
+    int tref;               // its temporal reference: display order within its GOP
+    uint32_t gop;           // which GOP, for the GOP's time base
 };
 
 // One ES packet's place in the byte stream, for giving pictures times.
@@ -432,6 +434,13 @@ struct m1 {
     struct uvid_frame out;
     int out_ready;
     int64_t last_pts;
+    // A GOP's TIME BASE: the time its display-order picture 0 would be
+    // shown, from any picture of it that carried a PTS. A packet's PTS
+    // is the first picture STARTING in it, so most pictures carry none;
+    // they are dated by temporal reference against the base (two GOPs
+    // kept: an anchor is shown after the next GOP has begun).
+    uint32_t gop;
+    int64_t gop_base[2];
     int failed;                     // -ENOTSUP once a stream is found to be MPEG-2
 
     // Per picture.
@@ -768,9 +777,19 @@ static int64_t pts_for(struct m1 *m, uint64_t at) {
     return m->marks[best].pts;
 }
 
+static int64_t tref_ms(const struct m1 *m, int tref) {
+    return m->fps_num ? (int64_t)tref * 1000 * m->fps_den / m->fps_num : (int64_t)tref * 40;
+}
+
 static void emit(struct m1 *m, struct pic *p) {
     int64_t dur = m->fps_num ? (int64_t)1000 * m->fps_den / m->fps_num : 40;
-    int64_t t = p->pts >= 0 ? p->pts : (m->last_pts >= 0 ? m->last_pts + dur : 0);
+    int64_t t = p->pts;
+    if (t < 0 && m->gop - p->gop < 2 && m->gop_base[p->gop & 1] >= 0)
+        t = m->gop_base[p->gop & 1] + tref_ms(m, p->tref);
+    if (t < 0 && m->last_pts >= 0) t = m->last_pts + dur;
+    // Untimed and nothing to count from (just after a seek): not shown,
+    // since a wrong time is worse than a missing frame to an exact seek.
+    if (t < 0) return;
     m->last_pts = t;
     m->out.w = m->w;
     m->out.h = m->h;
@@ -791,7 +810,7 @@ static void emit(struct m1 *m, struct pic *p) {
 static void picture(struct m1 *m, const uint8_t *d, size_t n, uint64_t at) {
     if (!m->have_seq) return;
     struct br b = { d + 4, n - 4, 0 };
-    get(&b, 10);                            // temporal reference
+    int tref = (int)get(&b, 10);
     int type = (int)get(&b, 3);
     get(&b, 16);                            // vbv delay
     if (type < 1 || type > 4) return;
@@ -810,6 +829,7 @@ static void picture(struct m1 *m, const uint8_t *d, size_t n, uint64_t at) {
         m->r_bwd = f - 1;
     }
     int64_t pts = pts_for(m, at);
+    if (pts >= 0) m->gop_base[m->gop & 1] = pts - tref_ms(m, tref);
 
     // A picture whose references are missing (after a seek, before the
     // next I) cannot be decoded; it is dropped, as every decoder does.
@@ -827,6 +847,8 @@ static void picture(struct m1 *m, const uint8_t *d, size_t n, uint64_t at) {
     }
     m->cur = cur;
     cur->pts = pts;
+    cur->tref = tref;
+    cur->gop = m->gop;
     cur->type = type == 1 ? 'I' : type == 2 ? 'P' : type == 3 ? 'B' : 'D';
 
     // Every slice: a start code 01..AF, its number the macroblock row + 1.
@@ -858,6 +880,7 @@ static int m1_open(struct uvid *v) {
     struct m1 *m = calloc(1, sizeof *m);
     if (!m) return -ENOMEM;
     m->last_pts = -1;
+    m->gop_base[0] = m->gop_base[1] = -1;
     v->cpriv = m;
     return 0;
 }
@@ -928,6 +951,9 @@ static int m1_frame(struct uvid *v, int eof, const struct uvid_frame **out) {
             m->failed = 1;                  // a sequence extension: MPEG-2
             uvid_fail("MPEG-2 video is not supported");
             return 0;
+        } else if (code == 0xB8) {
+            m->gop++;                       // a new GOP: its base is not known yet
+            m->gop_base[m->gop & 1] = -1;
         } else if (code == 0x00) {
             picture(m, m->es + s, e - s, m->base + s);
         }
@@ -954,6 +980,7 @@ static void m1_reset(struct uvid *v) {
     m->bwd_shown = 0;
     m->out_ready = 0;
     m->last_pts = -1;
+    m->gop_base[0] = m->gop_base[1] = -1;
 }
 
 static void m1_close(struct uvid *v) {

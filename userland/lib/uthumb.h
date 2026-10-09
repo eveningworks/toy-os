@@ -7,8 +7,9 @@
 
 // uthumb -- thumbnails: a LOOKUP on the draw path, a decode on a WORKER
 // THREAD, and a copy on disk (/var/cache/thumbnails) that outlives the
-// process. The File Manager's icons view and the Image Viewer's
-// filmstrip both draw through it.
+// process. The File Manager's icons view, the Image Viewer's filmstrip
+// and the Video Player's playlist all draw through it -- a video's
+// thumbnail is one of its frames (lib/uvid.h).
 //
 // THE LOOKUP NEVER DECODES. uthumb_get() answers from the table or
 // queues the file and answers NULL; the worker decodes one at a time and

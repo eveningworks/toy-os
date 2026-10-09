@@ -2294,6 +2294,19 @@ window without going through it will find its layout polls timing out.
 
   It is a registry rather than a script per item, the same shape
   `display_driver` and `block_device` use: the tenth extra is a row.
+- **`video_test.py`** -- the Video Player on a machine with no sound
+  device, in `gui_regress.py`: the window lists `/usr/share/videos` by
+  probing, plays the file it was handed, and the picture is DRAWN AND
+  MOVING (two unsettled photographs a second apart differ inside the
+  picture's rect -- `QMPSession.screenshot(stable=False)`, since a
+  playing video never settles) and HOLDS STILL when paused (the same two
+  photographs identical); Right seeks ten seconds, a playlist row plays
+  the AVI, Ctrl+S saves a frame, hovering the seek bar brings a preview,
+  F11/Esc. **The paused check found a real bug under TCG**: a decoder
+  running behind the clock kept "catching up" behind a pause, so the
+  picture changed while paused -- invisible on KVM, where the decoder is
+  never behind. Positive control: a widget that never draws the frame
+  fails exactly the two drawn-and-moving checks.
 - **`uvid_hostcheck.py`** -- `userland/lib/uvid*.c` (MPEG-1 video, the
   MPEG program stream) and `usnd_mp2.c` (Layer II), compiled with the
   host gcc and compared with FFmpeg's decode: ten encodes covering the

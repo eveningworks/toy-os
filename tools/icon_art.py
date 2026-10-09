@@ -308,6 +308,19 @@ def player():
     return finish(shadow(im))
 
 
+def video():
+    # A strip of film with a play mark: the Video Player.
+    im = canvas()
+    m = m_rr(6, 12, 58, 52, 7)
+    fill(im, m, ((126, 104, 240), (70, 64, 190)))
+    d = D4(im)
+    for x in range(11, 56, 9):
+        d.rounded_rectangle((x, 15, x + 4, 19), radius=1, fill=(255, 255, 255, 170))
+        d.rounded_rectangle((x, 45, x + 4, 49), radius=1, fill=(255, 255, 255, 170))
+    d.polygon([(26, 23), (42, 32), (26, 41)], fill=WHITE)
+    return finish(shadow(im))
+
+
 def settings():
     im = canvas()
     m = gear_mask(32, 32, 27, 21, 8, 9)
@@ -567,6 +580,12 @@ def _audio(d):
     d.ellipse((25, 39, 37, 50), fill=ink)
 
 
+def _video(d):
+    ink = (98, 84, 220, 255)
+    d.rounded_rectangle((19, 27, 45, 47), radius=3, fill=ink)
+    d.polygon([(28, 31), (37, 37), (28, 43)], fill=WHITE)
+
+
 def _config(d):
     ink = (36, 150, 140, 255)
     d.rounded_rectangle((20, 31, 44, 33.5), radius=1.25, fill=ink)
@@ -588,6 +607,7 @@ def _app(d):
 
 
 FILE_TYPES = {"file-text": _text, "file-doc": _doc, "file-image": _image, "file-audio": _audio,
+              "file-video": _video,
               "file-config": _config, "file-font": _font, "file-app": _app}
 
 
@@ -826,7 +846,7 @@ def cat_sound():
 # The names gen_icons.py ships each one under (data/icons/<name>.qoi).
 ART = {
     "notepad": notepad, "files": files, "terminal": terminal, "calculator": calculator,
-    "imgview": imgview, "player": player, "settings": settings, "taskmgr": taskmgr,
+    "imgview": imgview, "player": player, "video": video, "settings": settings, "taskmgr": taskmgr,
     "mines": mines, "screenshot": screenshot, "about": about, "help": help_app,
     "logview": logview, "crashreports": crashreports, "shapes": shapes, "fontdemo": fontdemo,
     "uidemo": uidemo, "doom": doom, "devmgr": devmgr, "bootmgr": bootmgr,
