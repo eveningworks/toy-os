@@ -2088,3 +2088,31 @@ in the list says "Recent changes" rather than pretending to a cut.
 The notes are TEXT TO SHOW from an unauthenticated server: one Markdown
 string, rendered by the same `uui_markdown`/`umd` pair `/bin/doc` uses,
 so there is no second parser of what `**` means.
+
+## A build without GPL code is decided by each port's declared licence
+
+**2026-10-09.** `NOGPL=1` leaves out every program built from a port
+whose licence is GPL-only, so a closed product can be built from toy-os
+without deleting anything by hand. Today that is DOOM alone. The
+maintainer asked for it while weighing a move from MIT to GPL-2.0.
+
+Yocto decides the same thing by licence (`INCOMPATIBLE_LICENSE`, each
+recipe declaring its own). FreeBSD keeps a knob per GPL component
+(`WITHOUT_GPL_DTC`). toy-os follows Yocto's shape, cut down: one SPDX
+line per port and one rule, "every alternative is GPL or AGPL". A
+knob per component would need a new knob, and someone to remember it,
+for each GPL dependency.
+
+**Why the programs are declared and not derived.** Each program's
+objects (`EXTRA_OBJS_<name>`) already say which ports it uses, and
+deriving the drop list from them was the first version. It produced
+an empty list: `all:` sits above those definitions and expands its
+prerequisites as it is read. So `PORT_PROGRAMS_<name>` names them.
+A name left off is then caught by the GATE, not by review: preflight
+builds `NOGPL=1` and fails if any object was compiled from a GPL-only
+port. Shown red by pointing `PORT_PROGRAMS_doom` at Calculator, a
+mistake the licence check cannot see.
+
+**Default unchanged.** Ordinary builds and releases keep DOOM: the
+option exists for whoever builds a closed product, and its gate exists
+so the option still works the day they need it.

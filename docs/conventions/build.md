@@ -634,6 +634,23 @@ this the obvious way), not from how much history it accumulated.
   build. Include it only where it is displayed; pulling it into a widely
   included header recreates the problem it is shaped to avoid. Both
   generated headers are gitignored.
+- **A VENDORED PORT DECLARES ITS LICENCE IN THE MAKEFILE, AND A
+  GPL-ONLY ONE THE PROGRAMS BUILT FROM IT.** `PORT_LICENSE_<name>` (SPDX
+  ids joined by OR) and `PORT_PROGRAMS_<name>` sit in the Makefile's
+  NOGPL block, because the vendored trees stay byte for byte.
+  `NOGPL=1` drops the programs of every port whose alternatives are all
+  GPL or AGPL; LGPL and a dual licence with a permissive option stay.
+  The programs are DECLARED rather than read off `EXTRA_OBJS_<name>`,
+  because `all:` expands its prerequisites as it is read, above those
+  definitions, where a derived list is empty. Three things hold it
+  true. `check_licenses.py` refuses a port with no declaration, and an
+  id its licence file is not written in. The same check refuses a
+  GPL-only port with no programs named. And preflight builds `NOGPL=1`
+  into `build/nogpl` (deleted after, since `check_deps.py` walks every
+  directory under `build/`) and fails if any object came from a GPL-only port,
+  which is what catches a program left off the list. An image needs
+  `make clean && make clean-disk` first: staging and `disk.img` only ever
+  add, so an earlier build's DOOM would stay.
 - **Versioning is semver + a `-dev` suffix, not a per-change build
   number.** `VERSION` only changes via `tools/set_version.sh <version>`:
   `0.2.0-dev` starts a new dev round, `0.2.0` (no `-dev`) cuts a

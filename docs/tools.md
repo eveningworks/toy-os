@@ -5741,6 +5741,14 @@ runs first**: a `doom1.wad` with one
   human reading the vendored license file, which is why the entries in
   `LICENSE` quote the version language rather than paraphrasing it.
 
+  **Each port's licence is also DECLARED in the Makefile**
+  (`PORT_LICENSE_<name>`, SPDX ids joined by OR), and this holds every
+  declaration against the port's licence file by family: an id whose
+  family's wording the file lacks fails, a file carrying the GPL's
+  preamble declared as anything else fails, and a GPL-only port must name
+  its programs (`PORT_PROGRAMS_<name>`). `NOGPL=1` decides from those
+  lines, so a wrong one would ship GPL code in a "GPL-free" build.
+
 - **`highmem_test.py`** -- the WHOLE KTEST suite on an 8 GiB guest
   (`ktest_run.py --mem 8192`), failing if an above-4-GiB check skipped
   rather than ran, which is what those do on every other runner's

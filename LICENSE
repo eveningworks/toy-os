@@ -87,6 +87,10 @@ directory.
         redistributing a built /bin/doom must offer the corresponding
         source for it, which this repository is.
 
+        A BUILD WITHOUT IT: `make iso NOGPL=1` leaves out every program
+        built from a GPL-only port, which today is /bin/doom alone, and
+        the rest of toy-os works without it.
+
         The Doom IWAD is NOT part of this repository and is not
         redistributed by it -- tools/fetch_wad.py obtains one, and the
         WAD carries id Software's own terms, which are not an open

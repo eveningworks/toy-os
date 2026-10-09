@@ -14,6 +14,10 @@
 #   1. make clean && make all -- full rebuild from scratch, no stale .o
 #      files hiding a real error.
 #   2. make iso -- confirms the ISO actually assembles.
+#   2a. make all NOGPL=1 into build/nogpl -- a build with no GPL code in
+#       it, failing if ANY object was compiled from a GPL-only port
+#       (the Makefile's PORT_LICENSE_* block says which). "It builds" is
+#       not the claim; "nothing GPL went into it" is.
 #   2b. tools/check_deps.py -- confirms every build directory's .d files
 #       are actually reaching make. A clean build hides this entirely
 #       (nothing is stale when everything was just compiled), which is
@@ -159,6 +163,17 @@ fi
 
 step "make iso"
 make iso >/tmp/preflight_iso.log 2>&1 || fail "make iso (see /tmp/preflight_iso.log)"
+
+step "make all NOGPL=1 (nothing compiled from a GPL-only port)"
+make all NOGPL=1 BUILD=build/nogpl >/tmp/preflight_nogpl.log 2>&1 ||
+    fail "make all NOGPL=1 (see /tmp/preflight_nogpl.log)"
+for p in $(make -s gpl-only-ports); do
+    leak=$(find build/nogpl -path "*/ports/$p/*" -name '*.o' | head -3)
+    [ -z "$leak" ] || fail "NOGPL=1 compiled GPL-only port $p: $leak -- a program built from it is missing from PORT_PROGRAMS_$p"
+done
+# GONE once looked at: check_deps.py walks every directory under build/,
+# and this tree's .d files rightly reach no make but its own.
+rm -rf build/nogpl
 
 step "check_deps.py (header dependency tracking)"
 python3 tools/check_deps.py || fail "header dependency tracking"

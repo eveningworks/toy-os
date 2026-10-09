@@ -1015,6 +1015,8 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/build.md`
 
+- **A VENDORED PORT DECLARES ITS LICENCE IN THE MAKEFILE, AND A
+  GPL-ONLY ONE THE PROGRAMS BUILT FROM IT** -- what `NOGPL=1` decides by
 - **A `.d` FILE MUST NEVER BE REMAKEABLE, OR make BUILDS THE WRONG FILE
   AND STILL EXITS 0**
 - **mtools DOES NOT READ stdin -- IT OPENS `/dev/tty`, so a CAPTURED

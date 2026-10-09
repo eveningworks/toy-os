@@ -366,8 +366,45 @@ USERLAND_PROGRAM_DIRS = gui bin tests
 # Every program source, and the ELF it builds to. A new program is a .c
 # file in one of those directories and nothing else -- the same
 # reasoning as C_SOURCES's recursive discovery below.
-USERLAND_PROGRAMS = $(shell find $(addprefix userland/,$(USERLAND_PROGRAM_DIRS)) -name '*.c' 2>/dev/null | sort)
+USERLAND_PROGRAMS_ALL = $(shell find $(addprefix userland/,$(USERLAND_PROGRAM_DIRS)) -name '*.c' 2>/dev/null | sort)
+USERLAND_PROGRAMS = $(filter-out $(if $(NOGPL),$(NOGPL_DROPS)),$(USERLAND_PROGRAMS_ALL))
 USERLAND_ELVES    = $(patsubst userland/%.c,$(BUILD)/userland/%.elf,$(USERLAND_PROGRAMS))
+
+# --- NOGPL=1: a build with no GPL code in it ---------------------------
+#
+# EVERY VENDORED PORT DECLARES ITS LICENCE HERE, as an SPDX expression of
+# ids joined by OR -- tools/check_licenses.py holds each line against the
+# port's own licence file, and refuses a port with no line. The vendored
+# trees stay byte for byte, which is why the declaration is not a file
+# inside them.
+PORT_LICENSE_cjson   = MIT
+PORT_LICENSE_dash    = BSD-3-Clause
+PORT_LICENSE_doom    = GPL-2.0-or-later
+PORT_LICENSE_mbedtls = Apache-2.0 OR GPL-2.0-or-later
+
+# ...and the programs built from it, under userland/ without the .c.
+# DECLARED, not read off EXTRA_OBJS_<program>: those are defined further
+# down, and `all:` above them expands its prerequisites as it is read --
+# so a list derived from them is empty there (the trap the "deferred"
+# rule at the top of this file is about).
+PORT_PROGRAMS_doom = gui/apps/doom
+
+# GPL-ONLY means every alternative is GPL or AGPL. A dual licence with a
+# permissive option (Mbed TLS) is not, and LGPL is not: it is a library
+# licence a closed program may link. So NOGPL=1 drops what a closed
+# product could not ship -- the programs of every GPL-only port (Yocto's
+# INCOMPATIBLE_LICENSE, decided by the declared licence) -- and seed then
+# leaves out any desktop entry whose program was not built.
+# tools/preflight.sh builds it and fails if ANYTHING was compiled from a
+# GPL-only port, which is what catches a program missing from the list.
+PORTS          = $(notdir $(wildcard userland/ports/*))
+GPL_ONLY_PORTS = $(foreach p,$(PORTS),$(if $(filter-out GPL-% AGPL-% OR,$(PORT_LICENSE_$(p))),,$(p)))
+NOGPL_DROPS    = $(foreach p,$(GPL_ONLY_PORTS),$(patsubst %,userland/%.c,$(PORT_PROGRAMS_$(p))))
+
+# For tools/preflight.sh's NOGPL=1 gate: which ports must not appear.
+gpl-only-ports:
+	@echo $(GPL_ONLY_PORTS)
+.PHONY: gpl-only-ports
 
 # The handful of programs whose on-disk name isn't their file name --
 # three exceptions spelled once each, instead of a name column on every
@@ -566,6 +603,8 @@ help:
 	@echo "                 it carries GRUB; BOOT=cd for the ISO -- implies iso)"
 	@echo "  usb-image      Build toyos-usb.img -- compact, self-booting, for dd to a USB stick"
 	@echo "  live-iso       Build toy-os-live.iso -- carries a filesystem image, boots with NO disk"
+	@echo "  NOGPL=1        On any of them: leave out every program built from GPL-only code"
+	@echo "                 (today DOOM) -- docs/building.md, \"A build with no GPL code\""
 	@echo ""
 	@echo " Any of the three ISO targets can BAKE IN boot flags, so they need not be"
 	@echo " typed into the GRUB menu every boot -- docs/boot-flags.md lists every word:"
@@ -1843,6 +1882,16 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	# sync/ is a build-staging tree `make clean` deletes wholesale.
 	mkdir -p $(SEED_DIR)/sync/usr/wm/applications $(SEED_DIR)/sync/usr/wm/startup
 	cp data/wm/applications/*.desktop $(SEED_DIR)/sync/usr/wm/applications/
+	# NOGPL=1: no entry for a program that was not built, and none of the
+	# program itself left in staging by an earlier full build (sync/ only
+	# adds, so a disk image needs `make clean-disk` too -- docs/building.md).
+	$(if $(NOGPL),@for d in $(NOGPL_DROPS); do \
+	    n=$$(basename $$d .c); \
+	    for f in $(SEED_DIR)/sync/usr/wm/applications/*.desktop; do \
+	        if grep -qE "^Exec=/bin/(.*/)?$$n( |$$)" "$$f"; then rm -f "$$f"; echo "seed: NOGPL leaves out $$(basename $$f)"; fi; \
+	    done; \
+	    find $(SEED_DIR)/sync/bin -name "$$n" -type f -delete; \
+	done)
 	# Screensaver option descriptors -- what each saver lets you change
 	# (userland/lib/usaver.h). NOT in /bin/wm/savers beside the programs:
 	# the setting's choice list IS that directory, so a .saver file there

@@ -127,6 +127,24 @@ comments in the file list every option. Some also have a **boot flag**
 that overrides them for one boot without rebuilding, such as `nohz=off`
 and `highres=off` — see [boot-flags.md](boot-flags.md).
 
+### A build with no GPL code
+
+`NOGPL=1` leaves out every program built from a port whose licence is
+GPL-only. Today that is DOOM, the one GPL component; everything else in
+toy-os is MIT, BSD or Apache-licensed and can go into a closed product
+with its notices. Each port's licence is declared in the Makefile
+(`PORT_LICENSE_<name>`), and the build decides from that, so a dual
+licence with a permissive option (Mbed TLS) stays in.
+
+```sh
+make all NOGPL=1                         # build only
+make clean && make clean-disk            # an IMAGE starts empty: an earlier
+make iso NOGPL=1                         #   build's DOOM would stay on disk.img
+```
+
+`tools/preflight.sh` builds `NOGPL=1` on every run and fails if anything
+at all was compiled from a GPL-only port, so the option cannot rot.
+
 ## Using it
 
 Type `help` at the prompt, then `doc <command>` for the page — those

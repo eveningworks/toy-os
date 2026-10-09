@@ -33,15 +33,21 @@ WHAT IT CHECKS
      alone would need to know which those are.
   7. Every notice file under data/licenses/ is named in LICENSE by path,
      and every data/licenses/ path LICENSE names exists.
+  8. Every port declares its licence in the Makefile (PORT_LICENSE_<name>,
+     SPDX ids joined by OR -- what NOGPL=1 decides by), each family it
+     names is the one its licence file is written in, a file carrying
+     the GPL's preamble is not declared as something else, and a
+     GPL-only port names the programs built from it (PORT_PROGRAMS_<name>).
 
 WHAT IT DOES NOT CHECK, and cannot: whether the license NAMED is the
-license the code is actually under. Nothing static can read a
+license the code is actually under, beyond its family (check 8). Nothing static can read a
 directory and know it is really GPL-2-or-later rather than GPL-3. That
 part is a human reading the vendored LICENSE file, and it is why the
 entries above quote the version language rather than paraphrasing it.
 """
 import argparse
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -53,6 +59,72 @@ SCHEMES = os.path.join(REPO, "data", "usr", "share", "terminal")
 NOTICES = os.path.join(REPO, "data", "licenses")
 
 LICENSE_FILENAMES = ("LICENSE", "LICENSE.txt", "LICENSE.md", "COPYING", "COPYING.txt")
+
+# An SPDX id's family, and words its licence text always contains.
+FAMILIES = (
+    ("AGPL-", "GNU AFFERO GENERAL PUBLIC LICENSE"),
+    ("LGPL-", "GNU LESSER GENERAL PUBLIC LICENSE"),
+    ("GPL-", "GNU GENERAL PUBLIC LICENSE"),
+    ("Apache-", "Apache License"),
+    ("MIT", "Permission is hereby granted"),
+    ("BSD-", "Redistribution and use in source and binary forms"),
+)
+
+
+def family(spdx_id):
+    for prefix, marker in FAMILIES:
+        if spdx_id.startswith(prefix):
+            return prefix, marker
+    return None, None
+
+
+def port_declarations():
+    """{port: (licence expression, programs)} as the Makefile declares them."""
+    lic, progs = {}, {}
+    for line in open(os.path.join(REPO, "Makefile")):
+        m = re.match(r"PORT_LICENSE_(\w+)\s*=\s*(.*?)\s*$", line)
+        if m:
+            lic[m.group(1)] = m.group(2)
+        m = re.match(r"PORT_PROGRAMS_(\w+)\s*=\s*(.*?)\s*$", line)
+        if m:
+            progs[m.group(1)] = m.group(2).split()
+    return lic, progs
+
+
+def check_declaration(name, d, expr, programs):
+    """Problems with one port's PORT_LICENSE_ line, as strings."""
+    if expr is None:
+        return [f"userland/ports/{name}/ declares no licence -- add PORT_LICENSE_{name} "
+                f"to the Makefile's NOGPL=1 block"]
+    words = expr.split()
+    ids = words[0::2]
+    if not ids or any(w != "OR" for w in words[1::2]) or len(words) % 2 == 0:
+        return [f"PORT_LICENSE_{name} = {expr!r}: only SPDX ids joined by OR are understood"]
+    text = ""
+    for f in LICENSE_FILENAMES:
+        if os.path.exists(os.path.join(d, f)):
+            text += open(os.path.join(d, f), errors="replace").read()
+    problems = []
+    for i in ids:
+        prefix, marker = family(i)
+        if prefix is None:
+            problems.append(f"PORT_LICENSE_{name}: {i} is not a family this check knows")
+        elif marker not in text:
+            problems.append(f"PORT_LICENSE_{name} says {i}, but its licence file has no "
+                            f"\"{marker}\"")
+    gpl_text = "GNU GENERAL PUBLIC LICENSE" in text or "GNU AFFERO" in text
+    if gpl_text and not any(i.startswith(("GPL-", "AGPL-")) for i in ids):
+        problems.append(f"userland/ports/{name}/'s licence file is the GPL, and "
+                        f"PORT_LICENSE_{name} does not say so -- NOGPL=1 would ship it")
+    gpl_only = all(i.startswith(("GPL-", "AGPL-")) for i in ids)
+    if gpl_only and not programs:
+        problems.append(f"userland/ports/{name}/ is GPL-only and declares no "
+                        f"PORT_PROGRAMS_{name} -- NOGPL=1 cannot leave its programs out")
+    for prog in programs:
+        if not os.path.exists(os.path.join(REPO, "userland", prog + ".c")):
+            problems.append(f"PORT_PROGRAMS_{name} names {prog}, and there is no "
+                            f"userland/{prog}.c")
+    return problems
 
 
 def main():
@@ -69,6 +141,7 @@ def main():
     lic = open(lic_path).read()
 
     problems, checked = [], 0
+    decl_lic, decl_progs = port_declarations()
 
     # --- vendored ports ------------------------------------------------
     if os.path.isdir(PORTS):
@@ -77,6 +150,8 @@ def main():
             if not os.path.isdir(d):
                 continue
             checked += 1
+            problems += check_declaration(name, d, decl_lic.get(name),
+                                          decl_progs.get(name, []))
             if not any(os.path.exists(os.path.join(d, f)) for f in LICENSE_FILENAMES):
                 problems.append(f"userland/ports/{name}/ has no license file -- a "
                                 f"vendored port must keep the terms it arrived under")
