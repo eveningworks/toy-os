@@ -25,6 +25,7 @@ happens when a kernel or a binary is pushed over the network.
     toy-os v0.3.0 -- an x86-64 hobby kernel
       kernel:   0.3.0-dev (426601f)  built 2026-09-01 10:39:12
       userland: 0.3.0-dev (214d29e)  built 2026-08-31
+      source:   https://github.com/eveningworks/toy-os/tree/214d29e...
       ** kernel and userland are from different builds **
     Machine: QEMU Standard PC (i440FX + PIIX, 1996)
     Boot: GRUB/Multiboot2 | C + ASM | Tested on QEMU
@@ -34,6 +35,11 @@ The comparison is on the BUILD ID, not the version string: two builds of
 `0.3.0-dev` from different commits are exactly the case this is for, and they
 share a version. A kernel too old to carry the provider says so rather than
 printing nothing — the absence dates it more precisely than silence would.
+
+The `source:` line is where this build's source code is: the commit it was
+built from, followed by "(plus uncommitted changes)" when the build was made from
+changes no commit holds. `/usr/share/licenses/SOURCE` says the same, with the
+release's source archive when there is one.
 
 The same information is in the GUI About window, from the same provider, so the
 two cannot disagree.

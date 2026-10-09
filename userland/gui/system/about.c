@@ -101,6 +101,19 @@ static void fill_rows(void) {
     snprintf(r->value, sizeof r->value, "%s", TOYOS_VERSION_FULL);
     r = add("Built", 0, 0);
     snprintf(r->value, sizeof r->value, "%s", TOYOS_BUILD_DATE);
+    // Where the source is: the repository and the commit, without the
+    // scheme, so it fits the column (/bin/about prints the full link).
+    r = add("Source", 0, 0);
+    {
+        const char *repo = TOYOS_SOURCE_REPO;
+        if (!strncmp(repo, "https://", 8)) repo += 8;
+        char id[24];
+        snprintf(id, sizeof id, "%s", TOYOS_BUILD_ID);
+        char *dirty = strstr(id, "-dirty");
+        if (dirty) *dirty = 0;
+        snprintf(r->value, sizeof r->value, "%s @ %s%s", repo, id,
+                 TOYOS_SOURCE_EXACT ? "" : ", plus local changes");
+    }
 
     // The row this window exists to make impossible to miss.
     if (have_kv && strcmp(kv.build_id, TOYOS_BUILD_ID) != 0) {

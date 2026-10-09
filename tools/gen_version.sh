@@ -56,6 +56,27 @@ if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; th
     fi
 fi
 
+# WHERE THIS BUILD'S SOURCE IS -- shown by About and written to the
+# image as /usr/share/licenses/SOURCE, so a copy handed on second-hand
+# still says where its source lives (what the GPL calls passing the offer
+# along, and an honest pointer under any licence). The repository is
+# origin's when that is GitHub, so a fork's image names the fork; the
+# full commit id goes in the link, since a short one can become ambiguous.
+SOURCE_REPO="https://github.com/eveningworks/toy-os"
+ORIGIN=$(git remote get-url origin 2>/dev/null || true)
+case "$ORIGIN" in
+    git@github.com:*)     SOURCE_REPO="https://github.com/${ORIGIN#git@github.com:}" ;;
+    https://github.com/*) SOURCE_REPO="$ORIGIN" ;;
+esac
+SOURCE_REPO="${SOURCE_REPO%.git}"
+SOURCE_URL="$SOURCE_REPO"
+SOURCE_EXACT=0
+case "$BUILD_ID" in
+    unknown) ;;
+    *-dirty) SOURCE_URL="$SOURCE_REPO/tree/$(git rev-parse HEAD)" ;;
+    *)       SOURCE_URL="$SOURCE_REPO/tree/$(git rev-parse HEAD)"; SOURCE_EXACT=1 ;;
+esac
+
 # What the OS actually shows. The rule, and the reason for each half:
 #
 #   0.3.0-dev  ->  "0.3.0-dev (2034bb1)"
@@ -116,6 +137,13 @@ cat > "$TMP" << EOF
 // bare macros when something needs to PARSE the version.
 #define TOYOS_VERSION_FULL "$VERSION_FULL"
 
+// The source this build was made from (see tools/gen_version.sh), and
+// whether it is EXACTLY that: 0 for a dirty tree, whose changes exist in
+// no commit, or for a build made without git.
+#define TOYOS_SOURCE_REPO "$SOURCE_REPO"
+#define TOYOS_SOURCE_URL "$SOURCE_URL"
+#define TOYOS_SOURCE_EXACT $SOURCE_EXACT
+
 #endif
 EOF
 
@@ -126,6 +154,38 @@ else
     mv "$TMP" "$OUT"
     echo "version: $VERSION_FULL"
 fi
+
+# --- /usr/share/licenses/SOURCE: the same pointer, as a file on the image
+mkdir -p build/gen
+SRC_OUT="build/gen/SOURCE"
+{
+    echo "toy-os $VERSION_FULL"
+    echo
+    if [ "$BUILD_ID" = unknown ]; then
+        echo "This build was made without git, so it cannot name its commit."
+        echo "toy-os's source is at:"
+        echo "  $SOURCE_URL"
+    else
+        echo "The source code this build was made from:"
+        echo "  $SOURCE_URL"
+        case "$VERSION" in
+            *-dev) ;;
+            *)  echo "and as one archive, beside this release's images:"
+                echo "  $SOURCE_REPO/releases/tag/v$VERSION  (toy-os-$VERSION-source.tar.gz)" ;;
+        esac
+        if [ "$SOURCE_EXACT" = 0 ]; then
+            echo
+            echo "This build was made from uncommitted changes on top of that"
+            echo "commit, so no published source matches it exactly."
+        fi
+    fi
+    echo
+    echo "toy-os's own code is under the licence in LICENSE at the top of the"
+    echo "source tree; what is under another licence, and which, is listed"
+    echo "there too and in this directory."
+} > "$SRC_OUT.tmp.$$"
+if [ -f "$SRC_OUT" ] && cmp -s "$SRC_OUT.tmp.$$" "$SRC_OUT"; then rm -f "$SRC_OUT.tmp.$$"
+else mv "$SRC_OUT.tmp.$$" "$SRC_OUT"; fi
 
 # --- build STAMP: the date AND time, isolated in ONE object -----------
 #

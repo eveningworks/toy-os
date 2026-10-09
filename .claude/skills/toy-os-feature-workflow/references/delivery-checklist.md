@@ -172,12 +172,20 @@ before you start delivering -- don't reconstruct it from memory.
   grant (2026-08-14) is push-to-main-without-asking for clear-cut,
   tested changes. Tags and `gh release` publishing still get
   confirmed first.
-- **Release assets, if cutting one:** three of them --
-  `toy-os.iso`, gzipped `disk.img.gz` (`make clean-disk && make iso
-  DEBUGCON=0` first -- so it carries no session-local test data and no
-  serial debug console, which is an unauthenticated root shell -- then
-  `gzip -k -9 disk.img`), and `tools/run_release.sh` -- `gh release create v<version> toy-os.iso disk.img.gz
-  tools/run_release.sh --title ... --notes ...` attaches them directly.
+- **Release assets, if cutting one:** `make clean-disk && make live-iso
+  usb-image DEBUGCON=0` (no session-local test data, and no serial debug
+  console -- an unauthenticated root shell), push the tag, then
+  `sh tools/release_assets.sh <version>`. It REFUSES unless the tree is
+  clean (untracked files included), `v<version>` is HEAD and on origin at
+  the same commit, and both images were built from that commit; then it
+  writes `build/release/<version>/`: `toy-os-live.iso`,
+  `toyos-usb.img.gz`, `toy-os-<version>-source.tar.gz` (the tag's
+  `git archive`, the source these images were built from, fixed to them
+  whatever later happens to the history), `run_release.sh` and
+  `SHA256SUMS` over all of them. `gh release create v<version>
+  build/release/<version>/* --title ... --notes ...` attaches them.
+  (This step used to name `toy-os.iso` and `disk.img.gz`, which no
+  release since v0.3.0 has shipped.)
 
 ## Direct local checkout, but as a background job (worktree-isolated)
 

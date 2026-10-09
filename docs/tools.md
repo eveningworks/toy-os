@@ -7005,6 +7005,19 @@ runs first**: a `doom1.wad` with one
   one), and it SKIPS cleanly without `mtools`. Needs `dosfstools` for
   the audit half.
 
+- **`release_assets.sh <version> [outdir]`** -- a GitHub Release's
+  assets, made only from a build that IS the tag: the live ISO, the USB
+  image gzipped, `toy-os-<version>-source.tar.gz` (`git archive` of the
+  tag) and `run_release.sh`, with `SHA256SUMS` over them, in
+  `build/release/<version>/`. It refuses before writing anything unless
+  VERSION matches, the tree is clean INCLUDING untracked files (every
+  `.c` compiles whether tracked or not, and `gen_version.sh`'s `-dirty`
+  sees tracked changes only), the tag is HEAD and on origin at the same
+  commit, `version.h` was generated from HEAD, and both images are newer
+  than it. The source archive is an asset of its own because GitHub's
+  automatic "Source code" links follow the tag and the repository, so a
+  history rewrite or a re-pointed tag would silently change what they
+  give; the asset stays fixed to the images beside it.
 - **`run_release.sh`** -- standalone QEMU launcher shipped as a GitHub
   Release asset (not part of the build), for running from just a
   release download with no checkout. Gunzips `disk.img.gz` if needed,

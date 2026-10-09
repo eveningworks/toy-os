@@ -141,13 +141,14 @@ command line.
 
 Tagged releases live on
 [GitHub Releases](https://github.com/eveningworks/toy-os/releases). Each
-ships two media and a launcher:
+ships two media, their source and a launcher:
 
 | Asset | What it is |
 |---|---|
 | `toy-os-live.iso` | Boots with **no disk at all** — the filesystem rides in RAM as a GRUB module, and what you write to it is gone at power off. The one to try first. |
 | `toyos-usb.img.gz` | A real 512 MB disk image. `gunzip`, `dd` it to a stick, and a machine boots it — and **keeps** what you write, which the live ISO does not. |
 | `run_release.sh` | Boots a download in QEMU with the right flags — nothing to clone or build. It picks whichever medium it finds beside it, so it runs an older release's assets as well as a current one. |
+| `toy-os-<version>-source.tar.gz` | The source code those images were built from, exactly -- the tag's tree as one archive. A built image names it too, in `/usr/share/licenses/SOURCE` and in About. |
 | `SHA256SUMS` | Verify before you `dd`. |
 
 From either medium, `install --disk <name> confirm` writes toy-os to an

@@ -51,6 +51,9 @@ int main(int argc, char **argv) {
     snprintf(line, sizeof line, "  userland: %s  built %s\n",
              TOYOS_VERSION_FULL, TOYOS_BUILD_DATE);
     sys_print(line);
+    snprintf(line, sizeof line, "  source:   %s%s\n", TOYOS_SOURCE_URL,
+             TOYOS_SOURCE_EXACT ? "" : " (plus uncommitted changes)");
+    sys_print(line);
 
     // THE COMPARISON IS ON THE BUILD ID, not the version: two builds of
     // 0.3.0-dev from different commits are exactly the case this is for,

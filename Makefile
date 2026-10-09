@@ -2044,6 +2044,10 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	done
 	@if [ -n "$$(ls -A data/wm/startup 2>/dev/null)" ]; then \
 	    cp data/wm/startup/* $(SEED_DIR)/sync/usr/wm/startup/; fi
+	# Where this build's source is (tools/gen_version.sh writes it), so a
+	# copy of the image handed on still says where to get the source.
+	mkdir -p $(SEED_DIR)/sync/usr/share/licenses
+	cp build/gen/SOURCE $(SEED_DIR)/sync/usr/share/licenses/SOURCE
 	# The layouts are generated from the host's xkeyboard-config, so its
 	# notices travel with them: an image that has /usr/share/kbs has
 	# /usr/share/licenses/xkeyboard-config.txt (see LICENSE).
