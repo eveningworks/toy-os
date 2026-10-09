@@ -1010,6 +1010,34 @@ timer interrupt that still arrives while the CPU spins, which the LAPIC
 timer does unless interrupts are off; the NMI half is later and wants
 the performance-counter setup nothing here has yet.
 
+### An AML interpreter, so toy-os can run the firmware's own methods (`_PTS`, battery, thermal, lid) -- not scheduled
+
+Put on the roadmap 2026-10-09 (not scheduled). Firmware describes its
+own housekeeping as small programs -- AML Methods in the DSDT -- that an
+ACPI operating system runs at the right moments: `_PTS` ("prepare to
+sleep") before a power-off, `_WAK` after a resume, and the Methods
+behind battery state, thermal zones and the lid. **Linux and Windows run
+them because they include a full interpreter** (ACPICA, ~100,000 lines;
+the NT AML engine). **toy-os deliberately does not**: it reads the
+namespace and decodes constants (`docs/aml-design.md` stages 0-2) and
+stops before executing anything -- stage 4 there, the 60,000-line
+project of an operand stack, control flow, mutexes and OperationRegion
+handlers for memory, I/O, PCI and the embedded controller.
+
+**What it costs today, and how it is worked around.** On the ASUS
+UX305FA, `_PTS` tells the embedded controller the coming sleep state;
+skipped, the machine needed two presses of the power button to start
+after a toy-os shutdown. The fix (b8913e60) lets the firmware do its own
+tidy-up instead: when it left ACPI mode off, toy-os powers off through
+its legacy path, which takes the firmware's own preparation. That is the
+right substitute while there is no interpreter, and it is why this item
+is not urgent.
+
+**What would change the answer.** A machine whose firmware starts in
+ACPI mode (so there is no legacy path to lean on) and misbehaves without
+`_PTS`; or battery, thermal and lid reporting being wanted, all of which
+are Methods. Start from `docs/aml-design.md`'s "honest case against".
+
 ### A hardware watchdog that RESETS a hung machine -- Intel's TCO timer (Linux `iTCO_wdt`) or ACPI's WDAT; nothing resets one today
 
 Put on the roadmap 2026-10-06 (not scheduled). The lockup detector above REPORTS a stuck

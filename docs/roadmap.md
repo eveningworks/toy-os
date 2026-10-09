@@ -1092,6 +1092,7 @@ run on, not by order.
 - [ ] A kvmclock clocksource -- under KVM without `+invtsc` every PM-timer read is a VM exit
 - [ ] Battery + AC adapter status
 - [ ] Thermal zone reporting
+- [ ] An AML interpreter, so toy-os can run the firmware's own methods (`_PTS`, battery, thermal, lid) -- not scheduled
 - [ ] Deeper CPU idle than `hlt`: MWAIT C-states from a per-model table, Linux's `intel_idle` -- judged by RAPL's package energy
 - [ ] CPU frequency scaling without HWP: ratios from `MSR_PLATFORM_INFO` into `IA32_PERF_CTL`, `intel_pstate`'s legacy mode
 - [ ] S3 suspend/resume
