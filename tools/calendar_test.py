@@ -147,6 +147,43 @@ def main():
     check("the WM agrees it is an overlay",
           dbg.json("gui state --json")["overlays"]["calendar"] is True)
 
+    # --- 1b. the card's clock is damaged whenever it changes ----------
+    # Frames damaged ELSEWHERE (the taskbar, under the pointer) under
+    # the verifier: a card that read the RTC while drawing showed a newer
+    # second than its last damage, between the RTC's rollover and the
+    # compositor's uptime tick -- a digit-sized stale patch, once a night
+    # in occlusion_test. THAT WINDOW IS A PHASE, FIXED FOR A BOOT (wall
+    # time is the RTC read once plus uptime), some boots a few ms wide, so
+    # each round re-sets the clock -- at nanosecond 0 of whenever the call
+    # lands -- to move it. Only on UTC, where the host's clock is the
+    # guest's local time.
+    #
+    # THE FRAMES MUST BE REAL ONES: pointer motion over the bare desktop
+    # takes the cheap cursor path and renders no scene, and a debug
+    # command asks for a FULL frame, which hides the bug. Crossing the
+    # network tray icon's edge through QEMU's input renders the taskbar
+    # alone -- the frame the bug was caught in.
+    tray = dbg.json("gui network --json").get("tray") or {}
+    dbg.warp_cursor(qmp, tray.get("cx", 1230), tray.get("cy", 696))
+    zone = dbg.send("sh config get system.timezone") or ""
+    utc = "UTC" in zone or not zone.strip().splitlines()[-1:]
+    dbg.damage_verify(True)
+    dbg.damage_bugs()   # only what follows counts
+    bugs = []
+    for rnd in range(4 if utc else 1):
+        if utc:
+            dbg.send('sh time -s "' + time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()) + '"')
+        dbg.damage_bugs()
+        t_end, i = time.time() + 2.5, 0
+        while time.time() < t_end:
+            qmp.move_rel(0, -40 if i % 2 == 0 else 40)
+            i += 1
+            time.sleep(0.03)
+        bugs += dbg.damage_bugs()
+    dbg.damage_verify(False)
+    check("the card's ticking clock leaves nothing stale between ticks", bugs == [],
+          "; ".join(bugs)[:300])
+
     # --- 2. today is highlighted, and its neighbour is not ------------
     tcol, trow = g["today"]["col"], g["today"]["row"]
     if check("today's cell is on the grid", tcol >= 0 and trow >= 0,

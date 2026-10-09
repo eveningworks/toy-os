@@ -52,6 +52,9 @@ void calendar_poll_config(void);
 // move: 1 = `<`, 2 = `>`, 3 = the title, 0 = none.
 int calendar_hover_at(int mx, int my);
 void calendar_damage(void);
+// The clock card's second: once per compositor tick, with the tray clock.
+// The card draws the time read HERE, never the RTC at draw time.
+void calendar_clock_tick(void);
 // Where it is, for wm_overlay.h's automatic damage. 0 when it has
 // no rect to report.
 int calendar_rect(int *x, int *y, int *w, int *h);

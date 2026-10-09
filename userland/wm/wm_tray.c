@@ -227,8 +227,8 @@ void tray_update_clock(void) {
     char buf[TRAY_TEXT_MAX];
     udate_format(buf, sizeof buf, &t, UDATE_TIME | (clock_seconds() ? UDATE_SECONDS : 0));
     tray_set_text(clock_tray_id, buf);
-    // The calendar's clock card ticks with this one.
-    if (calendar_open) calendar_damage();
+    // The calendar's clock card ticks with this one, from its own read.
+    calendar_clock_tick();
 }
 
 // The tray's icons run LARGER than a taskbar button's, because a tray

@@ -16,6 +16,15 @@
 
 int calendar_open = 0;
 
+// THE TIME THE CARD SHOWS, read at the tick and drawn from here. Read
+// while drawing, the RTC's second rolls over between the compositor's
+// uptime ticks, so a frame damaged for something else drew a newer digit
+// than the last one damaged -- a stale or half-new second.
+static struct rtc_time g_card_now;
+static int g_card_now_ok;
+// The "today" cell reads the same instant, or it could cross midnight a
+// frame apart from the card's date.
+
 // What is on screen. Reset to today every time the popup OPENS (see
 // calendar_open_now()), so a month paged to last week is not still
 // showing tomorrow -- the same call every desktop's clock applet makes.
@@ -170,7 +179,13 @@ void calendar_geometry(struct calendar_geom *g) {
     g->week_start_monday = week_start_monday;
 
     int ty, tm, td;
-    calendar_today(&ty, &tm, &td);
+    if (calendar_open && g_card_now_ok) {
+        struct rtc_time t = g_card_now;
+        tz_localize(&t);
+        ty = (int)t.year; tm = (int)t.month; td = (int)t.day;
+    } else {
+        calendar_today(&ty, &tm, &td);
+    }
     if (ty == vy && tm == vm) {
         int idx = g->first_col + td - 1;
         g->today_col = idx % 7;
@@ -199,12 +214,17 @@ static void go_today(void) {
     calendar_today(&view_year, &view_month, &d);
 }
 
+void calendar_clock_tick(void) {
+    g_card_now_ok = sys_gettime(&g_card_now) == 0;
+    if (calendar_open) calendar_damage();
+}
+
 void calendar_open_now(void) {
     go_today();
     wm_overlay_close_others("calendar");   // the popups are mutually exclusive
     calendar_open = 1;
     // Its own rect, not a full frame (wm_render.c repaints only damage).
-    calendar_damage();
+    calendar_clock_tick();
 }
 
 void calendar_close(void) {
@@ -300,9 +320,8 @@ static void draw_card(const struct calendar_geom *g) {
     uui_fill_round_rect(s, g->card_x, g->card_y, g->card_w, g->card_h, 6, UTHEME_SEPARATOR);
     uui_fill_round_rect(s, g->card_x + 1, g->card_y + 1, g->card_w - 2, g->card_h - 2, 5,
                         UTHEME_WHITE);
-    struct rtc_time now;
-    if (sys_gettime(&now) != 0) return;
-    time_t e = (time_t)cal_rtc_to_epoch(&now);
+    if (!g_card_now_ok) return;
+    time_t e = (time_t)cal_rtc_to_epoch(&g_card_now);
     struct tm tm;
     localtime_r(&e, &tm);
     char clock[32], date[64], zone[80];

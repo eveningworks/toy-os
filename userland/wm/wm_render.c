@@ -2488,6 +2488,20 @@ void wm_render_frame(int mx, int my) {
                              owner < 0 ? "" : windows[owner].title,
                              owner < 0 ? "" : "'",
                              owner < 0 ? 0 : window_intersects_damage(&windows[owner]));
+                // EVERY window over the diff, with what the cull reads: a
+                // window counted opaque there but not drawn leaves the
+                // previous buffer's pixels, which "no window" alone hides.
+                for (int i = 0; i < window_count; i++) {
+                    const struct window *w = &windows[i];
+                    if (w->x >= d.x1 || w->x + w->w <= d.x0 || w->y >= d.y1 || w->y + w->h <= d.y0)
+                        continue;
+                    struct urect o[3];
+                    wm_logf("wm:   over it: #%d '%s' (%d,%d %dx%d) state %d popup %d shown %d "
+                            "opaque %d anim %d gen %u\n", i, w->title, w->x, w->y, w->w, w->h,
+                            w->state, w->popup, window_shown(i, -1, g_cover >= 0, 0),
+                            window_opaque_rects(i, -1, o), wm_anim_hides(w),
+                            (unsigned)w->client_gen[w->client_front]);
+                }
                 wm_logf("wm: DAMAGE BUG -- %d px changed outside the damage rect, "
                              "first at (%d,%d); damage was (%d,%d %dx%d); "
                              "diff bbox (%d,%d %dx%d); %s\n",
