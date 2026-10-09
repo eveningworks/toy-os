@@ -236,7 +236,21 @@ def run(dbg, qmp, tmp, res):
     # straight back. Measured: the left click passed and the right one
     # reported 0. That is CLAUDE.md's `gui move` trap reaching a
     # control that is not a hover, which is why it is written out here.
-    vx, vy, vw, vh = lay.screen_rect("vol")
+    # WHERE THE SCALE IS NOW, asked of the client, once the window has
+    # stopped changing size: it opens taller than the work area and the
+    # WM fits it a moment later (wm_geometry_fit()), so under load a rect
+    # read from the first frame's layout lines is 26 px off by the click.
+    size = None
+    for _ in range(20):
+        dbg.settle()
+        w2 = dbg.window("Audio Player") or {}
+        now_size = (w2.get("w"), w2.get("h"))
+        if now_size == size:
+            break
+        size = now_size
+    r = dbg.widgets("Audio Player").get("vol")
+    vx, vy, vw, vh = ((r["screen"]["x"], r["screen"]["y"], r["w"], r["h"]) if r
+                      else lay.screen_rect("vol"))
 
     def click_scale(x, y):
         dbg.warp_cursor(qmp, x, y)
@@ -246,8 +260,12 @@ def run(dbg, qmp, tmp, res):
     lay2 = wait_layout(dbg, content,
                        lambda l: l.state is not None and l.state[4] <= 5)
     low = lay2.state[4] if lay2.state else -1
+    now = dbg.window("Audio Player") or {}
     res.check("clicking the left of the volume scale sets it low", low <= 5,
-              f"volume reported {low}")
+              f"volume reported {low}; clicked ({vx + 4},{vy + vh // 2}); window "
+              f"{win.get('x')},{win.get('y')} {win.get('w')}x{win.get('h')} content {content} "
+              f"at first, {now.get('x')},{now.get('y')} {now.get('w')}x{now.get('h')} "
+              f"content {now.get('content')} now")
 
     click_scale(vx + vw - 4, vy + vh // 2)
     lay3 = wait_layout(dbg, content,
