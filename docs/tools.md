@@ -5197,10 +5197,12 @@ window without going through it will find its layout polls timing out.
   are the parts that matter: several tools write files, and every one
   of them expects an empty desktop -- a tool inheriting the previous
   one's state fails in ways that look exactly like real widget bugs.
-  It runs **half the host's cores' worth of tools at a time** (`cores//2`
-  counts hardware threads, ~one guest per physical core), capped at
-  12 (`-j N` to change, `-j1` for the old serial behaviour -- that took
-  107s), each in its own **VM slot**:
+  It runs **one tool per hardware thread at a time**, capped at 16
+  (`-j N` to change, `-j1` for the old serial behaviour): the suite
+  waits rather than computes, so a waiting guest leaves its thread to
+  another -- measured 2026-10-09, 8 jobs 825s, 12 jobs ~635s, 16 jobs
+  ~575s on the 16-thread dev host, the comment above `DEFAULT_JOBS` has
+  the runs. Each tool gets its own **VM slot**:
   `vm.py --instance N` derives that VM's pidfile, serial socket, QMP
   port and VNC display from one number, and the slot is LEASED for as
   long as the VM lives rather than derived from the tool's position in

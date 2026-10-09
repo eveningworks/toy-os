@@ -476,7 +476,8 @@ ambiguous between the matrix and GitHub:
 - **`gui_regress.py` is the standard check** after touching `userland/`
   or anything the WM draws -- always `--logs DIR`. Its wall clock is the
   larger of the slowest tool and the sum over jobs; the per-tool timeout
-  is a hang guard. `DEFAULT_JOBS` is `min(12, cores//2)`.
+  is a hang guard. `DEFAULT_JOBS` is one guest per hardware thread, capped
+  at 16 (measured 2026-10-09: the suite waits rather than computes).
 - **`damage_sweep.py`/`damage_hunt.py` are in NO runner** (reason in
   `ondemand_sweep.py`'s exclusions) -- run them by hand after touching
   anything that draws or damages. `damage_sweep.py` needs a guest with

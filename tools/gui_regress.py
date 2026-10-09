@@ -84,29 +84,29 @@ import fresh_disk  # noqa: E402
 from harness import copy_disk  # noqa: E402
 from private_tmp import private_tmp  # noqa: E402
 
-# How many tools run at once by default. Each one is a QEMU with 256 MB
-# of guest RAM under TCG, so this is bounded by host cores far more than
-# by memory. `-j1` restores the original serial behaviour exactly.
+# How many tools run at once by default: ONE GUEST PER HARDWARE THREAD,
+# capped at 16. `-j1` restores the original serial behaviour exactly.
 #
-# DERIVED from the host rather than fixed at 4: the tool-seconds in a
-# full run total roughly 460s, so the ceiling is the slowest single tool
-# (notepad, ~41s -- forcequit dropped to ~35s in the 663d63b pass, so it
-# is no longer the straggler) and everything between 4 and that is just
-# how many cores are free. HALF the cores (`cpu_count() // 2`), because
-# `cpu_count()` counts hardware THREADS and a TCG guest is a busy CPU
-# thread plus its I/O -- so half the threads is roughly one guest per
-# physical core, and going past that oversubscribes and turns wall-clock
-# into settle flakes rather than speed (measurable: at five concurrent
-# guests on an 8-core box both gfxdemo and notepad failed comparisons
-# they pass alone).
+# THE SUITE WAITS RATHER THAN COMPUTES, which is why this is not "one per
+# physical core" any more. Measured 2026-10-09 on the 8-core/16-thread
+# dev host (fe39489f): 8 jobs 825s, 12 jobs 625-644s (three runs), 16
+# jobs 554-594s (three runs) -- while KVM at 8 jobs was 735s, only 11%
+# faster: the tools spend their time in settles, polls and real-time
+# waits, so a guest that is waiting leaves its thread to another. Every
+# failure across those six runs at 12 and 16 was a test bug since fixed
+# (window_identity_test read a log line once instead of waiting for it)
+# or an intermittent already in docs/bugs.md (occlusion, sysupdate). The
+# earlier half-the-threads rule came from gfxdemo and notepad failing
+# comparisons at five guests on an 8-core box, before the suite moved to
+# waits the app reports.
 #
-# The CAP is 12, raised from 8 in the pass that converted menubar and
-# taskmgr to observable waits (so the whole suite waits on something the
-# app SAYS, not a sleep). The cap only bites on a big host: on an 8-core
-# / 16-thread machine `//2` is already 8, so nothing changes there; a
-# 24-thread box now gets 12. It is a ceiling against oversubscription,
-# not a target -- do not raise it above `//2` for a given host.
-DEFAULT_JOBS = min(12, max(2, (os.cpu_count() or 4) // 2))
+# THE FLOOR IS THE SLOWEST TOOL: ~5,950 tool-seconds over 16 jobs is
+# ~370s, and screensaver_test alone is ~260s, so past 16 the run cannot
+# get much shorter -- the cap is where measuring stopped, not a guess.
+# A new tool that waits on a fixed sleep rather than on what the app
+# says is what turns more jobs into flakes; COST_S orders the longest
+# first so the tail is short.
+DEFAULT_JOBS = min(16, max(2, os.cpu_count() or 4))
 
 # In rough dependency order: the widget toolkit first, so a toolkit
 # regression is reported before the apps built on it start failing for
