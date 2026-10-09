@@ -874,7 +874,7 @@ run on, not by order.
 - [x] ~~Dead keys on or off~~ DONE 2026-10-05 -- `system.keyboard_dead_keys`, for every layout at once
 - [ ] The on-screen keyboard should draw the CONFIGURED layout, not its own copy of US QWERTY -- it still types US whatever is set
 - [ ] A virtual-keyboard protocol, so the on-screen keyboard can be a ring-3 app instead of compositor code
-- [ ] The keyboard translator compiled into ring 3, so the on-screen keyboard types the configured layout -- `docs/input-policy-design.md` stage 1, picked 2026-10-09
+- [ ] The keyboard translator in ring 3 too, for the on-screen keyboard -- `docs/input-policy-design.md` stage 1
 
 - [ ] `settings_init()` as initcalls too -- the last hand list; its order is the Settings sidebar's, so it needs an explicit order first
 
