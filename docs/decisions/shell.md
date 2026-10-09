@@ -608,7 +608,9 @@ sink is still known.
 *What it is not.* `/bin/strace` does not print the trace, and that is
 the design rather than a stub: relaying would mean the kernel handing
 every line to a ring-3 process through a channel that does not exist,
-for text `dmesg` already has. It also cannot attach to a running
+for text `dmesg` already has. (That channel exists now -- the record
+ring, `SPAWN_TRACE_RING`, 2026-10-09 -- and `docs/trace-design.md`
+re-argues this paragraph.) It also cannot attach to a running
 process, follow children, or filter by syscall -- all of which want
 `ptrace`, and none of which anything here has asked for.
 

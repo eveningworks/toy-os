@@ -72,7 +72,20 @@ int strace_active(void);
 // line with the real result once the client re-enters the syscall.
 void strace_begin(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2);
 void strace_end(uint64_t nr, uint64_t rax);
-void strace_end_noreturn(void);
+void strace_end_noreturn(uint64_t nr);
+// A call that PARKED and has now been woken: the text still says "= ?"
+// (stage 1 keeps the line as it was), the record carries `rax`.
+void strace_end_resumed(uint64_t nr, uint64_t rax);
+
+// THE RECORD RING (abi/trace_abi.h). strace_ring_check() resolves a
+// SPAWN_TRACE_RING name to an shm index the caller created, or a
+// negative errno; strace_arm_ring() hands it to the next claim, with the
+// arm. strace_wait_for_room() is the dispatcher's first call for a
+// traced syscall: with no room for its two records it rewinds the call
+// and sleeps, returns 1, and the dispatcher must return at once.
+int strace_ring_check(const char *name, int pid);
+void strace_arm_ring(int idx);
+int strace_wait_for_room(uint64_t *regs);
 
 // The pure formatting core, exposed for kernel/proc/strace_test.c.
 // Writes "name(args...)" (no return value, no newline) into `out` and

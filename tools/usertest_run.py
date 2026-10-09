@@ -335,6 +335,10 @@ TESTS = [
     # layout: what the on-screen keyboard types with. input_test's KTESTs
     # pass whether or not ring 3 links a byte of it.
     ("keymap_test", 0, None, None),
+    # strace's record ring: the program traces itself through a one-page
+    # ring. SPAWNED, because the legacy `run` loader's process has no
+    # slot to arm a trace from (strace_claim() refuses pid 0).
+    ("tracering_test", None, None, None),
     # lib/uappentry: the one desktop-entry reader (Task Manager, Crash
     # Reports), against the shipped entries and hand-written ones.
     ("appentry_test", 0, None, None),

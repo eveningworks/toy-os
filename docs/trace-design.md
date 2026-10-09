@@ -7,8 +7,8 @@ decision rather than starting from nothing: `docs/decisions/shell.md`,
 "`strace` is a `/bin` program, and the trace goes to the tracer's
 terminal".
 
-**NOTHING HERE IS BUILT (written 2026-10-09).** The stage markers go on
-the headings when that changes.
+**STAGE 1 IS BUILT (2026-10-09).** The stage markers are on the
+headings.
 
 ## The finding that shapes the plan
 
@@ -53,7 +53,7 @@ debugger on the record stream.
 |---|---|
 | the hooks | three in `syscall_dispatch()` (`kernel/proc/syscall.c`): `strace_begin()` before the handler, `strace_end()` or `strace_end_noreturn()` after |
 | what is formatted in ring 0 | everything: the name, three argument kinds (`A_PATH`, `A_BUF`, `A_OFLAGS` beside int/fd/hex), the return value, 14 errno names -- `kernel/proc/strace.c`, 507 lines |
-| arguments | THREE registers (`struct syscall_desc`'s `args[3]`), so a 4- to 6-argument call is traced short |
+| arguments | three registers -- ALL the ABI has (RDI, RSI, RDX; `userland/rt/sys.c`): a call needing more passes a struct, and the struct's contents (`spawn_msg`, `setting_msg`) are what the trace cannot show |
 | strings | copied from the tracee at entry (`vmm_copy_from_user()` with its pml4), 32 bytes before `...` |
 | a call that parks | prints `= ?` and never its result -- a `read` on a pipe, `waitpid`, `SYS_WAIT_EVENT` |
 | who is traced | ONE address space machine-wide (`g_traced_pml4`), named at the spawn (`SPAWN_TRACE`), followed across exec, not across fork |
@@ -72,7 +72,7 @@ stream it already has. Only attaching and the debugger need a stop.
 
 | | |
 |---|---|
-| **A. A record stream (recommended)** | `ktrace`'s shape: a fixed-size record per syscall entry and exit -- pid, number, all six argument registers, the return value, plus the bytes of any path or buffer argument, copied at entry -- written into a ring the tracer owns. The traced process never stops for the tracer. |
+| **A. A record stream (recommended)** | `ktrace`'s shape: a fixed-size record per syscall entry and exit -- pid, number, the three argument registers, the return value, plus the bytes of any path or buffer argument, copied at entry -- written into a ring the tracer owns. The traced process never stops for the tracer. |
 | B. Stops | Linux `strace`'s shape: the tracee stops at entry and exit, and the tracer reads registers and memory. One mechanism for both tools, and the expensive one -- and it needs the whole debugger's machinery (stop, cross-process read, registers) before `strace` works again. |
 | C. Nothing | Keep the 2026-08-23 decision: format in ring 0, extend it there. |
 
@@ -97,16 +97,24 @@ for space.
 
 Each stage has a caller of its own before the next one needs it.
 
-### Stage 1 -- records, beside the text
+### Stage 1 -- records, beside the text -- BUILT 2026-10-09
 
 `SPAWN_TRACE` gains a ring: the tracer creates an shm object, grants it
 to nobody, and names it in the spawn message; the kernel writes entry
 and exit records into it and bumps the tracer's wakeword. **The text
 path keeps working unchanged**, so stage 1 can be checked against it
-line for line. Records carry all six argument registers (fixing the
-3-argument limit for the record), and a call that parks gets its EXIT
-record when it finally returns -- Linux's `<... read resumed>`, which
-`= ?` cannot say today.
+line for line. A call that parks gets its EXIT record when it finally
+returns -- Linux's `<... read resumed>`, which `= ?` cannot say today.
+The handler resumes inside `syscall_dispatch()` after the wake (a real
+context switch), so the value is in RAX by then and the record is
+written in the tracee's own context.
+
+**A full ring stops the tracee BEFORE the call, not after it** (choice
+2A, as built): at entry, with no room for an entry and an exit record,
+the dispatcher rewinds RIP over the 2-byte `int $0x80`, sleeps the
+tracee a millisecond and puts RAX back, so the call is re-issued once
+the tracer has drained -- the signal path's SA_RESTART rewind. Nothing
+has run, so nothing is lost, and nothing parks with interrupts off.
 
 ### Stage 2 -- `/bin/strace` decodes, and the kernel's formatter goes
 
@@ -152,7 +160,7 @@ until then every binary was built on a host that has GDB already.
 Not containment -- the formatter parses nothing a stranger sends; it
 reads the tracee's own memory with bounds already checked. It buys
 **the missing features without `ptrace`** (`-o`, `-e`, `-c`, children,
-6 arguments, the result of a call that blocked), about 350 lines out of
+the result of a call that blocked), about 350 lines out of
 ring 0, and a record format the debugger's `catch syscall` reuses.
 
 ## The case against
@@ -163,13 +171,13 @@ ring 0, and a record format the debugger's `catch syscall` reuses.
   tracer that dies leaves a ring nobody drains -- choice 2A must not
   stop the tracee for ever, so a ring whose owner has exited is
   abandoned and tracing ends.
-- **Stage 1 alone fixes `= ?` and the 3-argument limit** even if stage 2
+- **Stage 1 alone fixes `= ?`** even if stage 2
   never happens -- the strongest point in favour, as stages 1-2 were
   for the netstack.
 
 ## Decided so far
 
 Picked 2026-10-09: **1A, a record stream**, and **2A, a full ring
-stops the tracee** at its return edge. Choice 3 was not put to the
+stops the tracee** -- before its call, by re-issue (Stage 1). Choice 3 was not put to the
 maintainer and takes its recommendation, **3A, a generated table**,
 unless reopened. The debugger's stage 4 is not scheduled.

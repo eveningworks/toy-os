@@ -1028,6 +1028,7 @@ void sys_spawn_opts_init(struct sys_spawn_opts *o) {
     o->stderr_fd = -1;
     o->pgid = 0;
     o->flags = 0;
+    o->trace_ring = 0;
 }
 
 int sys_spawn_opts(const char *path, const struct sys_spawn_opts *o) {
@@ -1055,6 +1056,10 @@ int sys_spawn_opts(const char *path, const struct sys_spawn_opts *o) {
     msg.stderr_fd = o->stderr_fd;
     if (o->stderr_fd != -1) flags |= SPAWN_STDERR;
     msg.pgid = o->pgid;
+    if (o->trace_ring) {
+        msg.trace_ring = o->trace_ring;
+        flags |= SPAWN_TRACE_RING;
+    }
     msg.flags = flags;
     int64_t rc = syscall1(SYS_SPAWN, (uint64_t)(uintptr_t)&msg);
 

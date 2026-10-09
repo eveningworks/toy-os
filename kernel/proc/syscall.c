@@ -119,6 +119,7 @@ void syscall_dispatch(uint64_t *regs) {
     // but emitted after the handler returns, once the return value is
     // known -- see kernel/proc/strace.c's top comment.
     int traced = strace_active();
+    if (traced && strace_wait_for_room(regs)) return;
     // Set by a handler that parked its caller instead of returning a
     // value (SYS_WAIT_EVENT, SYS_WAITPID, a pipe SYS_READ) -- see the
     // strace_end() call at the bottom.
@@ -130,7 +131,7 @@ void syscall_dispatch(uint64_t *regs) {
             // process_context_exit() path doesn't, and a thread exit
             // switches away), so the line has to be closed out before
             // dispatching rather than after.
-            strace_end_noreturn();
+            strace_end_noreturn(nr);
             traced = 0;
         }
     }
@@ -157,7 +158,9 @@ void syscall_dispatch(uint64_t *regs) {
     scheduler_kstack_track_syscall((int)nr);
 
     if (traced) {
-        if (blocked) strace_end_noreturn(); // "= ?" -- no value yet, see above
+        // A call that parked has been woken by now -- the switch away
+        // returns here -- so the value the wake wrote is in RAX.
+        if (blocked) strace_end_resumed(nr, regs[14]);
         else         strace_end(nr, regs[14]);
     }
 }

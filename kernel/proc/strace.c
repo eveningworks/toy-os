@@ -95,6 +95,11 @@
 #include "scheduler.h" // scheduler_current_pid() -- who armed the trace
 #include "fs.h"
 #include "knum.h"
+#include "string.h"
+#include "shm.h"       // the record ring is the tracer's shm object
+#include "futex.h"     // futex_note_ready() -- the tracer's wakeword
+#include "clocksource.h" // the monotonic clock sleep deadlines are on
+#include "trace_abi.h"
 
 // One traced address space at a time (decision 1 above). 0 = none;
 // a real CR3 is never 0, same assumption g_heap_pml4 makes.
@@ -119,7 +124,64 @@ static size_t g_len = 0;
 
 void strace_arm_for_current(void) { g_armed_by = scheduler_current_pid(); }
 
-void strace_disarm(void) { g_armed_by = 0; }
+// ---- the record ring (docs/trace-design.md, stage 1) -------------------
+//
+// BESIDE THE TEXT, not instead of it: every line still reaches the
+// tracer's terminal, so the records can be checked against it. One ring,
+// like one traced address space.
+static int g_ring = -1;          // shm index of the active ring, or -1
+static int g_ring_owner;         // the tracer's pid: it drains, we wait on it
+static uint32_t g_ring_nrec;     // slots, clamped to what the object holds
+static int g_ring_armed = -1;    // a ring waiting for the spawn to claim it
+
+static struct trace_ring_hdr *ring_hdr(int idx) {
+    return (struct trace_ring_hdr *)(uintptr_t)shm_frame(idx, 0);
+}
+
+// The slots the object can really hold, whatever the header claims: the
+// tracer wrote `nrec`, and a value past its own pages would have the
+// kernel write past them.
+static uint32_t ring_capacity(int idx) {
+    uint64_t bytes = shm_npages(idx) * 4096;
+    if (bytes <= TRACE_HDR_SIZE) return 0;
+    uint64_t fit = (bytes - TRACE_HDR_SIZE) / TRACE_REC_SIZE;
+    uint32_t want = ring_hdr(idx)->nrec;
+    return want < fit ? want : (uint32_t)fit;
+}
+
+int strace_ring_check(const char *name, int pid) {
+    int idx = shm_lookup(name);
+    if (idx < 0) return -ENOENT;
+    // THE TRACER'S OWN OBJECT ONLY: a ring somebody else made would let a
+    // spawner fill another process's memory with its child's syscalls.
+    if (shm_creator(idx) != pid) return -EPERM;
+    if (!shm_npages(idx) || ring_hdr(idx)->magic != TRACE_RING_MAGIC || ring_capacity(idx) < 2)
+        return -EINVAL;
+    return idx;
+}
+
+void strace_arm_ring(int idx) {
+    if (g_ring_armed >= 0) shm_put(g_ring_armed);
+    shm_get(idx);   // ours until the trace ends, whatever the tracer does
+    g_ring_armed = idx;
+}
+
+static void ring_drop(void) {
+    if (g_ring >= 0) shm_put(g_ring);
+    g_ring = -1;
+}
+
+void strace_disarm(void) {
+    // ONLY THE CALLER'S OWN ARM. Every sys_spawn() ends with a disarm,
+    // and a spawn can sleep loading its ELF (a disk wait under the mount
+    // lock) -- so another process's spawn finishing in that window would
+    // otherwise clear this one's arm, and its child would start untraced.
+    if (g_armed_by != scheduler_current_pid()) return;
+    g_armed_by = 0;
+    // An arm the spawn never collected: the spawn failed.
+    if (g_ring_armed >= 0) shm_put(g_ring_armed);
+    g_ring_armed = -1;
+}
 
 void strace_claim(uint64_t pml4_phys) {
     if (!g_armed_by || !pml4_phys) return;
@@ -128,6 +190,13 @@ void strace_claim(uint64_t pml4_phys) {
     // A kernel-context spawn reports pid 0, which can never match a
     // real arm, so the legacy loader is excluded for free.
     if (g_armed_by != scheduler_current_pid()) return;
+    ring_drop();
+    if (g_ring_armed >= 0) {
+        g_ring = g_ring_armed;
+        g_ring_armed = -1;
+        g_ring_owner = g_armed_by;
+        g_ring_nrec = ring_capacity(g_ring);
+    }
     g_armed_by = 0;
     g_traced_pml4 = pml4_phys;
     g_calls = 0;
@@ -464,6 +533,7 @@ void strace_rekey(uint64_t old_pml4, uint64_t new_pml4) {
 void strace_release(uint64_t pml4_phys) {
     if (!g_traced_pml4 || g_traced_pml4 != pml4_phys) return;
     g_traced_pml4 = 0;
+    ring_drop();
 
     // **THE SUMMARY IS THE KERNEL'S, because only the kernel can count.**
     // The old builtin read strace_call_count() after the traced program
@@ -481,6 +551,89 @@ void strace_release(uint64_t pml4_phys) {
 }
 
 
+// ---- writing records -------------------------------------------------------
+
+static uint32_t ring_room(void) {
+    struct trace_ring_hdr *h = ring_hdr(g_ring);
+    uint32_t used = h->head - h->tail;
+    // A tail past the head is a tracer writing nonsense: no room, which
+    // stalls only its own tracee -- it could SIGSTOP that anyway.
+    return used > g_ring_nrec ? 0 : g_ring_nrec - used;
+}
+
+static void ring_put(struct trace_rec *r) {
+    if (g_ring < 0 || !ring_room()) return;
+    struct trace_ring_hdr *h = ring_hdr(g_ring);
+    uint32_t seq = h->head;
+    r->seq = seq;
+    // Records are 128 bytes after a 128-byte header, so one never
+    // straddles a page: each is written through a single frame.
+    uint64_t off = TRACE_HDR_SIZE + (uint64_t)(seq % g_ring_nrec) * TRACE_REC_SIZE;
+    void *slot = (void *)(uintptr_t)(shm_frame(g_ring, off / 4096) + off % 4096);
+    k_memcpy(slot, r, sizeof *r);
+    __asm__ volatile ("" ::: "memory");   // the record before the head that publishes it
+    h->head = seq + 1;
+    futex_note_ready(g_ring_owner);
+}
+
+// A path or buffer argument's bytes, copied NOW: read later, the tracee
+// could have changed them. The first such argument only, through the
+// same validation the text line uses.
+static void rec_blob(struct trace_rec *r, uint64_t nr, uint64_t pml4) {
+    r->blob_arg = 0xFF;
+    const struct syscall_desc *d = syscall_desc_at(nr);
+    if (!d || !pml4) return;
+    for (int i = 0; i < 3; i++) {
+        uint64_t ptr = r->a[i], max;
+        int path = d->args[i] == A_PATH;
+        if (path) max = FS_PATH_MAX;
+        else if (d->args[i] == A_BUF && i < 2) max = r->a[i + 1];
+        else continue;
+        r->blob_arg = (uint8_t)i;
+        if (!ptr || !max || !vmm_validate_user_range(pml4, ptr, max)) return;
+        char src[TRACE_BLOB_MAX + 1];
+        uint64_t want = max < sizeof src ? max : sizeof src;
+        if (!vmm_copy_from_user(pml4, src, ptr, want)) return;
+        uint32_t n = 0;
+        while (n < TRACE_BLOB_MAX && n < want && !(path && src[n] == 0)) n++;
+        k_memcpy(r->blob, src, n);
+        r->blob_len = (uint16_t)n;
+        r->blob_cut = path ? (n == TRACE_BLOB_MAX && want > n && src[n] != 0) : max > n;
+        return;
+    }
+}
+
+static void rec_exit(uint64_t nr, int kind, uint64_t rax) {
+    if (g_ring < 0) return;
+    struct trace_rec r;
+    k_memset(&r, 0, sizeof r);
+    r.pid = scheduler_current_pid();
+    r.nr = (uint16_t)nr;
+    r.kind = (uint16_t)kind;
+    r.blob_arg = 0xFF;
+    r.ret = (int64_t)rax;
+    ring_put(&r);
+}
+
+int strace_wait_for_room(uint64_t *regs) {
+    if (g_ring < 0 || !strace_active() || ring_room() >= 2) return 0;
+    // A tracer that is gone will never drain: the ring is abandoned and
+    // the text trace carries on alone. Waiting on it would hang the
+    // tracee for good.
+    if (!scheduler_pid_alive(g_ring_owner)) { ring_drop(); return 0; }
+    ring_hdr(g_ring)->stalls++;
+    // RE-ISSUE THE CALL rather than hold it: back over the 2-byte
+    // `int $0x80`, sleep, and RAX (which a wake writes) back to the
+    // number -- so it runs again once there is room for both its
+    // records. Nothing has run, so nothing is lost; the signal path
+    // rewinds the same way for SA_RESTART.
+    uint64_t nr = regs[SCHED_TF_RAX];
+    regs[SCHED_TF_RIP] -= 2;
+    scheduler_sleep_current(regs, clocksource_now_ns() + 1000000ull);
+    regs[SCHED_TF_RAX] = nr;
+    return 1;
+}
+
 static void emit_line(void) {
     ap_ch(g_line, sizeof(g_line), &g_len, '\n');
     sink_write(g_line);
@@ -492,6 +645,15 @@ void strace_begin(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2) {
     g_calls++;
     g_len = strace_format_call(g_line, sizeof(g_line), nr, a0, a1, a2,
                                 vmm_current_pml4());
+    if (g_ring < 0) return;
+    struct trace_rec r;
+    k_memset(&r, 0, sizeof r);
+    r.pid = scheduler_current_pid();
+    r.nr = (uint16_t)nr;
+    r.kind = TRACE_ENTRY;
+    r.a[0] = a0; r.a[1] = a1; r.a[2] = a2;
+    rec_blob(&r, nr, vmm_current_pml4());
+    ring_put(&r);
 }
 
 void strace_end(uint64_t nr, uint64_t rax) {
@@ -499,9 +661,17 @@ void strace_end(uint64_t nr, uint64_t rax) {
     strace_format_ret(ret, sizeof(ret), nr, rax);
     ap_str(g_line, sizeof(g_line), &g_len, ret);
     emit_line();
+    rec_exit(nr, TRACE_EXIT, rax);
 }
 
-void strace_end_noreturn(void) {
+void strace_end_noreturn(uint64_t nr) {
     ap_str(g_line, sizeof(g_line), &g_len, " = ?");
     emit_line();
+    rec_exit(nr, TRACE_NORETURN, 0);
+}
+
+void strace_end_resumed(uint64_t nr, uint64_t rax) {
+    ap_str(g_line, sizeof(g_line), &g_len, " = ?");
+    emit_line();
+    rec_exit(nr, TRACE_RESUMED, rax);
 }

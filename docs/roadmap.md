@@ -1266,7 +1266,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] Tracepoints that compile out when disabled, so they can live on hot paths
 - [x] ~~`strace` as a `/bin` program, not a kernel builtin~~ DONE 2026-08-23 -- `SPAWN_TRACE`, and the trace reaches the tracer's terminal
 - [ ] `strace` extended to follow a process's children once `fork()` exists
-- [ ] `strace` decoding in ring 3, over a record stream -- `docs/trace-design.md`, choices picked 2026-10-09
+- [ ] `strace` decoding in ring 3, over a record stream -- `docs/trace-design.md`; stage 1 (the ring) built 2026-10-09
 
 ### Crash reporting & postmortem debugging
 

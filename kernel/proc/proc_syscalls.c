@@ -668,6 +668,24 @@ int sys_spawn(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         return 0;
     }
+    // THE RECORD RING, checked before anything is created: a spawn that
+    // asked for records and cannot have them must not start the child
+    // untraced.
+    int trace_ring = -1;
+    if (msg.flags & SPAWN_TRACE_RING) {
+        char ring_name[SHM_NAME_MAX];
+        if (!(msg.flags & SPAWN_TRACE) ||
+            !vmm_copy_string_from_user(pml4, ring_name, (uint64_t)(uintptr_t)msg.trace_ring,
+                                       sizeof ring_name)) {
+            c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+            return 0;
+        }
+        trace_ring = strace_ring_check(ring_name, scheduler_current_pid());
+        if (trace_ring < 0) {
+            c->regs[14] = (uint64_t)(int64_t)trace_ring;
+            return 0;
+        }
+    }
 
     struct spawn_args a;
     int rc = spawn_args_collect(pml4, &msg, &a, "spawn");
@@ -744,6 +762,7 @@ int sys_spawn(struct syscall_ctx *c) {
         // else's spawn can collect it. The disarm covers the spawn
         // having failed before an address space existed.
         if (msg.flags & SPAWN_TRACE) strace_arm_for_current();
+        if (trace_ring >= 0) strace_arm_ring(trace_ring);
         int pid = scheduler_spawn_group(a.path, a.args, a.args_len, stdout_desc,
                                          stdin_desc, stderr_desc, a.env, msg.pgid,
                                          c->pml4);

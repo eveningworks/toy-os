@@ -924,6 +924,11 @@ struct spawn_msg {
     // the terminal the caller is on is the ordinary case (systemd's
     // StandardError=inherit), not a mistake to refuse.
     int32_t stderr_fd;
+
+    // With SPAWN_TRACE_RING: the NAME of an shm object this process
+    // created, shaped as abi/trace_abi.h says, which the kernel fills
+    // with the child's syscalls as records. Not read without the flag.
+    const char *trace_ring;
 };
 
 // The child is TRACED: every syscall it makes is decoded and printed
@@ -988,9 +993,15 @@ struct spawn_msg {
 // rest on the screen (tools/ansi_cursor_test.py drew half a picture).
 #define SPAWN_DETACH 32
 
+// With SPAWN_TRACE: the trace also goes, as records, into the ring
+// `trace_ring` names (abi/trace_abi.h) -- for a tracer that decodes in
+// ring 3. The text lines go to the terminal as before. A ring that is
+// missing, not the caller's own, or malformed is -EINVAL.
+#define SPAWN_TRACE_RING 64
+
 // Every flag this kernel knows. Anything outside it is -EINVAL.
 #define SPAWN_FLAGS_ALL (SPAWN_TRACE | SPAWN_FOREGROUND | SPAWN_ARGV | SPAWN_SETSID | \
-                         SPAWN_STDERR | SPAWN_DETACH)
+                         SPAWN_STDERR | SPAWN_DETACH | SPAWN_TRACE_RING)
 
 // The most an environment blob may be, including its terminator. It has
 // to fit the child's single argv/env stack page alongside the strings

@@ -2356,7 +2356,10 @@ in it: a spawner preempted between arming and creating has its trace
 claimed by whoever else spawns. Naming the child at creation has no
 window. The arm that remains inside the kernel records WHO asked
 (`strace_arm_for_current()`), so even that one line cannot be collected
-by somebody else.
+by somebody else -- **nor cleared by somebody else**: the spawn can SLEEP
+loading the ELF, and every other spawn ends in `strace_disarm()`, which
+therefore touches only its caller's arm (on the ASUS a tracer started
+from a remote session lost its arm this way every time).
 
 **AN UNKNOWN SPAWN FLAG IS -EINVAL, NOT IGNORED.** A flag word that
 drops what it does not recognise can never be extended safely: an old
@@ -2378,6 +2381,17 @@ a lookup would find ITS descriptors. And it is stored as a tty INDEX,
 not a pointer, so a terminal destroyed under a running trace cannot
 leave a dangling one -- tty0's output hook is `vga_putc()`, so the
 console is index 0 rather than a special case.
+
+**A TRACER CAN ALSO TAKE THE TRACE AS RECORDS, AND A FULL RING NEVER
+DROPS ONE.** `SPAWN_TRACE_RING` names an shm object the tracer created
+(`abi/trace_abi.h`); the kernel writes an entry and an exit record per
+call beside the text line, with path and buffer bytes copied at the
+call. With no room for both records the call is RE-ISSUED -- RIP back
+over `int $0x80`, a 1 ms sleep on `clocksource_now_ns()` (NOT
+`ktime_now_ns()`, which is wall time: a deadline on it never comes), RAX
+restored -- so nothing has run and nothing is lost. A parked call's exit
+is written when it resumes, with the woken value. `/tests/tracering_test`
+checks all of it; `docs/trace-design.md` is the plan it is stage 1 of.
 
 **THE SUMMARY LINE IS THE KERNEL'S, because only the kernel can count.**
 `+++ N syscalls traced +++` is printed at `strace_release()`, the one

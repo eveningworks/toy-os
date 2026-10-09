@@ -1008,6 +1008,9 @@ struct sys_spawn_opts {
     int         stderr_fd;
     int         pgid;       // 0 inherits, PGID_NEW leads a new group
     unsigned    flags;      // SPAWN_* (abi/syscall_abi.h)
+    // With SPAWN_TRACE: an shm object of ours to receive the trace as
+    // records (abi/trace_abi.h), or NULL for the text trace alone.
+    const char *trace_ring;
 };
 
 // The -1s that a zeroed struct would get wrong. Call it, then override.
