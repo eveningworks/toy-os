@@ -59,6 +59,7 @@ void options_apply(void) {
         fv->single_click = g_opt.single_click;
         fv->hide_ext = !g_opt.extensions;
         uui_fileview_set_thumb(fv, g_opt.thumbs ? pane_thumb : 0, 0);
+        uui_fileview_set_badge(fv, g_opt.thumbs ? pane_badge : 0);
     }
     reload_panes();   // hidden files come and go with the filter
 }

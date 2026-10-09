@@ -4,6 +4,7 @@
 #include "lib/uthumb.h"
 #include "lib/ufile.h"
 #include "lib/uvid.h"
+#include "lib/uduration.h"
 #include "kpath.h"
 #include "caltime.h"   // cal_rtc_to_epoch -- the KERNEL's, linked into ring 3
 #include "ui/ulog.h"
@@ -33,6 +34,7 @@ struct thumb {
     int px;
     enum thumb_state state;
     struct uimg im;           // valid when READY
+    char note[12];            // a video's length, "1:17"; "" for none
 };
 
 static struct uthumb_config g_cfg;
@@ -51,6 +53,7 @@ struct thumb_job {
     struct uimg im;
     int rc;                        // 0 = a picture, -1 = not one
     int cached;                    // it came off the disk, not a decoder
+    char note[12];                 // a video's length
 };
 
 static struct thumb_job *g_job;    // in flight
@@ -188,6 +191,18 @@ static void cache_store(const char *cache, const struct uimg *im) {
 // Everything below runs off the main thread and touches nothing but its
 // own job.
 static int thumb_produce(struct thumb_job *j) {
+    // A VIDEO carries a NOTE beside its picture, its length -- read
+    // from its index here, off the draw path, cached copy or not (the
+    // cache holds pictures only).
+    uint8_t head[16];
+    size_t got = ufile_read_head(j->path, head, sizeof head);
+    int video = got >= 4 && uvid_probe(head, got);
+    struct uvid_info in;
+    if (video && uvid_load_info(j->path, &in) == 0 && in.ms)
+        uduration_clock(in.ms, j->note, sizeof j->note);
+    else
+        video = video ? 2 : 0;          // a video whose index will not read
+
     // THE CACHE FIRST: one small QOI read instead of a full decode and a
     // rescale, which for a photograph is the difference the cache exists
     // for. A miss costs one stat.
@@ -199,15 +214,12 @@ static int thumb_produce(struct thumb_job *j) {
 
     // Sniff before loading: uimg_load() reads the WHOLE file, and most
     // files in a directory are not images.
-    uint8_t head[16];
-    size_t got = ufile_read_head(j->path, head, sizeof head);
     if (got < 4) return -1;
     if (!uimg_probe(head, got)) {
-        if (!uvid_probe(head, got)) return -1;
+        if (video != 1) return -1;
         // A VIDEO's picture is a frame a tenth of the way in (at most
         // 3 s): the first is black as often as not, a fade's start.
-        struct uvid_info in;
-        uint32_t at = uvid_load_info(j->path, &in) == 0 ? in.ms / 10 : 0;
+        uint32_t at = in.ms / 10;
         if (at > 3000) at = 3000;
         return uvid_still(j->path, at, j->px, j->px, &j->im) == 0 ? 0 : -1;
     }
@@ -355,6 +367,11 @@ const struct uimg *uthumb_get(const char *path, const struct rtc_time *mtime,
     return t->state == THUMB_READY ? &t->im : 0;
 }
 
+const char *uthumb_note(const char *path, int px) {
+    const struct thumb *t = thumb_find(path, px);
+    return t && t->state == THUMB_READY && t->note[0] ? t->note : 0;
+}
+
 int uthumb_failed(const char *path, int px) {
     const struct thumb *t = thumb_find(path, px);
     return t && t->state == THUMB_NOT_IMAGE;
@@ -372,6 +389,7 @@ int uthumb_posted(void) {
             uimg_free(&j->im);          // nobody is waiting for it now
         } else if (j->rc == 0) {
             t->im = j->im;
+            strlcpy(t->note, j->note, sizeof t->note);
             t->state = THUMB_READY;
             changed = 1;
             // THE CACHE WRITE HAPPENS HERE, ON THE MAIN THREAD, with the

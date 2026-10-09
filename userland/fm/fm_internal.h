@@ -305,6 +305,8 @@ void tree_toggle(void *ctx, int id, int expand);
 // enqueues and posts POST_THUMB.
 const struct uimg *pane_thumb(void *ctx, const char *dir,
                                const struct sys_dirent *e, int px);
+// uui_fileview's badge callback: a video's length, from the same lookup.
+int pane_badge(void *ctx, const char *dir, const struct sys_dirent *e, int px, char *out, int cap);
 // POST_THUMB arrived -- a decode finished, or a lookup wants one
 // started. 1 if a thumbnail became ready.
 int thumb_posted(void);

@@ -2465,6 +2465,15 @@ window without going through it will find its layout polls timing out.
   16) with `tiny.yuv`, FFmpeg's decode of it, as `uvid_test`'s
   reference; `tiny.avi`, whose PCM is a formula of the sample index.
   Needs ffmpeg with libfreetype; nothing in the build runs it.
+- **`fetch_video.py`** -- Big Buck Bunny (the Blender Foundation, CC BY
+  3.0) for the Video Player, as an `EXTRAS=1` item in
+  `fetch_extras.py`'s registry: the Foundation's own 640x360 release,
+  PINNED BY SHA-256, extracted with Python's zipfile and transcoded by the
+  HOST's ffmpeg to MPEG-1 + MP2 (toy-os decodes neither H.264 nor AAC),
+  the first three minutes by default (`--full` for all ten), into
+  `data/videos-extra/` (gitignored) with the credit beside it. `--from
+  ZIP` skips the download. A film tests what the generated clips cannot:
+  scene cuts, fades, a rate-controlled encoder and a real soundtrack.
 - **`gen_cursors.py`** -- generates the shipped cursor themes into
   `data/cursors/`, which the Makefile's `seed` target stages onto the
   image. **Into `data/`, NOT `seed/sync/`** -- that tree is gitignored

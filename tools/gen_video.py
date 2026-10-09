@@ -146,10 +146,13 @@ def dusk(out):
     sx = f"(320+120*cos({ph}))"
     sy = f"(205+25*sin({ph}))"
     sun = f"exp(-(pow(X-{sx},2)+pow(Y-{sy},2))/1800)"
+    # CLIPPED BOTH WAYS: geq WRAPS a value outside 0..255 rather than
+    # clamping it, and a sine that dips a channel below 0 turns the top
+    # of the sky magenta for a few seconds of every loop.
     vf = (f"color=s=640x360:r=30:d=12,format=rgb24,"
-          f"geq=r='min(255,29+180*Y/H+40*sin({ph}+Y/90)+230*{sun})':"
-          f"g='min(255,27+90*pow(Y/H,2)+200*{sun})':"
-          f"b='min(255,58+40*(1-Y/H)+30*cos({ph}+Y/120)+120*{sun})'")
+          f"geq=r='clip(29+180*Y/H+40*sin({ph}+Y/90)+230*{sun},0,255)':"
+          f"g='clip(27+90*pow(Y/H,2)+200*{sun},0,255)':"
+          f"b='clip(58+40*(1-Y/H)+30*cos({ph}+Y/120)+120*{sun},0,255)'")
     ffmpeg(["-f", "lavfi", "-i", vf, "-an", "-c:v", "mpeg1video", "-bf", "2",
             "-g", "30", "-b:v", "600k"] + BITEXACT + ["-f", "mpeg", out])
 

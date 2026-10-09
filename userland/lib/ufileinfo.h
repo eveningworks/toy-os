@@ -31,6 +31,11 @@ struct ufileinfo {
     char img_format[16];
     char img_detail[UFI_TEXT];
 
+    int vid_w, vid_h;             // a video's, from lib/uvid.h; 0 when not one
+    uint32_t vid_fps100;          // frames a second x 100; 0 unknown
+    char vid_detail[UFI_TEXT];    // "MPEG-1"
+    char vid_audio[UFI_TEXT];     // "MP2, 44.1 kHz stereo"; "" for none
+
     int has_tags;                 // a sound's, from utags
     char title[UFI_TEXT], artist[UFI_TEXT], album[UFI_TEXT];
     uint32_t length_ms;
@@ -44,8 +49,8 @@ struct ufileinfo {
 };
 
 // What to read beyond the stat.
-#define UFI_HEADERS 1   // a picture's headers or a sound's tags -- a file read,
-                        // made only when the extension says picture or sound
+#define UFI_HEADERS 1   // a picture's headers, a sound's tags or a video's index --
+                        // a file read, made only when the extension says one
 #define UFI_WALK    2   // start counting a folder (ufileinfo_walk() goes on)
 #define UFI_OPENS   4   // what opens it: a scan of every desktop entry
 

@@ -8,6 +8,8 @@
 #include "kpath.h"
 #include "lib/uthumb.h"
 
+#include <string.h>
+
 static int wake(void *ctx) {
     (void)ctx;
     return uapp_post(g_app, POST_THUMB, 0);
@@ -32,6 +34,16 @@ const struct uimg *pane_thumb(void *ctx, const char *dir,
     if (!k_path_join(dir, e->name, path, sizeof path)) return 0;
     init_once();
     return uthumb_get(path, &e->modified, e->size, px);
+}
+
+int pane_badge(void *ctx, const char *dir, const struct sys_dirent *e, int px, char *out, int cap) {
+    (void)ctx;
+    char path[PATH_MAX_LEN];
+    if (!k_path_join(dir, e->name, path, sizeof path)) return 0;
+    const char *n = uthumb_note(path, px);
+    if (!n) return 0;
+    strlcpy(out, n, (size_t)cap);
+    return 1;
 }
 
 int thumb_posted(void) {

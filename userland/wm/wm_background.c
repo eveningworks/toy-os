@@ -76,7 +76,8 @@ static void read_settings(void) {
     // directories whose contents are trusted with the role.
     if (!strcmp(type, "live") && v[0] && !strchr(v, '/') && v[0] != '.') {
         // An EFFECT when there is a program by that name, else an
-        // animated picture -- the choice list is both directories.
+        // animated picture or a video -- the choice list is both
+        // directories.
         char path[128];
         struct sys_stat st;
         snprintf(path, sizeof path, "%s/%s", LIVEWALL_DIR, v);
@@ -87,6 +88,13 @@ static void read_settings(void) {
             if (sys_stat(path, &st) == 0) {
                 k_strlcpy(g_want, LIVEWALL_GIF_PLAYER, sizeof g_want);
                 k_strlcpy(g_arg, v, sizeof g_arg);
+            }
+            for (int i = 0; !g_want[0] && LIVEWALL_VIDEO_EXT[i]; i++) {
+                snprintf(path, sizeof path, "%s/%s.%s", LIVEWALL_ANIMATED_DIR, v, LIVEWALL_VIDEO_EXT[i]);
+                if (sys_stat(path, &st) == 0) {
+                    k_strlcpy(g_want, LIVEWALL_VIDEO_PLAYER, sizeof g_want);
+                    k_strlcpy(g_arg, v, sizeof g_arg);
+                }
             }
         }
     }

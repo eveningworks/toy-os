@@ -81,6 +81,13 @@ typedef const struct uimg *(*uui_fileview_thumb_fn)(void *ctx, const char *dir,
                                                      const struct sys_dirent *e,
                                                      int px);
 
+// A thumbnail's BADGE: a few characters drawn in a dark capsule at the
+// picture's bottom-right corner -- a video's length, Explorer's and
+// Dolphin's. Into `out`, returning 1; 0 for none. A LOOKUP, like the
+// thumbnail (lib/uthumb.h's uthumb_note()).
+typedef int (*uui_fileview_badge_fn)(void *ctx, const char *dir, const struct sys_dirent *e,
+                                     int px, char *out, int cap);
+
 // A VIRTUAL FOLDER: rows the CALLER supplies instead of a directory's,
 // with columns of its own -- KDE's KIO workers (trash:/, zip:/,
 // filenamesearch:/) and a Windows shell folder are this. The view's
@@ -162,6 +169,7 @@ struct uui_fileview {
 
     uui_fileview_thumb_fn thumb; // NULL = every file gets the generic icon
     void *thumb_ctx;
+    uui_fileview_badge_fn badge; // NULL = no thumbnail carries one
 
     uui_fileview_resolve_fn resolve; // NULL = every dir is a directory
     void *resolve_ctx;
@@ -296,6 +304,8 @@ void uui_fileview_set_filter(struct uui_fileview *fv,
                               uui_fileview_filter_fn fn, void *ctx);
 void uui_fileview_set_thumb(struct uui_fileview *fv,
                              uui_fileview_thumb_fn fn, void *ctx);
+// Called with the thumbnail's own `ctx`.
+void uui_fileview_set_badge(struct uui_fileview *fv, uui_fileview_badge_fn fn);
 // Virtual folders: `fn` answers a source for a dir it serves, else NULL.
 // Asked on every reload. See struct uui_fileview_source.
 void uui_fileview_set_resolver(struct uui_fileview *fv,

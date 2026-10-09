@@ -7,6 +7,7 @@
 #include "lib/usetting_text.h"
 #include "lib/ulivewall.h"
 #include "lib/uimg.h"
+#include "lib/uvid.h"
 #include <stdlib.h>
 
 // --- cursor: five shapes of the theme, on a light half and a dark half --
@@ -116,6 +117,11 @@ static int load_cover(const char *dir, const char *stem, int w, int h, struct ui
     for (unsigned e = 0; e < sizeof EXT / sizeof EXT[0]; e++) {
         snprintf(path, sizeof path, "%s/%s.%s", dir, stem, EXT[e]);
         if (uimg_load(path, &full) == 0) break;
+    }
+    // A VIDEO stands for itself by a frame a second in.
+    for (int e = 0; !full.px && LIVEWALL_VIDEO_EXT[e]; e++) {
+        snprintf(path, sizeof path, "%s/%s.%s", dir, stem, LIVEWALL_VIDEO_EXT[e]);
+        if (uvid_still(path, 1000, 0, 0, &full) != 0) memset(&full, 0, sizeof full);
     }
     int ok = 0;
     if (full.px && full.w > 0 && full.h > 0) {

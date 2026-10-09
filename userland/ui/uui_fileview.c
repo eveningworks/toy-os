@@ -458,6 +458,10 @@ void uui_fileview_set_filter(struct uui_fileview *fv,
     fv->filter_ctx = ctx;
 }
 
+void uui_fileview_set_badge(struct uui_fileview *fv, uui_fileview_badge_fn fn) {
+    fv->badge = fn;
+}
+
 void uui_fileview_set_thumb(struct uui_fileview *fv,
                              uui_fileview_thumb_fn fn, void *ctx) {
     fv->thumb = fn;
@@ -1111,6 +1115,17 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
             // frameless thumbnail reads as a rendering glitch.
             ugfx_draw_rect(s, tx2 - 1, ty2 - 1, thumb->w + 2, thumb->h + 2,
                             uui_table_c_grid(t));
+            char badge[16];
+            if (fv->badge && !fv->src && fv->badge(fv->thumb_ctx, fv->dir, e, px, badge, sizeof badge)) {
+                const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
+                int bw = ugfx_text_width(badge) + 8, bh = ugfx_char_h();
+                if (bw < thumb->w && bh < thumb->h) {
+                    int bx = tx2 + thumb->w - bw - 2, by = ty2 + thumb->h - bh - 2;
+                    uui_fill_round_rect(s, bx, by, bw, bh, UUI_CAPSULE, ugfx_rgb(20, 20, 24));
+                    ugfx_draw_string_clipped(s, bx + 4, by, bw - 8, badge, ugfx_rgb(255, 255, 255), ugfx_rgb(20, 20, 24));
+                }
+                ugfx_set_font(was);
+            }
         } else {
             const struct uimg *ico = icon_get(is_up || !e ? "folder" : ufiletype_icon(e->name, is_dir), px);
             int ix = x + (cw - px) / 2;

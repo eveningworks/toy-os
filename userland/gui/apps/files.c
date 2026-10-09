@@ -2041,6 +2041,7 @@ int main(int argc, char **argv) {
         g_pane[i].ctx = (void *)(intptr_t)i;
         uui_fileview_set_resolver(&g_pane[i], resolve_virtual, 0);
         uui_fileview_set_thumb(&g_pane[i], g_opt.thumbs ? pane_thumb : 0, 0);
+        uui_fileview_set_badge(&g_pane[i], g_opt.thumbs ? pane_badge : 0);
         uui_fileview_set_filter(&g_pane[i], pane_filter, (void *)(intptr_t)i);
         g_pane[i].single_click = g_opt.single_click;
         g_pane[i].hide_ext = !g_opt.extensions;

@@ -51,6 +51,10 @@ void uthumb_init(const struct uthumb_config *cfg);
 const struct uimg *uthumb_get(const char *path, const struct rtc_time *mtime,
                               uint32_t size, int px);
 
+// The short NOTE beside a ready thumbnail -- a video's length, "1:17" --
+// or NULL. A lookup like uthumb_get(), for a badge on the picture.
+const char *uthumb_note(const char *path, int px);
+
 // Whether `path` at `px` has been tried and is NOT a picture (or could
 // not be decoded) -- so a caller can draw a generic icon rather than a
 // placeholder that waits for ever.

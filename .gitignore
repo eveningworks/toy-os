@@ -143,6 +143,7 @@ ci-virtio.img
 # A fetched SoundFont (tools/fetch_soundfont.py) -- somebody else's ~31 MB
 # of samples, seeded only under EXTRAS=1. The built-in bank is tracked.
 /data/soundfonts/
+/data/videos-extra/
 # Fetched by `make iso EXTRAS=1`, never vendored: Mozilla's CA roots are
 # MPL-2.0. Only the fetched file -- the README beside it is ours and is
 # tracked.

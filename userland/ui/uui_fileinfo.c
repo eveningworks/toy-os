@@ -85,6 +85,9 @@ void uui_fileinfo_set(struct uui_fileinfo *w, const struct ufileinfo *fi) {
                  fi->files == 1 ? "" : "s", fi->dirs, fi->dirs == 1 ? "" : "s", fi->walking ? ", counting..." : "");
     else if (fi->img_w)
         snprintf(w->subtitle, sizeof w->subtitle, "%s, %s, %d x %d", fi->type, h, fi->img_w, fi->img_h);
+    else if (fi->vid_w)
+        snprintf(w->subtitle, sizeof w->subtitle, "%s, %s, %d x %d, %u:%02u", fi->type, h, fi->vid_w, fi->vid_h,
+                 fi->length_ms / 60000, (fi->length_ms / 1000) % 60);
     else if (fi->has_tags && fi->artist[0])
         snprintf(w->subtitle, sizeof w->subtitle, "%s, %s, %s", fi->type, h, fi->artist);
     else
@@ -96,6 +99,12 @@ void uui_fileinfo_set(struct uui_fileinfo *w, const struct ufileinfo *fi) {
         // The compact form walks nothing: a folder's count is what its
         // caller listed (the File Manager's own items), size only for a file.
         if (!fi->st.is_dir) row(g, "Size", "%s", size);
+        if (fi->vid_w) {
+            // A video's two telling facts: how long, and in what.
+            row(g, "Length", "%u:%02u", fi->length_ms / 60000, (fi->length_ms / 1000) % 60);
+            row(g, "Video", "%s%s%s", fi->vid_detail, fi->vid_audio[0] ? ", " : "",
+                fi->vid_audio[0] ? (strstr(fi->vid_audio, "MP2") ? "MP2" : strstr(fi->vid_audio, "PCM") ? "PCM" : "sound") : "");
+        }
         when(t, sizeof t, &fi->st.modified);
         row(g, "Modified", "%s", t);
         row(g, "Where", "%s", fi->dir);
@@ -116,6 +125,14 @@ void uui_fileinfo_set(struct uui_fileinfo *w, const struct ufileinfo *fi) {
         struct uui_fi_section *s = add(w, "Image", UTHEME_ACT_VIEW, 1, old, nold);
         row(s, "Dimensions", "%d x %d pixels", fi->img_w, fi->img_h);
         row(s, "Format", "%s%s%s", fi->img_format, fi->img_detail[0] ? ", " : "", fi->img_detail);
+    } else if (fi->vid_w) {
+        struct uui_fi_section *s = add(w, "Video", UTHEME_ACT_MEDIA, 1, old, nold);
+        if (fi->length_ms) row(s, "Length", "%u:%02u", fi->length_ms / 60000, (fi->length_ms / 1000) % 60);
+        row(s, "Size", "%d x %d", fi->vid_w, fi->vid_h);
+        if (fi->vid_fps100)
+            row(s, "Frame rate", fi->vid_fps100 % 100 ? "%u.%02u fps" : "%u fps", fi->vid_fps100 / 100, fi->vid_fps100 % 100);
+        row(s, "Video", "%s", fi->vid_detail);
+        row(s, "Sound", "%s", fi->vid_audio[0] ? fi->vid_audio : "none");
     } else if (fi->has_tags) {
         struct uui_fi_section *s = add(w, "Audio", UTHEME_ACT_MEDIA, 1, old, nold);
         if (fi->title[0]) row(s, "Title", "%s", fi->title);
@@ -162,11 +179,13 @@ static int stage_pic_h(const struct uui_fileinfo *w, int width);
 int uui_fileinfo_preview_px(const struct uui_fileinfo *w, int width) {
     int aw = width - 2 * pad(), ah = stage_pic_h(w, width);
     const struct ufileinfo *fi = w->fi;
-    if (!fi || !fi->img_w || !fi->img_h) return ah;
+    // A picture's own shape, or a video's frame's.
+    int pw = fi ? (fi->img_w ? fi->img_w : fi->vid_w) : 0, ph = fi ? (fi->img_w ? fi->img_h : fi->vid_h) : 0;
+    if (!pw || !ph) return ah;
     // The longest edge that fits the stage at this picture's own shape.
-    int long_edge = fi->img_w > fi->img_h ? fi->img_w : fi->img_h;
-    int by_w = (int)((long long)aw * long_edge / fi->img_w);
-    int by_h = (int)((long long)ah * long_edge / fi->img_h);
+    int long_edge = pw > ph ? pw : ph;
+    int by_w = (int)((long long)aw * long_edge / pw);
+    int by_h = (int)((long long)ah * long_edge / ph);
     return by_w < by_h ? by_w : by_h;
 }
 
@@ -178,7 +197,9 @@ static int stage_pic_h(const struct uui_fileinfo *w, int width) {
 
 // A picture's stage is there before its thumbnail arrives, so the
 // window's first size already holds it.
-static int staged(const struct uui_fileinfo *w) { return w->preview || (w->fi && w->fi->img_w); }
+static int staged(const struct uui_fileinfo *w) {
+    return w->preview || (w->fi && (w->fi->img_w || w->fi->vid_w));
+}
 
 static int hero_h(const struct uui_fileinfo *w, int width) {
     if (staged(w)) return pad() + stage_pic_h(w, width) + pad() + 2 * lh() + pad();
@@ -301,6 +322,13 @@ static void draw_hero(struct ugfx_surface *s, const struct uui_fileinfo *w) {
             int ix = w->x + (w->w - iw) / 2, iy = Y + p + (ah - ih) / 2;
             if (im->has_alpha) ugfx_blit_alpha(s, ix, iy, iw, ih, im->px, im->w);
             else ugfx_blit(s, ix, iy, iw, ih, im->px, im->w);
+            if (fi && fi->vid_w) {
+                // A video's still says so: a play mark on a disc.
+                int r = (iw < ih ? iw : ih) / 6, cx = ix + iw / 2, cy = iy + ih / 2;
+                uui_fill_round_rect(s, cx - r, cy - r, r * 2, r * 2, UUI_CAPSULE, ugfx_rgb(250, 250, 252));
+                int xs[3] = { cx - r / 3, cx - r / 3, cx + r / 2 }, ys[3] = { cy - r / 2, cy + r / 2, cy };
+                ugfx_fill_polygon(s, xs, ys, 3, ugfx_rgb(28, 28, 34));
+            }
         }
         int ty = Y + p + ah + p;
         const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));

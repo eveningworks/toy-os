@@ -45,7 +45,11 @@ import port_guard  # noqa: E402
 from harness import Results  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HOST_VIDEOS = os.path.join(REPO, "data", "usr", "share", "videos")
+# What the image was SEEDED from, not data/: an EXTRAS=1 build adds a
+# film, which moves every row after it.
+HOST_VIDEOS = os.path.join(REPO, "seed", "sync", "usr", "share", "videos")
+if not os.path.isdir(HOST_VIDEOS):
+    HOST_VIDEOS = os.path.join(REPO, "data", "usr", "share", "videos")
 FIRST = "/usr/share/videos/first-boot.mpg"   # long enough to seek in
 
 LOG = []

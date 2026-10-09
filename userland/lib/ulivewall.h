@@ -36,6 +36,10 @@
 // a choice itself -- a ChoiceDir lists files only.
 #define LIVEWALL_ANIMATED_DIR "/usr/share/wallpapers/animated"
 #define LIVEWALL_GIF_PLAYER LIVEWALL_DIR "/players/gif"
+// VIDEOS are live wallpapers the same way: a .mpg or .avi in that
+// directory, played silent and looping by this player (lib/uvid.h).
+#define LIVEWALL_VIDEO_PLAYER LIVEWALL_DIR "/players/video"
+static const char *const LIVEWALL_VIDEO_EXT[] = { "mpg", "avi", 0 };
 
 // The grid pitch on the desktop, in pixels. A preview passes a smaller
 // one so a thumbnail is not a handful of blobs.

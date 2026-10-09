@@ -673,7 +673,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~EXIF orientation~~ DONE 2026-09-16 -- applied in the decoder, as every viewer does
 - [x] ~~A wallpaper picker in System Settings~~ DONE 2026-10-08 -- Desktop > Wallpaper: Picture / Live / Plain colour
 - [x] ~~Live wallpapers~~ DONE 2026-10-08 -- a background client (`wm_background.c`): six effects, and a GIF plays
-- [ ] Video wallpapers -- an MPEG-1 decoder (pl_mpeg's size) behind the same background client
+- [x] ~~Video wallpapers~~ DONE 2026-10-09 -- `players/video`, silent and looping, over `lib/uvid_play.h`; `dusk.mpg` ships
 - [ ] Live wallpaper previews in Settings that move -- the gallery shows one still frame per effect
 - [ ] Dropdown lists sized to the room they have -- `uui_dropdown` scrolls past six rows; Qt shows 10, Windows 11 about 20
 - [x] ~~Desktop icon repositioning/dragging~~ done

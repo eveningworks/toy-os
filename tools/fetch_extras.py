@@ -142,6 +142,25 @@ EXTRAS = [
         dest="data/soundfonts/GeneralUser-GS.sf2",
         fetch=[sys.executable, os.path.join(HERE, "fetch_soundfont.py")],
     ),
+    Extra(
+        name="video",
+        what="Big Buck Bunny, the Blender Foundation's short film -- its first "
+             "three minutes as MPEG-1, for the Video Player to play something "
+             "made by people rather than generated here.",
+        licence="Creative Commons Attribution 3.0 (CC BY 3.0)",
+        summary=(
+            "Copy, share and adapt for any purpose, commercial included, "
+            "provided the Blender Foundation is credited. The film is "
+            "transcoded on your machine (adapting it, which CC BY allows) "
+            "and the credit is seeded beside it. It is DATA played by our "
+            "decoder, so there is no licence interaction with this "
+            "repository. The download is pinned by SHA-256."
+        ),
+        source="https://download.blender.org/peach/bigbuckbunny_movies/ -- the "
+               "Foundation's own 640x360 release (see tools/fetch_video.py)",
+        dest="data/videos-extra/big-buck-bunny.mpg",
+        fetch=[sys.executable, os.path.join(HERE, "fetch_video.py")],
+    ),
 ]
 
 

@@ -22,6 +22,7 @@ THE CHECKS, and what a broken version would still pass:
   5. a crashed client falls back to the picture and is restarted.
   6. an animated picture is a Live choice and plays; Picture stops it.
   7. Plain colour paints the chosen colour, read back from pixels.
+  (6 also plays a VIDEO, dusk.mpg, through players/video.)
   8. the same program started by someone else is an ORDINARY window, and
      takes nothing from the background (the role is the spawned pid's).
 
@@ -162,6 +163,16 @@ def run(dbg, qmp, shot):
     a = raw(qmp, shot, "lw_gif_a.png", sample)
     time.sleep(0.5)
     b = raw(qmp, shot, "lw_gif_b.png", sample)
+    check("...and it moves", a != b)
+
+    # --- 6b. so is a VIDEO, played silent and looping ------------------
+    set_setting(dbg, "desktop.wallpaper_live", "dusk")
+    st = wait_bg(dbg, lambda s: s.get("shown") == 1 and "players/video" in s.get("program", ""))
+    check("Live `dusk` (a video in /usr/share/wallpapers/animated) plays through the video player",
+          st.get("program") == "/bin/wm/wallpapers/players/video" and st.get("shown") == 1, f"{st}")
+    a = raw(qmp, shot, "lw_video_a.png", sample)
+    time.sleep(1.0)
+    b = raw(qmp, shot, "lw_video_b.png", sample)
     check("...and it moves", a != b)
     set_setting(dbg, "desktop.wallpaper_type", "picture")
     st = wait_bg(dbg, lambda s: s.get("pid") == 0)

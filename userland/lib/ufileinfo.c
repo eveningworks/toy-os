@@ -1,5 +1,6 @@
 // See ufileinfo.h.
 #include "lib/ufileinfo.h"
+#include "lib/uvid.h"
 #include <stdio.h>
 #include <string.h>
 #include "kpath.h"
@@ -70,6 +71,17 @@ static void volume(struct ufileinfo *fi) {
 }
 
 static void headers(struct ufileinfo *fi) {
+    if (fi->icon && !strcmp(fi->icon, "file-video")) {
+        struct uvid_info in;
+        if (uvid_load_info(fi->path, &in) != 0) return;
+        fi->vid_w = in.w;
+        fi->vid_h = in.h;
+        fi->length_ms = in.ms;
+        if (in.fps_num && in.fps_den) fi->vid_fps100 = (uint32_t)(100ull * in.fps_num / in.fps_den);
+        strlcpy(fi->vid_detail, in.detail, sizeof fi->vid_detail);
+        strlcpy(fi->vid_audio, in.audio, sizeof fi->vid_audio);
+        return;
+    }
     static uint8_t head[HEAD_BYTES];
     size_t n = ufile_read_head(fi->path, head, sizeof head);
     struct uimg_info info;
@@ -113,7 +125,8 @@ int ufileinfo_load(struct ufileinfo *fi, const char *path, unsigned what) {
         // Only what the extension calls a picture or a sound is read: the
         // details pane asks on every selection, and a binary's 64 KiB and
         // a tag scan per keypress made scrolling /bin paint half frames.
-        int media = fi->icon && (!strcmp(fi->icon, "file-image") || !strcmp(fi->icon, "file-audio"));
+        int media = fi->icon && (!strcmp(fi->icon, "file-image") || !strcmp(fi->icon, "file-audio") ||
+                                 !strcmp(fi->icon, "file-video"));
         if ((what & UFI_HEADERS) && media) headers(fi);
     } else if (what & UFI_WALK) {
         g_qhead = g_qtail = g_qcount = 0;
