@@ -234,6 +234,7 @@ void acpi_init(void) {
     // The namespace, walked once here: pci_bind() asks it for `_PRT`
     // routing before any driver unmasks a line (kernel/acpi/acpi_prt.c).
     aml_build();
+    acpi_power_boot();   // `acpimode=boot` only (kernel/acpi/acpi_power.c)
 
     boot_subsystem_up(BOOT_SUB_ACPI);
     acpi_query_init();

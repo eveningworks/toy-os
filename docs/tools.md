@@ -93,7 +93,12 @@ manual steps to be worth automating:
   is installed on this host; this is the one that exists. Refuses a dump
   whose ACPI checksum fails (a console dump loses bytes in transit; for
   a laptop write it to a file and `remote.py get` it). `--tree` prints
-  the namespace.
+  the namespace. `--prw` lists every `_PRW` with its GPE and the deepest
+  sleep state it wakes from, and how many can wake the machine from S5:
+  the three shapes real firmware writes it in (a Name, `Return
+  (Package)`, AMI's `Return (GPRW (gpe, state))`) are decoded, anything
+  else is reported unread. On the ASUS all 17 were Methods and none
+  woke from S5.
 - **`qemu_matrix.py`** -- runs the kernel test suite against SEVERAL
   QEMU versions in Docker (6.2, 7.2, 8.2 -- the last is what GitHub's
   runner has). Nothing is BUILT in the container: the ISO comes from

@@ -6680,17 +6680,19 @@ when the sleep is prepared -- it fires during or after the transition,
 and no measurement taken at one instant can find it.
 
 **What shipped is therefore the first version: disable everything and
-leave it masked**, with the cost recorded rather than hidden (the power
-button's GPE is masked with the rest, and that laptop then takes two
-presses to start -- `docs/bugs.md`). A machine that turns off and is
-awkward to turn on beats one that will not turn off.
-
-**And that makes `_PRW` load-bearing rather than a refinement.**
-Distinguishing "a legitimate wake source" from "one that will bounce us"
-is exactly what it is for, and there is now evidence that nothing
-cheaper substitutes: three attempts, two of them cleverer than the one
-that works. `docs/aml-design.md` stages it, and this episode is why that
-document exists.
+leave it masked.** That laptop then takes two presses to start
+(`docs/bugs.md`), and this entry used to blame the masked GPEs for it,
+calling `_PRW` load-bearing. **Measured on 2026-10-09, that was wrong.**
+The machine's power button is the fixed PM1 button (FADT `PWR_BUTTON=0`,
+no `PNP0C0C` device in the DSDT), so no GPE mask can reach it. All 17 of
+its `_PRW`s are Methods, and none wakes from S5 (`tools/aml_walk.py
+--prw`). Linux re-arms a device's GPE for S5 only when `_PRW` says it
+wakes from S5, so Linux's wake set there is empty: masking everything
+IS the correct S5 answer on this machine. And a shutdown done by the
+firmware itself needs one press. So the two presses come from something
+toy-os's path does or skips -- entering ACPI mode at the last moment,
+or not running `_PTS` -- and the boot words `acpimode=` and `gpewake=`
+isolate it one boot at a time.
 
 **One thing that was missing throughout and is now fixed regardless:
 the sleep write is TWO writes**, the sleep type first and the enable

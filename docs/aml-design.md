@@ -156,6 +156,15 @@ from absent and must not be conflated with it.
 
 ### Stage 3 -- `_PRW`, and the wake set
 
+**MEASURED 2026-10-09, AND THE PREMISE BELOW DID NOT SURVIVE IT.** On the
+machine it was for, all 17 `_PRW`s are Methods -- 12 `Return (GPRW (gpe,
+state))`, 3 `Return (Package)`, 2 conditional -- so a reader of constant
+Names finds none of them. And none wakes from S5, so the wake set this
+stage would compute there is empty, which is what toy-os already does.
+The two-press power button has another cause (`docs/bugs.md`).
+`tools/aml_walk.py --prw` is the measurement. What follows is the
+original plan, kept for the record.
+
 **This stage is the actual fix, and there is now evidence that nothing
 cheaper substitutes.** Three versions were measured on the machine that
 needs it (`docs/decisions.md`): disable everything and it powers off but
@@ -173,8 +182,10 @@ all, clear all, enable only the wake set -- instead of restoring the
 firmware's enables wholesale.
 
 **This is the stage that pays for the project**, and it is worth being
-honest that the payment is small: restoring the firmware's enables
-already fixed the machine that prompted this. What stage 3 buys is the
+honest that the payment is small. (This used to add that restoring the
+firmware's enables had fixed the machine that prompted it. It had not:
+restoring them made that machine reboot, as `docs/decisions.md`
+records.) What stage 3 buys is the
 removal of a residual risk (a non-wake GPE re-latching) and a wake set
 that is *correct* rather than a superset.
 

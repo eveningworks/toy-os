@@ -15,6 +15,7 @@
 #include "multiboot.h"  // ...and the boot word that turns it on
 #include "string.h"
 #include "kfmt.h" // klog_printf
+#include "knum.h" // k_parse_hex/k_parse_u64, for gpewake=
 #include "string.h"
 
 // FADT field offsets, from ACPI 6.4 table 5.9. Named rather than
@@ -347,6 +348,70 @@ static void pm1_clear_status(const struct acpi_state *s) {
     if (s->pm1b_evt) outw((uint16_t)s->pm1b_evt, 0xFFFF);
 }
 
+// --- the S5 EXPERIMENTS: boot words that change one thing per boot ----
+//
+// The ASUS takes two presses to start after toy-os powers it off, and
+// ONE after the firmware does (a press while toy-os runs, which -- with
+// ACPI mode off -- the firmware handles itself). Its power button is the
+// fixed PM1 one, not a GPE, and no `_PRW` wakes from S5, so the wake set
+// is not the difference (docs/bugs.md). These isolate what is, one boot
+// each, the way `nogpe` did for the reboot:
+//
+//   acpimode=never  power off WITHOUT entering ACPI mode first, as the
+//                   firmware's own path does
+//   acpimode=boot   enter ACPI mode at boot, as Linux does
+//   gpewake=A,B,..  after masking every GPE, re-arm these (hex or decimal)
+//
+// The value after `word=`, up to the next space, or NULL when absent.
+static const char *boot_value(const char *word, char *buf, size_t cap) {
+    const char *cmdline = multiboot_cmdline();
+    const char *p = cmdline ? k_strstr(cmdline, word) : 0;
+    if (!p || cap == 0) return 0;
+    p += k_strlen(word);
+    size_t n = 0;
+    while (p[n] && p[n] != ' ' && n + 1 < cap) { buf[n] = p[n]; n++; }
+    buf[n] = 0;
+    return buf;
+}
+
+static int acpimode_is(const char *want) {
+    char v[16];
+    return boot_value("acpimode=", v, sizeof v) && k_strcmp(v, want) == 0;
+}
+
+// `gpewake=`: re-arm the named GPEs in a block that was just masked. Each
+// is a bit in the block's EN half; a number past the block is ignored.
+static void gpe_rearm_named(uint32_t base, uint8_t len, uint32_t first) {
+    char list[96];
+    if (!base || len < 2 || !boot_value("gpewake=", list, sizeof list)) return;
+    uint8_t half = (uint8_t)(len / 2);
+    char *p = list;
+    while (*p) {
+        char *end = p;
+        while (*end && *end != ',') end++;
+        char save = *end;
+        *end = 0;
+        uint64_t g;
+        int ok = (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) ? k_parse_hex(p + 2, &g)
+                                                                : k_parse_u64(p, &g);
+        if (ok && g >= first && g < first + (uint32_t)half * 8) {
+            uint32_t bit = (uint32_t)g - first;
+            uint16_t en = (uint16_t)(base + half + bit / 8);
+            outb(en, (uint8_t)(inb(en) | (1u << (bit % 8))));
+            vga_printf("acpi: GPE 0x%x re-armed for S5 (gpewake=)\n", (uint32_t)g);
+            klog_printf("acpi: GPE 0x%x re-armed for S5 (gpewake=)\n", (uint32_t)g);
+        }
+        *end = save;
+        p = save ? end + 1 : end;
+    }
+}
+
+void acpi_power_boot(void) {
+    if (!acpimode_is("boot")) return;
+    vga_printf("acpi: entering ACPI mode at boot (acpimode=boot)\n");
+    enable_acpi_mode(acpi_state_mut());
+}
+
 // `nogpe`: leave the GPE blocks alone. The A/B for "which fix was it?"
 // -- clearing PM1_STS and disabling the GPEs both landed for one
 // symptom, and a machine that now stops is consistent with either.
@@ -378,14 +443,13 @@ static int gpes_left_alone(void) {
 // The third result is the informative one: the source that wakes this
 // machine is NOT ASSERTING when the sleep is prepared, so no measurement
 // taken at one instant can find it. It fires during or after the
-// transition. Distinguishing "a legitimate wake source" from "one that
-// will bounce us" is what `_PRW` is for, and reading `_PRW` needs the
-// namespace walk `docs/aml-design.md` stages.
+// transition.
 //
-// So this is the version that works, with the cost stated: the power
-// button's own GPE is masked with everything else, and on that laptop
-// starting it again takes two presses. A machine that turns off and is
-// awkward to turn on beats one that will not turn off.
+// AND MASKING EVERYTHING IS LINUX'S S5 ANSWER ON THAT MACHINE TOO: its
+// power button is the fixed PM1 one, not a GPE, and none of its 17
+// `_PRW`s wakes from S5 (`tools/aml_walk.py --prw`), so the wake set
+// Linux would re-arm here is empty. The two presses it then needs are
+// NOT this function's -- see the S5 experiments above and docs/bugs.md.
 static void gpe_block_off(uint32_t base, uint8_t len) {
     if (!base || len < 2) return;
     uint8_t half = (uint8_t)(len / 2);
@@ -446,7 +510,12 @@ int acpi_poweroff(void) {
     struct acpi_state *s = acpi_state_mut();
     if (!(s->flags & ACPI_F_S5)) return 0;
 
-    enable_acpi_mode(s);
+    if (acpimode_is("never")) {
+        vga_printf("acpi: powering off in legacy mode (acpimode=never)\n");
+        klog_write("acpi: powering off in legacy mode (acpimode=never)\n");
+    } else {
+        enable_acpi_mode(s);
+    }
 
     if (s->flags & ACPI_F_HW_REDUCED) {
         if (!gas_usable(&s->sleep_control)) return 0;
@@ -463,6 +532,7 @@ int acpi_poweroff(void) {
         if (!gpes_left_alone()) {
             gpe_block_off(s->gpe0_blk, s->gpe0_len);
             gpe_block_off(s->gpe1_blk, s->gpe1_len);
+            gpe_rearm_named(s->gpe0_blk, s->gpe0_len, 0);   // GPE0 only: no GPE1 base is parsed
         }
         pm1_clear_status(s);
         // LAST, so that one photograph of a machine about to reboot

@@ -489,10 +489,67 @@ def report_package(b, nodes, node, label):
                 print(f"      link {s}: _CRS is a {crs.kind} -> {desc}")
 
 
+def prw_shape(b, n):
+    """(gpe, deepest state, how) for one _PRW, or (None, None, why).
+
+    The shapes measured on real firmware (2026-10-09, the ASUS UX305FA:
+    17 _PRW, every one a Method): a constant Name; `Return (Package
+    {gpe, state, ...})`; and AMI's `Return (GPRW (gpe, state))`, whose
+    helper puts its first argument in the package and its second --
+    lowered to a sleep state the board supports -- after it. Anything
+    else (a conditional body, a GPE block reference) is reported, never
+    guessed."""
+    if n.kind == "name":
+        v, _ = decode_object(b, n.body[0])
+        how = "Name"
+    else:
+        off, ln = n.body
+        if ln < 2 or b[off] != 0xA4:            # ReturnOp, as the whole body
+            return None, None, "a body that is not one Return"
+        if b[off + 1] == 0x12:
+            v, _ = decode_object(b, off + 1)
+            how = "Method, Return (Package)"
+        elif is_name_lead(b[off + 1]):
+            segs, _root, _ups, nl = name_string(b, off + 1)
+            a, au = decode_integer(b, off + 1 + nl)
+            c, cu = decode_integer(b, off + 1 + nl + au) if au else (None, 0)
+            if not au or not cu or off + 1 + nl + au + cu != off + ln:
+                return None, None, "Return of a call whose arguments are not two constants"
+            return a, c, f"Method, Return ({'.'.join(segs)} ({a:#x}, {c}))"
+        else:
+            return None, None, "Return of an expression"
+    if not isinstance(v, list) or len(v) < 2:
+        return None, None, "not a package of at least two elements"
+    if not isinstance(v[0], int) or not isinstance(v[1], int):
+        return None, None, "a GPE block reference, or an element that is an expression"
+    return v[0], v[1], how
+
+
+def report_prw(b, nodes):
+    prws = [n for n in nodes if n.path and n.path[-1] == "_PRW" and n.body]
+    s5, unread = [], 0
+    for n in prws:
+        gpe, state, how = prw_shape(b, n)
+        dev = "\\" + ".".join(n.path[:-1])
+        if gpe is None:
+            unread += 1
+            print(f"  {dev:28s}  -- {how}")
+            continue
+        print(f"  {dev:28s}  GPE {gpe:#04x}  wakes from S{state} and shallower  ({how})")
+        if state >= 5:
+            s5.append(gpe)
+    print(f"aml_walk: {len(prws)} _PRW, {unread} unread; "
+          f"{len(s5)} can wake the machine from S5 (soft off)"
+          + (f": GPE {', '.join(f'{g:#04x}' for g in sorted(set(s5)))}" if s5 else ""))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("dump")
     ap.add_argument("--tree", action="store_true", help="print the namespace")
+    ap.add_argument("--prw", action="store_true",
+                    help="list every _PRW: its GPE and the deepest sleep state it wakes from")
     args = ap.parse_args()
 
     b = load_dump(args.dump)
@@ -515,6 +572,9 @@ def main():
     if args.tree:
         for n in nodes:
             print(f"  {n.kind:7s} \\{'.'.join(n.path)}")
+
+    if args.prw:
+        return report_prw(b, nodes)
 
     prts = [n for n in nodes if n.path and n.path[-1] == "_PRT"]
     if not prts:

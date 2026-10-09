@@ -15,6 +15,7 @@ int acpi_phys_readable(uint64_t phys, uint32_t len);
 const void *acpi_phys(uint64_t phys);
 
 void acpi_fadt_init(void);
+void acpi_power_boot(void);   // acpi_power.c: `acpimode=boot`
 void acpi_madt_init(void);
 
 #endif
