@@ -339,7 +339,14 @@ void uschema_effective(const struct uschema *s, char *out, uint32_t cap) {
 
 int uschema_validate(const struct uschema *s, const char *value) {
     if (!s || !value) return 0;
-    if (strlen(value) >= SETTING_ABI_VALUE_MAX) return 0;
+    size_t len = strlen(value);
+    if (len >= SETTING_ABI_VALUE_MAX) return 0;
+    // A VALUE MUST READ BACK AS WRITTEN. The /etc parser is key=value to
+    // end of line with both ends trimmed, so a newline would plant a
+    // second key in the file and an outer blank would silently vanish.
+    for (size_t i = 0; i < len; i++)
+        if ((unsigned char)value[i] < 0x20 || value[i] == 0x7f) return 0;
+    if (len && (value[0] == ' ' || value[len - 1] == ' ')) return 0;
 
     if (s->type == SETTING_ABI_TYPE_INT) {
         if (!value[0]) return 0;

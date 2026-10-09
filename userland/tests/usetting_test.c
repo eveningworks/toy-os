@@ -132,6 +132,31 @@ int main(void) {
     utest_check(!uschema_find("system.font_size", &s),
                 "a KERNEL setting is not declared by a file");
 
+    // --- settings that left the kernel stay settings -------------------
+    // Declared by a file AND gone from SYS_SETTING: both halves, since a
+    // setting in both places would answer from whichever merged first.
+    static const char *const moved[] = {
+        "system.ntp", "system.ntp_server", "system.ntp_interval",
+        "system.net_recover", "system.net_recover_wait",
+    };
+    for (unsigned i = 0; i < sizeof moved / sizeof moved[0]; i++) {
+        static struct setting_msg km;   // past the 2 KB frame cap
+        memset(&km, 0, sizeof km);
+        km.op = SETTING_OP_GET;
+        strlcpy(km.name, moved[i], sizeof km.name);
+        utest_checkf(uschema_find(moved[i], &s) && sys_setting(&km) != 0,
+                     "%s is declared by a file, not registered in ring 0", moved[i]);
+    }
+
+    // --- a declared value must read back as written ------------------
+    utest_check(uschema_find("system.ntp_server", &s) &&
+                uschema_validate(&s, "time.example.com"),
+                "a plain declared string is accepted");
+    utest_check(!uschema_validate(&s, "x\nntp=on"),
+                "a newline is refused -- it would plant a second key");
+    utest_check(!uschema_validate(&s, " x") && !uschema_validate(&s, "x\t"),
+                "an outer blank is refused -- the parser would trim it");
+
     // ALWAYS, and before the verdict -- including the case where the key
     // was NOT there to begin with, which an earlier version of this test
     // got wrong and left 56 on disk for every later tool.

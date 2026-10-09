@@ -1271,6 +1271,16 @@ two kernel files and rebuilding, and `SETTING_MAX` stopped being a
 ceiling the desktop competed for -- it had been raised four times, and
 the last raise found the old value exactly full.
 
+**The one exception is `system.shell`**, registered in ring 0 though
+ring 0 never applies it. libc's `system()` reads it, and the C library
+reaches settings only through `SYS_SETTING` -- `lib/usetting.h`'s merge
+belongs to the toolkit, not to libc's "any C program" audience -- and
+its `apply` refuses a path that does not exist, which no declaration key
+can express. Declaring it would mean libc parsing `/etc` itself or
+`system()` ignoring the setting (glibc's choice: always `/bin/sh`). The
+network-time and `netheal` settings were the other stragglers; they
+became declarations on 2026-10-09.
+
 ## A declared setting can require another declared setting, and nothing else
 
 `Requires=<name>=<value>` in an `/etc/settings.d` declaration makes the

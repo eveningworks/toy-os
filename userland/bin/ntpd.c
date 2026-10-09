@@ -32,8 +32,8 @@
 #include "net_abi.h"
 #include "query_abi.h"
 #include "setting_abi.h"
-#include "ntp_config.h"
 #include "lib/cmd.h"
+#include "lib/usetting.h"
 #include "lib/uresolv.h"
 #include <stdio.h>
 #include <stdarg.h>
@@ -100,14 +100,17 @@ static void say(const char *fmt, ...) {
 
 // --- the settings ------------------------------------------------------
 
+// system.ntp, ntp_server and ntp_interval are DECLARED in /etc/settings.d,
+// so they are read through usetting's merge -- a bare SYS_SETTING never
+// sees them. These fallbacks only cover a missing declaration file; the
+// settings' own defaults are its Default= lines.
+#define NTP_DEFAULT_SERVER   "pool.ntp.org"
+#define NTP_DEFAULT_INTERVAL 60   // minutes
+#define NTP_INTERVAL_MIN     1
+#define NTP_INTERVAL_MAX     1440
+
 static int setting_str(const char *name, char *out, unsigned cap) {
-    struct setting_msg m;
-    memset(&m, 0, sizeof m);
-    m.op = SETTING_OP_GET;
-    strlcpy(m.name, name, sizeof m.name);
-    if (sys_setting(&m) != 0 || !m.value[0]) return 0;
-    strlcpy(out, m.value, cap);
-    return 1;
+    return usetting_get(name, out, cap) && out[0];
 }
 
 static int ntp_enabled(void) {

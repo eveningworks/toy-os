@@ -1,2 +1,8 @@
+Type=string
+File=/etc/toyos.conf
+Label=Time server
+Category=Time & Locale
+Group=Network Time
+Default=pool.ntp.org
 Description=The time server to ask -- a host name or an address
 Order=20

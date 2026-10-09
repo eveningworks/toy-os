@@ -1,0 +1,13 @@
+Type=enum
+File=/etc/toyos.conf
+Label=Reboot if the network never comes up
+Category=Network
+Group=Recovery
+# Off by default: a machine that reboots itself unasked is alarming on a
+# desktop. This is for a headless test machine whose only fault symptom
+# is being unreachable. Read by /bin/netheal.
+Default=off
+Choices=on,off
+Order=10
+Choice.on=On
+Choice.off=Off

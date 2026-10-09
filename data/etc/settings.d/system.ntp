@@ -1,3 +1,12 @@
+Type=enum
+File=/etc/toyos.conf
+Label=Set the time automatically
+Category=Time & Locale
+Group=Date & time
+# Off by default: turning it on makes this machine contact a host on the
+# internet, which nothing should start doing because it was installed.
+Default=off
+Choices=on,off
 Description=Keep the clock set from a time server on the network
 Order=10
 Choice.on=On

@@ -1,2 +1,12 @@
+Type=int
+File=/etc/toyos.conf
+Label=Sync every
+Category=Time & Locale
+Group=Network Time
+Default=60
+Min=1
+Max=1440
+Step=15
+Unit=min
 Description=How often to ask. A failed sync retries sooner than this
 Order=30

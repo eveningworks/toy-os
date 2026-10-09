@@ -1,0 +1,12 @@
+Type=int
+File=/etc/toyos.conf
+Label=Seconds to wait for an address
+Category=Network
+Group=Recovery
+# The floor stays well clear of a healthy boot: the test machine's DHCP
+# lease arrives ~10 s after boot.
+Default=45
+Min=5
+Max=600
+Unit=s
+Order=20

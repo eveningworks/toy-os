@@ -307,10 +307,12 @@ Settings gives it a spinbox.
 
 **A string setting validates in its own `apply`**, because the registry
 range-checks an INT and enumerates an ENUM's choices but has nothing to
-check free text against. `system.ntp_server` refuses an empty value and
-anything carrying whitespace — the `/etc` parser reads `key=value` to
-end of line, so an embedded space would be stored and read back as a
-different string than was typed.
+check free text against. `system.shell` refuses anything but an absolute
+path to a file that exists. A DECLARED string has no `apply`; what
+`lib/usetting_schema.c` refuses for every declared value is anything
+that would not read back as written -- a control character (a newline
+would plant a second key) or an outer blank (the `/etc` parser trims
+it).
 
 **The registry enforces an INT's range**, so `config set`, a hand-edited
 `/etc` file and a widget are all checked the same way — a value outside
