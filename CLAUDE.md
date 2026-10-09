@@ -527,7 +527,10 @@ before a module-level buffer anything a syscall reaches uses),
 the network BUILT, on QEMU's e1000 and on real r8169s -- the Lenovo,
 the desktop),
 `netstack-design.md` (the network stack in ring 3, PLANNED -- before
-socket or `kernel/net/` work).
+socket or `kernel/net/` work), `trace-design.md` (`strace` decoding in
+ring 3 and a debugger's stop, PLANNED -- before `strace.c` or `ptrace`
+work), `input-policy-design.md` (keymaps in the compositor, the pointer
+kept, PLANNED -- before `keyboard_layout.c` or `WIN_EV_RAW_KEY` work).
 
 **Rules for editing docs/:**
 

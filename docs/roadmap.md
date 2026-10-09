@@ -874,6 +874,7 @@ run on, not by order.
 - [x] ~~Dead keys on or off~~ DONE 2026-10-05 -- `system.keyboard_dead_keys`, for every layout at once
 - [ ] The on-screen keyboard should draw the CONFIGURED layout, not its own copy of US QWERTY -- it still types US whatever is set
 - [ ] A virtual-keyboard protocol, so the on-screen keyboard can be a ring-3 app instead of compositor code
+- [ ] Keymap translation in the compositor -- `docs/input-policy-design.md` stages it; the maintainer picks its choices before stage 1
 
 - [ ] `settings_init()` as initcalls too -- the last hand list; its order is the Settings sidebar's, so it needs an explicit order first
 
@@ -1265,6 +1266,7 @@ split. One line per pair here; the site lists are in roadmap-details.
 - [ ] Tracepoints that compile out when disabled, so they can live on hot paths
 - [x] ~~`strace` as a `/bin` program, not a kernel builtin~~ DONE 2026-08-23 -- `SPAWN_TRACE`, and the trace reaches the tracer's terminal
 - [ ] `strace` extended to follow a process's children once `fork()` exists
+- [ ] `strace` decoding in ring 3, over a record stream -- `docs/trace-design.md` stages it; the maintainer picks its choices before stage 1
 
 ### Crash reporting & postmortem debugging
 
