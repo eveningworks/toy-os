@@ -6710,6 +6710,11 @@ run -- and toy-os deliberately differs because the half of that it can
 do is the half that broke the machine. `acpimode=poweroff` keeps the old
 order for an A/B on the next machine.
 
+**Confirmed on a second machine the same day:** the Kaby Lake desktop,
+whose firmware also leaves ACPI mode off, powers off through the legacy
+path and starts on one press (maintainer). The ACPI-mode fallback has
+not run on any machine yet: every one so far stopped on the legacy write.
+
 **One thing that was missing throughout and is now fixed regardless:
 the sleep write is TWO writes**, the sleep type first and the enable
 second, as `acpi_hw_legacy_sleep()` does. One write carrying both is
