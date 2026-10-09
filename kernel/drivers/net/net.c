@@ -310,16 +310,25 @@ void net_poll(void) {
     uint64_t tcp_due = tcp_next_deadline();
     if (tcp_due) clockevent_idle_wake_by(tcp_due);
 
+    int delivered = 0;
     while (g_rx_head != g_rx_tail) {
         struct rx_slot *s = &g_rxq[g_rx_head];
         // Zero length is a frame whose device was unregistered while it
         // sat here -- dropped rather than parsed against a card that is
         // gone. net_rx() never queues one, having refused it as short.
-        if (s->len) eth_input(s->dev, s->data, s->len);
+        if (s->len) { eth_input(s->dev, s->data, s->len); delivered++; }
         g_rx_head = (g_rx_head + 1) % NET_RX_QUEUE;
     }
 
     in_poll = 0;
+    // WHAT WAS DELIVERED WAKES THE READERS, as Linux's sk_data_ready does.
+    // net_rx()'s wake alone is lost twice over: one landing before a
+    // reader parks finds nobody, and a reader it woke while ANOTHER
+    // context held in_poll re-parks before that context delivers. A
+    // frame with a successor is rescued by the next interrupt; the LAST
+    // one -- a download's final data and FIN -- has none, and the reader
+    // slept with every byte in its socket (sysupdate_test's stall).
+    if (delivered) scheduler_wake(net_wait_chan(), SYS_RETRY);
 }
 
 void net_init(void) {

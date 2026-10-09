@@ -123,9 +123,9 @@ def stall_evidence(qmp, dbg, t0):
                 print(f"    slirp  {ln.strip()}")
     except Exception as e:      # evidence only: never the verdict
         print(f"    slirp  unavailable: {e!r}")
-    for cmd in ("sh netlog -n 6", "sh netctl", "sh ps"):
+    for cmd in ("sh netlog -n 6", "sh netctl", "sh ps -T"):
         try:
-            for ln in (dbg.send(cmd) or "").strip().splitlines()[-14:]:
+            for ln in (dbg.send(cmd) or "").strip().splitlines()[-24:]:
                 print(f"    guest  {ln}")
         except Exception as e:
             print(f"    guest  {cmd}: {e!r}")
