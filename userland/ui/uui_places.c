@@ -79,7 +79,7 @@ static int row_at(const struct uui_places *p, int cx, int cy) {
 
 void uui_places_init(struct uui_places *p) {
     memset(p, 0, sizeof *p);
-    p->selected = p->hot = p->armed = -1;
+    p->selected = p->hot = p->armed = p->thumb_grab = -1;
 }
 
 void uui_places_add(struct uui_places *p, const char *label, const char *icon,
@@ -241,7 +241,8 @@ static void op_draw(struct ugfx_surface *s, const void *w) {
     int bw = bar_w(p);
     if (bw) uui_scrollbar_draw(s, p->x + p->w - bw, p->y, bw, p->h, content_h(p), p->h,
                                max_scroll(p) - p->scroll, bg,
-                               uui_state_bg(bg, UUI_STATE_PRESSED), 0);
+                               uui_state_bg(bg, UUI_STATE_PRESSED),
+                               p->thumb_grab >= 0 ? UUI_SCROLLBAR_HELD : 0);
     if (p->focused && p->selected >= 0) {
         int x, y, rw, rh;
         uui_places_row_rect(p, p->selected, &x, &y, &rw, &rh);
@@ -256,9 +257,33 @@ static void take_row(struct uui_places *p, int i) {
     p->has_taken = 1;
 }
 
+static void set_scroll(struct uui_places *p, int px) {
+    if (px > max_scroll(p)) px = max_scroll(p);
+    p->scroll = px < 0 ? 0 : px;
+}
+
+// THE BAR'S OFFSET COUNTS FROM THE BOTTOM (uui_scrollbar.h), in pixels
+// here, so every call turns `scroll` round.
 static int op_press(void *w, int cx, int cy, unsigned mods) {
     (void)mods;
     struct uui_places *p = w;
+    int bw = bar_w(p);
+    if (bw && cx >= p->x + p->w - bw) {
+        int bx = p->x + p->w - bw, off = max_scroll(p) - p->scroll;
+        enum uui_scrollbar_zone z = uui_scrollbar_hit(bx, p->y, bw, p->h, content_h(p), p->h,
+                                                      off, cx, cy, 0);
+        if (z == UUI_SB_THUMB) {
+            int ty, th;
+            uui_scrollbar_thumb_rect(p->y, p->h, content_h(p), p->h, off, &ty, &th, bw, 0);
+            p->thumb_grab = cy - ty;
+        } else if (z == UUI_SB_ABOVE) {
+            set_scroll(p, p->scroll - (p->h - place_h()));
+        } else if (z == UUI_SB_BELOW) {
+            set_scroll(p, p->scroll + (p->h - place_h()));
+        }
+        p->armed = -1;
+        return 1;
+    }
     p->armed = row_at(p, cx, cy);
     return p->armed >= 0;
 }
@@ -267,6 +292,7 @@ static int op_release(void *w, int cx, int cy) {
     struct uui_places *p = w;
     int i = p->armed;
     p->armed = -1;
+    p->thumb_grab = -1;
     if (i >= 0 && row_at(p, cx, cy) == i) take_row(p, i);
     return 1;
 }
@@ -274,6 +300,13 @@ static int op_release(void *w, int cx, int cy) {
 static int op_motion(void *w, int cx, int cy, unsigned buttons) {
     (void)buttons;
     struct uui_places *p = w;
+    if (p->thumb_grab >= 0) {   // follows y only, and survives leaving the bar
+        int off = uui_scrollbar_offset_for_drag(p->y, p->h, content_h(p), p->h, cy,
+                                                p->thumb_grab, bar_w(p), 0);
+        int was = p->scroll;
+        set_scroll(p, max_scroll(p) - off);
+        return p->scroll != was;
+    }
     int i = row_at(p, cx, cy);
     if (i == p->hot) return 0;
     p->hot = i;
@@ -299,9 +332,7 @@ static int op_key(void *w, int key, unsigned mods) {
 static int op_wheel(void *w, int notches) {
     struct uui_places *p = w;
     int was = p->scroll;
-    p->scroll -= notches * place_h() * 2;
-    if (p->scroll > max_scroll(p)) p->scroll = max_scroll(p);
-    if (p->scroll < 0) p->scroll = 0;
+    set_scroll(p, p->scroll - notches * place_h() * 2);
     return p->scroll != was;
 }
 

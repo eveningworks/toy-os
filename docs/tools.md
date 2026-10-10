@@ -3282,8 +3282,10 @@ window without going through it will find its layout polls timing out.
   commits and the app loads that file, a breadcrumb segment and a typed
   breadcrumb path both navigate, Places rows are clicked at the rects the
   widget reports (`place_rows()`, since a device row is taller than a
-  place), Escape cancels and the owner gets
-  the focus back, killing the owner takes the dialog with it, and both
+  place), Places' scrollbar thumb DRAGS with the real pointer
+  (`drag_real()`; the strip overflowing is checked first, and making a
+  press on the bar arm nothing turns it red), Escape cancels and the
+  owner gets the focus back, killing the owner takes the dialog with it, and both
   other apps open the same chooser.
 
   **Read its docstring before trusting the modality checks.** Two

@@ -45,6 +45,7 @@ struct uui_places {
     int has_taken;
     int focused;                  // OWNED -- the focus ring's set_focused
     int scroll;                   // PIXELS scrolled off the top, when it overflows; OWNED
+    int thumb_grab;               // OWNED: where in the thumb a drag holds it, or -1
     uint32_t bg;                  // 0 = derived from the theme at draw
 };
 

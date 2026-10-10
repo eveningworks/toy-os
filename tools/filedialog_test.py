@@ -23,6 +23,11 @@ What it proves, and what a broken version would still pass:
     behind the window it is modal to.
   * A PLACES row navigates: clicking "Root" lists `/`, which the
     starting directory was not.
+  * Places' SCROLLBAR DRAGS: with the strip overflowing, the real
+    pointer drags its thumb down and the first row moves up -- read off
+    the widget's own row rects. It drew a bar and handled only the wheel
+    until 2026-10-10; a press on the bar armed nothing. The overflow is
+    checked first, since a strip that fits has no bar to drag.
   * A ROUND TRIP: pick a real file in the chooser, and Notepad's title
     and text area show that file. The chooser is not asserted on at all
     here -- the evidence is the app having loaded what was chosen.
@@ -603,6 +608,33 @@ def check_places_hover(dbg, res, qmp):
     close_all(dbg)
 
 
+def check_places_drag(dbg, res, qmp):
+    owner, dlg = open_chooser(dbg, NOTEPAD, "untitled")
+    places = fd_geom(dbg, "places") if dlg else None
+    rows = place_rows(dbg)
+    if not dlg or not places or not rows:
+        res.check("Places' scrollbar thumb drags", False, f"dlg={dlg is not None} places={places}")
+        close_all(dbg)
+        return
+    px, py, pw, ph = places
+    last = rows[-1]
+    over = last[1] + last[3] > py + ph
+    res.check("the Places strip overflows at this size (the precondition)", over,
+              f"last row ends {last[1] + last[3]}, strip ends {py + ph}")
+    if over:
+        # The bar is the strip's right edge; the thumb starts at its top.
+        bx = dlg["content"]["x"] + px + pw - 8
+        top = dlg["content"]["y"] + py
+        dbg.drag_real(qmp, bx, top + 20, bx, top + ph - 2, steps=6)
+        dbg.settle()
+        moved = place_rows(dbg)
+        res.check("Places' scrollbar thumb drags", moved and moved[0][1] < rows[0][1],
+                  f"row 0 at y {rows[0][1]} before, {moved[0][1] if moved else None} after")
+    dbg.key(ESC)
+    wait_dialog(dbg, False)
+    close_all(dbg)
+
+
 def check_cancel(dbg, res):
     owner, dlg = open_chooser(dbg, NOTEPAD, "untitled")
     if not dlg:
@@ -674,6 +706,10 @@ def run(dbg, res, qmp):
 
     print("a hover must not disturb Save As")
     check_places_hover(dbg, res, qmp)
+    close_all(dbg)
+
+    print("dragging Places' scrollbar")
+    check_places_drag(dbg, res, qmp)
     close_all(dbg)
 
     print("cancelling")
