@@ -309,6 +309,38 @@ def main():
         else:
             r.check("a binary pushed over tftp runs on the guest", False,
                     "seed/sync/bin/hello missing -- run `make iso` first")
+
+        # 5b. `sync --delete` removes what the local tree no longer has,
+        #     in a subdirectory too -- and a plain sync does not.
+        tree = os.path.join(tmp, "synct")
+        os.makedirs(os.path.join(tree, "sub"))
+        for rel in ("a.txt", "sub/c.txt"):
+            with open(os.path.join(tree, rel), "w") as f:
+                f.write(rel + "\n")
+        remote("sync", tree, "/var/tmp/synct")
+        stale = os.path.join(tmp, "stale.txt")
+        with open(stale, "w") as f:
+            f.write("stale\n")
+        remote("put", stale, "/var/tmp/synct/stale.txt")
+        remote("put", stale, "/var/tmp/synct/sub/old.txt")
+
+        def listing():
+            return remote("exec", "ls -R /var/tmp/synct").stdout
+        dry = remote("sync", "--delete", "--dry-run", tree, "/var/tmp/synct").stdout
+        plain = remote("sync", tree, "/var/tmp/synct")
+        kept = listing()
+        r.check("sync --delete --dry-run names both stale files",
+                "would delete stale.txt" in dry and "would delete sub/old.txt" in dry,
+                repr(dry[-300:]))
+        r.check("a sync without --delete deletes nothing",
+                plain.returncode == 0 and "stale.txt" in kept and "old.txt" in kept,
+                repr(kept[-300:]))
+        gone = remote("sync", "--delete", tree, "/var/tmp/synct")
+        after = listing()
+        r.check("sync --delete removes them and keeps the tree's own files",
+                gone.returncode == 0 and "stale.txt" not in after
+                and "old.txt" not in after and "a.txt" in after and "c.txt" in after,
+                repr(after[-300:]) + repr(gone.stderr[-200:]))
         # 6. THE MACHINE'S OWNER CAN SEE WHO IS ON IT. The tray's
         #    remote-activity item is the only thing that reports a
         #    session while it is happening, and the indicator is the

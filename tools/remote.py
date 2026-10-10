@@ -817,9 +817,40 @@ def _remote_mismatches(sess, host, tftp_port, remote_dir, want, timeout,
     return bad
 
 
+def _remote_files(sess, remote_dir, timeout):
+    """Every FILE under `remote_dir` on the machine, as relative paths.
+
+    Parsed from `ls -R`: the first directory's names come with no
+    header, each later one under a `/path:` line, and a directory's name
+    ends in `/`.
+    """
+    base = remote_dir.rstrip("/")
+    cur, out = base, set()
+    for line in sess.run(f"ls -R {base}", timeout):
+        name = line.strip()
+        if not name:
+            continue
+        if name.startswith("/") and name.endswith(":"):
+            cur = name[:-1].rstrip("/")
+            continue
+        if name.endswith("/"):
+            continue
+        full = f"{cur}/{name}"
+        if full.startswith(base + "/"):
+            out.add(full[len(base) + 1:])
+    return out
+
+
 def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
-            dry_run=False, missing_only=False, sess=None, force=False):
+            dry_run=False, missing_only=False, sess=None, force=False,
+            delete=False):
     """`missing_only` sends only what the machine does NOT already have.
+
+    `delete` also removes the machine's files that the local tree does
+    not have -- rsync's `--delete`, and opt-in for the same reason: a
+    tree that is not wholly the build's (/usr/share/doom holds WADs the
+    machine downloaded, /etc its configuration) must never be pruned.
+    Files only; an emptied directory stays.
 
     That is dpkg's conffile rule, and it is what /etc needs: a new
     service or setting descriptor has to ARRIVE, while a file the
@@ -886,14 +917,22 @@ def do_sync(host, telnet_port, tftp_port, local_dir, remote_dir, timeout,
             dirs.add(f"{base}/{d}")
         dirs = sorted(dirs, key=lambda x: x.count("/"))
         bytes_todo = sum(want[r][1] for r in todo)
+        extra = sorted(_remote_files(sess, remote_dir, timeout) - set(want)) \
+            if delete else []
         print(f"remote: {len(want)} file(s), {len(todo)} to send "
-              f"({bytes_todo / 1024.0:.0f} KB)")
+              f"({bytes_todo / 1024.0:.0f} KB)"
+              + (f", {len(extra)} to delete" if delete else ""))
         if dry_run:
             for r in todo:
                 print(f"  would send {r}")
+            for r in extra:
+                print(f"  would delete {r}")
             return 0
         for d in dirs:
             sess.run(f"mkdir {d}", timeout)
+        for r in extra:
+            print(f"remote: deleting {base}/{r}")
+            sess.run(f"rm {base}/{r}", timeout)
     except (TimeoutError, EOFError, RuntimeError) as e:
         print(f"remote: {e}", file=sys.stderr)
         return 1
@@ -1176,9 +1215,15 @@ USERLAND_TREES = (("bin", "/bin", False), ("tests", "/tests", False),
                   ("home", "/home", True), ("lib", "/lib", False),
                   ("install", "/install", False))
 
+# What `flash --prune` may delete from: trees that are wholly the
+# build's. Not /usr (downloaded WADs), /etc or /home (the machine's own),
+# and not /lib, where a running program may have the .so mapped.
+PRUNE_TREES = ("/bin", "/tests")
+
 
 def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
-             kernel_only=False, staging="seed/sync", force=False):
+             kernel_only=False, staging="seed/sync", force=False,
+             prune=False):
     """Replace the kernel on the machine's own boot partition.
 
     THE RESCUE ENTRY IS THE POINT. grub.cfg already offers "toy-os
@@ -1365,7 +1410,8 @@ def do_flash(host, telnet_port, tftp_port, local, timeout, reboot,
                 return 1
             if do_sync(host, telnet_port, tftp_port, local_dir, remote,
                        timeout, False, new_only, sess=rescue,
-                       force=force and not new_only):
+                       force=force and not new_only,
+                       delete=prune and remote in PRUNE_TREES):
                 print(f"remote: FAILED syncing {remote} -- the kernel has "
                       "NOT been written", file=sys.stderr)
                 if rescue is not None:
@@ -1507,6 +1553,10 @@ def main():
                    help="send EVERY file, comparing nothing -- the machine's "
                         "`sum` is what the comparison trusts, and the "
                         "laptop's is wrong on large files (docs/bugs.md)")
+    y.add_argument("--delete", action="store_true",
+                   help="also delete the machine's files the local tree "
+                        "lacks (rsync --delete); see them first with "
+                        "--dry-run. Never on a tree the machine adds to")
 
     f = sub.add_parser("flash", help="replace the kernel on the machine's "
                                      "own boot partition")
@@ -1540,6 +1590,9 @@ def main():
                    help="what `make iso` staged (default: seed/sync)")
     f.add_argument("--force", action="store_true",
                    help="sync every file, comparing nothing (see sync --force)")
+    f.add_argument("--prune", action="store_true",
+                   help="delete what the build no longer has from /bin and "
+                        "/tests -- the trees that are wholly the build's")
 
     sc = sub.add_parser("screenshot", help="capture the machine's screen")
     sc.add_argument("local", nargs="?", default="screenshot.png",
@@ -1575,11 +1628,12 @@ def main():
         if a.cmd == "sync":
             return do_sync(a.host, a.telnet_port, a.tftp_port,
                            a.local, a.remote, a.timeout, a.dry_run,
-                           a.new_only, force=a.force)
+                           a.new_only, force=a.force, delete=a.delete)
         if a.cmd == "flash":
             return do_flash(a.host, a.telnet_port, a.tftp_port,
                             a.kernel, a.timeout, a.reboot,
-                            a.kernel_only, a.staging, force=a.force)
+                            a.kernel_only, a.staging, force=a.force,
+                            prune=a.prune)
         if a.cmd == "screenshot":
             return do_screenshot(a, a.host, a.telnet_port, a.tftp_port, a.timeout)
         if a.cmd == "shell":

@@ -644,7 +644,8 @@ manual steps to be worth automating:
   read `echo vnc-typed-421`).
 
 - **`remote_test.py`** -- `telnetd`, `tftpd` and `remote.py` end to end
-  against a QEMU guest, seven checks. On demand: it boots its own guest
+  against a QEMU guest, including `sync --delete` (with a plain sync
+  as its control). On demand: it boots its own guest
   and ENABLES services that ship disabled, so it leaves `disk.img` with
   a network shell turned on -- `make clean-disk && make iso` afterwards
   if that matters. **Its lossy puts drop one block on purpose**
@@ -675,6 +676,7 @@ manual steps to be worth automating:
       python3 tools/remote.py --host <machine-ip> screenshot shot.png
       python3 tools/remote.py --host <machine-ip> shell      # Ctrl-] quits
       python3 tools/remote.py --host <machine-ip> sync seed/sync/bin /bin
+      python3 tools/remote.py --host <machine-ip> sync --delete --dry-run seed/sync/bin /bin
       python3 tools/remote.py --host <machine-ip> --timeout 60 flash build/kernel.bin
       python3 tools/remote.py --host <machine-ip> reboot --list
       python3 tools/remote.py --host <machine-ip> reboot --entry "toy-os (no kernel debugger)" --wait 120
@@ -839,16 +841,17 @@ manual steps to be worth automating:
   **`/etc` IS SYNCED, but NEW FILES ONLY** (`USERLAND_TREES`), so a new
   service descriptor does arrive while the machine's own configuration
   -- which services are enabled, its address -- is never overwritten.
-  **A FLASH ADDS AND REPLACES; IT NEVER DELETES.** The sync sends what
-  the staging tree has and leaves everything else alone, so a file
-  REMOVED from `data/` stays on a machine that was flashed while it
-  existed -- with no error and nothing saying so. It bit on 2026-09-20:
-  two settings replaced by an effect descriptor were deleted from the
-  tree, and the laptop kept showing their rows in System Settings for
-  the rest of the session. `rm` the file on the machine (`remote.py
-  exec "rm <path>"`); there is no sweep, because "delete what the
-  staging tree does not have" would empty `/etc` of everything a
-  machine configured for itself.
+  **A FLASH ADDS AND REPLACES; IT DELETES ONLY WITH `--prune`.** The
+  sync sends what the staging tree has and leaves everything else
+  alone, so a file REMOVED from the tree stays on a machine that was
+  flashed while it existed -- with no error and nothing saying so (a
+  deleted `/bin/lswin` kept answering, wrongly). `flash --prune`
+  deletes what the build no longer has from `/bin` and `/tests` ONLY:
+  `/etc` and `/home` are the machine's own, `/usr/share/doom` holds
+  WADs it downloaded, and `/lib` may have a `.so` mapped. Anywhere
+  else, `sync --delete` (rsync's, opt-in for the same reason; preview
+  it with `--dry-run`) or `rm` by hand -- a settings descriptor removed
+  from `data/etc/settings.d` still needs the `rm`.
 
   **`/etc/settings.d` IS THE EXCEPTION and is overwritten**, because
   those files are not that machine's configuration: they are shipped
@@ -5370,7 +5373,9 @@ window without going through it will find its layout polls timing out.
   EXACTLY -- "it changed" alone is satisfied by almost anything.
 - **`doom_test.py`** -- DOOM runs, draws, animates and takes input,
   including an arrow that still turns with Ctrl (fire) or Shift (run)
-  held and Alt+Space (strafe + use) NOT opening the menu -- Doom reads
+  held and Alt+Space (strafe + use) NOT opening the menu, because a
+  level in play holds the WM's shortcut inhibitor and DOOM's own menu
+  gives it back (both sides' log lines) -- Doom reads
   keys by position (`on_phys_key`), so it is driven through QMP, never
   `gui key`, which injects translated keys only. **ON DEMAND,
   not in `gui_regress.py`**: it needs an IWAD, and the IWAD is

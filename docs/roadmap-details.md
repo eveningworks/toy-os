@@ -3511,12 +3511,14 @@ unplayed audio after up to a ring (341 ms), by which time the app has
 finished and stopped the stream. Starting the new card at the old one's
 position is the obvious fix and not tried.
 
-### `umd_hostcheck.py` FINDS BOLD MARKERS SURVIVING IN `docs/commands/diskbench.md`
+### `font_test.py`'s `...and notices that 'g' paints below its line` FAILS
 
-`python3 tools/umd_hostcheck.py`: two FAIL lines on the page's "A
-progress line is <profile> <percent> <bytes-moved> ..." sentence. The
-same on 2f11440c (`predates.py --build ''`), so it predates the `<details>`
-work that touched `umd.c` next.
+`make iso`, `python3 tools/vm.py start`, `python3 tools/font_test.py`:
+33 checks pass and this one fails: `/bin/font glyph g`'s output (on
+Liberation Sans at 14 px, by then in the run) lacks the "paints below its
+line" text the check looks for. Red at f6bac79c too (`predates.py`). Not
+yet measured on a fresh image (`make clean-disk && make iso`), which is
+the next step; `font glyph g`'s output was not captured.
 
 ## Legend: the old milestone numbers
 
