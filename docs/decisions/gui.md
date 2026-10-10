@@ -11054,3 +11054,37 @@ by its AppId: it draws it full or empty from a watch on
 watch on a missing folder falls back to every write in the machine),
 opens the File Manager on `trash:/` rather than its Exec, and offers
 Empty on its menu. Linux desktops do the same with a `trash:///` link.
+
+## The compositor never decodes a picture: `/bin/thumb` does
+
+The desktop draws a picture as its thumbnail (2026-10-10), and the
+desktop is drawn by the COMPOSITOR. Decoding the files on it there --
+JPEG, PNG, GIF, BMP, and video through `lib/uvid` -- would put five
+parsers of files anyone can write into the one process every window
+depends on: a malformed picture saved to the desktop would crash toywm,
+and with it every app's window. Windows runs thumbnail handlers out of
+Explorer's process for exactly this (`dllhost` hosting the handler
+COM objects), and GNOME's thumbnailers run as separate programs, inside
+`bwrap`, for the same reason.
+
+**So the desktop asks `/bin/thumb`** -- `uthumb_make()` in a process of
+its own -- to write the entries into the File Manager's existing cache,
+and reads back only the finished QOI (`uthumb_load_cached()`), **through
+the QOI decoder alone**: the cache folder is writable, and a JPEG placed
+under a cache name must not reach the JPEG decoder by being probed. A
+picture that crashes a decoder now ends `thumb`, which the crash
+reporter says plainly, and the desktop keeps the type icon.
+
+Three rules keep it from running `thumb` more than it must. It loads on
+the POLL, never while drawing. It asks about an item ONCE, until the
+item changes. And it asks only about a file that has kept still for a
+second AND is two seconds old by the clock: a copy grows a block at a
+time (asking at each step ran `thumb` once per block, measured), and a
+thumbnail made in the same second as its source is refused for good by
+the cache's strictly-newer rule. The cache folder's watch brings the
+finished entries in; a folder's own contents have no watch, so a folder
+waiting on a picture still too new looks again a second later.
+
+The File Manager and the Image Viewer keep decoding in-process through
+`uthumb_get()`'s worker: a crash there ends one app, which is the
+ordinary cost of an app reading a file.

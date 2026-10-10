@@ -1958,14 +1958,16 @@ static void cmd_icons(struct dbg_out *o, int json) {
                        desktop_icon_size_word());
         int first = 1;
         for (int i = 0; i < desktop_icon_count(); i++) {
-            const char *name, *kind; int x, y, w, h, lines;
+            const char *name, *kind; int x, y, w, h, lines, peeks = 0;
             if (!desktop_icon_geometry(i, &name, &x, &y, &w, &h, &lines, &kind)) continue;
-            dbg_out_printf(o, "%s{\"name\":\"%s\",\"kind\":\"%s\",\"art\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"lines\":%d,\"selected\":%s,\"hovered\":%s,\"renaming\":%s,\"target\":%s}",
+            int thumb = desktop_icon_preview(i, &peeks);   // before the printf reads `peeks`
+            dbg_out_printf(o, "%s{\"name\":\"%s\",\"kind\":\"%s\",\"art\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"lines\":%d,\"selected\":%s,\"hovered\":%s,\"renaming\":%s,\"target\":%s,\"thumb\":%s,\"peeks\":%d}",
                            first ? "" : ",", name, kind, desktop_icon_art(i), x, y, w, h, lines,
                            desktop_icon_selected(i) ? "true" : "false",
                            desktop_hovered_icon() == i ? "true" : "false",
                            desktop_renaming() == i ? "true" : "false",
-                           desktop_drop_target() == i ? "true" : "false");
+                           desktop_drop_target() == i ? "true" : "false",
+                           thumb ? "true" : "false", peeks);
             first = 0;
         }
         // What a release would do where a drag rests now, "" for nothing.

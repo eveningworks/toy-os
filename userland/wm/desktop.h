@@ -147,6 +147,8 @@ void desktop_drop_hover(int mx, int my);
 const char *desktop_drop_label(void);
 int desktop_drop_target(void);             // the icon lit as a target, or -1
 const char *desktop_icon_art(int i);       // the icon name it is drawn with
+// 1 when it is drawn as its own thumbnail; *peeks, a folder's pictures shown.
+int desktop_icon_preview(int i, int *peeks);
 int desktop_icon_px(void);                 // the current size in pixels
 const char *desktop_icon_size_word(void);  // and the setting's word
 

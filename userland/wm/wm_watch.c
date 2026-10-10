@@ -10,17 +10,20 @@ static const char *const PATH[WM_TOPIC_COUNT] = {
     [WM_TOPIC_DESKTOP]  = "/home/desktop",
     [WM_TOPIC_EFFECTS]  = "/etc/effects",
     [WM_TOPIC_TRASH]    = "/home/.Trash/files",
+    [WM_TOPIC_THUMBS]   = "/var/cache/thumbnails",
 };
 
 static int g_id[WM_TOPIC_COUNT];         // the kernel's watch id, > 0
 static uint64_t g_gen[WM_TOPIC_COUNT];
 
 void wm_watch_init(void) {
-    // The bin is made on the first delete (lib/utrash.h), and a watch
+    // The bin and the thumbnail cache are made on first use, and a watch
     // needs a folder to watch: one refused falls back to EVERY write.
     sys_mkdir("/home/.Trash");
     sys_mkdir("/home/.Trash/files");
     sys_mkdir("/home/.Trash/info");
+    sys_mkdir("/var/cache");
+    sys_mkdir("/var/cache/thumbnails");
     for (int t = 0; t < WM_TOPIC_COUNT; t++) {
         g_gen[t] = 1;
         if (!PATH[t]) continue;

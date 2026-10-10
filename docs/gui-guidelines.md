@@ -621,7 +621,10 @@ The desktop shows a photograph, so nothing on it is a solid fill:
   caption is its `Name=`, so that is what changes -- KDE's rule.
 - **Properties opens the Properties app** with the path (Alt+Enter).
 - **A file is drawn as its type** -- the File Manager's icon for it
-  (`ufiletype_icon()`), so the two views of one folder agree.
+  (`ufiletype_icon()`), so the two views of one folder agree -- **and a
+  picture or a video as itself**: its thumbnail in a thin white frame,
+  a video with a play mark, a folder with its first two pictures laid
+  across it. The type icon shows until the thumbnail is ready.
 - **An icon a drag rests on says what a release does**, Explorer's
   rule: it lights like a selection and the drag's label reads "Move to
   Box" ("Copy to" with Ctrl), "Open with Image Viewer", "Notepad can't

@@ -68,4 +68,25 @@ int uthumb_posted(void);
 // periodic tick. Returns 0.
 int uthumb_tick(void);
 
+// --- the cache, from OUTSIDE the worker ----------------------------------
+//
+// THE DESKTOP IS DRAWN BY THE COMPOSITOR, which must never run a JPEG,
+// PNG, GIF or video decoder on a file someone else wrote: one malformed
+// picture would take every window down with it. So its thumbnails are
+// made by a separate program (/bin/thumb, through uthumb_make()) into
+// this same cache, and the compositor only reads finished entries back
+// (uthumb_load_cached()) -- Windows' out-of-process thumbnail handlers
+// and GNOME's sandboxed thumbnailers, the same split.
+
+// Make, or confirm fresh, the cache entry for `path` at `px`, here and
+// now. 0 when there is one; -1 for a file that is not a picture or a
+// video, or one whose path the cache cannot name.
+int uthumb_make(const char *path, int px);
+
+// The cache entry for `path` at `px`, when it is newer than `mtime` (the
+// file's, from a listing): decoded as QOI AND NOTHING ELSE, so a file of
+// another format placed under the cache's name reaches no other decoder.
+// 0 and `*out` filled (the caller frees it), or -1.
+int uthumb_load_cached(const char *path, const struct rtc_time *mtime, int px, struct uimg *out);
+
 #endif

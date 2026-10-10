@@ -188,6 +188,8 @@ static void cache_store(const char *cache, const struct uimg *im) {
 
 // --- the worker ---------------------------------------------------------
 
+static int thumb_produce(struct thumb_job *j);
+
 // Everything below runs off the main thread and touches nothing but its
 // own job.
 static int thumb_produce(struct thumb_job *j) {
@@ -422,4 +424,35 @@ int uthumb_posted(void) {
 int uthumb_tick(void) {
     thumb_start_next();
     return 0;
+}
+
+// --- the cache, from outside the worker (uthumb.h) -----------------------
+
+int uthumb_make(const char *path, int px) {
+    static struct thumb_job j;   // a few hundred bytes of paths: off the frame
+    memset(&j, 0, sizeof j);
+    struct sys_stat st;
+    if (px <= 0 || strlen(path) >= sizeof j.path || sys_stat(path, &st) != 0 || st.is_dir) return -1;
+    strcpy(j.path, path);
+    j.px = px;
+    j.src_epoch = cal_rtc_to_epoch(&st.modified);
+    if (!cache_path(path, px, j.cache, sizeof j.cache)) return -1;
+    if (thumb_produce(&j) != 0) return -1;
+    if (!j.cached) cache_store(j.cache, &j.im);
+    uimg_free(&j.im);
+    return 0;
+}
+
+#define THUMB_FILE_MAX (256 * 1024)   // far past a 256-px QOI; a file this big is not ours
+
+int uthumb_load_cached(const char *path, const struct rtc_time *mtime, int px, struct uimg *out) {
+    char cache[THUMB_PATH];
+    if (!path || !mtime || !cache_path(path, px, cache, sizeof cache)) return -1;
+    if (!cache_fresh(cache, cal_rtc_to_epoch(mtime))) return -1;
+    uint8_t *d = 0;
+    size_t n = 0;
+    if (ufile_slurp(cache, THUMB_FILE_MAX, &d, &n) != UFILE_OK) return -1;
+    int rc = uimg_codec_qoi.probe(d, n) ? uimg_codec_qoi.decode(d, n, out) : -1;
+    free(d);
+    return rc == 0 ? 0 : -1;
 }

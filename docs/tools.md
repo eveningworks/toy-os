@@ -3398,12 +3398,15 @@ window without going through it will find its layout polls timing out.
   control found that. In `gui_regress.py`.
 - **`desktop_drop_test.py`** -- dropping onto desktop icons, in
   `gui_regress.py`: each icon's art by type (`gui icons --json` reports
-  `art`, the draw loop's own lookup), and HELD real-pointer drags that
+  `art`, the draw loop's own lookup), thumbnails (`thumb`, `peeks`: a
+  .qoi, a .jpg and a folder holding a .bmp come out drawn as themselves
+  from `/bin/thumb`'s cache; a text file does not), and HELD real-pointer drags that
   stop on a target and ask (`target`, and the top-level `drop` label):
   a folder lights and takes the file, a plain file is no target (the
   control), Notepad refuses a .qoi and nothing moves, the Recycle Bin
   takes one and turns `trash-full`, Image Viewer opens one. Positive
-  control: folders never targets turns the three folder checks red.
+  controls: folders never targets turns the three folder checks red; a
+  cache the compositor can never read turns the thumbnail check red.
 - **`desktop_menu_test.py`** -- the desktop's menus, glass, Rename and
   Properties (26 checks; the last three are `desktop.menu_spacing`: the
   rows shrink in order, the card is DRAWN shorter -- the comfortable

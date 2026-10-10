@@ -8,7 +8,9 @@ the release does it (userland/wm/desktop.c, "dropping ONTO an icon"):
 
   1. Each icon is drawn with its TYPE's art -- a folder, a text file, a
      picture, the Recycle Bin -- read from `gui icons --json`'s "art",
-     the same lookup the draw loop paints with.
+     the same lookup the draw loop paints with. Then a picture becomes
+     its thumbnail ("thumb", made by /bin/thumb into the cache) and a
+     folder shows the pictures inside it ("peeks"); a text file does not.
   2. A file held over a FOLDER lights it ("target") and the label says
      "Move to Box"; the release moves it in (`ls` of the folder, and it
      is gone from the desktop). A plain FILE under the pointer is no
@@ -99,6 +101,22 @@ def run(dbg, qmp):
     check("each icon is drawn with its type's art",
           arts == {"Box": "folder", "notes.txt": "file-text", "pic.qoi": "file-image",
                    "Recycle Bin": "trash-empty"}, str(arts))
+
+    # 1b. Pictures show themselves -- made by /bin/thumb, read from the
+    # cache -- and a folder shows the pictures inside it. A text file
+    # stays its type icon: the control, so a desktop that drew a frame
+    # for everything fails.
+    for c in (f"mkdir {DESK}/Holiday", f"cp /usr/share/pictures/dusk-24bit.bmp {DESK}/Holiday/",
+              f"cp /usr/share/wallpapers/aurora.jpg {DESK}/aurora.jpg"):
+        dbg.send(f"sh {c}")
+    shown = wait_for(lambda: (lambda d: d if d.get("pic.qoi", {}).get("thumb") and d.get("aurora.jpg", {}).get("thumb")
+                              and d.get("Holiday", {}).get("peeks", 0) >= 1 else None)(icons(dbg)[0]), timeout=30)
+    ic = icons(dbg)[0]
+    check("pictures are drawn as thumbnails", bool(shown),
+          str({n: (ic.get(n, {}).get("thumb"), ic.get(n, {}).get("peeks")) for n in ("pic.qoi", "aurora.jpg", "Holiday")}))
+    check("...and a text file is not", ic.get("notes.txt", {}).get("thumb") is False)
+    cache = dbg.send("sh ls /var/cache/thumbnails")
+    check("...and they came from /bin/thumb's cache", "home%desktop%aurora.jpg-" in cache, cache[-200:])
 
     # 2. A folder takes it; a plain file does not.
     ic, drop = hold_over(dbg, qmp, "notes.txt", "junk.txt")

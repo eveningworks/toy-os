@@ -18,6 +18,8 @@
 #include "lib/icon_cache.h"
 #include "lib/ufiletype.h"  // a file's icon, by its type
 #include "lib/uopen.h"      // what a launcher opens, for a file dropped on it
+#include "lib/uthumb.h"     // thumbnails: made by /bin/thumb, only READ here
+#include "caltime.h"         // cal_rtc_to_epoch(), for a file's age
 #include "wm/wm_log.h"
 #include "lib/uimg.h"
 #include "lib/ulivewall.h" // ulivewall_colour() -- the plain colours
@@ -145,6 +147,26 @@ static int item_is_bin(int i);
 static int drop_desktop_drag(void);
 static int g_bin_full;          // the Recycle Bin's picture: anything in it
 static void damage_icon_hl(int i);
+
+// THUMBNAILS, by item: a picture's or a video's own, and up to two of
+// the pictures inside a folder. Loaded on the poll, never while drawing,
+// and ONLY from the cache: /bin/thumb makes them (lib/uthumb.h says why
+// the compositor never decodes someone else's file).
+#define DESKTOP_PEEKS 2
+static struct uimg g_thumb[DESKTOP_FILES_MAX];
+static struct uimg g_peek[DESKTOP_FILES_MAX][DESKTOP_PEEKS];
+static uint8_t g_thumb_asked[DESKTOP_FILES_MAX];   // /bin/thumb already asked about it
+// When each item last changed: a file still being copied grows a block at
+// a time, and asking at every step ran /bin/thumb once per block. An item
+// is asked about only once it has kept still for THUMB_SETTLE_TICKS.
+static uint64_t g_thumb_changed[DESKTOP_FILES_MAX];
+static uint64_t g_thumb_due;     // a refresh owed then, for what was too fresh; 0 none
+#define THUMB_SETTLE_TICKS 100   // a second
+static uint32_t g_files_epoch;   // moves when the list or the icon size does
+static void thumbs_reset(void);
+static void thumbs_refresh(void);
+static void thumb_forget(int i);
+static void spawn_argv(char *const *argv);
 
 // The grid geometry, recomputed live (cheap -- a handful of registry
 // entries) rather than cached, same "derive fresh, don't persist a
@@ -309,12 +331,22 @@ static int desktop_files_reload(void) {
             }
         if (edited) {
             desktop_files_parse();
-            wm_damage_rect(0, 0, screen_w, screen_h - taskbar_h);
             redraw_pending = 1;
             wm_damage_rect(0, 0, screen_w, screen_h);
         }
+        // A picture that finished arriving, or a folder that gained one,
+        // is asked about again: the first ask may have met a half-written
+        // file, and a folder's contents have no watch of their own.
+        for (int i = 0; i < n; i++)
+            if (!is_desktop_file(fresh[i].name) &&
+                (fresh[i].size != g_files[i].size ||
+                 k_memcmp(&fresh[i].modified, &g_files[i].modified, sizeof fresh[i].modified) != 0)) {
+                g_files[i] = fresh[i];
+                thumb_forget(i);
+            }
         return 0;
     }
+    thumbs_reset();   // indexed by the list that is about to change
     for (int i = 0; i < n; i++) g_files[i] = fresh[i];
     g_file_count = n;
     desktop_files_parse();
@@ -548,6 +580,7 @@ static void icon_size_reload(void) {
     k_strlcpy(g_icon_size, word, sizeof g_icon_size);
     g_icon_px = k_strcmp(word, "small") == 0 ? 32 :
                 k_strcmp(word, "large") == 0 ? 64 : 48;
+    thumbs_reset();   // made at the old size
     reflow_overflow();
     redraw_pending = 1;
     wm_damage_rect(0, 0, screen_w, screen_h);
@@ -570,6 +603,14 @@ void desktop_poll_config(void) {
         wallpaper_reload();      // the first call is the initial load
         if (desktop_files_reload()) positions_loaded = 0;
         return;
+    }
+    // Thumbnails: when the list, the icon size or the cache changes.
+    static uint64_t thumbs_gen;
+    if (g_thumb_due && sys_ticks() >= g_thumb_due) { g_thumb_due = 0; g_files_epoch++; }
+    uint64_t tg = wm_watch_gen(WM_TOPIC_THUMBS) + g_files_epoch;
+    if (tg != thumbs_gen && !desktop_drag_active()) {
+        thumbs_gen = tg;
+        thumbs_refresh();
     }
     // The Recycle Bin's picture: is anything in it? One entry answers.
     static uint64_t bin_gen;
@@ -738,7 +779,154 @@ const char *desktop_icon_art(int i) {
 
 int desktop_drop_target(void) { return g_drop_on; }
 
+int desktop_icon_preview(int i, int *peeks) {
+    int n = 0;
+    for (int k = 0; item_visible(i) && k < DESKTOP_PEEKS; k++) n += g_peek[i][k].px != 0;
+    if (peeks) *peeks = n;
+    return item_visible(i) && g_thumb[i].px != 0;
+}
+
+// --- thumbnails ------------------------------------------------------------
+
+static int has_thumb_type(const char *name) {
+    const char *t = ufiletype_icon(name, 0);
+    return k_strcmp(t, "file-image") == 0 || k_strcmp(t, "file-video") == 0;
+}
+
+static void thumb_forget(int i) {
+    uimg_free(&g_thumb[i]);
+    for (int k = 0; k < DESKTOP_PEEKS; k++) uimg_free(&g_peek[i][k]);
+    g_thumb_asked[i] = 0;
+    g_thumb_changed[i] = sys_ticks();
+    g_files_epoch++;
+}
+
+// Written in the last two seconds? Then a thumbnail made now could carry
+// the SAME second as its source, and the cache's strictly-newer rule
+// (lib/uthumb.c) would refuse it for good -- so it waits.
+static int too_fresh(const struct rtc_time *m) {
+    struct rtc_time now;
+    if (sys_gettime(&now) != 0) return 0;
+    return cal_rtc_to_epoch(&now) < cal_rtc_to_epoch(m) + 2;
+}
+
+static void thumbs_reset(void) {
+    for (int i = 0; i < DESKTOP_FILES_MAX; i++) {
+        uimg_free(&g_thumb[i]);
+        for (int k = 0; k < DESKTOP_PEEKS; k++) uimg_free(&g_peek[i][k]);
+        g_thumb_asked[i] = 0;
+        g_thumb_changed[i] = sys_ticks();   // a new list may hold a file still arriving
+    }
+    g_files_epoch++;
+}
+
+// Every missing thumbnail the cache has now is loaded; the rest are asked
+// of /bin/thumb ONCE per item and list, in one run -- its writes move the
+// cache's watch, which brings this round again to load them.
+static void thumbs_refresh(void) {
+    static char *argv[DESKTOP_FILES_MAX * DESKTOP_PEEKS + 6];
+    static char paths[2][DESKTOP_FILES_MAX * DESKTOP_PEEKS][PATH_BUF];   // per size
+    static char size[2][8];
+    int px = icon_px(), peek_px = icon_px() * 9 / 20;
+    k_snprintf(size[0], sizeof size[0], "%d", px);
+    k_snprintf(size[1], sizeof size[1], "%d", peek_px);
+    int want[2] = { 0, 0 };   // paths waiting, at each size
+    const int cap = DESKTOP_FILES_MAX * DESKTOP_PEEKS;
+    uint64_t now = sys_ticks();
+    g_thumb_due = 0;
+    for (int i = 0; i < g_file_count && i < DESKTOP_FILES_MAX; i++) {
+        if (item_is_launcher(i)) continue;
+        // Still changing: loaded if the cache has it, asked about later.
+        int settled = now - g_thumb_changed[i] >= THUMB_SETTLE_TICKS &&
+                      (item_is_dir(i) || !too_fresh(&g_files[i].modified));
+        if (!settled && !g_thumb_asked[i]) g_thumb_due = now + THUMB_SETTLE_TICKS;
+        int ask = settled && !g_thumb_asked[i];
+        char path[PATH_BUF];
+        item_path(i, path, sizeof path);
+        if (!item_is_dir(i)) {
+            if (g_thumb[i].px || !has_thumb_type(g_files[i].name)) continue;
+            if (uthumb_load_cached(path, &g_files[i].modified, px, &g_thumb[i]) == 0) {
+                damage_icon_hl(i);
+                redraw_pending = 1;
+            } else if (ask && want[0] < cap) {
+                k_strlcpy(paths[0][want[0]++], path, PATH_BUF);
+            }
+            if (ask) g_thumb_asked[i] = 1;
+            continue;
+        }
+        // A folder: its first pictures, by name, from one short listing.
+        if (g_peek[i][DESKTOP_PEEKS - 1].px) continue;
+        static struct sys_dirent kids[32];
+        int m = sys_listdir(path, kids, 32), got = 0, waiting = 0;
+        for (int k = 0; k < m && got < DESKTOP_PEEKS; k++) {
+            if (kids[k].is_dir || !has_thumb_type(kids[k].name)) continue;
+            char kid[PATH_BUF];
+            if (!k_path_join(path, kids[k].name, kid, sizeof kid)) continue;
+            if (g_peek[i][got].px || uthumb_load_cached(kid, &kids[k].modified, peek_px, &g_peek[i][got]) == 0) {
+                damage_icon_hl(i);
+                redraw_pending = 1;
+            } else if (too_fresh(&kids[k].modified)) {
+                waiting = 1;
+            } else if (ask && want[1] < cap) {
+                k_strlcpy(paths[1][want[1]++], kid, PATH_BUF);
+            }
+            got++;
+        }
+        // A folder's contents have no watch here: a picture still too new
+        // to ask about is looked at again shortly.
+        if (waiting) g_thumb_due = now + THUMB_SETTLE_TICKS;
+        else if (ask) g_thumb_asked[i] = 1;
+    }
+    // One run per size: the item thumbnails, then the peeks.
+    // At most THUMB_RUN files a run, so a full desktop stays far inside
+    // what a spawn's argument block holds.
+    enum { THUMB_RUN = 32 };
+    for (int s = 0; s < 2; s++) {
+        for (int at = 0; at < want[s]; at += THUMB_RUN) {
+            int k = 0;
+            argv[k++] = "/bin/thumb";
+            argv[k++] = "-q";
+            argv[k++] = "-s";
+            argv[k++] = size[s];
+            for (int j = at; j < want[s] && j < at + THUMB_RUN; j++) argv[k++] = paths[s][j];
+            argv[k] = 0;
+            spawn_argv(argv);
+        }
+        if (want[s]) wm_logf("desktop: asked /bin/thumb for %d thumbnail(s) at %s px", want[s], size[s]);
+    }
+}
+
 int desktop_icon_px(void) { return icon_px(); }
+
+// A thumbnail in a thin white frame, centred in the icon's square -- a
+// photograph laid on the desktop, Windows' and GNOME's look. A video
+// carries a play mark.
+static void draw_thumb(const struct uimg *t, int x, int y, int px, int video) {
+    int tx = x + (px - t->w) / 2, ty = y + (px - t->h) / 2;
+    ugfx_fill_rect(wm_surface(), tx - 2, ty - 1, t->w + 4, t->h + 4, ugfx_rgb(0, 0, 0));
+    ugfx_fill_rect(wm_surface(), tx - 2, ty - 2, t->w + 4, t->h + 4, UTHEME_WHITE);
+    ugfx_blit_alpha(wm_surface(), tx, ty, t->w, t->h, t->px, t->w);
+    if (video) {
+        int r = px / 7, cx = tx + t->w / 2, cy = ty + t->h / 2;
+        ugfx_fill_circle(wm_surface(), cx, cy, r, ugfx_rgb(20, 22, 28));
+        int pts_x[3] = { cx - r / 3, cx - r / 3, cx + r / 2 };
+        int pts_y[3] = { cy - r / 2, cy + r / 2, cy };
+        ugfx_fill_polygon(wm_surface(), pts_x, pts_y, 3, UTHEME_WHITE);
+    }
+}
+
+// A folder's peek: its first pictures, small and framed, laid across its
+// front -- the folder still reads as a folder, and says what it holds.
+static void draw_peeks(int i, int x, int y, int px) {
+    for (int k = 0; k < DESKTOP_PEEKS; k++) {
+        const struct uimg *t = &g_peek[i][k];
+        if (!t->px) continue;
+        int tx = x + px / 2 - t->w / 2 + (k ? px / 6 : -px / 8);
+        int ty = y + px / 2 - t->h / 3 + (k ? px / 12 : 0);
+        ugfx_fill_rect(wm_surface(), tx - 1, ty - 1, t->w + 2, t->h + 2, UTHEME_WHITE);
+        ugfx_blit_alpha(wm_surface(), tx, ty, t->w, t->h, t->px, t->w);
+    }
+}
 
 void desktop_draw(void) {
     desktop_load_positions();
@@ -803,8 +991,11 @@ void desktop_draw(void) {
         // A launcher's own artwork; a file's is the File Manager's for
         // its type (ufiletype.h), so the two views of one folder agree.
         const struct uimg *ico = icon_get(desktop_icon_art(i), px);
-        if (ico) {
+        if (g_thumb[i].px) {
+            draw_thumb(&g_thumb[i], x, y, px, k_strcmp(desktop_icon_art(i), "file-video") == 0);
+        } else if (ico) {
             ugfx_blit_alpha(wm_surface(), x, y, ico->w, ico->h, ico->px, ico->w);
+            draw_peeks(i, x, y, px);
         } else {
             ugfx_fill_rect(wm_surface(), x, y, px, px, ugfx_rgb(60, 90, 130));
             ugfx_draw_rect(wm_surface(), x, y, px, px, icon_fg);
