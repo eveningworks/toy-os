@@ -274,6 +274,55 @@ static int listed(const struct upd_plan *p, int n, const char *path) {
     return 0;
 }
 
+// The crc and size the record says `path` was shipped with. 1 if listed.
+static int recorded(const char *rec, const char *path, uint32_t *crc, uint64_t *size) {
+    for (const char *l = rec; l && *l; ) {
+        const char *nl = strchr(l, '\n');
+        size_t len = nl ? (size_t)(nl - l) : strlen(l);
+        char line[UPD_PATH_MAX * 2 + 64];
+        struct upd_file f;
+        if (len < sizeof line && l[0] != '#') {
+            memcpy(line, l, len);
+            line[len] = '\0';
+            if (parse_line(line, &f) == 0 && !strcmp(f.path, path)) {
+                *crc = f.crc;
+                *size = f.size;
+                return 1;
+            }
+        }
+        l = nl ? nl + 1 : 0;
+    }
+    return 0;
+}
+
+// DPKG'S CONFFILE RULE, for a new-only file the machine already has: the
+// same as shipped is SAME; still what the LAST update shipped (unedited)
+// is replaced; anything else -- edited here, or no record to tell -- is
+// kept, and the shipped version is fetched to UPD_NEW_DIR instead.
+static int conffile_change(struct upd_plan *p, struct upd_file *f, uint64_t size,
+                           const char *rec, const struct upd_hooks *h) {
+    uint32_t crc, was_crc;
+    uint64_t was_size;
+    if (file_crc(f->path, &crc) != 0) return UPD_SAME;   // unreadable: leave it be
+    if (size == f->size && crc == f->crc) return UPD_SAME;
+    if (rec && recorded(rec, f->path, &was_crc, &was_size) && size == was_size && crc == was_crc)
+        return UPD_CHANGED;
+    char alt[UPD_PATH_MAX];
+    if ((size_t)snprintf(alt, sizeof alt, "%s%s", UPD_NEW_DIR, f->path) + sizeof UPDATE_STAGED_SUFFIX
+        > sizeof alt) {
+        say(h, "%s: changed on this machine -- kept", f->path);
+        return UPD_SAME;
+    }
+    p->conf_kept++;
+    say(h, "%s: changed on this machine -- kept; the shipped version is %s", f->path, alt);
+    snprintf(f->path, sizeof f->path, "%s", alt);
+    uint64_t asz = 0;
+    int e = exists(alt, &asz);
+    if (!e) return UPD_NEW;
+    if (e == 1 && asz == f->size && file_crc(alt, &crc) == 0 && crc == f->crc) return UPD_SAME;
+    return e == 2 ? UPD_IGNORED : UPD_CHANGED;
+}
+
 // What the last applied manifest listed and this one does not, appended
 // as UPD_REMOVE rows. Only the managed trees: a new-only file (/etc,
 // /home) is the machine's own once installed, and the kernel has its
@@ -570,8 +619,9 @@ int upd_check(const char *base, struct upd_plan *p, const struct upd_hooks *h) {
 
     p->staged_for_boot = exists(UPDATE_PENDING_PATH, 0) == 1;
     compare_kernel(p, h);
+    char *rec = read_whole(UPD_INSTALLED_PATH);
     for (int i = 0; i < p->count; i++) {
-        if (cancelled(h)) { set_error(p, h, "cancelled"); return -1; }
+        if (cancelled(h)) { free(rec); set_error(p, h, "cancelled"); return -1; }
         struct upd_file *f = &p->files[i];
         if (f->flags & (UPD_F_KERNEL | UPD_F_KERNEL_GZ)) {
             // decided above
@@ -581,7 +631,7 @@ int upd_check(const char *base, struct upd_plan *p, const struct upd_hooks *h) {
             uint32_t crc;
             if (e == 2) f->change = UPD_IGNORED;           // a directory where a file should be
             else if (!e) f->change = UPD_NEW;
-            else if (f->flags & UPD_F_NEW_ONLY) f->change = UPD_SAME;   // the machine's own
+            else if (f->flags & UPD_F_NEW_ONLY) f->change = conffile_change(p, f, size, rec, h);
             else if (size != f->size) f->change = UPD_CHANGED;
             else if (file_crc(f->path, &crc) != 0 || crc != f->crc) f->change = UPD_CHANGED;
             else f->change = UPD_SAME;
@@ -592,6 +642,7 @@ int upd_check(const char *base, struct upd_plan *p, const struct upd_hooks *h) {
         }
         if ((i & 31) == 31) progress(h, p, -1);
     }
+    free(rec);
     say(h, "compared %d files: %d to fetch", p->count, p->changed);
     find_stale(p, h);
     // ALREADY AT THIS MANIFEST: it becomes the record, which is how a

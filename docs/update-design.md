@@ -165,7 +165,9 @@ documents set.
 **The manifest** is `<crc32> <size> <path> [opts]` with the path
 URL-QUOTED (settings files have spaces in their names) under a
 `# version` / `# built` header, and a file is fetched from
-`<server>/files<path>`. `opts` carries `new-only` (`/etc`, `/home`,
+`<server>/files<path>`. `opts` carries `new-only` (`/etc`, `/home` --
+replaced only while unedited since 2026-10-10, dpkg's conffile rule;
+`docs/commands/update.md`,
 imported from `remote.py`'s `USERLAND_TREES` so push and pull agree),
 and `kernel` / `kernel-gz` with a `src=` -- the kernel is listed as the
 ELF and the gzipped image, and the client picks by what its own GRUB

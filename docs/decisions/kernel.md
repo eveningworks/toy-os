@@ -8773,6 +8773,35 @@ touched, which it could already have replaced with anything. A stale
 LIBRARY waits for the boot like a changed one (`-<path>` in
 `/var/lib/update/pending`), because a process may still map it.
 
+## A shipped change to /etc replaces an unedited file -- dpkg's conffile rule
+
+`/etc` and `/home` were NEW-ONLY: installed when absent, never touched
+after. That kept the owner's edits safe and made every later change to
+a shipped `/etc` file unreachable: the scheduling-class work gave
+`/etc/services.d/toywm` two new lines (2026-10-10), and every machine
+that already had the file updated to a kernel with realtime classes and
+a compositor that never asked for one.
+
+**What real systems do.** dpkg replaces an unedited conffile silently
+and, for an edited one, asks -- or keeps the owner's and writes the
+package's as `.dpkg-dist`. rpm's `%config(noreplace)` keeps the owner's
+and writes `.rpmnew`. systemd avoids the question for units with a
+split: vendor units in `/usr/lib/systemd/system`, always replaced, and
+the owner's overrides in `/etc`.
+
+**What toy-os does: dpkg's rule, with the record it already keeps.**
+The manifest last applied (`/var/lib/update/installed`, the stale-file
+rule's file list) says what crc each `/etc` file was SHIPPED with. A
+changed file still carrying that crc is replaced; one that does not is
+kept and said so, and the shipped version goes to
+`/var/lib/update/new<path>`. Not beside it: init loads every file in
+`/etc/services.d` and settings every one in `/etc/settings.d`, so an
+rpm-style `.rpmnew` there would load twice. No record means no way to
+tell an edit, so the safe answer -- keep -- is taken. The systemd split
+was declined: it fixes services only, and changes init, the layout
+check and every descriptor's home to do it, where this fixes every
+shipped `/etc` file with a change to the one client.
+
 ## An update that touches a library or the kernel is applied BY THE KERNEL, at the next boot
 
 **The problem.** `/bin/update` (and the System Update window) replace

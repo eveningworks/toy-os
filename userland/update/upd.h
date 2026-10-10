@@ -31,11 +31,19 @@
 // it still has the crc it was shipped with: an edited file is kept and
 // said so, and a file no manifest ever listed is never touched.
 #define UPD_INSTALLED_PATH "/var/lib/update/installed"
+// A shipped /etc file the owner EDITED is kept, and the new version
+// lands here under its own path -- rpm's .rpmnew, but out of the
+// directory: init loads every file in /etc/services.d, so a `.new`
+// beside a descriptor would start the service twice.
+#define UPD_NEW_DIR "/var/lib/update/new"
 
 // What the manifest says to do with a file. KERNEL lines come in two
 // forms, the ELF and the gzipped image, and the machine's own GRUB
 // decides which one it can boot (see upd.c's kernel_variant()).
-#define UPD_F_NEW_ONLY  0x1   // /etc, /home: install only if absent -- it is the machine's own
+// /etc, /home: the machine's own once edited. A shipped change replaces
+// a file only while it still has the crc the record says was shipped;
+// an edited one is kept and the new version goes to UPD_NEW_DIR.
+#define UPD_F_NEW_ONLY  0x1
 #define UPD_F_KERNEL    0x2   // the ELF kernel image
 #define UPD_F_KERNEL_GZ 0x4   // the same kernel, gzipped, for a GRUB with gzio
 
@@ -77,6 +85,7 @@ struct upd_plan {
     uint64_t bytes;               // their total size
     int      removals;            // stale files to remove (UPD_REMOVE rows)
     int      kept_edited;         // stale, but edited here, so kept
+    int      conf_kept;           // a changed /etc file edited here: kept, new one beside
     char    *manifest;            // the raw text, recorded once applied
     int      staged_for_boot;     // an earlier run already staged an update (restart pending)
     int      kernel_blocked;      // the kernel changed and may not be installed: nothing will be

@@ -88,9 +88,18 @@ after an install.
 ## What decides that a file changed
 
 **Size and crc32, never dates.** A machine whose clock is wrong would
-otherwise refuse every update or take every one. `/etc` and `/home` are
-this machine's own: a file there is installed only if it is **absent**,
-as `remote.py flash` does.
+otherwise refuse every update or take every one.
+
+**`/etc` and `/home` follow dpkg's conffile rule.** A file there that
+is absent is installed. One that a release CHANGED is replaced only
+while it still has the crc the last update shipped -- nobody edited it.
+One edited here is **kept**, the run says
+`<path>: changed on this machine -- kept`, and the shipped version is
+fetched to `/var/lib/update/new<path>` to compare by hand. Not beside
+it, as rpm's `.rpmnew` is: init loads every file in `/etc/services.d`,
+so a second copy there would start the service twice. With no record
+of an earlier update there is nothing to tell an edit by, so every
+changed `/etc` file is treated as edited.
 
 **A file a release stops shipping is removed** -- dpkg's rule. Each
 successful run keeps the manifest it applied in

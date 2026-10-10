@@ -6459,7 +6459,12 @@ runs first**: a `doom1.wad` with one
   guest is kept and said so, and a stale library is staged as a `-` line
   and removed by the next boot -- then served again to put the guest
   back. Removing the "edited here" crc guard by `mutate.py` takes the
-  run to 31 of 32. **Release notes**: `--check` prints the notes newer
+  run to 31 of 32. **`/etc`, dpkg's conffile rule**: the server can
+  REPLACE a file's body and its manifest line (`Server.replace`), so an
+  unedited `/etc/shells` takes a "new release", an edited one is kept
+  and its new version lands in `/var/lib/update/new/etc/shells`; making
+  the unedited branch keep instead took the run to 40 of 41.
+  **Release notes**: `--check` prints the notes newer
   than the guest's build and none older, cut first at the commit the
   guest was compiled from and then -- after an install from a manifest
   claiming another `# commit` -- at the RECORD's.

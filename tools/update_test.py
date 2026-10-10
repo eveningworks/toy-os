@@ -19,6 +19,10 @@ WHAT IT PROVES, each against an INDEPENDENT reader (`sum`, `cat`,
      a record of the previous manifest exists -- unless it was edited
      here, which keeps it. A stale LIBRARY waits for the boot like a
      changed one ("-/lib/..." in the pending list).
+  9. /etc, dpkg's conffile rule: a shipped change to an /etc file the
+     machine already has REPLACES it while it is still what the last
+     update shipped, and an EDITED one is kept -- the new version lands
+     in /var/lib/update/new/<path> instead.
   8. RELEASE NOTES: `update --check` prints the notes NEWER than this
      machine's build and none older -- cut first at the commit the guest
      was compiled from, then, once an install has recorded a manifest
@@ -48,6 +52,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -78,6 +83,7 @@ class Server:
         self.hide = set()      # paths the served manifest leaves out
         self.notes = None      # a notes file to serve instead of the build's own
         self.commit = None     # a `# commit` to claim instead of the build's own
+        self.replace = {}      # path -> bytes: a "new release" of that file
         base = update_server.make_handler({"": self.manifest})
         outer = self
 
@@ -92,14 +98,21 @@ class Server:
                 if outer.notes is not None and self.path == "/notes":
                     self._send(200, outer.notes.encode(), "text/plain")
                     return
-                if (outer.hide or outer.commit) and self.path == "/manifest":
+                if (outer.hide or outer.commit or outer.replace) and self.path == "/manifest":
                     text, _ = outer.manifest.build()
                     keep = [ln for ln in text.splitlines()
                             if len(ln.split(" ")) < 3 or ln.split(" ")[2] not in outer.hide]
+                    for path, body in outer.replace.items():
+                        keep = [" ".join([str(zlib.crc32(body)), str(len(body))] + f[2:])
+                                if len(f) >= 3 and f[2] == path else ln
+                                for ln, f in ((ln, ln.split(" ")) for ln in keep)]
                     if outer.commit:
                         keep = [f"# commit {outer.commit}" if ln.startswith("# commit ") else ln
                                 for ln in keep]
                     self._send(200, ("\n".join(keep) + "\n").encode(), "text/plain")
+                    return
+                if self.path.startswith("/files") and self.path[6:] in outer.replace:
+                    self._send(200, outer.replace[self.path[6:]], "application/octet-stream")
                     return
                 if outer.tamper and self.path == "/files" + outer.tamper:
                     _, files = outer.manifest.build()
@@ -307,6 +320,26 @@ def main():
         c.ok("serving them again puts them back",
              all(summed(sh, f) is not None for f in ("/bin/hello", "/lib/libhello.so")),
              out.strip()[-200:])
+
+        # 9. /etc: replaced while unedited, kept (new one aside) once edited
+        conf = "/etc/shells"
+        release = sh.run(f"cat {conf}").replace("\r", "").strip() + "\n# release two\n"
+        srv.replace = {conf: release.encode()}
+        out = sh.run(f"update --from {url}", timeout=600)
+        got = summed(sh, conf)
+        c.ok("an unedited /etc file takes the shipped change",
+             got is not None and got[0] == zlib.crc32(release.encode()), f"sum {got} {out[-200:]}")
+        sh.run(f"truncate -s 7 {conf}")
+        srv.replace = {conf: (release + "# release three\n").encode()}
+        out = sh.run(f"update --from {url}", timeout=600)
+        got = summed(sh, conf)
+        c.ok("an EDITED one is kept, and said so",
+             got is not None and got[1] == 7 and "changed on this machine -- kept" in out,
+             f"sum {got} {out[-240:]}")
+        aside = summed(sh, "/var/lib/update/new" + conf)
+        c.ok("...and the shipped version is put aside, out of /etc",
+             aside is not None and aside[0] == zlib.crc32(srv.replace[conf]), f"sum {aside}")
+        srv.replace = {}
 
         # 8. release notes, cut at this machine's build
         own = update_server._build_id().split("-")[0]   # git log never says -dirty
