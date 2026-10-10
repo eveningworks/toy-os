@@ -10975,3 +10975,50 @@ here that carries an arrow at all, and the one the UTF-8 migration will
 read. Replacing the character with "?" would lose it outright. The
 status bar says "as UTF-8" when that happened. Search accepts a pasted
 character in either form.
+
+## Every scrollbar is one shared state in a reserved strip
+
+Nine toolkit widgets -- Places, the file list, the sidebar, the list
+box, the scroll view, the tree, the option list, the table, the text
+view -- drew the old 20 px track-and-thumb bar (two of them an 8 px
+one), while the Start menu, Notepad and the Markdown viewer had moved
+to the overlay bar approved on 2026-10-04 and the Terminal drew its own
+copy of it. The maintainer saw three widths in one session. And each
+widget carried its own press, motion and release for the bar: Places
+drew a bar that would not drag, the fourth such bar this project has
+shipped.
+
+**What real systems do.** Windows 11 and GTK float a thin overlay bar on
+the content and widen it under the pointer; macOS hides it until a
+scroll; KDE's Breeze keeps a narrow strip reserved beside the content.
+In every toolkit the bar is ONE implementation -- Qt's `QScrollBar`, GTK's
+`GtkScrollbar` inside `GtkScrolledWindow` -- that every scrolling view
+composes, never a per-view copy.
+
+**What toy-os does.** `uui_sbar` is a small state struct a widget embeds:
+the strip, hover and its eased widening (the Start menu's 150 ms out,
+400 ms linger), the thumb grab and trough paging, drawn through the
+existing overlay painter. The widget keeps its position and routes its
+pointer through the bar first; positions count from the START there,
+and the painter's from-the-bottom scrollback offset is converted in one
+place. Not a widget of its own (`uui_widget_ops`), because the router
+offers events to one widget at a rect, and a bar that is part of a list
+has to share the list's rect and its press.
+
+**The strip is reserved, not floating.** Chosen from a Design canvas of
+Notepad's Open dialog: floating gains the strip's width but puts the
+hovered thumb over the ends of rows and needs a translucent groove. The
+strip is page-coloured, so at rest it looks like the floating bar.
+**The Terminal floats, and is the one exception.** It reserved the
+strip for an afternoon, which cost it a column; the maintainer asked for
+the column back with the bar widening over the text only while hovered
+(Windows 11's and GTK's overlay). Its resting thumb fits inside the
+margin it always had, so floating there costs no text at rest -- the
+condition that makes the exception safe, and the reason it is not the
+toolkit's default: a list's rows run to its edge with no margin to hide
+a thumb in.
+
+`sbar_test` holds the state to the guidelines' rules through the
+painter's own geometry, so a from-the-top/from-the-bottom slip -- the
+classic upside-down thumb -- fails there.
+

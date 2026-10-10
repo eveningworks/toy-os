@@ -169,6 +169,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_renamer.h` | THE RENAME-MANY DIALOG: a window of its own, over lib/urename.h -- a rule (Numbered, Find and replace, Change case), Keep extensions, and a PREVIEW of every old name beside its new one, with the cl... |
 | `uui_route.h` | uui_route -- pointer input, delivered to widgets by the toolkit instead of by every app. |
 | `uui_runask.h` | uui_runask -- "Run backup.sh?": the card that asks what to do with a program or a script before anything runs. |
+| `uui_sbar.h` | uui_sbar -- one vertical scrollbar's STATE, for a widget to embed: the overlay bar in a reserved strip, its hover, its thumb grab and its track paging, so every scrolling view looks and behaves the... |
 | `uui_scale.h` | A CONTINUOUS value on a range, dragged with the pointer -- a media player's position bar, a volume control, a percentage. |
 | `uui_scrollanim.h` | SMOOTH SCROLLING AS A DISPLACEMENT OF THE DRAWN CONTENT, easing to zero -- the widget's own position (`top`, `offset`, `scroll_offset`) still jumps exactly as it always did, so every reader of it,... |
 | `uui_scrollbar.h` | Split out of the single uwidgets.c/.h this used to be, one file per widget -- the same shape as apps/ui/, so a widget's kernel-side and ring-3 versions live at matching paths. |

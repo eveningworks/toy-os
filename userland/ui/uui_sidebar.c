@@ -11,7 +11,6 @@
 #include "ui/uui_sidebar.h"
 #include "ui/uui_describe.h"
 #include "ui/uui_widget.h"
-#include "ui/uui_scrollbar.h"
 #include "lib/icon_cache.h" // icon_get() -- a heading may carry an icon
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
@@ -41,8 +40,7 @@ void uui_sidebar_init(struct uui_sidebar *s, int x, int y, int w, int h,
     s->hovered = -1;
     s->top = 0;
     s->row_h = 0; // derive from the font
-    s->bar_w = 8;
-    s->thumb_grab = -1;
+    uui_sbar_init(&s->sb);
     s->bg = ugfx_rgb(246, 246, 248);
     s->fg = ugfx_rgb(20, 20, 20);
     // Slightly dimmer than an item, but only slightly -- and the first
@@ -60,8 +58,6 @@ void uui_sidebar_init(struct uui_sidebar *s, int x, int y, int w, int h,
     s->heading_fg = ugfx_rgb(64, 66, 74);
     s->sel_bg = ugfx_rgb(205, 220, 240);
     s->sel_fg = ugfx_rgb(20, 20, 20);
-    s->track_bg = UTHEME_BUTTON_BG;
-    s->thumb_bg = ugfx_rgb(150, 155, 165);
     s->selected = first_item(s);
 }
 
@@ -122,15 +118,12 @@ static int scrollbar_visible(const struct uui_sidebar *s) {
     return s->count > visible_rows(s);
 }
 
-// The scrollbar counts from the BOTTOM (offset 0 = scrolled to the end)
-// while `top` counts from the start. Same pair as uui_tree and
-// uui_listbox, deliberately identical, so the three cannot disagree
-// about which way a thumb moves -- getting it backwards is invisible
-// until somebody drags.
-static int bar_x(const struct uui_sidebar *s) { return s->x + s->w - s->bar_w; }
+static int bar_x(const struct uui_sidebar *s) { return s->x + s->w - uui_sbar_width(); }
 
-static int offset_of(const struct uui_sidebar *s) {
-    return s->count - visible_rows(s) - s->top;
+// The bar, filled in from the rows and `top` before anything asks it.
+static void sbar_fill(const struct uui_sidebar *s, struct uui_sbar *b) {
+    uui_sbar_place(b, bar_x(s), s->y, s->h);
+    uui_sbar_set(b, s->count, visible_rows(s), s->top);
 }
 
 static void clamp_top(struct uui_sidebar *s) {
@@ -138,15 +131,6 @@ static void clamp_top(struct uui_sidebar *s) {
     if (max_top < 0) max_top = 0;
     if (s->top > max_top) s->top = max_top;
     if (s->top < 0) s->top = 0;
-}
-
-// The inverse of offset_of(): the scrollbar speaks offsets, `top` is
-// what this widget stores.
-static int set_offset(struct uui_sidebar *s, int offset) {
-    int before = s->top;
-    s->top = s->count - visible_rows(s) - offset;
-    clamp_top(s);
-    return s->top != before;
 }
 
 // Scrolls until `row` is on screen. Called after any keyboard move, so
@@ -215,7 +199,7 @@ void uui_sidebar_natural_size(const struct uui_sidebar *s, int *out_w, int *out_
         ugfx_set_font(was);
         if (w > widest) widest = w;
     }
-    if (out_w) *out_w = UUI_SIDEBAR_PAD_X * 2 + widest + s->bar_w;
+    if (out_w) *out_w = UUI_SIDEBAR_PAD_X * 2 + widest + uui_sbar_width();
     if (out_h) *out_h = row_h(s) * (s->count > 0 ? s->count : 1);
 }
 
@@ -229,7 +213,7 @@ void uui_sidebar_set_geometry(struct uui_sidebar *s, int x, int y, int w, int h)
 void uui_sidebar_draw(struct ugfx_surface *surf, const struct uui_sidebar *s) {
     int rh = row_h(s);
     int vis = visible_rows(s);
-    int bar = scrollbar_visible(s) ? s->bar_w : 0;
+    int bar = scrollbar_visible(s) ? uui_sbar_width() : 0;
 
     ugfx_fill_rect(surf, s->x, s->y, s->w, s->h, s->bg);
 
@@ -299,10 +283,9 @@ void uui_sidebar_draw(struct ugfx_surface *surf, const struct uui_sidebar *s) {
         ugfx_set_font(was);
     }
 
-    if (bar)
-        uui_scrollbar_draw(surf, s->x + s->w - bar, s->y, bar, s->h,
-                            s->count, vis, offset_of(s),
-                            s->track_bg, s->thumb_bg, 0);
+    struct uui_sbar sb = s->sb;
+    sbar_fill(s, &sb);
+    uui_sbar_draw(&sb, surf, s->bg, s->fg);
 
     // On the selected row, or round the pane when it is scrolled off --
     // see uui_listbox.c for why an indicator that can vanish is not one.
@@ -334,26 +317,10 @@ static int hover(struct uui_sidebar *s, int cx, int cy) {
 
 int uui_sidebar_press(struct uui_sidebar *s, int cx, int cy) {
     if (!uui_hit(s->x, s->y, s->w, s->h, cx, cy)) return 0;
-    if (scrollbar_visible(s) && cx >= bar_x(s)) {
-        int vis = visible_rows(s);
-        int off = offset_of(s);
-        enum uui_scrollbar_zone zone =
-            uui_scrollbar_hit(bar_x(s), s->y, s->bar_w, s->h, s->count, vis,
-                               off, cx, cy, 0);
-        if (zone == UUI_SB_THUMB) {
-            int ty, th;
-            uui_scrollbar_thumb_rect(s->y, s->h, s->count, vis, off,
-                                      &ty, &th, s->bar_w, 0);
-            // The grab offset WITHIN the thumb, so it tracks the cursor
-            // instead of snapping its top to it.
-            s->thumb_grab = cy - ty;
-            return 1;
-        }
-        int page = vis > 1 ? vis - 1 : 1;
-        if (zone == UUI_SB_ABOVE) set_offset(s, off + page);
-        else if (zone == UUI_SB_BELOW) set_offset(s, off - page);
-        return 1;
-    }
+    sbar_fill(s, &s->sb);
+    int r = uui_sbar_press(&s->sb, cx, cy);
+    if (r & UUI_SBAR_MOVED) s->top = s->sb.top;
+    if (r & UUI_SBAR_TOOK) return 1;
     // ARMED HERE, COMMITTED ON RELEASE (docs/gui-guidelines.md): the
     // press only moves the highlight, so dragging off the row before
     // letting go cancels the navigation. The app is told in release.
@@ -364,13 +331,14 @@ int uui_sidebar_press(struct uui_sidebar *s, int cx, int cy) {
 }
 
 int uui_sidebar_motion(struct uui_sidebar *s, int cx, int cy, unsigned buttons) {
-    if (s->thumb_grab >= 0) {
-        (void)cx; // a thumb drag follows y only, and survives leaving the bar
-        int off = uui_scrollbar_offset_for_drag(s->y, s->h, s->count,
-                                                 visible_rows(s), cy,
-                                                 s->thumb_grab, s->bar_w, 0);
-        return set_offset(s, off);
+    sbar_fill(s, &s->sb);
+    int r = uui_sbar_motion(&s->sb, cx, cy, buttons);
+    if (r & UUI_SBAR_MOVED) s->top = s->sb.top;
+    if (r & UUI_SBAR_TOOK) {
+        if (s->hovered != -1) { s->hovered = -1; r |= UUI_SBAR_REDRAW; }
+        return (r & (UUI_SBAR_MOVED | UUI_SBAR_REDRAW)) != 0;
     }
+    if (r & UUI_SBAR_REDRAW) { hover(s, cx, cy); return 1; }
     if (buttons) {
         // A drag with the button down keeps moving the highlight, the
         // way a listbox does, so a press that landed on the wrong row
@@ -384,7 +352,7 @@ int uui_sidebar_motion(struct uui_sidebar *s, int cx, int cy, unsigned buttons) 
 
 int uui_sidebar_release(struct uui_sidebar *s, int cx, int cy) {
     (void)cx; (void)cy;
-    s->thumb_grab = -1;
+    uui_sbar_release(&s->sb);
     return 1;
 }
 

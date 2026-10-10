@@ -4883,28 +4883,28 @@ found by its BASE character (`q`, `/`) or, for one that is not ASCII,
 `kc<keycode>` (`kc13`, Finnish's dead acute); `--json` adds the layout
 the bar names and a pending dead key.
 
-- **THE TERMINAL'S SCROLLBAR IS AN OVERLAY: THIN AT REST, FULL UNDER THE
-  POINTER, AND THE GRID DOES NOT NARROW FOR IT.** It was a reserved
-  gutter (Konsole's, xterm's) until the maintainer found it too heavy
-  (2026-10-02); it is now the Start menu's bar -- Windows 11's and
-  GNOME Console's: a 3 px thumb inside the right margin over no text,
-  growing to `uui_scrollbar_natural_size()`'s width over the last column
-  while hovered or dragged, and drawn only when there is scrollback.
-  **`size_changed()` and `default_size()` both leave it out** -- they are
-  inverses, and a bar counted in only one of them is a window that opens
-  a column narrower than it asked for. `bar_rect()` is the full bar and
-  the hover zone, and the one geometry draw, hit-test and drag all use.
+- **THE TERMINAL'S SCROLLBAR IS THE TOOLKIT'S, THIN AT REST IN THE MARGIN,
+  AND THE GRID DOES NOT NARROW FOR IT.** `uui_sbar` (the convention "A
+  SCROLLING VIEW EMBEDS `uui_sbar`"): a 3 px thumb at rest on the strip's
+  far edge, inside the right margin over no text; under the pointer or a
+  drag it widens OVER the last column; drawn only when there is
+  scrollback. The one place a bar floats rather than reserving its strip
+  (the maintainer's call, 2026-10-10: a column of text is worth more than
+  a strip that is empty at rest). **`TERM_MARGIN` must stay wider than
+  the resting thumb and its 2 px inset**, or the thumb lands on text.
+  **`size_changed()` and `default_size()` both leave the bar out** --
+  they are inverses, and a bar counted in only one of them is a window
+  that opens a column narrower than it asked for. `bar_rect()` is the
+  full bar, the hover zone and the one geometry draw, hit-test and drag
+  all use.
 
-  Three things follow. **`sb_view` already counts from the BOTTOM**,
-  which is what a vertical `uui_scrollbar`'s offset means
-  (`uui_scrollbar.h`), so unlike `uui_listbox` there is no conversion --
-  and a conversion added "for symmetry" would put the thumb at the wrong
-  end. **The colours are Plasma's DARK pair** (`#31363b` track,
-  `#76797c` thumb) rather than the toolkit theme's: this page is the
-  ANSI palette on black by definition, and Notepad's near-white bar down
-  the side of it would be the brightest thing on the window. And **the
-  trough PAGES, the thumb drags, and both had to be written** -- this
-  project has shipped four bars that drew and did nothing.
+  Two things follow. **`sb_view` counts from the BOTTOM** and the bar
+  from the top, so `term_sbar()` converts once (`sb_count - sb_view`) and
+  every caller reads `g_sb.top` back through the same subtraction. **The
+  colours are the page's own** -- the groove a step from the background
+  toward the text -- so the bar follows any scheme rather than one dark
+  pair; and it is placed in the UI face, since its width is read from the
+  face selected.
 
 - **A MOTION WITH NO BUTTON HELD IS IGNORED, NOT TREATED AS A RELEASE.**
   The convention above says to test the `buttons` mask on a drag, and it
@@ -5663,12 +5663,31 @@ main()'s local.
 ## ONE SCROLLBAR LOOK: `uui_scrollbar_draw_overlay()`
 
 - **A scrolling view draws the OVERLAY bar** (docs/gui-guidelines.md's
-  scrollbar section, rule 0): the Start menu, Notepad and `uui_markdown`
-  draw through it. Hover is `wide` 0..255; `UUI_SCROLLBAR_HELD` while a
-  drag holds the thumb. Hit-testing and dragging are the same
-  `uui_scrollbar_hit()` / `_offset_for_drag()` as ever.
+  scrollbar section, rule 0), through `uui_sbar` (next) or, for the few
+  that predate it (the Start menu, Notepad, `uui_markdown`, the grid, the
+  log and media lists), directly. Hover is `wide` 0..255;
+  `UUI_SCROLLBAR_HELD` while a drag holds the thumb.
 - **The column under an overlay bar is the PAGE's colour**, painted by
   the app: the bar draws only its thumb and groove.
+
+## A SCROLLING VIEW EMBEDS `uui_sbar`, AND ROUTES ITS POINTER THROUGH IT FIRST
+
+- **The widget owns the position; `uui_sbar` owns the bar** -- its strip
+  (`uui_sbar_width()`, reserved while `uui_sbar_shown()`), hover and its
+  eased widening, the thumb grab, trough paging. A widget fills it
+  (`uui_sbar_place()` + `uui_sbar_set()`, positions from the START) before
+  every draw and every event, offers press/motion/release to it first,
+  and reads `top` back when an answer carries `UUI_SBAR_MOVED`. All nine
+  list-shaped widgets and the Terminal do; `sbar_test` holds it to the
+  guidelines.
+- **Draw from a COPY in a const draw**: fill a local `struct uui_sbar`
+  from the widget's and draw that -- the easing is a function of time
+  since the last hover change, so the copy reads it right. A widget with
+  a scroll glide passes PIXELS to the draw (the displacement folded into
+  `top`) and rows to the input, which is safe because the grab is a
+  screen offset.
+- **Place it in the interface face** -- the width is captured at
+  `uui_sbar_place()`, from the face selected then.
 
 ## CHROME IS MEASURED IN THE INTERFACE FACE, EVEN INSIDE A DOCUMENT'S
 

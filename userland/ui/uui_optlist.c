@@ -19,10 +19,8 @@ static int field_h(void) {
 }
 
 static int bar_w(const struct uui_optlist *ol) {
-    if (ol->bar_w > 0) return ol->bar_w;
-    int w;
-    uui_scrollbar_natural_size(&w, 0);
-    return w;
+    (void)ol;
+    return uui_sbar_width();
 }
 
 int uui_optlist_row_h(const struct uui_optlist *ol) {
@@ -127,7 +125,7 @@ void uui_optlist_init(struct uui_optlist *ol, struct uui_optlist_item *items, in
     memset(ol, 0, sizeof *ol);
     ol->selected = -1;
     ol->hovered = -1;
-    ol->thumb_grab = -1;
+    uui_sbar_init(&ol->sb);
     ol->editing = -1;
     ol->bg = UUI_COLOR_UNSET;
     ol->fg = UUI_COLOR_UNSET;
@@ -328,13 +326,10 @@ void uui_optlist_draw(struct ugfx_surface *s, const struct uui_optlist *ol) {
 
     if (bar) {
         // In pixels, so the thumb glides with the rows.
-        int max_px = (ol->count - vis) * rh;
-        int off_px = (ol->count - vis - ol->top) * rh + disp;
-        if (off_px < 0) off_px = 0;
-        if (off_px > max_px) off_px = max_px;
-        uui_scrollbar_draw(s, ol->x + ol->w - bar, ol->y, bar, ol->h,
-                           ol->count * rh, vis * rh, off_px,
-                           UTHEME_BUTTON_BG, UTHEME_OUTLINE, 0);
+        struct uui_sbar sb = ol->sb;
+        uui_sbar_place(&sb, ol->x + ol->w - bar, ol->y, ol->h);
+        uui_sbar_set(&sb, ol->count * rh, vis * rh, ol->top * rh - disp);
+        uui_sbar_draw(&sb, s, bg, UTHEME_TEXT);
     }
 
     // A focused list with its selection out of sight still says so.
@@ -369,37 +364,22 @@ int uui_optlist_hit(const struct uui_optlist *ol, int cx, int cy) {
     return idx >= 0 && idx < ol->count ? idx : -1;
 }
 
-// `scroll_offset` counts from the BOTTOM, `top` from the top.
-static int bar_offset(const struct uui_optlist *ol) {
-    return ol->count - uui_optlist_visible_rows(ol) - ol->top;
-}
-
-static int set_bar_offset(struct uui_optlist *ol, int offset) {
-    int before = ol->top;
-    ol->top = ol->count - uui_optlist_visible_rows(ol) - offset;
-    clamp_top(ol);
-    return ol->top != before;
+// The bar in ROWS, filled in before anything asks it.
+static struct uui_sbar *sbar(struct uui_optlist *ol) {
+    uui_sbar_place(&ol->sb, ol->x + ol->w - bar_w(ol), ol->y,
+                   uui_optlist_scrollbar_visible(ol) ? ol->h : 0);
+    uui_sbar_set(&ol->sb, ol->count, uui_optlist_visible_rows(ol), ol->top);
+    return &ol->sb;
 }
 
 static int bar_press(struct uui_optlist *ol, int cx, int cy) {
-    if (!uui_optlist_scrollbar_visible(ol)) return 0;
-    int bw = bar_w(ol), bx = ol->x + ol->w - bw;
-    if (!uui_hit(bx, ol->y, bw, ol->h, cx, cy)) return 0;
-    int vis = uui_optlist_visible_rows(ol), off = bar_offset(ol);
-    enum uui_scrollbar_zone zone =
-        uui_scrollbar_hit(bx, ol->y, bw, ol->h, ol->count, vis, off, cx, cy, 0);
-    if (zone == UUI_SB_THUMB) {
-        int ty, th;
-        uui_scrollbar_thumb_rect(ol->y, ol->h, ol->count, vis, off, &ty, &th, bw, 0);
-        ol->thumb_grab = cy - ty;
-        uui_scrollanim_cancel(&ol->anim);
-        return 1;
+    int r = uui_sbar_press(sbar(ol), cx, cy);
+    if (ol->sb.grab >= 0) uui_scrollanim_cancel(&ol->anim);
+    if (r & UUI_SBAR_MOVED) {
+        uui_scrollanim_arm(&ol->anim);
+        ol->top = ol->sb.top;
     }
-    int page = vis > 1 ? vis - 1 : 1;
-    if (zone == UUI_SB_ABOVE || zone == UUI_SB_BELOW) uui_scrollanim_arm(&ol->anim);
-    if (zone == UUI_SB_ABOVE) set_bar_offset(ol, off + page);
-    else if (zone == UUI_SB_BELOW) set_bar_offset(ol, off - page);
-    return 1;   // the strip is the bar's, whatever the zone
+    return (r & UUI_SBAR_TOOK) != 0;   // the strip is the bar's, whatever the zone
 }
 
 static int ol_press(struct uui_optlist *ol, int cx, int cy, unsigned mods) {
@@ -434,12 +414,17 @@ static int ol_motion(struct uui_optlist *ol, int cx, int cy, unsigned buttons) {
     if (buttons) {
         if (ol->edit_drag && ol->editing >= 0 && edit_place(ol))
             return uui_textbox_ops.motion(&ol->edit, cx, cy, buttons);
-        if (ol->thumb_grab < 0) return 0;
-        int vis = uui_optlist_visible_rows(ol);
-        int off = uui_scrollbar_offset_for_drag(ol->y, ol->h, ol->count, vis,
-                                                cy, ol->thumb_grab, bar_w(ol), 0);
-        return set_bar_offset(ol, off);
+        if (ol->sb.grab < 0) return 0;
+        int r = uui_sbar_motion(sbar(ol), cx, cy, buttons);
+        if (r & UUI_SBAR_MOVED) ol->top = ol->sb.top;
+        return (r & UUI_SBAR_MOVED) != 0;
     }
+    int r = uui_sbar_motion(sbar(ol), cx, cy, 0);   // the bar's hover
+    if (r & UUI_SBAR_TOOK) {
+        if (ol->hovered != -1) { ol->hovered = -1; r |= UUI_SBAR_REDRAW; }
+        return (r & UUI_SBAR_REDRAW) != 0;
+    }
+    if (r & UUI_SBAR_REDRAW) { ol->hovered = uui_optlist_hit(ol, cx, cy); return 1; }
     int row = uui_optlist_hit(ol, cx, cy);
     if (row == ol->hovered) return 0;
     ol->hovered = row;
@@ -542,7 +527,7 @@ static int op_motion(void *w, int cx, int cy, unsigned buttons) {
 static int op_release(void *w, int cx, int cy) {
     (void)cx; (void)cy;
     struct uui_optlist *ol = (struct uui_optlist *)w;
-    ol->thumb_grab = -1;
+    uui_sbar_release(&ol->sb);
     ol->edit_drag = 0;
     return 1;
 }

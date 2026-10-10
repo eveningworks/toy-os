@@ -942,8 +942,8 @@ int main(void) {
     uui_textbox_init(&g_title, "");
     uui_optlist_init(&g_words, g_rows, 0);
     g_words.value_chars = 12;
-    uui_textview_init(&g_text, 0, 0, 0, 0, UTHEME_TEXT, UTHEME_WHITE, UTHEME_PANEL_BG,
-                      UTHEME_OUTLINE, UTHEME_SELECTION, g_textbuf, sizeof g_textbuf);
+    uui_textview_init(&g_text, 0, 0, 0, 0, UTHEME_TEXT, UTHEME_WHITE, UTHEME_SELECTION,
+                      g_textbuf, sizeof g_textbuf);
     g_text.show_caret = 1;
     g_text.editable = 1;   // its keys are text_key()'s; the menu edits too
     utext_set_wrap(&g_text.tb, UTEXT_WRAP_OFF);

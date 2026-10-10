@@ -1,6 +1,7 @@
 #ifndef UUI_SCROLLVIEW_H
 #define UUI_SCROLLVIEW_H
 
+#include "ui/uui_sbar.h"
 #include "ui/uui_widget.h"
 #include "ui/uui_layout.h"
 #include "ui/uui_scrollanim.h"
@@ -76,22 +77,21 @@ struct uui_scrollview {
     struct uui_scrollanim anim;
     int anim_disp;
     int content_h;   // the content's natural height, measured at layout
-    int thumb_grab;
+    struct uui_sbar sb; // the scrollbar
     // What the content looked like when it was last positioned. Compared
     // on every draw so a changed item list re-lays itself out WITHOUT
     // the app having to say so -- see uui_scrollview_content_changed().
     struct uui_item *seen_items;
-    int seen_count;  // grab offset within the thumb, or -1 when not dragging
+    int seen_count;
 
     // --- what the app may configure ---------------------------------
     int pref_rows;   // natural height, in text rows (0 = a default)
     int step;        // wheel/arrow step in pixels (0 = one text row)
-    int bar_w;       // scrollbar width (0 = the scrollbar's own default)
 
     // Defaulted from the theme at init, like every other widget's
     // colours -- an app that wants a different look assigns them
     // rather than the widget guessing.
-    uint32_t bg, track_bg, thumb_bg;
+    uint32_t bg;
 };
 
 // `content` must outlive the scrollview. Colours come from the theme,

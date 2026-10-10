@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "ui/ugfx.h"
 #include "ui/uui_primitives.h"
-#include "ui/uui_scrollbar.h"
+#include "ui/uui_sbar.h"
 #include "ui/uui_seek.h"
 #include "ui/uui_scrollanim.h"
 
@@ -235,20 +235,13 @@ struct uui_table {
     int focused;    // OWNED -- driven by the focus ring's set_focused
     int top;        // first visible row; OWNED
     int row_h;      // 0 = derive from the font
-    int bar_w;
-
-    // Live thumb-drag state: -1 when none, else the grab offset WITHIN
-    // the thumb. OWNED. Passing 0 here instead of the real offset is
-    // what made a ring-3 scrollbar grabbable only by its top edge once
-    // already -- see docs/gui-guidelines.md's scrollbar section.
-    int thumb_grab;
+    struct uui_sbar sb; // the scrollbar, below the header; OWNED
     // The glide (ui/uui_scrollanim.h): `top` jumps, the rows are drawn
     // displaced for a few frames. OWNED.
     struct uui_scrollanim anim;
 
     uint32_t bg, fg, sel_bg, sel_fg;
     uint32_t head_bg, head_fg, grid;
-    uint32_t track_bg, thumb_bg;
 };
 
 void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
@@ -328,13 +321,15 @@ uint32_t uui_table_c_sel_bg(const struct uui_table *t);
 uint32_t uui_table_c_sel_fg(const struct uui_table *t);
 uint32_t uui_table_c_head_bg(const struct uui_table *t);
 uint32_t uui_table_c_grid(const struct uui_table *t);
-uint32_t uui_table_c_track_bg(const struct uui_table *t);
-uint32_t uui_table_c_thumb_bg(const struct uui_table *t);
 
 int  uui_table_row_h(const struct uui_table *t);
 int  uui_table_header_h(const struct uui_table *t);
 int  uui_table_visible_rows(const struct uui_table *t);
 int  uui_table_scrollbar_visible(const struct uui_table *t);
+// The bar, placed and filled in from the table's rows. For a widget that
+// draws a table's rows its own way (uui_fileview) and keeps its bar.
+struct uui_sbar *uui_table_sbar(struct uui_table *t);
+int  uui_table_bar_hover(struct uui_table *t, int cx, int cy, int *on);
 
 // Where column `col` starts and how wide it is, both content-relative.
 // Public because a test asserts on it rather than re-deriving it in

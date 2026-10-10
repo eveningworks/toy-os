@@ -1,6 +1,7 @@
 #ifndef UUI_SIDEBAR_H
 #define UUI_SIDEBAR_H
 
+#include "ui/uui_sbar.h"
 #include <stdint.h>
 #include "ui/ugfx.h"
 #include "ui/uui_primitives.h"
@@ -105,10 +106,9 @@ struct uui_sidebar {
     int focused;    // OWNED -- driven by the focus ring's set_focused
     int top;        // first visible row; OWNED
     int row_h;      // 0 = derive from the font
-    int bar_w;
-    int thumb_grab; // -1 when no drag is in progress; OWNED
+    struct uui_sbar sb; // OWNED: the scrollbar
 
-    uint32_t bg, fg, heading_fg, sel_bg, sel_fg, track_bg, thumb_bg;
+    uint32_t bg, fg, heading_fg, sel_bg, sel_fg;
 };
 
 // Everything starts scrolled to the top with the FIRST ITEM selected --

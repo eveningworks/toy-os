@@ -14,7 +14,6 @@
 //     re-run is arithmetic over a handful of items, and a resize
 //     already does exactly this.
 #include "ui/uui_scrollview.h"
-#include "ui/uui_scrollbar.h"
 #include "ui/utheme.h"
 #include "ui/ugfx.h"
 
@@ -25,11 +24,8 @@ static int row_px(const struct uui_scrollview *sv) {
 }
 
 static int bar_px(const struct uui_scrollview *sv) {
-    if (sv->bar_w > 0) return sv->bar_w;
-    int w = 0, h = 0;
-    uui_scrollbar_natural_size(&w, &h);
-    (void)h;
-    return w > 0 ? w : 8;
+    (void)sv;
+    return uui_sbar_width();
 }
 
 static int max_offset(const struct uui_scrollview *sv) {
@@ -48,17 +44,13 @@ static int max_offset(const struct uui_scrollview *sv) {
 // "it will not go all the way up". In pixels both ends land exactly and
 // a drag is smooth instead of snapping to a row.
 //
-// The three callers -- draw, hit and drag -- must pass the SAME three
-// numbers, which is why they come from one place.
-static void sb_units(const struct uui_scrollview *sv,
-                     int *total, int *vis, int *off) {
-    *total = sv->content_h > 0 ? sv->content_h : 1;
-    *vis = sv->h;
-    // The bar counts from the BOTTOM; the glide's displacement is folded
-    // in so the thumb moves with the content rather than ahead of it.
-    *off = max_offset(sv) - sv->offset + sv->anim_disp;
-    if (*off < 0) *off = 0;
-    if (*off > max_offset(sv)) *off = max_offset(sv);
+// Draw, hit and drag must see the SAME numbers, which is why they come
+// from one place. The glide's displacement is folded in so the thumb
+// moves with the content rather than ahead of it.
+static void sbar_fill(const struct uui_scrollview *sv, struct uui_sbar *b) {
+    uui_sbar_place(b, sv->x + sv->w - bar_px(sv), sv->y, sv->h);
+    uui_sbar_set(b, sv->content_h > 0 ? sv->content_h : 1, sv->h, sv->offset - sv->anim_disp);
+    b->step = row_px(sv);
 }
 
 static int clamp_offset(struct uui_scrollview *sv) {
@@ -120,18 +112,13 @@ void uui_scrollview_init(struct uui_scrollview *sv, struct uui_layout *content) 
     uui_scrollanim_init(&sv->anim);
     sv->anim_disp = 0;
     sv->content_h = 0;
-    sv->thumb_grab = -1;
+    uui_sbar_init(&sv->sb);
     sv->seen_items = 0;
     sv->seen_count = -1; // -1, not 0: an EMPTY content list is a real
                           // state, and 0 would read as "already seen".
     sv->pref_rows = 0;
     sv->step = 0;
-    sv->bar_w = 0;
     sv->bg = UTHEME_WINDOW_BG;
-    // The same two values uui_listbox uses, so a scrollbar looks the
-    // same whichever widget is showing one.
-    sv->track_bg = UTHEME_BUTTON_BG;
-    sv->thumb_bg = ugfx_rgb(150, 155, 165);
     if (content) uui_router_init(&sv->router, content->items, content->count);
     else uui_router_init(&sv->router, 0, 0);
 }
@@ -237,10 +224,8 @@ static void sv_children_end(struct ugfx_surface *s, void *w) {
 
     if (!uui_scrollview_scrollable(sv)) return;
 
-    int total, vis, off;
-    sb_units(sv, &total, &vis, &off);
-    uui_scrollbar_draw(s, sv->x + sv->w - bar_px(sv), sv->y, bar_px(sv), sv->h,
-                        total, vis, off, sv->track_bg, sv->thumb_bg, 0);
+    sbar_fill(sv, &sv->sb);
+    uui_sbar_draw(&sv->sb, s, sv->bg, UTHEME_TEXT);
 }
 
 // THE ONE ACCESSOR for the children, which is why the staleness check
@@ -279,33 +264,14 @@ static int on_bar(const struct uui_scrollview *sv, int cx) {
 }
 
 static int bar_press(struct uui_scrollview *sv, int cx, int cy) {
-    int total, vis, off;
-    sb_units(sv, &total, &vis, &off);
-    int bx = sv->x + sv->w - bar_px(sv);
-
-    enum uui_scrollbar_zone zone =
-        uui_scrollbar_hit(bx, sv->y, bar_px(sv), sv->h, total, vis, off, cx, cy, 0);
-
-    if (zone == UUI_SB_THUMB) {
-        int ty, th;
-        uui_scrollbar_thumb_rect(sv->y, sv->h, total, vis, off, &ty, &th, bar_px(sv), 0);
-        // The grab offset WITHIN the thumb, so it tracks the cursor
-        // instead of snapping its top to it -- the bug the ring-3
-        // Notepad shipped by passing 0 here.
-        sv->thumb_grab = cy - ty;
-        uui_scrollanim_cancel(&sv->anim); // a drag draws where the thumb is, at once
-        return 1;
+    sbar_fill(sv, &sv->sb);
+    int r = uui_sbar_press(&sv->sb, cx, cy);
+    if (sv->sb.grab >= 0) uui_scrollanim_cancel(&sv->anim); // a drag draws where the thumb is, at once
+    if (r & UUI_SBAR_MOVED) {
+        uui_scrollanim_arm(&sv->anim);   // a page glides
+        uui_scrollview_set_offset(sv, sv->sb.top);
     }
-
-    // Page toward the click, keeping one row of overlap, as every real
-    // toolkit does and as uui_listbox already does here. In pixels now,
-    // like everything else the bar is driven with (sb_units()).
-    int row = row_px(sv);
-    int page = sv->h > row ? sv->h - row : row;
-    if (zone == UUI_SB_ABOVE || zone == UUI_SB_BELOW) uui_scrollanim_arm(&sv->anim);
-    if (zone == UUI_SB_ABOVE) return uui_scrollview_set_offset(sv, sv->offset - page);
-    if (zone == UUI_SB_BELOW) return uui_scrollview_set_offset(sv, sv->offset + page);
-    return 0;
+    return (r & (UUI_SBAR_MOVED | UUI_SBAR_REDRAW)) != 0;
 }
 
 // Reached only when no CHILD took the press (uui_route.c falls through
@@ -320,21 +286,17 @@ static int sv_press(void *w, int cx, int cy, unsigned mods) {
 
 static int sv_motion(void *w, int cx, int cy, unsigned buttons) {
     struct uui_scrollview *sv = w;
-    if (sv->thumb_grab >= 0) {
-        int total, vis, off;
-        sb_units(sv, &total, &vis, &off);
-        off = uui_scrollbar_offset_for_drag(sv->y, sv->h, total, vis,
-                                            cy, sv->thumb_grab, bar_px(sv), 0);
-        return uui_scrollview_set_offset(sv, max_offset(sv) - off);
-    }
-    (void)cx; (void)cy; (void)buttons;
-    return 0;
+    if (!uui_scrollview_scrollable(sv)) return 0;
+    sbar_fill(sv, &sv->sb);
+    int r = uui_sbar_motion(&sv->sb, cx, cy, buttons);
+    if (r & UUI_SBAR_MOVED) uui_scrollview_set_offset(sv, sv->sb.top);
+    return (r & (UUI_SBAR_MOVED | UUI_SBAR_REDRAW)) != 0;
 }
 
 static int sv_release(void *w, int cx, int cy) {
     struct uui_scrollview *sv = w;
     (void)cx; (void)cy;
-    if (sv->thumb_grab >= 0) { sv->thumb_grab = -1; return 1; }
+    if (uui_sbar_release(&sv->sb)) return 1;
     return 0;
 }
 

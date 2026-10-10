@@ -6,38 +6,24 @@
 
 #define DEFAULT_WHEEL_LINES 3
 
-// Font-derived, not a fixed pixel count: a constant would be right at
-// exactly one font size. Asked of the scrollbar, so widening the bar is
-// one edit rather than one per caller.
-static int default_bar_w(void) {
-    int w = 0;
-    uui_scrollbar_natural_size(&w, 0);
-    return w;
-}
-
 void uui_textview_init(struct uui_textview *tv, int x, int y, int w, int h,
-                        uint32_t fg, uint32_t bg, uint32_t track_bg,
-                        uint32_t thumb_bg, uint32_t sel_bg,
+                        uint32_t fg, uint32_t bg, uint32_t sel_bg,
                         char *buf, int cap) {
     utext_init_buf(&tv->tb, buf, cap);
     tv->tb.animate = 1; // a Toykit app redraws per frame (ui/uui_anim.h)
     tv->x = x; tv->y = y; tv->w = w; tv->h = h;
     tv->policy = UUI_TEXTVIEW_AUTO;
     tv->body = UUI_TEXTVIEW_BODY_APP;
-    tv->bar_w = default_bar_w();
+    uui_sbar_init(&tv->sb);
     // Below this much room for text, AUTO hides the bar entirely.
-    tv->min_text_w = tv->bar_w * 3;
+    tv->min_text_w = uui_sbar_width() * 3;
     tv->wheel_lines = DEFAULT_WHEEL_LINES;
     tv->page_overlap = 1;
     tv->show_caret = 0;
     tv->editable = 0;
-    tv->bar_flags = 0;
     tv->fg = fg;
     tv->bg = bg;
-    tv->track_bg = track_bg;
-    tv->thumb_bg = thumb_bg;
     tv->sel_bg = sel_bg;
-    tv->thumb_grab = -1;
     tv->panning = 0;
     tv->pan_last_y = 0;
     tv->pan_remainder = 0;
@@ -59,7 +45,7 @@ void uui_textview_natural_size(const struct uui_textview *tv, int *out_w, int *o
 // that circularity deliberately: the bar never appears and immediately
 // disappears because reserving its strip made the text re-wrap to fit.
 static int text_w_with_bar(const struct uui_textview *tv) {
-    int tw = tv->w - tv->bar_w;
+    int tw = tv->w - uui_sbar_width();
     return tw > 0 ? tw : 0;
 }
 
@@ -101,6 +87,24 @@ static void metrics(struct uui_textview *tv, int *total, int *visible) {
     ugfx_set_font(was);
 }
 
+// The bar in LINES, filled in before anything asks it. utext counts its
+// offset from the BOTTOM (a scrollback); the bar from the top.
+static struct uui_sbar *sbar(struct uui_textview *tv) {
+    int total, visible;
+    metrics(tv, &total, &visible);
+    int max = total > visible ? total - visible : 0;
+    uui_sbar_place(&tv->sb, tv->x + uui_textview_text_w(tv), tv->y,
+                   uui_textview_scrollbar_visible(tv) ? tv->h : 0);
+    uui_sbar_set(&tv->sb, total, visible, max - tv->tb.scroll_offset);
+    tv->sb.step = tv->page_overlap;
+    return &tv->sb;
+}
+
+static void sbar_moved(struct uui_textview *tv) {
+    int max = tv->sb.total > tv->sb.visible ? tv->sb.total - tv->sb.visible : 0;
+    utext_scroll_set(&tv->tb, max - tv->sb.top);
+}
+
 void uui_textview_draw(struct ugfx_surface *s, struct uui_textview *tv) {
     int tw = uui_textview_text_w(tv);
 
@@ -120,9 +124,10 @@ void uui_textview_draw(struct ugfx_surface *s, struct uui_textview *tv) {
     was = grid_font();
     utext_bar_units(&tv->tb, total, visible, &total_px, &vis_px, &off_px);
     ugfx_set_font(was);
-    uui_scrollbar_draw(s, tv->x + tw, tv->y, tv->bar_w, tv->h,
-                       total_px, vis_px, off_px,
-                       tv->track_bg, tv->thumb_bg, tv->bar_flags);
+    struct uui_sbar sb = tv->sb;
+    uui_sbar_place(&sb, tv->x + tw, tv->y, tv->h);
+    uui_sbar_set(&sb, total_px, vis_px, total_px - vis_px - off_px);
+    uui_sbar_draw(&sb, s, tv->bg, tv->fg);
 }
 
 int uui_textview_wheel(struct uui_textview *tv, int delta) {
@@ -131,60 +136,25 @@ int uui_textview_wheel(struct uui_textview *tv, int delta) {
     return 1;
 }
 
-// Which zone is this point in? UUI_SB_NONE for anything off the bar.
-static enum uui_scrollbar_zone bar_zone(struct uui_textview *tv, int cx, int cy) {
-    if (!uui_textview_scrollbar_visible(tv)) return UUI_SB_NONE;
-    int tw = uui_textview_text_w(tv);
-    if (cx < tv->x + tw) return UUI_SB_NONE; // in the text body
-    int total, visible;
-    metrics(tv, &total, &visible);
-    return uui_scrollbar_hit(tv->x + tw, tv->y, tv->bar_w, tv->h,
-                             total, visible, tv->tb.scroll_offset,
-                             cx, cy, tv->bar_flags);
+// Is this point on the bar rather than the text?
+static int on_bar(struct uui_textview *tv, int cx, int cy) {
+    return uui_sbar_hit(sbar(tv), cx, cy);
 }
 
+// A press on the bar: the thumb grabs, the track pages (keeping
+// page_overlap lines). Act-on-contact, as a repeat-capable control is.
 int uui_textview_click(struct uui_textview *tv, int cx, int cy) {
-    if (!uui_textview_hit(tv, cx, cy)) return 0;
-    enum uui_scrollbar_zone zone = bar_zone(tv, cx, cy);
-
-    int total, visible;
-    metrics(tv, &total, &visible);
-
-    // An arrow steps one line; the track pages. Both are act-on-contact,
-    // which is correct for a repeat-capable control (see
-    // docs/gui-guidelines.md's scrollbar section).
-    if (zone == UUI_SB_UP)   { utext_scroll(&tv->tb, 1);  return 1; }
-    if (zone == UUI_SB_DOWN) { utext_scroll(&tv->tb, -1); return 1; }
-    if (zone != UUI_SB_ABOVE && zone != UUI_SB_BELOW) return 0;
-
-    int page = visible > tv->page_overlap ? visible - tv->page_overlap : 1;
-    utext_scroll(&tv->tb, zone == UUI_SB_ABOVE ? page : -page);
-    return 1;
+    if (!uui_textview_hit(tv, cx, cy) || !on_bar(tv, cx, cy)) return 0;
+    int r = uui_sbar_press(&tv->sb, cx, cy);
+    if (r & UUI_SBAR_MOVED) sbar_moved(tv);
+    return (r & UUI_SBAR_TOOK) != 0;
 }
 
 int uui_textview_drag_start(struct uui_textview *tv, int cx, int cy) {
     if (!uui_textview_hit(tv, cx, cy)) return 0;
-
-    enum uui_scrollbar_zone zone = bar_zone(tv, cx, cy);
-    if (zone == UUI_SB_THUMB) {
-        int total, visible;
-        metrics(tv, &total, &visible);
-        int thumb_y, thumb_h;
-        uui_scrollbar_thumb_rect(tv->y, tv->h, total, visible,
-                                 tv->tb.scroll_offset, &thumb_y, &thumb_h,
-                                 tv->bar_w, tv->bar_flags);
-        tv->thumb_grab = cy - thumb_y;
-        return 1;
-    }
-
-    // A press anywhere ELSE on the bar is the track or an arrow: decline
-    // it, so it reaches click() and pages. Checked BEFORE the body case
-    // -- with PAN enabled, falling through here swallows every track
-    // click as a pan, and the bar silently stops paging.
-    if (zone != UUI_SB_NONE) return 0;
+    if (on_bar(tv, cx, cy)) return uui_textview_click(tv, cx, cy);
 
     if (tv->body == UUI_TEXTVIEW_BODY_PAN) {
-        tv->thumb_grab = -1;
         tv->panning = 1;
         tv->pan_last_y = cy;
         tv->pan_remainder = 0;
@@ -194,15 +164,8 @@ int uui_textview_drag_start(struct uui_textview *tv, int cx, int cy) {
 }
 
 void uui_textview_drag(struct uui_textview *tv, int cx, int cy) {
-    (void)cx;
-    int total, visible;
-    metrics(tv, &total, &visible);
-
-    if (tv->thumb_grab >= 0) {
-        utext_scroll_set(&tv->tb,
-            uui_scrollbar_offset_for_drag(tv->y, tv->h, total, visible,
-                                          cy, tv->thumb_grab,
-                                          tv->bar_w, tv->bar_flags));
+    if (tv->sb.grab >= 0) {
+        if (uui_sbar_motion(sbar(tv), cx, cy, 1) & UUI_SBAR_MOVED) sbar_moved(tv);
         return;
     }
 
@@ -223,7 +186,7 @@ void uui_textview_drag(struct uui_textview *tv, int cx, int cy) {
 }
 
 void uui_textview_drag_end(struct uui_textview *tv) {
-    tv->thumb_grab = -1;
+    uui_sbar_release(&tv->sb);
     tv->panning = 0;
     tv->pan_remainder = 0;
 }
@@ -248,8 +211,8 @@ static int tv_ops_press(void *w, int cx, int cy, unsigned mods) {
 
 static int tv_ops_motion(void *w, int cx, int cy, unsigned buttons) {
     struct uui_textview *tv = (struct uui_textview *)w;
-    if (!buttons) return 0;
-    if (tv->thumb_grab < 0 && !tv->panning) return 0;
+    if (!buttons || (tv->sb.grab < 0 && !tv->panning))   // the bar's hover
+        return (uui_sbar_motion(sbar(tv), cx, cy, buttons) & UUI_SBAR_REDRAW) != 0;
     uui_textview_drag(tv, cx, cy);
     return 1;
 }
@@ -293,7 +256,7 @@ static int tv_ops_cursor(const void *w, int cx, int cy) {
 static int tv_ops_edit_target(void *w, int cx, int cy, struct uui_edit_target *out) {
     struct uui_textview *tv = (struct uui_textview *)w;
     if (cx == UUI_NOWHERE || !uui_textview_hit(tv, cx, cy)) return 0;
-    if (bar_zone(tv, cx, cy) != UUI_SB_NONE) return 0;
+    if (on_bar(tv, cx, cy)) return 0;
     tv->tb.ed.flags = tv->editable ? 0 : UUI_EDIT_READONLY;
     out->ed = &tv->tb.ed;
     out->ops = utext_edit_ops();

@@ -823,7 +823,7 @@ static int ic_cell_w(const struct uui_fileview *fv) {
 static int ic_cell_h(const struct uui_fileview *fv) { return ic_px(fv) + IC_LABEL_LINES * (ugfx_char_h() + 1) + 10; }
 
 static int ic_cols(const struct uui_fileview *fv) {
-    int n = (fv->table.w - fv->table.bar_w - 2 * ic_pad()) / ic_cell_w(fv);
+    int n = (fv->table.w - uui_sbar_width() - 2 * ic_pad()) / ic_cell_w(fv);
     return n > 0 ? n : 1;
 }
 
@@ -860,11 +860,6 @@ static int ic_bar_visible(const struct uui_fileview *fv) {
     return ic_max_scroll(fv) > 0;
 }
 
-// Bottom-anchored offset, uui_scrollbar's convention (see uui_tree.c).
-static int ic_offset(const struct uui_fileview *fv) {
-    return ic_max_scroll(fv) - fv->icon_scroll;
-}
-
 static void ic_clamp(struct uui_fileview *fv) {
     int max_scroll = ic_max_scroll(fv);
     if (fv->icon_scroll > max_scroll) fv->icon_scroll = max_scroll;
@@ -878,11 +873,14 @@ static int ic_eff_scroll(const struct uui_fileview *fv) {
     return fv->icon_scroll - fv->ic_anim.disp;
 }
 
-static int ic_set_offset(struct uui_fileview *fv, int offset) {
-    int before = fv->icon_scroll;
-    fv->icon_scroll = ic_max_scroll(fv) - offset;
-    ic_clamp(fv);
-    return fv->icon_scroll != before;
+// The grid's bar, IN PIXELS, sharing the table's state (one mode shows
+// at a time). A page is the view less one cell -- Explorer's paging.
+static struct uui_sbar *ic_sbar(struct uui_fileview *fv) {
+    struct uui_table *t = &fv->table;
+    uui_sbar_place(&t->sb, t->x + t->w - uui_sbar_width(), t->y, ic_bar_visible(fv) ? t->h : 0);
+    uui_sbar_set(&t->sb, ic_content_h(fv), ic_view_h(fv), fv->icon_scroll);
+    t->sb.step = ic_cell_h(fv);
+    return &t->sb;
 }
 
 static struct icon_grid ic_grid(const struct uui_fileview *fv) {
@@ -918,7 +916,7 @@ int uui_fileview_cell_rect(const struct uui_fileview *fv, int view,
 static int ic_hit_view(const struct uui_fileview *fv, int cx, int cy) {
     const struct uui_table *t = &fv->table;
     if (!uui_hit(t->x, t->y, t->w, t->h, cx, cy)) return -1;
-    if (ic_bar_visible(fv) && cx >= t->x + t->w - t->bar_w) return -1;
+    if (ic_bar_visible(fv) && cx >= t->x + t->w - uui_sbar_width()) return -1;
     int lx = cx - (t->x + ic_pad());
     int ly = cy - (t->y + ic_pad()) + ic_eff_scroll(fv);
     if (lx < 0 || ly < 0) return -1;
@@ -987,7 +985,7 @@ int uui_fileview_band_active(const struct uui_fileview *fv) {
 static void tb_rb_rect(void *ctx, int index, int *x, int *y, int *w, int *h) {
     const struct uui_fileview *fv = (const struct uui_fileview *)ctx;
     const struct uui_table *t = &fv->table;
-    int bar = uui_table_scrollbar_visible(t) ? t->bar_w : 0;
+    int bar = uui_table_scrollbar_visible(t) ? uui_sbar_width() : 0;
     *x = t->x;
     *y = t->y + uui_table_header_h(t) + (index - t->top) * uui_table_row_h(t);
     *w = t->w - bar;
@@ -1171,14 +1169,11 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
     }
 
     if (ic_bar_visible(fv)) {
-        // The thumb glides with the grid: the displacement folded into
-        // the bottom-anchored offset.
-        int off = ic_offset(fv) + disp;
-        if (off < 0) off = 0;
-        if (off > ic_max_scroll(fv)) off = ic_max_scroll(fv);
-        uui_scrollbar_draw(s, t->x + t->w - t->bar_w, t->y, t->bar_w, t->h,
-                            ic_content_h(fv), ic_view_h(fv), off,
-                            uui_table_c_track_bg(t), uui_table_c_thumb_bg(t), 0);
+        // The thumb glides with the grid: the displacement folded in.
+        struct uui_sbar sb = t->sb;
+        uui_sbar_place(&sb, t->x + t->w - uui_sbar_width(), t->y, t->h);
+        uui_sbar_set(&sb, ic_content_h(fv), ic_view_h(fv), fv->icon_scroll - disp);
+        uui_sbar_draw(&sb, s, uui_table_c_bg(t), uui_table_c_fg(t));
     }
 
     // The band, above everything it crosses. An outline, not a fill --
@@ -1195,9 +1190,11 @@ static void ic_draw(struct ugfx_surface *s, const struct uui_fileview *fv) {
 }
 
 static int ic_hover(struct uui_fileview *fv, int cx, int cy) {
+    int r = uui_sbar_motion(ic_sbar(fv), cx, cy, 0);   // the bar's hover
+    if (r & UUI_SBAR_TOOK) cx = cy = UUI_NOWHERE;       // no cell under the bar
     int view = ic_hit_view(fv, cx, cy);
     int src = view >= 0 ? uui_table_source_row(&fv->table, view) : -1;
-    if (src == fv->table.hovered) return 0;
+    if (src == fv->table.hovered) return (r & UUI_SBAR_REDRAW) != 0;
     fv->table.hovered = src;
     return 1;
 }
@@ -1210,28 +1207,13 @@ static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
     fv->press_row = -1;
     fv->deferred_clear = 0;
 
-    if (ic_bar_visible(fv) && cx >= t->x + t->w - t->bar_w) {
-        int vis = ic_view_h(fv), total = ic_content_h(fv);
-        int off = ic_offset(fv);
-        enum uui_scrollbar_zone zone =
-            uui_scrollbar_hit(t->x + t->w - t->bar_w, t->y, t->bar_w, t->h,
-                              total, vis, off, cx, cy, 0);
-        if (zone == UUI_SB_THUMB) {
-            int thumb_y, thumb_h;
-            uui_scrollbar_thumb_rect(t->y, t->h, total, vis, off,
-                                      &thumb_y, &thumb_h, t->bar_w, 0);
-            t->thumb_grab = cy - thumb_y;
-            uui_scrollanim_cancel(&fv->ic_anim); // a drag draws where the thumb is, at once
-            return 1;
-        }
-        // A page is the view less one cell, so the last row seen stays
-        // in sight as the first -- Explorer's paging.
-        int page = vis > ic_cell_h(fv) ? vis - ic_cell_h(fv) : ic_cell_h(fv);
-        if (zone == UUI_SB_ABOVE || zone == UUI_SB_BELOW) uui_scrollanim_arm(&fv->ic_anim);
-        if (zone == UUI_SB_ABOVE) ic_set_offset(fv, off + page);
-        else if (zone == UUI_SB_BELOW) ic_set_offset(fv, off - page);
-        return 1;
+    int r = uui_sbar_press(ic_sbar(fv), cx, cy);
+    if (t->sb.grab >= 0) uui_scrollanim_cancel(&fv->ic_anim); // a drag draws where the thumb is, at once
+    if (r & UUI_SBAR_MOVED) {
+        uui_scrollanim_arm(&fv->ic_anim);   // a page glides
+        fv->icon_scroll = t->sb.top;
     }
+    if (r & UUI_SBAR_TOOK) return 1;
 
     int view = ic_hit_view(fv, cx, cy);
     if (view < 0) {
@@ -1265,11 +1247,10 @@ static int ic_press(struct uui_fileview *fv, int cx, int cy, unsigned mods) {
 
 static int ic_drag(struct uui_fileview *fv, int cx, int cy) {
     struct uui_table *t = &fv->table;
-    if (t->thumb_grab >= 0) {
-        int off = uui_scrollbar_offset_for_drag(t->y, t->h, ic_content_h(fv),
-                                                 ic_view_h(fv), cy,
-                                                 t->thumb_grab, t->bar_w, 0);
-        return ic_set_offset(fv, off);
+    if (t->sb.grab >= 0) {
+        int r = uui_sbar_motion(ic_sbar(fv), cx, cy, 1);
+        if (r & UUI_SBAR_MOVED) fv->icon_scroll = t->sb.top;
+        return (r & UUI_SBAR_MOVED) != 0;
     }
     if (fv->band.armed) {
         struct rb_ops ops = { ic_rb_count, ic_rb_rect };
@@ -1281,7 +1262,7 @@ static int ic_drag(struct uui_fileview *fv, int cx, int cy) {
 }
 
 static void ic_drag_end(struct uui_fileview *fv) {
-    fv->table.thumb_grab = -1;
+    uui_sbar_release(&fv->table.sb);
     if (fv->band.armed) {
         rb_end(&fv->band);
         ic_apply_band(fv);
@@ -1504,7 +1485,9 @@ int uui_fileview_hit(const struct uui_fileview *fv, int cx, int cy) {
 
 int uui_fileview_hover(struct uui_fileview *fv, int cx, int cy) {
     if (fv->mode == UUI_FILEVIEW_ICONS) return ic_hover(fv, cx, cy);
-    return uui_table_hover(&fv->table, cx, cy);
+    int on = 0, redraw = uui_table_bar_hover(&fv->table, cx, cy, &on);
+    if (on) return uui_table_hover(&fv->table, UUI_NOWHERE, UUI_NOWHERE) | redraw;
+    return uui_table_hover(&fv->table, cx, cy) | redraw;
 }
 
 // THE SELECTION AND THE MARKED SET ARE ONE THING, which is Explorer's

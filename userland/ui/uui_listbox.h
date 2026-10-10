@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "ui/ugfx.h"
 #include "ui/uui_primitives.h"
-#include "ui/uui_scrollbar.h"
+#include "ui/uui_sbar.h"
 #include "ui/uui_seek.h"
 #include "ui/uui_scrollanim.h"
 
@@ -27,13 +27,9 @@ struct uui_listbox {
     int focused;   // OWNED -- driven by the focus ring's set_focused
     int top;       // first visible row; OWNED
     int row_h;     // 0 = derive from the font
-    int bar_w;
-    // Live thumb-drag state: -1 when no drag is in progress, otherwise
-    // the offset WITHIN the thumb that was grabbed. OWNED -- driven by
-    // uui_listbox_press()/_drag()/_drag_end().
-    int thumb_grab;
+    struct uui_sbar sb;         // the scrollbar; OWNED
     struct uui_scrollanim anim; // the glide (ui/uui_scrollanim.h); OWNED
-    uint32_t bg, fg, sel_bg, sel_fg, track_bg, thumb_bg;
+    uint32_t bg, fg, sel_bg, sel_fg;
 
     // TYPE-AHEAD state, OWNED -- driven by uui_listbox_key().
     struct uui_seek seek;

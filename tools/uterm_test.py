@@ -50,8 +50,11 @@ SPAWN_TIMEOUT_S = 15.0
 BG = (0x23, 0x26, 0x29)
 FG = (0xFC, 0xFC, 0xFC)
 
-# terminal.c's scrollbar colours -- Plasma's dark pair.
-TRACK = (49, 54, 59)
+# The toolkit's overlay bar (ui/uui_sbar.h) over the page: its groove is
+# the page blended 24/255 toward the text, its resting thumb the theme's
+# outline grey (uui_scrollbar_draw_overlay()).
+TRACK = tuple(b + (f - b) * 24 // 255 for b, f in zip(BG, FG))
+THUMB_REST = (150, 155, 165)
 
 HEX = {" ": "0x20", "/": "0x2f", ".": "0x2e", "-": "0x2d", "_": "0x5f"}
 
@@ -1470,9 +1473,10 @@ def check_scrollbar(dbg, qmp, tmp, res):
     if not bar:
         return
 
-    # AN OVERLAY BAR (terminal.c's bar_rect): nothing drawn while there is
-    # nothing to scroll, a thin thumb at rest, the full groove under the
-    # pointer. Read as pixels, each against a control.
+    # THE TOOLKIT'S BAR in a reserved strip (terminal.c's bar_rect):
+    # nothing drawn while there is nothing to scroll, a thin thumb at
+    # rest, the groove under the pointer. Read as pixels, each against a
+    # control.
     c = win["content"]
     box = (c["x"] + bar[0], c["y"] + bar[1],
            c["x"] + bar[0] + bar[2], c["y"] + bar[1] + bar[3])
@@ -1499,7 +1503,7 @@ def check_scrollbar(dbg, qmp, tmp, res):
         rgb = im.convert("RGB")
         def near(px, col, tol):
             return all(abs(px[i] - col[i]) < tol for i in range(3))
-        right = sum(near(rgb.getpixel((x, y)), (118, 121, 124), 12)
+        right = sum(near(rgb.getpixel((x, y)), THUMB_REST, 12)
                     for x in range(box[2] - 4, box[2]) for y in range(box[1], box[3]))
         cx = box[0] + bar[2] // 2
         run = best = 0
@@ -1510,17 +1514,36 @@ def check_scrollbar(dbg, qmp, tmp, res):
               right > 10 and best < bar[3] // 4,
               f"thumb px on the edge {right}, longest groove run {best} of {bar[3]}")
 
-    # HOVERED: the full groove, a capsule -- its four corners background,
-    # the middle of each edge track. The pointer has to be REALLY there
-    # (warp_cursor): an injected move lasts one frame.
+    # THE GRID KEEPS THE COLUMN: the bar floats, so at rest the text runs
+    # on under where the hovered bar will be -- left of the resting thumb,
+    # inside the bar's rect. A grid that reserved the strip leaves that
+    # band blank. dmesg's lines are long enough to reach the last column.
+    under = ink(qmp, tmp, "sb_under.png", (box[0], box[1], box[2] - 6, box[3]))
+    res.check("s2d. at rest the text reaches under the bar -- the grid kept the column",
+              under > 20, f"{under} text px under the bar, left of its resting thumb")
+
+    # HOVERED: the groove grows in -- a capsule the thumb's width, so the
+    # strip's TOP corners stay page and its centre column is one long run
+    # of groove down to the thumb (the view is at the bottom). Not the
+    # bottom corners: the thumb covers that end, and the window's own
+    # bottom-right pixel there is a border grey within reach of the
+    # groove's colour. The pointer has to be REALLY there (warp_cursor):
+    # an injected move lasts one frame.
     dbg.warp_cursor(qmp, c["x"] + bar[0] + bar[2] // 2, c["y"] + bar[1] + bar[3] // 3)
     time.sleep(0.8)
-    corners, middles = corner_shape(qmp, tmp, "sb_shape.png", box, TRACK)
-    # Three midpoints, not four: the view is at the bottom, so the thumb
-    # covers the groove's bottom midpoint.
-    res.check("s2a. hovered, the groove grows in: corners rounded away, edges track",
-              corners == 0 and middles >= 3,
-              f"{corners}/4 corners still track-coloured, {middles}/4 edge midpoints")
+    corner_shape(qmp, tmp, "sb_shape.png", box, TRACK)   # takes the screenshot
+    with Image.open(os.path.abspath(os.path.join(tmp, "sb_shape.png"))) as im:
+        rgb = im.convert("RGB")
+        seen = [rgb.getpixel((x, y)) for y in (box[1], box[3] - 1) for x in (box[0], box[2] - 1)]
+        corners = sum(near(px, TRACK, 8) for px in seen[:2])
+        run = grown = 0
+        for y in range(box[1], box[3]):
+            run = run + 1 if near(rgb.getpixel((cx, y)), TRACK, 4) else 0
+            grown = max(grown, run)
+    res.check("s2a. hovered, the groove grows in: top corners rounded away, a long groove run",
+              corners == 0 and grown >= bar[3] // 4,
+              f"{corners}/2 top corners groove-coloured {seen} (groove {TRACK}), "
+              f"longest groove run {grown} of {bar[3]}")
 
     # The thumb, from the app's rect and the widget's own proportions.
     # Dragging it UP goes BACK into history: a vertical bar here is a

@@ -1,6 +1,7 @@
 #ifndef UUI_PLACES_H
 #define UUI_PLACES_H
 
+#include "ui/uui_sbar.h"
 #include <stdint.h>
 #include "ui/ugfx.h"
 
@@ -45,7 +46,7 @@ struct uui_places {
     int has_taken;
     int focused;                  // OWNED -- the focus ring's set_focused
     int scroll;                   // PIXELS scrolled off the top, when it overflows; OWNED
-    int thumb_grab;               // OWNED: where in the thumb a drag holds it, or -1
+    struct uui_sbar sb;           // OWNED: the scrollbar
     uint32_t bg;                  // 0 = derived from the theme at draw
 };
 

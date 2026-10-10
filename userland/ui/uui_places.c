@@ -3,7 +3,6 @@
 #include "ui/uui_widget.h"
 #include "ui/uui_primitives.h"
 #include "ui/uui_describe.h"
-#include "ui/uui_scrollbar.h"
 #include "ui/utheme.h"
 #include "lib/icon_cache.h"
 #include "lib/human.h"
@@ -50,11 +49,19 @@ static int max_scroll(const struct uui_places *p) {
     return m > 0 ? m : 0;
 }
 
-static int bar_w(const struct uui_places *p) {
-    if (!max_scroll(p)) return 0;
-    int w;
-    uui_scrollbar_natural_size(&w, 0);
-    return w;
+static int bar_w(const struct uui_places *p) { return max_scroll(p) ? uui_sbar_width() : 0; }
+
+// The bar follows the strip and the scroll, filled in fresh before
+// anything asks it: rows are added and the strip resized from outside.
+static void sbar_fill(const struct uui_places *p, struct uui_sbar *b) {
+    uui_sbar_place(b, p->x + p->w - uui_sbar_width(), p->y, p->h);
+    uui_sbar_set(b, content_h(p), p->h, p->scroll);
+    b->step = place_h();
+}
+
+static struct uui_sbar *sbar(struct uui_places *p) {
+    sbar_fill(p, &p->sb);
+    return &p->sb;
 }
 
 int uui_places_row_rect(const struct uui_places *p, int i, int *x, int *y, int *w, int *h) {
@@ -79,7 +86,8 @@ static int row_at(const struct uui_places *p, int cx, int cy) {
 
 void uui_places_init(struct uui_places *p) {
     memset(p, 0, sizeof *p);
-    p->selected = p->hot = p->armed = p->thumb_grab = -1;
+    p->selected = p->hot = p->armed = -1;
+    uui_sbar_init(&p->sb);
 }
 
 void uui_places_add(struct uui_places *p, const char *label, const char *icon,
@@ -238,11 +246,9 @@ static void op_draw(struct ugfx_surface *s, const void *w) {
                                   i == p->selected ? rfg : dim, rbg);
     }
     ugfx_clear_clip_rect(s);
-    int bw = bar_w(p);
-    if (bw) uui_scrollbar_draw(s, p->x + p->w - bw, p->y, bw, p->h, content_h(p), p->h,
-                               max_scroll(p) - p->scroll, bg,
-                               uui_state_bg(bg, UUI_STATE_PRESSED),
-                               p->thumb_grab >= 0 ? UUI_SCROLLBAR_HELD : 0);
+    struct uui_sbar sb = p->sb;
+    sbar_fill(p, &sb);
+    uui_sbar_draw(&sb, s, bg, UTHEME_TEXT);
     if (p->focused && p->selected >= 0) {
         int x, y, rw, rh;
         uui_places_row_rect(p, p->selected, &x, &y, &rw, &rh);
@@ -262,28 +268,12 @@ static void set_scroll(struct uui_places *p, int px) {
     p->scroll = px < 0 ? 0 : px;
 }
 
-// THE BAR'S OFFSET COUNTS FROM THE BOTTOM (uui_scrollbar.h), in pixels
-// here, so every call turns `scroll` round.
 static int op_press(void *w, int cx, int cy, unsigned mods) {
     (void)mods;
     struct uui_places *p = w;
-    int bw = bar_w(p);
-    if (bw && cx >= p->x + p->w - bw) {
-        int bx = p->x + p->w - bw, off = max_scroll(p) - p->scroll;
-        enum uui_scrollbar_zone z = uui_scrollbar_hit(bx, p->y, bw, p->h, content_h(p), p->h,
-                                                      off, cx, cy, 0);
-        if (z == UUI_SB_THUMB) {
-            int ty, th;
-            uui_scrollbar_thumb_rect(p->y, p->h, content_h(p), p->h, off, &ty, &th, bw, 0);
-            p->thumb_grab = cy - ty;
-        } else if (z == UUI_SB_ABOVE) {
-            set_scroll(p, p->scroll - (p->h - place_h()));
-        } else if (z == UUI_SB_BELOW) {
-            set_scroll(p, p->scroll + (p->h - place_h()));
-        }
-        p->armed = -1;
-        return 1;
-    }
+    int r = uui_sbar_press(sbar(p), cx, cy);
+    if (r & UUI_SBAR_MOVED) p->scroll = p->sb.top;
+    if (r & UUI_SBAR_TOOK) { p->armed = -1; return 1; }
     p->armed = row_at(p, cx, cy);
     return p->armed >= 0;
 }
@@ -292,20 +282,18 @@ static int op_release(void *w, int cx, int cy) {
     struct uui_places *p = w;
     int i = p->armed;
     p->armed = -1;
-    p->thumb_grab = -1;
+    if (uui_sbar_release(&p->sb)) return 1;
     if (i >= 0 && row_at(p, cx, cy) == i) take_row(p, i);
     return 1;
 }
 
 static int op_motion(void *w, int cx, int cy, unsigned buttons) {
-    (void)buttons;
     struct uui_places *p = w;
-    if (p->thumb_grab >= 0) {   // follows y only, and survives leaving the bar
-        int off = uui_scrollbar_offset_for_drag(p->y, p->h, content_h(p), p->h, cy,
-                                                p->thumb_grab, bar_w(p), 0);
-        int was = p->scroll;
-        set_scroll(p, max_scroll(p) - off);
-        return p->scroll != was;
+    int r = uui_sbar_motion(sbar(p), cx, cy, buttons);
+    if (r & UUI_SBAR_MOVED) p->scroll = p->sb.top;
+    if (r & UUI_SBAR_TOOK) {
+        if (p->hot != -1) { p->hot = -1; r |= UUI_SBAR_REDRAW; }
+        return (r & (UUI_SBAR_MOVED | UUI_SBAR_REDRAW)) != 0;
     }
     int i = row_at(p, cx, cy);
     if (i == p->hot) return 0;

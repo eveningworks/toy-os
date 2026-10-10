@@ -3,7 +3,6 @@
 #include "ui/uui_tree.h"
 #include "ui/uui_route.h" // UUI_NOWHERE -- a drag_over's leave
 #include "ui/uui_widget.h"
-#include "ui/uui_scrollbar.h" // uui_scrollbar_natural_size()
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 #include "lib/icon_cache.h" // icon_get() -- a node may carry an icon
 #include <stdio.h>
@@ -24,14 +23,7 @@ void uui_tree_init(struct uui_tree *t, int x, int y, int w, int h,
     t->dropped_node = -1;
     t->top = 0;
     t->row_h = 0; // derive from the font
-    // THE TOOLKIT'S OWN DEFAULT, not a pixel count. uui_scrollbar.h
-    // asks every widget to take its width from there so the bar tracks
-    // the font size and the toolkit's bars keep matching each other;
-    // this one picked 8, which is the case that header names. At the
-    // default face that left a thumb the maintainer could not reliably
-    // grab -- the same complaint that widened uui_textview's.
-    uui_scrollbar_natural_size(&t->bar_w, 0);
-    t->thumb_grab = -1;
+    uui_sbar_init(&t->sb);
     uui_scrollanim_init(&t->anim);
     t->collapsed = 0; // EXPANDED by default -- see the header
     t->on_toggle = 0;
@@ -41,8 +33,6 @@ void uui_tree_init(struct uui_tree *t, int x, int y, int w, int h,
     t->sel_bg = ugfx_rgb(205, 220, 240);
     t->sel_fg = ugfx_rgb(20, 20, 20);
     t->sel_style = UUI_SEL_SOFT;
-    t->track_bg = UTHEME_BUTTON_BG;
-    t->thumb_bg = ugfx_rgb(150, 155, 165);
     t->guide = ugfx_rgb(200, 200, 208);
 }
 
@@ -321,15 +311,13 @@ int uui_tree_scrollbar_visible(const struct uui_tree *t) {
     return uui_tree_visible_count(t) > uui_tree_visible_rows(t);
 }
 
-// The scrollbar counts from the BOTTOM (offset 0 = scrolled to the end)
-// while `top` counts from the start. Two helpers, lifted verbatim from
-// uui_listbox, so the two widgets cannot disagree about which way a
-// thumb moves -- getting this backwards is invisible until somebody
-// drags.
-static int tree_bar_x(const struct uui_tree *t) { return t->x + t->w - t->bar_w; }
+static int tree_bar_x(const struct uui_tree *t) { return t->x + t->w - uui_sbar_width(); }
 
-static int tree_offset(const struct uui_tree *t) {
-    return uui_tree_visible_count(t) - uui_tree_visible_rows(t) - t->top;
+// The bar in ROWS, filled in before anything asks it.
+static struct uui_sbar *tree_sbar(struct uui_tree *t) {
+    uui_sbar_place(&t->sb, tree_bar_x(t), t->y, t->h);
+    uui_sbar_set(&t->sb, uui_tree_visible_count(t), uui_tree_visible_rows(t), t->top);
+    return &t->sb;
 }
 
 static void tree_clamp(struct uui_tree *t) {
@@ -361,7 +349,7 @@ void uui_tree_natural_size(const struct uui_tree *t, int *out_w, int *out_h) {
                 ugfx_text_width(t->nodes[i].label);
         if (w > widest) widest = w;
     }
-    if (out_w) *out_w = UUI_TREE_PAD_X * 2 + widest + t->bar_w;
+    if (out_w) *out_w = UUI_TREE_PAD_X * 2 + widest + uui_sbar_width();
     if (out_h) *out_h = uui_tree_row_h(t) * (t->count > 0 ? t->count : 1);
 }
 
@@ -395,7 +383,7 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
     int rh = uui_tree_row_h(t);
     int vis = uui_tree_visible_rows(t);
     int total = uui_tree_visible_count(t);
-    int bar = uui_tree_scrollbar_visible(t) ? t->bar_w : 0;
+    int bar = uui_tree_scrollbar_visible(t) ? uui_sbar_width() : 0;
 
     ugfx_fill_rect(s, t->x, t->y, t->w, t->h, t->bg);
 
@@ -412,7 +400,7 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
     for (int n = 0; n < t->count && meters; n++) {
         const struct uui_tree_node *m = &t->nodes[n];
         if (!m->meter_on) continue;
-        int room = t->x + t->w - t->bar_w - UUI_TREE_PAD_X - (rounded ? 6 : 0)
+        int room = t->x + t->w - uui_sbar_width() - UUI_TREE_PAD_X - (rounded ? 6 : 0)
                  - (row_text_x(t, n) + ugfx_text_width(m->label) + 6)
                  - (m->note ? ugfx_text_width(m->note) + 6 : 0);
         if (room < meter_w() + 6) meters = 0;
@@ -566,12 +554,10 @@ void uui_tree_draw(struct ugfx_surface *s, const struct uui_tree *t) {
         // In PIXELS, so the thumb glides with the rows: the row ratios
         // scaled by rh land the thumb on the same pixels the row-unit
         // hit test computes.
-        int max_px = (total - vis) * rh;
-        int off_px = tree_offset(t) * rh + disp;
-        if (off_px < 0) off_px = 0;
-        if (off_px > max_px) off_px = max_px;
-        uui_scrollbar_draw(s, t->x + t->w - bar, t->y, bar, t->h,
-                            total * rh, vis * rh, off_px, t->track_bg, t->thumb_bg, 0);
+        struct uui_sbar sb = t->sb;
+        uui_sbar_place(&sb, t->x + t->w - bar, t->y, t->h);
+        uui_sbar_set(&sb, total * rh, vis * rh, t->top * rh - disp);
+        uui_sbar_draw(&sb, s, t->bg, t->fg);
     }
 
     // On the selected row, or round the box when it is collapsed away
@@ -636,39 +622,15 @@ int uui_tree_wheel(struct uui_tree *t, int notches) {
     return t->top != before;
 }
 
-static int tree_set_offset(struct uui_tree *t, int offset) {
-    int before = t->top;
-    t->top = uui_tree_visible_count(t) - uui_tree_visible_rows(t) - offset;
-    tree_clamp(t);
-    return t->top != before;
-}
-
 int uui_tree_press(struct uui_tree *t, int cx, int cy) {
     if (cx < t->x || cx >= t->x + t->w || cy < t->y || cy >= t->y + t->h) return 0;
-    if (uui_tree_scrollbar_visible(t) && cx >= tree_bar_x(t)) {
-        int vis = uui_tree_visible_rows(t);
-        int total = uui_tree_visible_count(t);
-        int off = tree_offset(t);
-        enum uui_scrollbar_zone zone =
-            uui_scrollbar_hit(tree_bar_x(t), t->y, t->bar_w, t->h, total, vis,
-                              off, cx, cy, 0);
-        if (zone == UUI_SB_THUMB) {
-            int thumb_y, thumb_h;
-            uui_scrollbar_thumb_rect(t->y, t->h, total, vis, off,
-                                      &thumb_y, &thumb_h, t->bar_w, 0);
-            // The grab offset WITHIN the thumb, so it tracks the cursor
-            // instead of snapping its top to it -- the bug the ring-3
-            // Notepad shipped by passing 0 here.
-            t->thumb_grab = cy - thumb_y;
-            uui_scrollanim_cancel(&t->anim); // a drag draws where the thumb is, at once
-            return 1;
-        }
-        int page = vis > 1 ? vis - 1 : 1;
-        if (zone == UUI_SB_ABOVE || zone == UUI_SB_BELOW) uui_scrollanim_arm(&t->anim);
-        if (zone == UUI_SB_ABOVE) tree_set_offset(t, off + page);
-        else if (zone == UUI_SB_BELOW) tree_set_offset(t, off - page);
-        return 1;
+    int r = uui_sbar_press(tree_sbar(t), cx, cy);
+    if (t->sb.grab >= 0) uui_scrollanim_cancel(&t->anim); // a drag draws where the thumb is, at once
+    if (r & UUI_SBAR_MOVED) {
+        uui_scrollanim_arm(&t->anim);   // a page glides
+        t->top = t->sb.top;
     }
+    if (r & UUI_SBAR_TOOK) return 1;
     uui_tree_click(t, cx, cy);
     // NON-ZERO ON ANY HIT, even when nothing changed: the router takes
     // its pointer grab only when press does, so returning 0 for a
@@ -678,15 +640,13 @@ int uui_tree_press(struct uui_tree *t, int cx, int cy) {
 }
 
 int uui_tree_drag(struct uui_tree *t, int cx, int cy) {
-    (void)cx;
-    if (t->thumb_grab < 0) return 0;
-    int off = uui_scrollbar_offset_for_drag(t->y, t->h, uui_tree_visible_count(t),
-                                             uui_tree_visible_rows(t), cy,
-                                             t->thumb_grab, t->bar_w, 0);
-    return tree_set_offset(t, off);
+    if (t->sb.grab < 0) return 0;
+    int r = uui_sbar_motion(tree_sbar(t), cx, cy, 1);
+    if (r & UUI_SBAR_MOVED) t->top = t->sb.top;
+    return (r & UUI_SBAR_MOVED) != 0;
 }
 
-void uui_tree_drag_end(struct uui_tree *t) { t->thumb_grab = -1; }
+void uui_tree_drag_end(struct uui_tree *t) { uui_sbar_release(&t->sb); }
 
 // Scrolls the view so the selection is on screen. Called after any key
 // that moves it -- a selection that moved off the top is indistinguishable
@@ -776,10 +736,14 @@ static int tree_press_op(void *w, int cx, int cy, unsigned mods) {
     return uui_tree_press(w, cx, cy);
 }
 static int tree_motion_op(void *w, int cx, int cy, unsigned buttons) {
-    (void)buttons;
     struct uui_tree *t = w;
-    if (t->thumb_grab >= 0) return uui_tree_drag(t, cx, cy);
-    return uui_tree_hover(t, cx, cy);
+    if (t->sb.grab >= 0) return uui_tree_drag(t, cx, cy);
+    int r = uui_sbar_motion(tree_sbar(t), cx, cy, buttons);   // the bar's hover
+    if (r & UUI_SBAR_TOOK) {
+        if (t->hovered != -1) { t->hovered = -1; r |= UUI_SBAR_REDRAW; }
+        return (r & UUI_SBAR_REDRAW) != 0;
+    }
+    return uui_tree_hover(t, cx, cy) | ((r & UUI_SBAR_REDRAW) != 0);
 }
 static int tree_release_op(void *w, int cx, int cy) {
     (void)cx; (void)cy;

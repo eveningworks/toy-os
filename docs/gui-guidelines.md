@@ -325,8 +325,13 @@ drift.
 edge at rest; under the pointer the thumb widens and a groove EXACTLY
 its width runs the strip's length -- no rim of grey beside the capsule.
 No arrows. The strip is `uui_scrollbar_overlay_width()`, a row less than
-a line, measured in the interface face. The Start menu, Notepad and the
-Markdown viewer all draw through it, so they cannot drift apart.
+a line, measured in the interface face, and it is RESERVED: the content
+stops short of it, so the thumb never covers text (chosen over a bar
+floating on the content, 2026-10-10) -- except the Terminal, whose resting
+thumb fits in its margin and whose bar widens over the last column, so
+its grid keeps that column. A scrolling view gets all of this, and
+points 1-5 below, by embedding `uui_sbar` (`ui/uui_sbar.h`) -- every
+list-shaped widget and the Terminal do, so they cannot drift apart.
 
 **3. The trough pages, the thumb drags, the arrows step.** A press on
 the track above the thumb goes back one visible page, below it forward

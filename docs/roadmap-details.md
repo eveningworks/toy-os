@@ -1294,6 +1294,8 @@ rather than imply otherwise.
 
 ### Desktop visual polish
 
+- [x] **A thin-at-rest scrollbar that costs no column.** DONE 2026-10-10 for the Terminal, the maintainer's ask the same day: at rest the 3 px thumb sits inside the margin, the grid takes the column back, and under the pointer the bar widens over the last column. Lists keep the reserved strip -- their rows run to the edge with no margin to hide a resting thumb in (`docs/decisions/gui.md`, "Every scrollbar is one shared state in a reserved strip").
+
 ~~Basic image support~~ -- done: a BASELINE JPEG decoder in RING 3
 (`userland/lib/uimg_jpeg.c`, behind `uimg.h`'s codec table), with
 `/bin/imginfo` to inspect a file, `uui_image` to put one in a layout,

@@ -373,8 +373,7 @@ static void on_open(struct uapp *a) {
     g.list.selected = 0;
 
     uui_textview_init(&g.view, PAD, row_scroll(), VIEW_W, scroll_h(),
-                      UTHEME_TEXT, UTHEME_WHITE, UTHEME_PANEL_BG,
-                      UTHEME_BUTTON_BG, SEL_BG, g_view_buf, (int)sizeof g_view_buf);
+                      UTHEME_TEXT, UTHEME_WHITE, SEL_BG, g_view_buf, (int)sizeof g_view_buf);
     // Body drags PAN this view: UI Demo has no cursor or selection of
     // its own, so nothing conflicts, and it makes the third input route
     // demonstrable. Notepad keeps the default (body presses are the
@@ -540,8 +539,8 @@ static void on_widget(struct uapp *a, int id, int reason) {
     case ID_VIEW:
         if (reason == UUI_REASON_WHEEL) log_scroll("wheel");
         else if (reason == UUI_REASON_MOTION)
-            log_scroll(g.view.thumb_grab >= 0 ? "thumb" : "pan");
-        else if (reason == UUI_REASON_PRESS && g.view.thumb_grab < 0)
+            log_scroll(g.view.sb.grab >= 0 ? "thumb" : "pan");
+        else if (reason == UUI_REASON_PRESS && g.view.sb.grab < 0)
             log_scroll("page");
         break;
     default:

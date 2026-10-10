@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "ui/ugfx.h"
 #include "ui/utext.h"
-#include "ui/uui_scrollbar.h"
+#include "ui/uui_sbar.h"
 #include "ui/uui_primitives.h"
 
 // uui_textview -- the ring-3 port of apps/ui/ui_textview.c: a utext, its
@@ -68,20 +68,14 @@ struct uui_textview {
 
     uint8_t policy;    // enum uui_textview_policy
     uint8_t body;      // enum uui_textview_body
-    int bar_w;
     int min_text_w;    // AUTO hides the bar below this much text width
     int wheel_lines;
     int page_overlap;  // rows kept when paging (1 = classic)
     int show_caret;
-    unsigned bar_flags; // UUI_SCROLLBAR_* passed through to the bar
 
-    uint32_t fg, bg, track_bg, thumb_bg, sel_bg;
+    uint32_t fg, bg, sel_bg;
 
-    // Live drag state. -1 when no thumb drag is in progress; otherwise
-    // the offset WITHIN the thumb that was grabbed, so the thumb tracks
-    // the cursor rather than snapping its top to it (the ring-3
-    // Notepad shipped that bug once by passing 0 here).
-    int thumb_grab;
+    struct uui_sbar sb; // the scrollbar, in LINES; OWNED
     int pan_last_y;
     int pan_remainder;
     int panning;
@@ -97,8 +91,7 @@ struct uui_textview {
 // 1.6 MB file want very different numbers, and neither is this
 // widget's to choose. Storage last, as uui_fileview's entry array is.
 void uui_textview_init(struct uui_textview *tv, int x, int y, int w, int h,
-                        uint32_t fg, uint32_t bg, uint32_t track_bg,
-                        uint32_t thumb_bg, uint32_t sel_bg,
+                        uint32_t fg, uint32_t bg, uint32_t sel_bg,
                         char *buf, int cap);
 
 void uui_textview_set_geometry(struct uui_textview *tv, int x, int y, int w, int h);

@@ -280,6 +280,12 @@ TESTS = [
     # app's array would fail rather than pass by coincidence.
     ("table_tree_test", None,   # spawned: it draws, so it needs the font
      None, None),
+    # The scrollbar state every scrolling widget embeds (ui/uui_sbar.h):
+    # no jump on grab, an absolute clamped drag, trough paging, the
+    # thumb at the right END -- read back through the painter's own
+    # geometry, so a from-the-top/from-the-bottom slip fails here.
+    ("sbar_test", None,         # spawned: the bar's width is the font's
+     None, None),
     # The audio decode path -- the half of lib/usnd.h that needs no
     # sound card. Playback is judged on the HOST instead
     # (tools/audio_test.py records what the device emitted), so these

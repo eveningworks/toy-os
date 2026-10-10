@@ -598,8 +598,8 @@ int main(void) {
     uui_progress_init(&g_bar);
     uui_table_init(&g_table, 0, 0, 0, 0, COLS, (int)(sizeof COLS / sizeof COLS[0]), cell, 0);
     uui_table_set_tint(&g_table, tint);
-    uui_textview_init(&g_log, 0, 0, 0, 0, UTHEME_TEXT, UTHEME_WHITE, UTHEME_PANEL_BG,
-                      UTHEME_BUTTON_BG, UTHEME_SELECTION, g_log_buf, (int)sizeof g_log_buf);
+    uui_textview_init(&g_log, 0, 0, 0, 0, UTHEME_TEXT, UTHEME_WHITE, UTHEME_SELECTION,
+                      g_log_buf, (int)sizeof g_log_buf);
     uui_markdown_init(&g_notes);
     uui_tabs_init(&g_tabs, g_tab_list, PAGE_COUNT, 0);
     g_tabs.on_select = tab_selected;

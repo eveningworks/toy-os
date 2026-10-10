@@ -14,7 +14,7 @@
 #include <stdint.h>
 #include "ui/ugfx.h"
 #include "ui/uui_primitives.h"
-#include "ui/uui_scrollbar.h"
+#include "ui/uui_sbar.h"
 #include "ui/uui_scrollanim.h"
 #include "ui/uui_textbox.h"
 
@@ -46,8 +46,7 @@ struct uui_optlist {
     int top;          // first visible row; OWNED
     int row_h;        // 0 = derive from the font
     int value_chars;  // the value column's width in characters; 0 = 16
-    int bar_w;
-    int thumb_grab;   // OWNED: -1, or the grab offset within the thumb
+    struct uui_sbar sb;               // OWNED: the scrollbar
     struct uui_scrollanim anim;       // OWNED
 
     // The inline edit: the row being edited, or -1. The field is drawn

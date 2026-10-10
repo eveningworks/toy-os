@@ -163,7 +163,9 @@ def run(dbg, qmp, res):
         res.check("the icons pane still reports its rect", pane_rect is not None)
         if pane_rect:
             px, py, pw, ph = pane_rect
-            bx = c["x"] + px + pw - 7
+            # The overlay bar's resting thumb: 3 px on the strip's far
+            # edge, in the theme's outline grey (ui/uui_sbar.h).
+            bx = c["x"] + px + pw - 2
             thumb = [y for y in range(c["y"] + py, c["y"] + py + ph)
                      if im.getpixel((bx, y)) == (150, 155, 165)]
             res.check("the thumb is on screen in its known colour", len(thumb) > 8, f"rows={len(thumb)}")

@@ -2,7 +2,7 @@
 #include "ui/uui_table.h"
 #include "lib/uimg.h"
 #include "ui/uui_widget.h"
-#include "ui/uui_scrollbar.h" // uui_scrollbar_natural_size()
+#include "ui/uui_route.h"   // UUI_NOWHERE
 #include <string.h>
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
@@ -49,14 +49,7 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
     t->top = 0;
     uui_scrollanim_init(&t->anim);
     t->row_h = 0; // derive from the font
-    // THE TOOLKIT'S OWN DEFAULT, not a pixel count. uui_scrollbar.h
-    // asks every widget to take its width from there so the bar tracks
-    // the font size and the toolkit's bars keep matching each other;
-    // this one picked 8, which is the case that header names. At the
-    // default face that left a thumb the maintainer could not reliably
-    // grab -- the same complaint that widened uui_textview's.
-    uui_scrollbar_natural_size(&t->bar_w, 0);
-    t->thumb_grab = -1;
+    uui_sbar_init(&t->sb);
     // Sorting off until an app supplies a comparator, so a table that
     // says nothing about sorting behaves exactly as it did before.
     t->compare = 0;
@@ -92,8 +85,6 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
     // `text`, which would darken every table header today.
     t->head_fg = ugfx_rgb(40, 40, 40);
     t->grid = UUI_COLOR_UNSET;
-    t->track_bg = UUI_COLOR_UNSET;
-    t->thumb_bg = UUI_COLOR_UNSET;
 }
 
 
@@ -108,8 +99,6 @@ uint32_t uui_table_c_sel_bg(const struct uui_table *t)  { return UUI_COLOR(t->se
 uint32_t uui_table_c_sel_fg(const struct uui_table *t)  { return UUI_COLOR(t->sel_fg, UTHEME_TEXT); }
 uint32_t uui_table_c_head_bg(const struct uui_table *t) { return UUI_COLOR(t->head_bg, UTHEME_BUTTON_BG); }
 uint32_t uui_table_c_grid(const struct uui_table *t)    { return UUI_COLOR(t->grid, UTHEME_SEPARATOR); }
-uint32_t uui_table_c_track_bg(const struct uui_table *t)   { return UUI_COLOR(t->track_bg, UTHEME_BUTTON_BG); }
-uint32_t uui_table_c_thumb_bg(const struct uui_table *t)   { return UUI_COLOR(t->thumb_bg, UTHEME_OUTLINE); }
 
 int uui_table_row_h(const struct uui_table *t) {
     return t->row_h > 0 ? t->row_h : ugfx_char_h() + 4;
@@ -396,7 +385,7 @@ void uui_table_set_rows(struct uui_table *t, int row_count) {
 // Width available to the columns -- the whole widget minus the
 // scrollbar, when one is showing.
 static int table_content_w(const struct uui_table *t) {
-    return t->w - (uui_table_scrollbar_visible(t) ? t->bar_w : 0);
+    return t->w - (uui_table_scrollbar_visible(t) ? uui_sbar_width() : 0);
 }
 
 void uui_table_column_rect(const struct uui_table *t, int col,
@@ -598,7 +587,7 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
     int rh = uui_table_row_h(t);
     int hh = uui_table_header_h(t);
     int vis = uui_table_visible_rows(t);
-    int bar = uui_table_scrollbar_visible(t) ? t->bar_w : 0;
+    int bar = uui_table_scrollbar_visible(t) ? uui_sbar_width() : 0;
 
     ugfx_fill_rect(s, t->x, t->y, t->w, t->h, uui_table_c_bg(t));
 
@@ -676,13 +665,10 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
         // scroll. IN PIXELS, so the thumb glides with the rows: the
         // ratios are the row ones scaled by rh, which lands the thumb
         // on the same pixels the row-unit hit test computes.
-        int max_px = (vcount(t) - vis) * rh;
-        int off_px = (vcount(t) - vis - t->top) * rh + disp;
-        if (off_px < 0) off_px = 0;
-        if (off_px > max_px) off_px = max_px;
-        uui_scrollbar_draw(s, t->x + t->w - bar, t->y + hh, bar, t->h - hh,
-                            vcount(t) * rh, vis * rh, off_px,
-                            uui_table_c_track_bg(t), uui_table_c_thumb_bg(t), 0);
+        struct uui_sbar sb = t->sb;
+        uui_sbar_place(&sb, t->x + t->w - bar, t->y + hh, t->h - hh);
+        uui_sbar_set(&sb, vcount(t) * rh, vis * rh, t->top * rh - disp);
+        uui_sbar_draw(&sb, s, uui_table_c_bg(t), uui_table_c_fg(t));
     }
 
     // On the selected ROW, because that is what the arrows move. Round
@@ -716,7 +702,7 @@ void uui_table_natural_size(const struct uui_table *t, int *out_w, int *out_h) {
                 total += col_fixed_w(chars);
             }
         }
-        *out_w = total + t->bar_w;
+        *out_w = total + uui_sbar_width();
     }
     // Header plus a few rows: a preferred MINIMUM, not the whole table.
     // Asking for every row would make a window with 60 processes in it
@@ -735,7 +721,7 @@ int uui_table_header_hit(const struct uui_table *t, int cx, int cy) {
 }
 
 int uui_table_hit(const struct uui_table *t, int cx, int cy) {
-    int bar = uui_table_scrollbar_visible(t) ? t->bar_w : 0;
+    int bar = uui_table_scrollbar_visible(t) ? uui_sbar_width() : 0;
     int hh = uui_table_header_h(t);
     if (!uui_hit(t->x, t->y + hh, t->w - bar, t->h - hh, cx, cy)) return -1;
     int rh = uui_table_row_h(t);
@@ -789,70 +775,43 @@ int uui_table_click(struct uui_table *t, int cx, int cy) {
 }
 
 // --- the scrollbar's own input ---------------------------------------
-//
-// Same offset inversion as the listbox: `top` counts from the top,
-// while the scrollbar's offset counts from the BOTTOM. draw() converts
-// one way; everything here converts back the same way or the thumb
-// tracks the cursor upside down.
-static int table_bar_x(const struct uui_table *t) {
-    return t->x + t->w - t->bar_w;
-}
 
-static int table_offset(const struct uui_table *t) {
-    return vcount(t) - uui_table_visible_rows(t) - t->top;
-}
-
-static int table_set_offset(struct uui_table *t, int offset) {
-    int before = t->top;
-    t->top = vcount(t) - uui_table_visible_rows(t) - offset;
-    table_clamp(t);
-    return t->top != before;
+// The bar in ROWS, below the header, filled in before anything asks it.
+struct uui_sbar *uui_table_sbar(struct uui_table *t) {
+    int hh = uui_table_header_h(t);
+    uui_sbar_place(&t->sb, t->x + t->w - uui_sbar_width(), t->y + hh,
+                   uui_table_scrollbar_visible(t) ? t->h - hh : 0);
+    uui_sbar_set(&t->sb, vcount(t), uui_table_visible_rows(t), t->top);
+    return &t->sb;
 }
 
 int uui_table_press(struct uui_table *t, int cx, int cy) {
-    if (!uui_table_scrollbar_visible(t)) return 0;
-    int hh = uui_table_header_h(t);
-    int bx = table_bar_x(t);
-    if (cx < bx || cx >= t->x + t->w) return 0;
-    if (cy < t->y + hh || cy >= t->y + t->h) return 0;
-
-    int vis = uui_table_visible_rows(t);
-    int off = table_offset(t);
-    enum uui_scrollbar_zone zone =
-        uui_scrollbar_hit(bx, t->y + hh, t->bar_w, t->h - hh,
-                           vcount(t), vis, off, cx, cy, 0);
-
-    if (zone == UUI_SB_THUMB) {
-        int thumb_y, thumb_h;
-        uui_scrollbar_thumb_rect(t->y + hh, t->h - hh, vcount(t), vis, off,
-                                  &thumb_y, &thumb_h, t->bar_w, 0);
-        // The offset WITHIN the thumb, so it tracks the cursor rather
-        // than snapping its top to it.
-        t->thumb_grab = cy - thumb_y;
-        uui_scrollanim_cancel(&t->anim); // a drag draws where the thumb is, at once
-        return 1;
+    int r = uui_sbar_press(uui_table_sbar(t), cx, cy);
+    if (t->sb.grab >= 0) uui_scrollanim_cancel(&t->anim); // a drag draws where the thumb is, at once
+    if (r & UUI_SBAR_MOVED) {
+        uui_scrollanim_arm(&t->anim);   // a page glides
+        t->top = t->sb.top;
     }
-
-    int page = vis > 1 ? vis - 1 : 1;
-    if (zone == UUI_SB_ABOVE || zone == UUI_SB_BELOW) uui_scrollanim_arm(&t->anim);
-    if (zone == UUI_SB_ABOVE) table_set_offset(t, off + page);
-    else if (zone == UUI_SB_BELOW) table_set_offset(t, off - page);
-    else return 0;
-    return 1;
+    return (r & UUI_SBAR_TOOK) != 0;
 }
 
 int uui_table_drag(struct uui_table *t, int cx, int cy) {
-    (void)cx;
-    if (t->thumb_grab < 0) return 0;
-    int hh = uui_table_header_h(t);
-    int vis = uui_table_visible_rows(t);
-    int off = uui_scrollbar_offset_for_drag(t->y + hh, t->h - hh, vcount(t),
-                                             vis, cy, t->thumb_grab, t->bar_w, 0);
-    return table_set_offset(t, off);
+    if (t->sb.grab < 0) return 0;
+    int r = uui_sbar_motion(uui_table_sbar(t), cx, cy, 1);
+    if (r & UUI_SBAR_MOVED) t->top = t->sb.top;
+    return (r & UUI_SBAR_MOVED) != 0;
 }
 
 void uui_table_drag_end(struct uui_table *t) {
-    t->thumb_grab = -1;
+    uui_sbar_release(&t->sb);
+}
+
+// The bar's hover, for a motion with no button: 1 if it needs a redraw,
+// and *on set when the pointer is on the strip (so not on a row).
+int uui_table_bar_hover(struct uui_table *t, int cx, int cy, int *on) {
+    int r = uui_sbar_motion(uui_table_sbar(t), cx, cy, 0);
+    *on = (r & UUI_SBAR_TOOK) != 0;
+    return (r & UUI_SBAR_REDRAW) != 0;
 }
 
 int uui_table_wheel(struct uui_table *t, int notches) {
@@ -1046,7 +1005,9 @@ static int tb_ops_press(void *w, int cx, int cy, unsigned mods) {
 static int tb_ops_motion(void *w, int cx, int cy, unsigned buttons) {
     struct uui_table *t = (struct uui_table *)w;
     if (buttons & 1) return uui_table_drag(t, cx, cy);
-    return uui_table_hover(t, cx, cy);
+    int on = 0, redraw = uui_table_bar_hover(t, cx, cy, &on);
+    if (on) return uui_table_hover(t, UUI_NOWHERE, UUI_NOWHERE) | redraw;
+    return uui_table_hover(t, cx, cy) | redraw;
 }
 
 static int tb_ops_release(void *w, int cx, int cy) {
