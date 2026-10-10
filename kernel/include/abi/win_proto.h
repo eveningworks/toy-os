@@ -1161,14 +1161,14 @@ struct win_popup_pos {
 // A CLIENT ASKING THE COMPOSITOR TO STOP EATING GLOBAL SHORTCUTS while
 // it has the focus. `window`: which one. `a`: 1 to inhibit, 0 to release.
 //
-// **IT EXISTS FOR ONE HONEST REASON: BINDING A SHORTCUT.** System
-// Settings' capture control has to receive Super+E as a keystroke, and
-// the compositor would otherwise match it and launch a file manager --
-// the control could never record the very combinations it exists to
-// record. Wayland has exactly this and calls it
-// `zwp_keyboard_shortcuts_inhibit_v1`; KDE and GNOME both implement it
-// for their own shortcut editors and for remote-desktop and VM windows,
-// which want the guest to see Super too.
+// **TWO CALLERS, BOTH OF WHICH MUST RECEIVE THE KEYS THEMSELVES.** System
+// Settings' capture control has to receive Super+E as a keystroke, or
+// the compositor launches a file manager with the very combination it
+// is recording; and DOOM, while a level is played, needs Alt+Space as
+// strafe + use rather than the window menu. Wayland has exactly this and
+// calls it `zwp_keyboard_shortcuts_inhibit_v1`; KDE and GNOME both
+// implement it for their own shortcut editors and for remote-desktop,
+// VM and game windows. Alt+Space and Super are inhibited with the rest.
 //
 // **IT IS SCOPED TO THE FOCUSED WINDOW AND RELEASED AUTOMATICALLY.** The
 // compositor drops it when that window loses the focus or goes away, so

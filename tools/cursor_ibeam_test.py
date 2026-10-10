@@ -116,23 +116,25 @@ def is_ibeam(b):
     if not b:
         return False
     dx0, dy0, dx1, dy1, n = b
-    return dy0 <= -4 and dx0 <= -1 and dx1 <= 4 and n >= 10
+    return dy0 <= -4 and dx0 <= -1 and dx1 <= 6 and n >= 10
 
 
 def is_arrow(b):
-    """Drawn from the hotspot down and right, and nothing above or left."""
+    """Drawn from the hotspot down and right; above or left of it only
+    the theme's soft shadow, inside its 2 px margin (078e527d)."""
     if not b:
         return False
     dx0, dy0, dx1, dy1, n = b
-    return dy0 >= 0 and dx0 >= 0 and dy1 >= 10 and n >= 40
+    return dy0 >= -3 and dx0 >= -3 and dy1 >= 10 and n >= 40
 
 
 def is_wait(b):
-    """Centred like the I-beam, but WIDE -- 11x15 against the bar's 7."""
+    """Centred like the I-beam, but WIDE -- ~23 px against the bar's ~11,
+    both measured with the shadow."""
     if not b:
         return False
     dx0, dy0, dx1, dy1, n = b
-    return dy0 <= -4 and dx0 <= -4 and dx1 >= 4 and n >= 40
+    return dy0 <= -4 and dx0 <= -8 and dx1 >= 8 and n >= 40
 
 
 def shape(b):
@@ -154,6 +156,10 @@ def wait_log(dbg, needle, secs=8.0):
             return True
         time.sleep(0.2)
     return False
+
+
+def uui_in(r, x, y):
+    return r["x"] <= x < r["x"] + r["w"] and r["y"] <= y < r["y"] + r["h"]
 
 
 def close_all(dbg):
@@ -267,6 +273,33 @@ def main():
     check("the taskbar is not the client's either, with a window under it",
           covers and is_arrow(b),
           f"content covers the strip: {covers}; {shape(b)}")
+
+    # An OVERLAY covers the frame's edges too: the Start menu over a
+    # window's left border must not show that border's resize arrow. The
+    # border is put under the menu's middle, and the same point is read
+    # with the menu closed first -- without that control a point that
+    # missed the border would pass.
+    menu = dbg.menu()
+    win = dbg.window("Terminal")
+    dbg.drag(win["x"] + 80, win["y"] + 8,
+             menu["x"] + menu["w"] // 2 + 80, menu["y"] + 28)
+    dbg.settle()
+    win = dbg.window("Terminal")
+    px, py = win["x"] + 1, menu["y"] + menu["h"] // 2
+    dbg.warp_cursor(qmp, px, py)
+    edge = dbg.cursor_shape()
+    start = dbg.taskbar()["start"]
+    dbg.send(f"gui click {start['cx']} {start['cy']}")
+    dbg.settle()
+    menu = dbg.menu()
+    dbg.warp_cursor(qmp, px, py)
+    over = dbg.cursor_shape()
+    check("a window edge under the Start menu shows no resize arrow",
+          edge == dbg.CURSOR_H and menu["open"]
+          and uui_in(menu, px, py) and over == dbg.CURSOR_NORMAL,
+          f"edge alone {edge}, under the open menu {over}, menu {menu['open']}")
+    dbg.send(f"gui click {start['cx']} {start['cy']}")
+    dbg.settle()
     close_all(dbg)
 
     # --- 3. an app's own text area: Notepad ---------------------------

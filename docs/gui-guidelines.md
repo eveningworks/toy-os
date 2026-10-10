@@ -673,7 +673,9 @@ window manager handles it as it does Alt+F4 -- Windows' system-menu
 shortcut (KDE's is Alt+F3). It is the way back from FULLSCREEN, which
 has no title bar and hides the taskbar, and whose content right-click
 belongs to the app: before it, a window put in fullscreen from the menu
-by an app with no F11 of its own could only be closed.
+by an app with no F11 of its own could only be closed. **Unlike Alt+F4
+it can be inhibited**: a window holding the shortcut inhibitor (DOOM in
+play) receives it as a key, and Alt+F4 stays the one break.
 
 ## When an app stops answering
 

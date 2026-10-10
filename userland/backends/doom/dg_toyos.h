@@ -84,6 +84,7 @@ void dg_tick(void);
 void dg_hold(int on);
 int dg_paused(void);        // the game is paused (by anyone)
 int dg_menu_active(void);   // a menu -- or DOOM's own help -- is up
+int dg_playing(void);       // a level is being played: no menu, pause or demo
 
 // Puts `text` on the game's message line, as F5's "High detail" does --
 // shown with messages switched off too, and only while a level is up.

@@ -402,11 +402,29 @@ static void on_phys_key(struct uapp *a, int keycode, int down, unsigned mods) {
     dg_push_key(keycode, down);
 }
 
+// WHILE A LEVEL IS PLAYED THE GAME HOLDS THE SHORTCUT INHIBITOR, so
+// Alt+Space strafes + uses instead of opening the window menu, and Super
+// reaches the game -- a game disabling the Win key. Menus, pause and the
+// launcher give the desktop its shortcuts back; Alt+F4 is never
+// inhibited. The WM drops it on focus loss, so a refocus asks again.
+static int g_inhibited;
+
+static void update_inhibit(struct uapp *a) {
+    int want = uapp_focused(a) && !doom_front_up() && !doom_help_up() && dg_playing();
+    if (want == g_inhibited) return;
+    g_inhibited = want;
+    uapp_inhibit_shortcuts(a, want);
+    ulogf("doom: shortcuts %s\n", want ? "inhibited" : "released");
+}
+
 // No releases come for keys held as focus leaves (abi/win_proto.h), so
 // they are released here -- or the player walks on in a window behind.
 static void on_focus(struct uapp *a, int focused) {
-    (void)a;
-    if (!focused) dg_release_all();
+    if (!focused) {
+        dg_release_all();
+        g_inhibited = 0;   // the WM has already dropped it
+    }
+    update_inhibit(a);
 }
 
 // --- the game loop ------------------------------------------------------
@@ -418,6 +436,7 @@ static int on_tick(struct uapp *a) {
     struct doom_state *st = uapp_state(a);
     if (!st->started || st->failed) return 0;
     dg_tick();
+    update_inhibit(a);
     // DOOM's own menu opening and closing, said once each -- the one
     // way a test can tell F1-on-the-sheet reached the game's help.
     static int menu_was;

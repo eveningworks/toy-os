@@ -746,9 +746,11 @@ static enum wm_cursor_kind resolve_cursor_kind(int mx, int my) {
     if (dragging >= 0) return WM_CURSOR_MOVE;
     if (wm_dnd_refused_at(mx, my)) return WM_CURSOR_NOT_ALLOWED;
 
+    // An edge UNDER an overlay is not hovered: the Start menu over a
+    // window's border showed that border's resize arrow.
     int edges = 0;
     if (resizing >= 0) edges = resize_edges;
-    else if (wm_find_resize_zone(mx, my, &edges) < 0) edges = 0;
+    else if (wm_overlay_under(mx, my) || wm_find_resize_zone(mx, my, &edges) < 0) edges = 0;
 
     // Which DIAGONAL a corner gets is the direction the drag runs in:
     // top-left and bottom-right both lie on the \ axis, the other two

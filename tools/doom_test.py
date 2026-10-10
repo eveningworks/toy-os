@@ -375,6 +375,22 @@ def run(dbg, qmp, tmp, res):
         qmp.send_key("esc")      # close the menu for the checks below
         time.sleep(1.0)
 
+    # WHY IT DOES NOT: the game holds the WM's shortcut inhibitor while a
+    # level is played, and gives it back on its own menu -- so Super and
+    # PrtSc work again there. Both edges, from both sides' logs.
+    said = " ".join(dbg.logs("shortcuts", clear=True))
+    res.check("a level in play holds the shortcut inhibitor",
+              "doom: shortcuts inhibited" in said
+              and "wm: shortcuts inhibited by window" in said, said[-200:])
+    qmp.send_key("esc")          # DOOM's own menu
+    time.sleep(1.0)
+    said = " ".join(dbg.logs("shortcuts", clear=True))
+    qmp.send_key("esc")
+    time.sleep(1.0)
+    res.check("...and DOOM's menu gives it back",
+              "doom: shortcuts released" in said
+              and "wm: shortcuts released by window" in said, said[-200:])
+
     # --- Alt+C: the screen effect ------------------------------------
     #
     # Off by default, then Subtle: one scanline closing each of DOOM's 200

@@ -225,6 +225,9 @@ void dg_hold(int on) {
 
 int dg_paused(void) { return paused; }
 int dg_menu_active(void) { return menuactive; }
+int dg_playing(void) {
+    return gamestate == GS_LEVEL && !menuactive && !paused && !demoplayback;
+}
 
 void dg_message(const char *text) {
     players[consoleplayer].message = (char *)text;

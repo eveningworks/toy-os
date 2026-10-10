@@ -319,8 +319,8 @@ void uapp_set_cursor(struct uapp *a, int cursor) {
 
 // **ASK THE COMPOSITOR TO STOP EATING GLOBAL SHORTCUTS.** Only a program
 // that must RECEIVE them has any business calling this -- in this tree
-// that is System Settings' shortcut capture, which cannot record Super+E
-// while the compositor is busy launching a file manager with it.
+// System Settings' shortcut capture (Super+E) and DOOM while a level is
+// played (Alt+Space).
 //
 // It lapses on its own when this window loses the focus, so a caller
 // that forgets to release it cannot leave the desktop without
