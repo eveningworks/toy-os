@@ -33,8 +33,11 @@ static int g_stale;
 
 static struct uui_dialog g_ask;
 
+static int search_open_due(void);
+
 static int on_tick(struct uapp *a) {
     (void)a;
+    if (search_open_due()) return 1;
     if (g_show_sysinfo && sysinfo_tick()) return 1;
     int clock = clock_tick();   // the live clock's second moved
     clock |= kbd_tick();        // Try it took or left focus
@@ -244,18 +247,42 @@ static int on_close(struct uapp *a) {
     return 0;
 }
 
-// The search box changed: filter the sidebar. If the open page no longer
-// matches and nothing is staged on it, the first match opens instead.
+// The search box changed: filter the sidebar AT ONCE (in memory -- see
+// set_registry.c's g_choices). If the open page no longer matches and
+// nothing is staged on it, the first match opens -- but only once typing
+// PAUSES: opening a page reads every setting on it, and doing that per
+// letter is what stalled the box. The tick runs short until it has.
+#define SEARCH_OPEN_MS 300
+static unsigned long long g_search_open_at;   // sys_monotonic_ns(), 0 = none due
+static int g_search_target = -1;              // the match to open then
+
 static void search_changed(void) {
     const char *q = uui_textbox_text(&g_search);
     if (!strcmp(q, g_filter)) return;
     strlcpy(g_filter, q, sizeof g_filter);
     rebuild_sidebar();
     int sel = uui_sidebar_selected_id(&g_tree);
-    if (sel >= 0 && sel != g_page_node && !page_dirty()) navigate(sel);
-    else if (g_page_node >= 0) uui_sidebar_select_id(&g_tree, g_page_node);
+    g_search_target = -1;
+    if (sel >= 0 && sel != g_page_node && !page_dirty()) {
+        g_search_target = sel;
+        g_search_open_at = sys_monotonic_ns() + SEARCH_OPEN_MS * 1000000ull;
+        if (g_app) uapp_set_tick(g_app, SEARCH_OPEN_MS / 3);
+    }
+    if (g_page_node >= 0) uui_sidebar_select_id(&g_tree, g_page_node);
     ulogf("settings: filter \"%s\" rows %d\n", g_filter, g_node_count);
     report_rows();
+}
+
+// The paused search's first match, opened from the tick. 1 if it did.
+static int search_open_due(void) {
+    if (!g_search_open_at || sys_monotonic_ns() < g_search_open_at) return 0;
+    g_search_open_at = 0;
+    if (g_app) uapp_set_tick(g_app, SETTINGS_TICK_MS);
+    int to = g_search_target;
+    g_search_target = -1;
+    if (to < 0 || to == g_page_node || page_dirty()) return 0;
+    navigate(to);
+    return 1;
 }
 
 // The sidebar's width, re-derived from the divider whenever the body

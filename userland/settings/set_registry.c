@@ -28,6 +28,11 @@ int      *g_order;
 // rule of its own is one the registry would still let `config set`
 // change.
 char     (*g_unavail)[SETTING_ABI_DESC_MAX];
+// Every choice's display name, one per line, read ONCE per reload: the
+// search matches against it. Asking the registry per keystroke was a
+// syscall per choice of every setting -- thousands a letter, and the
+// stall typing into the search box.
+static char **g_choices;
 int      g_setting_count;
 uint32_t g_generation;
 
@@ -112,6 +117,14 @@ static int has_word(const char *hay, const char *needle) {
 
 static int setting_matches(int i) {
     if (has_word(g_label[i], g_filter) || has_word(g_desc[i], g_filter)) return 1;
+    return g_choices[i] && has_word(g_choices[i], g_filter);
+}
+
+// Setting `i`'s choices' display names, newline-separated (so a query
+// cannot match across two of them), or NULL for a setting with none.
+static char *read_choices(int i) {
+    char *out = 0;
+    size_t len = 0;
     for (int c = 0; c < MAX_CHOICES; c++) {
         struct setting_msg m;
         memset(&m, 0, sizeof m);
@@ -119,9 +132,16 @@ static int setting_matches(int i) {
         m.index = i;
         m.choice = c;
         if (usetting_dispatch(&m) != 0) break;
-        if (has_word(m.label, g_filter)) return 1;
+        size_t n = strlen(m.label);
+        char *grown = realloc(out, len + n + 2);
+        if (!grown) break;
+        out = grown;
+        memcpy(out + len, m.label, n);
+        len += n;
+        out[len++] = '\n';
+        out[len] = '\0';
     }
-    return 0;
+    return out;
 }
 
 static int adapters_matches(void) {
@@ -180,13 +200,14 @@ int group_shown(int g) {
     return g_show_debug || !g_group_debug[g] || (g == g_page_group && !g_show_sysinfo);
 }
 
-void rebuild_sidebar(void) {
-    // Read BEFORE g_nodes is rewritten: the sidebar holds a row index into
-    // this same array, so afterwards it would name whatever row took its place.
-    int keep = uui_sidebar_selected_id(&g_tree);
+// The PAGES -- categories, their pages, labels, order and debug flags --
+// from the settings table. Asks the registry per page, so it runs once
+// per reload (g_pages_stale), never per keystroke of a search.
+static int g_pages_stale = 1;
+
+static void collect_pages(void) {
     g_cat_count = 0;
     g_group_count = 0;
-    g_node_count = 0;
 
     // Categories and pages collected in FIRST-SEEN order, then sorted by
     // a DECLARED weight below. The sort is not alphabetical, and that
@@ -285,6 +306,17 @@ void rebuild_sidebar(void) {
     // keeps the label its descriptor gives it ("Sound" > "Output").
     for (int g = 0; g < g_group_count; g++)
         strlcpy(g_group_display[g], g_group_label[g], sizeof g_group_display[g]);
+}
+
+void rebuild_sidebar(void) {
+    // Read BEFORE g_nodes is rewritten: the sidebar holds a row index into
+    // this same array, so afterwards it would name whatever row took its place.
+    int keep = uui_sidebar_selected_id(&g_tree);
+    if (g_pages_stale) {
+        collect_pages();
+        g_pages_stale = 0;
+    }
+    g_node_count = 0;
 
     // A HEADING PER CATEGORY, ITS PAGES UNDER IT -- KDE System Settings'
     // and macOS's sidebar. Every destination is an indented ITEM and
@@ -375,6 +407,12 @@ static int grow_tables(int need) {
     GROW(g_type, cap); GROW(g_widget, cap); GROW(g_imin, cap); GROW(g_imax, cap);
     GROW(g_istep, cap); GROW(g_unit, cap); GROW(g_sflags, cap); GROW(g_order, cap);
     GROW(g_unavail, cap);
+    {   // grown and ZEROED: a slot past the old cap holds no string yet
+        char **q = realloc(g_choices, (size_t)cap * sizeof *q);
+        if (!q) return 0;
+        for (int i = g_cap; i < cap; i++) q[i] = 0;
+        g_choices = q;
+    }
     GROW(g_cat, cap); GROW(g_group_cat, cap); GROW(g_group_key, cap); GROW(g_group_label, cap);
     GROW(g_cat_order, cap); GROW(g_group_order, cap); GROW(g_group_display, cap);
     GROW(g_group_debug, cap);
@@ -421,6 +459,8 @@ int reload_settings(void) {
         g_sflags[k] = m.sflags;
         g_order[k]  = m.order;
         strlcpy(g_unavail[k], m.unavailable, sizeof g_unavail[k]);
+        free(g_choices[k]);
+        g_choices[k] = read_choices(i);
         g_setting_count++;
     }
     g_generation = m.generation;
@@ -451,6 +491,7 @@ int reload_settings(void) {
         strlcpy(g_label[i], q, sizeof g_label[i]);
     }
 
+    g_pages_stale = 1;
     rebuild_sidebar();
     return g_setting_count;
 }
