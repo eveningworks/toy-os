@@ -84,6 +84,20 @@ int scheduler_kernel_running(void);
 uint32_t scheduler_timeslice_ms(void);
 int scheduler_set_timeslice_ms(uint32_t ms);
 
+// The realtime guards (abi/syscall_abi.h, SYS_SCHED_SETSCHEDULER):
+// kernel.sched_rt_runtime_ms, RT's share of each second while an
+// ordinary process wants the CPU (1000 = no limit), and
+// kernel.sched_rt_watchdog_ms, how long one RT process may run without
+// blocking before it is moved to SCHED_OTHER (0 = never). Setters return
+// 0 and change nothing outside the range.
+#define SCHED_RT_RUNTIME_DEFAULT_MS  950
+#define SCHED_RT_WATCHDOG_DEFAULT_MS 1000
+#define SCHED_RT_WATCHDOG_MAX_MS     60000
+uint32_t scheduler_rt_runtime_ms(void);
+uint32_t scheduler_rt_watchdog_ms(void);
+int scheduler_set_rt_runtime_ms(uint32_t ms);
+int scheduler_set_rt_watchdog_ms(uint32_t ms);
+
 // Prints the last couple of dozen scheduler transitions, consecutive
 // duplicates collapsed. For reporting a state that cannot happen; not
 // for tracing normal operation.
@@ -933,14 +947,16 @@ int scheduler_stop(int pid, int sig);
 // running.
 int scheduler_continue(int pid);
 
-// SCHEDULING PRIORITY, nice-style: LOWER runs first, 0 the default.
-// Strict between levels, round-robin within one -- and it CAN STARVE,
-// so only a process that blocks promptly should have one. See
-// abi/syscall_abi.h's SYS_SETPRIORITY for the measurement that made it
-// necessary. 0, or -ESRCH -- the level comes back through `value`,
-// since a negative level and an error are otherwise the same number.
+// NICE (-20..19, a SCHED_OTHER weight) and the SCHEDULING CLASS
+// (SCHED_OTHER, or SCHED_FIFO/SCHED_RR at 1..99) -- abi/syscall_abi.h's
+// SYS_SETPRIORITY and SYS_SCHED_SETSCHEDULER have the rules. 0, or
+// -ESRCH/-EINVAL; values come back through pointers, since a negative
+// nice and an error are otherwise the same number. NO PERMISSION CHECK:
+// that is the syscall's.
 int scheduler_set_priority(int pid, int value);
 int scheduler_get_priority(int pid, int *value);
+int scheduler_set_class(int pid, int policy, int rt_prio);
+int scheduler_get_class(int pid, int *policy, int *rt_prio);
 
 // 1 if `pid` is currently suspended.
 int scheduler_stopped(int pid);
@@ -1282,6 +1298,12 @@ int  scheduler_test_take_resched(void);
 // The picker's answer from rotation position `start`, switching to
 // nothing.
 int  scheduler_test_pick(int start);
+// What `ns` of running adds to slot `idx`'s vruntime at its nice.
+uint64_t scheduler_test_vr_scale(int idx, uint64_t ns);
+// Bill `ns` of realtime to slot `idx`, as if it had just run that long,
+// and put the machine-wide RT budget back afterwards.
+void scheduler_test_rt_charge(int idx, uint64_t ns);
+void scheduler_test_rt_budget_reset(void);
 // A slot's vruntime -- how much it counts as having run -- set and read.
 // -1 is the kernel context; -2 (read only) the pack's floor.
 void     scheduler_test_set_vruntime(int idx, uint64_t v);

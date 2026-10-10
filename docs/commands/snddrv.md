@@ -7,7 +7,7 @@
 ## Synopsis
 
 ```
-snddrv [-d INDEX] [--driver NAME] [--pci] [--usb-id VID:PID] [--usb-clock ID] [--prio N] [-v]
+snddrv [-d INDEX] [--driver NAME] [--pci] [--usb-id VID:PID] [--usb-clock ID] [--no-rt] [-v]
 ```
 
 ## Options
@@ -31,11 +31,13 @@ snddrv [-d INDEX] [--driver NAME] [--pci] [--usb-id VID:PID] [--usb-clock ID] [-
   which it reports, so two runs of one build can exercise different
   clocks and sound different. Pin it to compare them by ear. The bind
   line always says which clock was used.
-- `--prio N` -- run at this scheduling level instead of the default
-  -10. A DIAGNOSTIC: `--prio 0` is how the driver behaved before a woken
-  process could preempt, which is the A/B that shows the difference by
-  ear. At the default level a busy machine makes a USB DAC run dry and
-  crackle; the serving line says which level a run used.
+- `--no-rt` -- drop to an ordinary process even when started
+  realtime. A DIAGNOSTIC: the boot service runs snddrv `SCHED_FIFO`, so
+  a woken driver preempts whatever ordinary process is on the CPU; this
+  is how it behaved before, which is the A/B that shows the difference
+  by ear -- a busy machine makes a USB DAC run dry and crackle. Only
+  init can make a process realtime, so a snddrv started by hand is
+  already ordinary; the serving line says which class a run has.
 - `-v`, `--verbose` -- say which plugins loaded, and which devices were
   declined.
 - `-h`, `--help` -- the options.

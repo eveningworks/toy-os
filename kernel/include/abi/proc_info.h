@@ -133,6 +133,13 @@ struct proc_info {
     // Free: it lands in the tail padding `ready` left behind, so every
     // offset and the size are unchanged.
     int32_t  tgid;
+    // The SCHEDULING CLASS and nice (abi/syscall_abi.h, SYS_SCHED_*):
+    // `ps --sched` reads them, as procps' CLS/RTPRIO/NI. Grows the struct
+    // by one aligned step; every older offset is unchanged.
+    int8_t   nice;
+    uint8_t  policy;      // SCHED_OTHER / SCHED_FIFO / SCHED_RR
+    uint8_t  rt_prio;     // 1..99 under FIFO/RR, 0 otherwise
+    uint8_t  reserved_sched;
 };
 
 // `wait_reason` went into the hole after `name`; `ready` then grew the
@@ -140,7 +147,7 @@ struct proc_info {
 // reshuffle, because every offset here is a contract with a ring-3
 // binary. The assert is the thing that notices, so update it
 // deliberately when a field is added and never to make a build pass.
-_Static_assert(sizeof(struct proc_info) == 72,
+_Static_assert(sizeof(struct proc_info) == 80,
                "struct proc_info must grow append-only -- existing fields never move");
 _Static_assert(__builtin_offsetof(struct proc_info, name) == 36,
                "struct proc_info's name must stay where ring-3 binaries expect it");

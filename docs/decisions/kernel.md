@@ -8325,8 +8325,10 @@ process's level is strictly better than the running one's.
 when that flag is set. It uses the same rotation and the same refusals
 (`g_preempt_depth`, the legacy loader) as `scheduler_tick()`, which
 already rotates from an interrupt, so it adds no new place a switch can
-happen. `snddrv` asks for -10. Strictly better only: a wake at the same
-level preempting would rotate the CPU on every interrupt.
+happen. `snddrv` asked for nice -10 then; since 2026-10-10 its service
+runs it `SCHED_FIFO` ("Two scheduling classes", below). Strictly better
+only: a wake at the same level preempting would rotate the CPU on every
+interrupt.
 
 **The preempted process has to run first when its level comes back**,
 Windows' rule for a preempted thread. Without it the round-robin
@@ -8345,7 +8347,9 @@ RECORDING it"). A driver at a better level cut in on every wake and reset
 the rotation each time, with or without preemption. The 2026-09-21 wedge
 at -10 is NOT explained; it did not recur in about ten runs at -10 on the
 ASUS and in QEMU. And **priority is still strict with no ageing**: a
-process at a better level that spins takes the machine.
+process at a better level that spins takes the machine -- true of the
+realtime class today, which is why it has a watchdog and a throttle
+("Two scheduling classes", below).
 
 Measured 2026-09-23 on the ASUS, same script each time (an MP3 with a
 disturbance 20 s in), `--prio 0` against the new default: full speed
@@ -8378,8 +8382,8 @@ less than what it would preempt.** An IRQ wake only made the waiter
 READY, so every DMA completion cost it up to a whole slice behind a busy
 peer -- and it was usually holding the filesystem lock the whole time,
 so everybody behind it waited too. CFS's wakeup preemption, and 4.4BSD's
-PRIBIO for the same reason. Never across levels, so the audio driver's
--10 still wins. This is the one exception to "a wake preempts only from
+PRIBIO for the same reason. Never across classes, so the realtime audio
+driver still wins. This is the one exception to "a wake preempts only from
 a better level" above. It was UNCONDITIONAL until 2026-09-26 (a
 `g_wake_next` naming the next process), which is the half of CFS's rule
 that was copied without the other half; see the next-but-one entry.
@@ -8405,7 +8409,9 @@ the strict levels and, within the best one, runs the lowest `vruntime`;
 the old rotation order only breaks ties. A wake at the same level may
 cut in only when the woken context is behind what runs by more than
 `WAKE_GRAN_NS`. That is CFS's rule (EEVDF's since 6.6), minus weights,
-because the levels already are the weights here.
+because the levels already are the weights here. (Since 2026-10-10 the
+"level" is the fair class, and nice IS a weight on `vruntime` -- "Two
+scheduling classes", below.)
 
 **What it replaced was two tie-breaks with no bound between them.** A
 context woken MID-CALL ran next (`g_wake_next`), and a context a wake
@@ -8459,7 +8465,8 @@ kill now defers on `parked_in_kernel` whatever the state.
 
 **Not done, deliberately:** no weights within a level (nice values are
 levels here, strict, and ageing across them is still absent -- a
-better-level spinner still takes the machine); and the same-level
+better-level spinner still takes the machine; both changed with "Two
+scheduling classes", below); and the same-level
 cut-in stays limited to MID-CALL wakes, as before, rather than every
 wake as in CFS, so ordinary interrupts still do not rotate the CPU.
 
@@ -9128,3 +9135,92 @@ what the console can report line by line. Five seconds, not systemd's
 90 or launchd's 20, for the readiness timeout's reason: on a machine
 with one console a long silent pause reads as a hang.
 
+## Two scheduling classes: realtime above fair, and nice is a share
+
+Until 2026-10-10 a process had one number, nice -20..19, and the picker
+treated it as a STRICT RANK: any runnable process at a better level ran
+before everything below it, with fair sharing (`vruntime`) only inside
+one level. That was built for one measured reason -- a ring-3 audio
+driver woken by its device had to beat the rotation (above, "A wake
+preempts only from a better level") -- and it left three things wrong.
+The compositor and a busy app were peers, so an actively working app
+degraded the desktop. A nice value meant something no port expects:
+nice 19 never ran while anything at 0 wanted the CPU, and nice -1
+starved the machine if it spun. And any process could set any pid to
+-20, since nothing checked.
+
+**What real systems do.** Linux has scheduling CLASSES, compiled in and
+queried in a fixed order -- stop, deadline, RT (`SCHED_FIFO`/`SCHED_RR`,
+1..99), fair (CFS, EEVDF since 6.6), idle -- and nice is only a WEIGHT
+within fair (`sched_prio_to_weight[]`, ~1.25x a step). RT is guarded
+twice: `sched_rt_runtime_us` caps all RT at 950 ms of each second, and
+`RLIMIT_RTTIME` signals one task that runs too long without blocking.
+Raising either needs `CAP_SYS_NICE`, or asking rtkit, which grants RT
+within limits. KWin runs its main thread `SCHED_RR` (the binary carries
+`CAP_SYS_NICE`) with `SCHED_RESET_ON_FORK`, so what it starts is
+ordinary; Mutter can ask rtkit for the same. PipeWire's data thread is `SCHED_FIFO`. Windows
+uses one number but in two bands -- 16..31 realtime, 1..15 dynamic --
+and MMCSS raises audio threads into the realtime band, then drops them
+back when they overrun their reserved share. Pluggable schedulers were
+proposed for Linux for years and refused; `sched_ext` (6.12) is BPF
+experimentation, not how Linux schedules.
+
+**What toy-os does: Linux's shape, two classes, sized down.**
+- **`SCHED_FIFO`/`SCHED_RR` at 1..99 run before every `SCHED_OTHER`
+  process**, highest priority first. Within one priority, FIFO order:
+  a stamp (`rt_seq`) taken when a process goes to the BACK -- a wake,
+  an RR slice's end, a yield -- and kept when it is preempted, so a
+  preempted FIFO process resumes at the head as POSIX requires. No
+  queues: the picker already scans the table, so a stamp is the whole
+  data structure.
+- **`SCHED_OTHER` is the old least-`vruntime` rule with nice as CFS's
+  weight**: run time is added divided by the weight. The kernel context
+  takes part at nice 0.
+- **Only init may make anything more important** -- RT, a lower nice,
+  or any change to another process; anyone may make itself less
+  important (`-EPERM` otherwise). There are no users here, so
+  `CAP_SYS_NICE` has one holder, and a service asks through systemd's
+  `CPUSchedulingPolicy=`/`CPUSchedulingPriority=`/`Nice=`
+  (`data/etc/services.d/README.md`). The obvious alternative, a
+  self-raise like the driver's old `setpriority(-10)`, is exactly the
+  any-process-can-take-the-machine hole this closes.
+- **RT is never inherited** -- `SCHED_RESET_ON_FORK`, always on, for all
+  three ways a slot is made. A realtime compositor spawns every app; an
+  inheriting class would have made the whole desktop realtime.
+- **Two guards, because a spinning RT process owns the machine.** A
+  WATCHDOG: one that runs `kernel.sched_rt_watchdog_ms` (1000) without
+  BLOCKING -- a yield does not count -- is moved to `SCHED_OTHER` and
+  logged, MMCSS's demotion rather than `RLIMIT_RTTIME`'s SIGKILL, since
+  the processes this protects (the compositor, the sound driver) are
+  ones nobody wants killed. And a THROTTLE: all RT together gets
+  `kernel.sched_rt_runtime_ms` (950) of each second while an ordinary
+  process wants the CPU. Unlike Linux's it is WORK-CONSERVING -- a
+  throttled RT process still runs when nothing ordinary is READY, since
+  idling then helps nobody -- and the kernel context does not count as
+  wanting the CPU, being the idle loop far more often than the shell.
+  The watchdog is the one that ends the episode; the throttle keeps a
+  shell alive for the second before it does.
+- **A `SCHED_FIFO` process has no slice, only the guards**, so the
+  timer still comes round every `kernel.timeslice_ms` to check them --
+  without that a FIFO process is never billed and the watchdog never
+  fires.
+
+**Measured 2026-10-10**, KVM with a TSC clocksource,
+`latency_under_io.py --load cpu` (four busy ordinary `spin_test`s, 15 s),
+one build, toywm's descriptor with and without its two CPU lines: the
+compositor's frame-wake lateness was 65 us average and 975 us worst as
+an ordinary process, against 8-9 us average and 30-34 us worst as
+`SCHED_RR 1` (two runs). And a `SCHED_FIFO 50` service that never
+blocks was throttled at 950 ms and demoted at 1003 ms, while init's own
+"started" line waited for the throttle -- which is the class doing what
+it says.
+
+**Not done, deliberately.** No rtkit: a program started by hand cannot
+become realtime at all, so a hand-started `snddrv` runs ordinary and
+its serving line says so (the roadmap's "Realtime for a program started
+by hand"). No deadline class, no idle class, no per-process
+`RLIMIT_RTTIME` (one machine-wide figure until a second caller wants a
+different one). And no plugin interface -- a seam with one
+implementation behind it is unvalidated (`struct win_transport`); two
+concrete classes with two real users is the honest version of the same
+idea.

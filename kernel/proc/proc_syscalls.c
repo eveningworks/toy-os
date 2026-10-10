@@ -1020,10 +1020,16 @@ void proc_syscall_release(uint64_t pml4_phys) {
     }
 }
 
-// --- scheduling priority ------------------------------------------------
+// --- nice and the scheduling class ------------------------------------
 //
-// abi/syscall_abi.h says why this exists and why it can starve.
+// abi/syscall_abi.h has the rules. INIT HOLDS CAP_SYS_NICE: there are no
+// users, so "who may make something more important" has one answer.
 #define PRIO_PROCESS 0
+
+static int caller_is_init(void) {
+    int me = scheduler_current_pid();
+    return me && me == scheduler_init_pid();
+}
 
 int sys_setpriority(struct syscall_ctx *c) {
     int which = (int)(int64_t)c->a0;
@@ -1033,6 +1039,13 @@ int sys_setpriority(struct syscall_ctx *c) {
 
     if (which != PRIO_PROCESS || value < -20 || value > 19) { ret = -EINVAL; goto out; }
     if (!who) who = scheduler_current_pid();
+    int now = 0;
+    ret = scheduler_get_priority(who, &now);
+    if (ret) goto out;
+    if (!caller_is_init() && (who != scheduler_current_pid() || value < now)) {
+        ret = -EPERM;
+        goto out;
+    }
     ret = scheduler_set_priority(who, value);
 out:
     c->regs[14] = (uint64_t)ret;
@@ -1050,6 +1063,38 @@ int sys_getpriority(struct syscall_ctx *c) {
     ret = scheduler_get_priority(who, &value);
     if (ret == 0) ret = 20 - value;   // syscall_abi.h: never negative
 out:
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
+
+int sys_sched_setscheduler(struct syscall_ctx *c) {
+    int who    = (int)(int64_t)c->a0;
+    int policy = (int)(int64_t)c->a1;
+    int prio   = (int)(int64_t)c->a2;
+    int64_t ret;
+
+    if (!who) who = scheduler_current_pid();
+    int was = 0, was_prio = 0;
+    ret = scheduler_get_class(who, &was, &was_prio);
+    if (ret) goto out;
+    // Dropping ITSELF to SCHED_OTHER is the one thing anyone may do.
+    if (!caller_is_init() && (who != scheduler_current_pid() || policy != SCHED_OTHER)) {
+        ret = policy == SCHED_OTHER || policy == SCHED_FIFO || policy == SCHED_RR
+              ? -EPERM : -EINVAL;
+        goto out;
+    }
+    ret = scheduler_set_class(who, policy, prio);
+out:
+    c->regs[14] = (uint64_t)ret;
+    return 0;
+}
+
+int sys_sched_getscheduler(struct syscall_ctx *c) {
+    int who = (int)(int64_t)c->a0;
+    if (!who) who = scheduler_current_pid();
+    int policy = 0, prio = 0;
+    int64_t ret = scheduler_get_class(who, &policy, &prio);
+    if (ret == 0) ret = policy | prio << 8;
     c->regs[14] = (uint64_t)ret;
     return 0;
 }

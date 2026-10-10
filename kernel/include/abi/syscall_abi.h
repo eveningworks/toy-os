@@ -2628,27 +2628,20 @@ struct usb_control_msg {
                              // -EPERM not the registered driver,
                              // -ENOMEM no room, -EFAULT a bad pointer.
 
-// SCHEDULING PRIORITY, POSIX's shape: nice-style, LOWER runs first,
-// 0 the default, -20..19 the range. Strict between levels and
-// round-robin within one. INHERITED by whatever a process creates, as
-// POSIX's fork and posix_spawn do.
+// NICE, POSIX's shape: -20..19, 0 the default, LOWER gets MORE of the
+// CPU. A WEIGHT within SCHED_OTHER (CFS's table, ~1.25x a step), never
+// a rank: nice 19 still runs beside a busy nice 0, just less. Inherited
+// by whatever a process creates, as fork and posix_spawn do.
 //
-// **A DRIVER IS WHY THIS EXISTS.** A ring-3 driver is woken by its
-// device's interrupt and then waits its turn -- measured as ~17 ms of
-// dead air 5.6 times a second on a USB audio endpoint with 12 ms of
-// buffer, at a 10 ms timeslice behind the compositor and the mixer.
-// An in-kernel driver never sees it, because it refills inside the
-// handler. This is what every OS gives an audio thread: RT priority in
-// PipeWire and JACK, MMCSS "Pro Audio" on Windows.
-//
-// **AND IT CAN STARVE.** There is no ageing and no budget: a busy
-// process at a better level holds the CPU against everything below.
-// Only a process that BLOCKS promptly should ask for one.
+// ONLY INIT MAY LOWER A NICE VALUE OR TOUCH ANOTHER PROCESS; anyone may
+// raise its own (-EPERM otherwise). There are no users to ask, so this
+// is CAP_SYS_NICE held by pid 1 alone, and a service gets a better
+// figure from its descriptor's `Nice=` (data/etc/services.d/README.md).
 #define SYS_SETPRIORITY 134  // RDI = which (PRIO_PROCESS only), RSI =
                              // who (0 = the caller), RDX = the value.
                              // 0, or -EINVAL for an unknown `which` or
                              // a value outside -20..19, -ESRCH for a
-                             // pid that is not there.
+                             // pid that is not there, -EPERM above.
 #define SYS_GETPRIORITY 135  // RDI = which, RSI = who. 20 - the value
                              // (1..40), or -EINVAL/-ESRCH. Offset
                              // because a negative level would read as
@@ -2711,6 +2704,38 @@ struct usb_control_msg {
                              // skipped and counted), or -EINVAL at an
                              // unknown op, -EFAULT. What the caller holds
                              // is released when it exits.
+
+// THE SCHEDULING CLASS, sched_setscheduler()'s shape. A runnable
+// SCHED_FIFO/SCHED_RR process runs before EVERY SCHED_OTHER one, the
+// higher priority (1..99) first; FIFO keeps the CPU until it blocks,
+// yields or is outranked, RR also goes to the back of its priority at
+// each kernel.timeslice_ms. For a process that BLOCKS PROMPTLY -- a
+// driver refilling a buffer, the compositor between frames.
+//
+// **TWO GUARDS, BECAUSE A SPINNING RT PROCESS OWNS THE MACHINE.** One
+// that runs kernel.sched_rt_watchdog_ms without blocking is moved to
+// SCHED_OTHER and logged (RLIMIT_RTTIME's shape, demoted rather than
+// killed); and all RT together gets kernel.sched_rt_runtime_ms of each
+// second while an ordinary process wants the CPU (sched_rt_runtime_us).
+//
+// ONLY INIT MAY ASK FOR RT, or touch another process; anyone may drop
+// ITSELF to SCHED_OTHER (-EPERM otherwise). A service asks through its
+// descriptor's `CPUSchedulingPolicy=` (data/etc/services.d/README.md).
+// NEVER INHERITED: whatever an RT process creates starts SCHED_OTHER
+// (Linux's SCHED_RESET_ON_FORK, here always on).
+#define SCHED_OTHER 0
+#define SCHED_FIFO  1
+#define SCHED_RR    2
+#define SCHED_RT_PRIO_MIN 1
+#define SCHED_RT_PRIO_MAX 99
+#define SYS_SCHED_SETSCHEDULER 143 // RDI = pid (0 = the caller), RSI = a
+                             // SCHED_* policy, RDX = its priority (0 for
+                             // OTHER, 1..99 otherwise). 0, or -EINVAL,
+                             // -ESRCH, -EPERM.
+#define SYS_SCHED_GETSCHEDULER 144 // RDI = pid (0 = the caller). The
+                             // policy | priority << 8, or -ESRCH. Packed
+                             // so one call answers sched_getscheduler()
+                             // and sched_getparam() both.
 
 #define INPUT_INJECT_BATCH 32
 #define INPUT_INJECT_KEY      1 // code: an evdev keycode; x: 1 down, 0 up

@@ -323,9 +323,9 @@ KTEST("sched", "a wake reaches only the channel it names") {
 }
 
 KTEST("sched", "a wake preempts only when it OUTRANKS what is running") {
-    // The kernel context runs this test at the default level, 0. A wake
-    // at a better level must ask for a switch on the way out of the
-    // trap; one at the same level must not, or every interrupt would
+    // The kernel context runs this test in the fair class. An RT wake
+    // must ask for a switch on the way out of the trap; a fair one
+    // parked at a syscall entry must not, or every interrupt would
     // rotate the CPU.
     uint64_t tf_hi[SCHED_TF_SLOTS] = {0}, tf_eq[SCHED_TF_SLOTS] = {0};
     static const char chan_hi, chan_eq;
@@ -338,7 +338,8 @@ KTEST("sched", "a wake preempts only when it OUTRANKS what is running") {
     int asked_eq = -1, asked_hi = -1, cur = scheduler_current_pid();
 
     if (hi >= 0 && eq >= 0) {
-        scheduler_set_priority(scheduler_slot_pid(hi), -5);
+        scheduler_set_class(scheduler_slot_pid(hi), SCHED_FIFO, 10);
+        (void)scheduler_test_take_resched();   // the class change asks for one itself
         scheduler_wake(&chan_eq, 0);
         asked_eq = scheduler_test_take_resched();
         scheduler_wake(&chan_hi, 0);
@@ -356,11 +357,12 @@ KTEST("sched", "a wake preempts only when it OUTRANKS what is running") {
     KTEST_ASSERT_EQ(asked_hi, 1);
 }
 
-KTEST("sched", "within a level, whoever has run least runs next") {
-    // Two READY slots at a level nothing real uses. Equal: the scan
-    // order decides, so from A's position it is B (the old round-robin).
-    // A behind: A, although B comes first in the scan -- which is what a
-    // preempted process, or one back from a long wait, needs.
+KTEST("sched", "within the fair class, whoever has run least runs next") {
+    // Two READY fair slots, far below the pack's floor so nothing real
+    // competes. Equal: the scan order decides, so from A's position it
+    // is B (the old round-robin). A behind: A, although B comes first in
+    // the scan -- which is what a preempted process, or one back from a
+    // long wait, needs.
     uint64_t tf_a[SCHED_TF_SLOTS] = {0}, tf_b[SCHED_TF_SLOTS] = {0};
     static const char chan_a, chan_b;
 
@@ -370,8 +372,6 @@ KTEST("sched", "within a level, whoever has run least runs next") {
     int equal = -2, behind = -2;
 
     if (a >= 0 && b >= 0) {
-        scheduler_set_priority(scheduler_slot_pid(a), -17);
-        scheduler_set_priority(scheduler_slot_pid(b), -17);
         scheduler_wake(&chan_a, 0);
         scheduler_wake(&chan_b, 0);
         (void)scheduler_test_take_resched();
@@ -391,6 +391,137 @@ KTEST("sched", "within a level, whoever has run least runs next") {
 
     KTEST_ASSERT_EQ(equal, b);
     KTEST_ASSERT_EQ(behind, a);
+}
+
+KTEST("sched", "RT runs before every fair process: best priority, then FIFO order") {
+    // A fair slot that has run NOTHING still loses to any RT one -- the
+    // class is a rank, the vruntime only orders the fair class. Within
+    // RT, the higher priority first; at one priority, whoever got in
+    // line first. Dropping the best to SCHED_OTHER hands over.
+    static uint64_t tf[4][SCHED_TF_SLOTS];
+    static const char chan[4];
+    int s[4], picks[4] = { -2, -2, -2, -2 };
+
+    scheduler_preempt_disable();
+    for (int i = 0; i < 4; i++) s[i] = scheduler_test_park(tf[i], &chan[i], SCHED_WAIT_EVENT);
+    int ok = s[0] >= 0 && s[1] >= 0 && s[2] >= 0 && s[3] >= 0;
+    if (ok) {
+        scheduler_set_class(scheduler_slot_pid(s[0]), SCHED_FIFO, 10);
+        scheduler_set_class(scheduler_slot_pid(s[1]), SCHED_FIFO, 20);
+        scheduler_set_class(scheduler_slot_pid(s[3]), SCHED_FIFO, 10);
+        for (int i = 0; i < 4; i++) scheduler_wake(&chan[i], 0);   // 0 in line before 3
+        scheduler_test_set_vruntime(s[2], 0);
+        picks[0] = scheduler_test_pick(s[2]);        // 20 beats 10 beats fair
+        scheduler_set_class(scheduler_slot_pid(s[1]), SCHED_OTHER, 0);
+        picks[1] = scheduler_test_pick(s[0]);        // 0 and 3 at 10: 0 woke first
+        scheduler_set_class(scheduler_slot_pid(s[0]), SCHED_OTHER, 0);
+        scheduler_set_class(scheduler_slot_pid(s[3]), SCHED_OTHER, 0);
+        scheduler_test_set_vruntime(s[0], 1000000);
+        scheduler_test_set_vruntime(s[1], 1000000);
+        scheduler_test_set_vruntime(s[3], 1000000);
+        picks[2] = scheduler_test_pick(s[0]);        // all fair: least run
+        (void)scheduler_test_take_resched();
+    }
+    for (int i = 0; i < 4; i++) scheduler_test_release(s[i]);
+    scheduler_preempt_enable();
+
+    if (!ok) KTEST_SKIP("no free process slots to fabricate");
+    KTEST_ASSERT_EQ(picks[0], s[1]);
+    KTEST_ASSERT_EQ(picks[1], s[0]);
+    KTEST_ASSERT_EQ(picks[2], s[2]);
+}
+
+KTEST("sched", "nice is a weight: CFS's ~1.25x a step, not a rank") {
+    uint64_t tf[SCHED_TF_SLOTS] = {0};
+    static const char chan;
+    uint64_t at0 = 0, at5 = 0, atm5 = 0, at19 = 0;
+
+    scheduler_preempt_disable();
+    int a = scheduler_test_park(tf, &chan, SCHED_WAIT_EVENT);
+    if (a >= 0) {
+        int pid = scheduler_slot_pid(a);
+        at0 = scheduler_test_vr_scale(a, 1000000);
+        scheduler_set_priority(pid, 5);
+        at5 = scheduler_test_vr_scale(a, 1000000);
+        scheduler_set_priority(pid, -5);
+        atm5 = scheduler_test_vr_scale(a, 1000000);
+        scheduler_set_priority(pid, 19);
+        at19 = scheduler_test_vr_scale(a, 1000000);
+    }
+    scheduler_test_release(a);
+    scheduler_preempt_enable();
+
+    if (a < 0) KTEST_SKIP("no free process slots to fabricate");
+    KTEST_ASSERT_EQ(at0, 1000000);               // nice 0 is real time
+    KTEST_ASSERT_EQ(at5, 3056716);               // 1 ms * 1024 / 335
+    KTEST_ASSERT_EQ(atm5, 328099);              // 1 ms * 1024 / 3121
+    KTEST_ASSERT_EQ(at19, 68266666);             // 1 ms * 1024 / 15
+}
+
+KTEST("sched", "an RT process that does not block is moved to SCHED_OTHER") {
+    // The watchdog: a second of RT without a block demotes. The budget
+    // is put back after, or real RT processes would start throttled.
+    static uint64_t tf[2][SCHED_TF_SLOTS];
+    static const char chan[2];
+    int policy_short = -1, policy_long = -1, rt_prio = -1;
+    uint32_t wd = scheduler_rt_watchdog_ms();
+
+    scheduler_preempt_disable();
+    int a = scheduler_test_park(tf[0], &chan[0], SCHED_WAIT_EVENT);
+    int b = scheduler_test_park(tf[1], &chan[1], SCHED_WAIT_EVENT);
+    if (a >= 0 && b >= 0 && wd) {
+        scheduler_set_class(scheduler_slot_pid(a), SCHED_FIFO, 5);
+        scheduler_set_class(scheduler_slot_pid(b), SCHED_RR, 5);
+        scheduler_test_rt_charge(a, (uint64_t)(wd - 1) * 1000000ull);
+        scheduler_get_class(scheduler_slot_pid(a), &policy_short, &rt_prio);
+        scheduler_test_rt_charge(b, (uint64_t)wd * 1000000ull);
+        scheduler_get_class(scheduler_slot_pid(b), &policy_long, &rt_prio);
+        scheduler_test_rt_budget_reset();
+        (void)scheduler_test_take_resched();
+    }
+    scheduler_test_release(a);
+    scheduler_test_release(b);
+    scheduler_preempt_enable();
+
+    if (a < 0 || b < 0) KTEST_SKIP("no free process slots to fabricate");
+    if (!wd) KTEST_SKIP("kernel.sched_rt_watchdog_ms is 0");
+    KTEST_ASSERT_EQ(policy_short, SCHED_FIFO);   // just under: kept
+    KTEST_ASSERT_EQ(policy_long, SCHED_OTHER);   // at the limit: demoted
+    KTEST_ASSERT_EQ(rt_prio, 0);
+}
+
+KTEST("sched", "throttled RT yields to a READY fair process") {
+    // Past kernel.sched_rt_runtime_ms in this second, RT is passed over
+    // while an ordinary process is READY. (That it still runs when none
+    // is cannot be fabricated here: real processes may be READY too.)
+    static uint64_t tf[2][SCHED_TF_SLOTS];
+    static const char chan[2];
+    int fresh = -2, throttled = -2;
+    uint32_t rt = scheduler_rt_runtime_ms();
+
+    scheduler_preempt_disable();
+    int r = scheduler_test_park(tf[0], &chan[0], SCHED_WAIT_EVENT);
+    int f = scheduler_test_park(tf[1], &chan[1], SCHED_WAIT_EVENT);
+    if (r >= 0 && f >= 0 && rt < 1000) {
+        scheduler_set_class(scheduler_slot_pid(r), SCHED_FIFO, 5);
+        scheduler_wake(&chan[0], 0);
+        scheduler_wake(&chan[1], 0);
+        scheduler_test_set_vruntime(f, 0);
+        scheduler_test_rt_budget_reset();
+        fresh = scheduler_test_pick(f);                    // the control
+        scheduler_test_rt_charge(r, (uint64_t)rt * 1000000ull);
+        throttled = scheduler_test_pick(f);
+        scheduler_test_rt_budget_reset();
+        (void)scheduler_test_take_resched();
+    }
+    scheduler_test_release(r);
+    scheduler_test_release(f);
+    scheduler_preempt_enable();
+
+    if (r < 0 || f < 0) KTEST_SKIP("no free process slots to fabricate");
+    if (rt >= 1000) KTEST_SKIP("kernel.sched_rt_runtime_ms is unlimited");
+    KTEST_ASSERT_EQ(fresh, r);
+    KTEST_ASSERT_EQ(throttled, f);
 }
 
 KTEST("sched", "a mid-call wake cuts in only while it has run less than what runs") {

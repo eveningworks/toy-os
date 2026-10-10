@@ -80,6 +80,8 @@
 #include "syscall_abi.h" // struct sys_dirent
 #include <fcntl.h>
 #include <unistd.h>
+#include <sched.h>
+#include <sys/resource.h>
 #include "tmppath.h"
 
 #define SERVICES_DIR   "/etc/services.d"
@@ -295,6 +297,12 @@ struct service {
     unsigned long long ready_timeout_ms;
     unsigned long long ready_deadline_ms;
     unsigned long long stop_timeout_ms;   // StopTimeout=: SIGTERM to SIGKILL at shutdown
+    // CPUSchedulingPolicy=/CPUSchedulingPriority=/Nice=, applied by init
+    // to the new pid -- init holds the only right to ask for better.
+    int  sched_policy; // SCHED_*, or -1 for none given
+    int  sched_prio;
+    int  nice;
+    int  has_nice;
 };
 
 // Static, not local: USERLAND_CFLAGS carries -Wframe-larger-than=2048
@@ -547,6 +555,37 @@ static void load_service(const char *file) {
         if (ms > 0) s->ready_timeout_ms = (unsigned long long)ms;
         else logf1("init: %s has a non-positive ReadyTimeout=, using the default\n",
                    s->name);
+    }
+
+    // systemd's three CPU keys. A bad value is said and ignored, like every
+    // key here: the service then simply runs as an ordinary process.
+    char sp[16];
+    s->sched_policy = -1;
+    s->sched_prio = 0;
+    s->has_nice = 0;
+    if (etc_config_buf_get(&g_cfg, "CPUSchedulingPolicy", sp, sizeof sp)) {
+        if (k_strcmp(sp, "fifo") == 0)       s->sched_policy = SCHED_FIFO;
+        else if (k_strcmp(sp, "rr") == 0)    s->sched_policy = SCHED_RR;
+        else if (k_strcmp(sp, "other") == 0) s->sched_policy = SCHED_OTHER;
+        else logf1("init: %s has an unknown CPUSchedulingPolicy=, ignoring it\n", s->name);
+    }
+    if (s->sched_policy == SCHED_FIFO || s->sched_policy == SCHED_RR) {
+        char *end = 0;
+        s->sched_prio = etc_config_buf_get(&g_cfg, "CPUSchedulingPriority", sp, sizeof sp)
+                        ? (int)strtol(sp, &end, 10) : 0;
+        if (!end || *end || s->sched_prio < SCHED_RT_PRIO_MIN || s->sched_prio > SCHED_RT_PRIO_MAX) {
+            logf1("init: %s needs a CPUSchedulingPriority= of 1..99, ignoring its policy\n",
+                  s->name);
+            s->sched_policy = -1;
+        }
+    }
+    if (etc_config_buf_get(&g_cfg, "Nice", sp, sizeof sp)) {
+        char *end = 0;
+        s->nice = (int)strtol(sp, &end, 10);
+        if (*end || s->nice < -20 || s->nice > 19)
+            logf1("init: %s has a Nice= outside -20..19, ignoring it\n", s->name);
+        else
+            s->has_nice = 1;
     }
 
     // Refused the same way, for the same reason: zero would be SIGKILL at
@@ -841,6 +880,13 @@ static void start_service(struct service *s) {
     else o.stderr_fd = SPAWN_FD_KMSG;
     int pid = sys_spawn_opts(s->exec, &o);
     if (pid > 0) {
+        // Before it has run a slice, since the spawn only made it READY.
+        // A failure is said and the service runs as an ordinary process.
+        if (s->has_nice && setpriority(PRIO_PROCESS, pid, s->nice) != 0)
+            logf1("init: could not apply Nice= to %s\n", s->name);
+        struct sched_param sp = { s->sched_prio };
+        if (s->sched_policy >= 0 && sched_setscheduler(pid, s->sched_policy, &sp) != 0)
+            logf1("init: could not apply CPUSchedulingPolicy= to %s\n", s->name);
         s->pid = pid;
         s->started_ms = now_ms();
         // A NEW PROCESS HAS ANNOUNCED NOTHING. Cleared on every start,

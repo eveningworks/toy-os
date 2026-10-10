@@ -496,21 +496,15 @@ static int kernel_slot_runnable(void) {
     return kernel_saved_rsp != 0;
 }
 
-// Scans the whole rotation -- all MAX_PROCS process slots PLUS the
-// kernel's own position -- starting just after `start` (wrapping), and
-// returns the runnable one at the best level that has run least. Falls back to ROT_KERNEL when nothing
-// else is runnable, which is the pre-rotation behaviour: a tick that
-// finds no ready process resumes the kernel, exactly as before.
-//
-// `start` may be -1 (nothing was running); the +MAX_PROCS+1 term keeps
-// the modulo positive for it.
-// A process's scheduling priority, by pid. The picker above is the
-// only reader; these are the only writers.
+// A process's nice value and class, by pid. The picker is the only
+// reader; these, sched_class_reset() and the RT watchdog are the only
+// writers. Permission is the syscall's business, not this file's.
 int scheduler_set_priority(int pid, int value) {
     int idx = pid_slot(pid);
     if (idx < 0 || procs[idx].state == SCHED_UNUSED)
         return -ESRCH;
-    procs[idx].prio = (int8_t)value;
+    if (value < -20 || value > 19) return -EINVAL;
+    procs[idx].nice = (int8_t)value;
     return 0;
 }
 
@@ -518,22 +512,65 @@ int scheduler_get_priority(int pid, int *value) {
     int idx = pid_slot(pid);
     if (idx < 0 || procs[idx].state == SCHED_UNUSED)
         return -ESRCH;
-    *value = procs[idx].prio;
+    *value = procs[idx].nice;
     return 0;
+}
+
+static uint64_t g_rt_seq;   // rt_seq's counter: the back of every RT queue
+
+int scheduler_set_class(int pid, int policy, int rt_prio) {
+    int idx = pid_slot(pid);
+    if (idx < 0 || procs[idx].state == SCHED_UNUSED || procs[idx].state == SCHED_ZOMBIE)
+        return -ESRCH;
+    if (policy == SCHED_OTHER ? rt_prio != 0
+        : (policy != SCHED_FIFO && policy != SCHED_RR) ||
+          rt_prio < SCHED_RT_PRIO_MIN || rt_prio > SCHED_RT_PRIO_MAX)
+        return -EINVAL;
+    int was_rt = procs[idx].policy != SCHED_OTHER;
+    procs[idx].policy = (uint8_t)policy;
+    procs[idx].rt_prio = (uint8_t)rt_prio;
+    if (policy != SCHED_OTHER) {
+        if (!was_rt) procs[idx].rt_run_ns = 0;
+        procs[idx].rt_seq = ++g_rt_seq;
+    } else if (was_rt) {
+        vr_place(idx);   // rejoins the fair pack where it is now, not where it left it
+    }
+    g_need_resched = 1;  // either way the best runnable may have changed
+    return 0;
+}
+
+int scheduler_get_class(int pid, int *policy, int *rt_prio) {
+    int idx = pid_slot(pid);
+    if (idx < 0 || procs[idx].state == SCHED_UNUSED)
+        return -ESRCH;
+    *policy = procs[idx].policy;
+    *rt_prio = procs[idx].rt_prio;
+    return 0;
+}
+
+void sched_class_reset(int slot, int parent) {
+    procs[slot].nice = parent >= 0 ? procs[parent].nice : 0;
+    procs[slot].policy = SCHED_OTHER;
+    procs[slot].rt_prio = 0;
+    procs[slot].rt_seq = 0;
+    procs[slot].rt_run_ns = 0;
 }
 
 // A WAKE THAT OUTRANKS WHAT IS RUNNING asks for a switch on the way out
 // of the trap it happened in (scheduler_trap_exit()) -- Linux's
-// TIF_NEED_RESCHED. Only a STRICTLY better level: a wake at the same
-// level would preempt on every interrupt and give nothing back. The one
-// exception is a context parked MID-CALL that has run less than what is
-// running -- see wake_slot().
+// TIF_NEED_RESCHED. Only a STRICTLY better rank: an RT wake at the same
+// priority would preempt on every interrupt and give nothing back. A
+// SCHED_OTHER wake beside SCHED_OTHER is vruntime's business -- see
+// wake_slot() and wake_preempt().
 int g_need_resched;
 
-// The level a wake has to beat: the running process's, or the kernel
-// slot's default when the kernel context is what runs.
-static int running_prio(void) {
-    return current_index >= 0 ? procs[current_index].prio : 0;
+static int is_rt(int idx) { return procs[idx].policy != SCHED_OTHER; }
+
+// What a wake has to beat: an RT process's priority (1..99), or 0 for
+// the fair class -- which the kernel context always belongs to.
+static int rank_of(int idx) { return is_rt(idx) ? procs[idx].rt_prio : 0; }
+static int running_rank(void) {
+    return current_index >= 0 ? rank_of(current_index) : 0;
 }
 
 static int runnable_at(int idx) {
@@ -562,6 +599,63 @@ static uint64_t *vr_of(int rot) {
     return rot == ROT_KERNEL ? &kernel_vruntime : &procs[rot].vruntime;
 }
 
+// NICE IS A WEIGHT: CFS's sched_prio_to_weight[], nice -20..19, 1024 at
+// 0 and ~1.25x a step, so two busy processes one step apart split the
+// CPU ~55/45 whatever their absolute values. vruntime advances by the
+// time run over the weight, and least-vruntime-first does the rest.
+static const uint32_t NICE_WEIGHT[40] = {
+    88761, 71755, 56483, 46273, 36291, 29154, 23254, 18705, 14949, 11916,
+     9548,  7620,  6100,  4904,  3906,  3121,  2501,  1991,  1586,  1277,
+     1024,   820,   655,   526,   423,   335,   272,   215,   172,   137,
+      110,    87,    70,    56,    45,    36,    29,    23,    18,    15,
+};
+
+static uint64_t vr_scale(int rot, uint64_t ns) {
+    if (rot == ROT_KERNEL) return ns;
+    return ns * 1024 / NICE_WEIGHT[procs[rot].nice + 20];
+}
+
+// THE REALTIME GUARDS (abi/syscall_abi.h, SYS_SCHED_SETSCHEDULER).
+// Throttling is Linux's sched_rt_runtime_us over a fixed 1 s period,
+// but WORK-CONSERVING: a throttled RT process still runs when no
+// SCHED_OTHER process wants the CPU, since idling then helps nobody.
+// The kernel context does not count as wanting it -- it is the idle loop
+// far more often than the text shell.
+#define RT_PERIOD_NS 1000000000ull
+static uint32_t g_rt_runtime_ms = SCHED_RT_RUNTIME_DEFAULT_MS;
+static uint32_t g_rt_watchdog_ms = SCHED_RT_WATCHDOG_DEFAULT_MS;
+static uint64_t g_rt_period_start_ns, g_rt_used_ns;
+static int g_rt_throttled;
+
+static void rt_period_roll(uint64_t now) {
+    if (now - g_rt_period_start_ns < RT_PERIOD_NS) return;
+    g_rt_period_start_ns = now;
+    g_rt_used_ns = 0;
+    g_rt_throttled = 0;
+}
+
+static int fair_process_runnable(void) {
+    for (int i = 0; i < MAX_PROCS; i++)
+        if (runnable_at(i) && !is_rt(i)) return 1;
+    return 0;
+}
+
+static int rt_allowed(void) { return !g_rt_throttled || !fair_process_runnable(); }
+
+// The best runnable RT process -- highest rt_prio, then lowest rt_seq
+// -- or -1 for none, or none allowed to run.
+static int rt_pick(void) {
+    int pick = -1;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (!runnable_at(i) || !is_rt(i)) continue;
+        if (pick < 0 || procs[i].rt_prio > procs[pick].rt_prio ||
+            (procs[i].rt_prio == procs[pick].rt_prio && procs[i].rt_seq < procs[pick].rt_seq))
+            pick = i;
+    }
+    if (pick >= 0 && !rt_allowed()) return -1;
+    return pick;
+}
+
 // A context arriving -- woken, spawned, or the kernel after idling --
 // goes no further back than one slice behind the pack. Without the
 // floor, a process that slept an hour is owed an hour (CFS's
@@ -572,16 +666,17 @@ void vr_place(int rot) {
     if (*vr_of(rot) < floor) *vr_of(rot) = floor;
 }
 
+// Returns who runs next: the best RT process if one may run, otherwise
+// the SCHED_OTHER process -- or the kernel context, which is one -- that
+// has run least by weighted vruntime. Falls back to ROT_KERNEL when
+// nothing else is runnable: a tick that finds nothing resumes the kernel.
+//
+// `start` may be -1 (nothing was running); the +MAX_PROCS+1 term keeps
+// the modulo positive for it.
 int find_next_runnable(int start) {
-    // THE BEST LEVEL PRESENT, first. Strict priority between levels and
-    // least-run-first within one (vruntime, above), which keeps equals
-    // fair while letting a woken driver in ahead of the desktop. The kernel's own slot sits at the default level, so it
-    // is not starved by ordinary processes and IS outranked by a
-    // driver -- which is the point.
-    int best = 127;
-    for (int idx = 0; idx < MAX_PROCS; idx++)
-        if (runnable_at(idx) && procs[idx].prio < best) best = procs[idx].prio;
-    if (kernel_slot_runnable() && 0 < best) best = 0;
+    rt_period_roll(clocksource_now_ns());
+    int rt = rt_pick();
+    if (rt >= 0) return rt;
 
     // Scanned in rotation order from `start`, so among equals the next
     // one along wins, which is the old round-robin.
@@ -595,9 +690,9 @@ int find_next_runnable(int start) {
         int pos = (from + i) % npos;
         int idx = pos == MAX_PROCS ? ROT_KERNEL : pos;
         if (idx == ROT_KERNEL) {
-            if (!kernel_slot_runnable() || best != 0) continue;
+            if (!kernel_slot_runnable()) continue;
             vr_place(ROT_KERNEL);   // idling left it behind: owed one slice, not the idle
-        } else if (!runnable_at(idx) || procs[idx].prio != best) {
+        } else if (!runnable_at(idx) || is_rt(idx)) {
             // STOPPED IS CHECKED HERE AND NOWHERE ELSE (runnable_at()).
             // One picker means one place suspension has to be honoured.
             continue;
@@ -808,15 +903,18 @@ static uint64_t vr_credit_ns(void) { return (uint64_t)g_timeslice_ms * 1000000ul
 static int vr_behind_running(int i) {
     uint64_t now = clocksource_now_ns();
     uint64_t run = now > g_run_start_ns ? now - g_run_start_ns : 0;
-    uint64_t cur = current_index >= 0 ? procs[current_index].vruntime + run
+    uint64_t cur = current_index >= 0
+                 ? procs[current_index].vruntime + vr_scale(current_index, run)
                  : kernel_vruntime + (g_kernel_halting ? 0 : run);
     return procs[i].vruntime + WAKE_GRAN_NS < cur;
 }
 
 static void wake_preempt(int i) {
+    if (is_rt(i)) procs[i].rt_seq = ++g_rt_seq;            // the back of its queue
+    else vr_place(i);
     if (current_index < 0 && clockevent_in_idle()) return; // the idle path hands over already
-    if (procs[i].prio != running_prio()) return;           // better prio has its own rule
-    vr_place(i);
+    if (rank_of(i) > running_rank()) { g_need_resched = 1; return; }
+    if (is_rt(i) || running_rank() > 0) return;            // equal RT waits; fair never beats RT
     if (!vr_behind_running(i)) return;                     // it has had its share
     uint64_t gran_end = g_slice_start_ns + WAKE_GRAN_NS;
     if (clocksource_now_ns() >= gran_end) {
@@ -831,6 +929,21 @@ uint32_t scheduler_timeslice_ms(void) { return g_timeslice_ms; }
 int scheduler_set_timeslice_ms(uint32_t ms) {
     if (ms < SCHED_TIMESLICE_MIN_MS || ms > SCHED_TIMESLICE_MAX_MS) return 0;
     g_timeslice_ms = ms;
+    return 1;
+}
+
+uint32_t scheduler_rt_runtime_ms(void) { return g_rt_runtime_ms; }
+uint32_t scheduler_rt_watchdog_ms(void) { return g_rt_watchdog_ms; }
+
+int scheduler_set_rt_runtime_ms(uint32_t ms) {
+    if (ms < 1 || ms > RT_PERIOD_NS / 1000000) return 0;
+    g_rt_runtime_ms = ms;
+    return 1;
+}
+
+int scheduler_set_rt_watchdog_ms(uint32_t ms) {
+    if (ms > SCHED_RT_WATCHDOG_MAX_MS) return 0;
+    g_rt_watchdog_ms = ms;
     return 1;
 }
 
@@ -959,14 +1072,48 @@ int scheduler_live_count(void) { return alive_count; }
 static uint64_t g_proc_ns = 0;   // charged to some slot
 static uint64_t g_kernel_ns = 0; // charged to nobody: the idle halt, or the text shell
 
+// RT time, against both guards. A demotion here is seen by the very
+// pick that follows, since every pick bills first.
+static void rt_charge(int idx, uint64_t slice, uint64_t now) {
+    rt_period_roll(now);
+    g_rt_used_ns += slice;
+    if (!g_rt_throttled && g_rt_runtime_ms < RT_PERIOD_NS / 1000000 &&
+        g_rt_used_ns >= (uint64_t)g_rt_runtime_ms * 1000000ull) {
+        g_rt_throttled = 1;
+        klog_printf("sched: realtime throttled -- %u ms of RT in this second; "
+                    "ordinary processes get the rest\n", g_rt_runtime_ms);
+    }
+    procs[idx].rt_run_ns += slice;
+    if (g_rt_watchdog_ms && procs[idx].rt_run_ns >= (uint64_t)g_rt_watchdog_ms * 1000000ull) {
+        klog_printf("sched: pid %d (\"%s\") ran %u ms realtime without blocking -- "
+                    "moved to SCHED_OTHER\n", procs[idx].pid, procs[idx].name,
+                    (unsigned)(procs[idx].rt_run_ns / 1000000));
+        procs[idx].policy = SCHED_OTHER;
+        procs[idx].rt_prio = 0;
+        vr_place(idx);
+    }
+}
+
+// Is a guard due for the RT process on the CPU? The tick asks, since a
+// FIFO process is otherwise never rotated and so never billed.
+static int rt_guard_due(int idx, uint64_t now) {
+    uint64_t run = now > g_run_start_ns ? now - g_run_start_ns : 0;
+    if (g_rt_watchdog_ms && procs[idx].rt_run_ns + run >= (uint64_t)g_rt_watchdog_ms * 1000000ull)
+        return 1;
+    if (now - g_rt_period_start_ns >= RT_PERIOD_NS) return 0;
+    return g_rt_used_ns + run >= (uint64_t)g_rt_runtime_ms * 1000000ull &&
+           g_rt_runtime_ms < RT_PERIOD_NS / 1000000 && fair_process_runnable();
+}
+
 void bill_current(void) {
     uint64_t now = clocksource_now_ns();
     if (now > g_run_start_ns) {
         uint64_t slice = now - g_run_start_ns;
         if (current_index >= 0) {
             procs[current_index].cpu_ns += slice;
-            procs[current_index].vruntime += slice;
+            procs[current_index].vruntime += vr_scale(current_index, slice);
             g_proc_ns += slice;
+            if (is_rt(current_index)) rt_charge(current_index, slice, now);
         } else {
             g_kernel_ns += slice;
             if (!g_kernel_halting) kernel_vruntime += slice;
@@ -987,6 +1134,10 @@ void scheduler_cpu_time(uint64_t *proc_ns, uint64_t *kernel_ns) {
     if (kernel_ns) *kernel_ns = g_kernel_ns;
 }
 
+uint64_t scheduler_test_vr_scale(int idx, uint64_t ns) { return vr_scale(idx, ns); }
+void scheduler_test_rt_charge(int idx, uint64_t ns) { rt_charge(idx, ns, clocksource_now_ns()); }
+void scheduler_test_rt_budget_reset(void) { g_rt_used_ns = 0; g_rt_throttled = 0; }
+
 // The rotation, shared by the timer and by SYS_YIELD. They are the same
 // operation now that neither one is where billing happens -- see
 // bill_current() above.
@@ -997,7 +1148,17 @@ static void scheduler_rotate(uint64_t *regs);
 // rather than when the idle loop's slice would have ended.
 static int timer_wants_rotation(uint64_t now) {
     if (current_index < 0 && clockevent_in_idle()) return scheduler_any_ready();
-    return g_need_resched || now >= g_slice_end_ns;
+    if (g_need_resched) return 1;
+    if (current_index >= 0 && procs[current_index].policy == SCHED_FIFO && now >= g_slice_end_ns) {
+        // A FIFO PROCESS HAS NO SLICE, only the guards. The slice end
+        // still comes round as the cadence they are checked at -- and
+        // must be pushed on, or a deadline in the past refires at once.
+        if (rt_guard_due(current_index, now)) return 1;
+        slice_restart();
+        clockevent_reprogram();
+        return 0;
+    }
+    return now >= g_slice_end_ns;   // SCHED_RR and SCHED_OTHER alike
 }
 
 void scheduler_tick(uint64_t *regs) {
@@ -1036,15 +1197,18 @@ uint64_t scheduler_next_event_ns(void) {
 // "SCHED_COMPAT_YIELD" behaviour of CFS. Without it the least-run rule
 // hands a yielder straight back the CPU it just gave up, since a
 // process that only yields has run almost nothing (cputime_test).
+// An RT yield goes to the back of its priority, sched_yield()'s POSIX
+// meaning -- and does not reset the watchdog, which counts until a BLOCK.
 void scheduler_yield(uint64_t *regs) {
-    if (current_index >= 0) {
-        int lvl = procs[current_index].prio;
+    if (current_index >= 0 && is_rt(current_index)) {
+        procs[current_index].rt_seq = ++g_rt_seq;
+    } else if (current_index >= 0) {
         uint64_t top = procs[current_index].vruntime;
         for (int i = 0; i < MAX_PROCS; i++)
-            if (i != current_index && runnable_at(i) && procs[i].prio == lvl &&
+            if (i != current_index && runnable_at(i) && !is_rt(i) &&
                 procs[i].vruntime > top)
                 top = procs[i].vruntime;
-        if (lvl == 0 && kernel_slot_runnable() && kernel_vruntime > top) top = kernel_vruntime;
+        if (kernel_slot_runnable() && kernel_vruntime > top) top = kernel_vruntime;
         procs[current_index].vruntime = top;
     }
     scheduler_rotate(regs);
@@ -1145,6 +1309,10 @@ static void scheduler_rotate(uint64_t *regs) {
         // answer (see fpu.h).
         fpu_save(procs[current_index].fpu);
         procs[current_index].state = SCHED_READY;
+        // SCHED_RR's one difference from FIFO: a spent slice goes to the
+        // back of its priority. A preemption leaves it at the head.
+        if (procs[current_index].policy == SCHED_RR && clocksource_now_ns() >= g_slice_end_ns)
+            procs[current_index].rt_seq = ++g_rt_seq;
         trace_sched("rotate_out", current_index);
     } else {
         save_kernel_frame(regs);
@@ -1273,6 +1441,7 @@ static int block_common(uint64_t *regs, const void *chan, int reason,
     sched_switch_begin();
     bill_current(); // this slice ends here -- see bill_current()
     int idx = current_index;
+    procs[idx].rt_run_ns = 0;   // it blocked: the RT watchdog starts again
     procs[idx].kernel_rsp = (uint64_t)regs;
     kstack_verify(idx);
     fpu_save(procs[idx].fpu);
@@ -1429,6 +1598,7 @@ int scheduler_block_kernel_until(const void *chan, int reason, uint64_t wake_at_
 
     sched_switch_begin();
     bill_current();
+    procs[idx].rt_run_ns = 0;
     kstack_verify(idx);
     fpu_save(procs[idx].fpu);
     procs[idx].state = SCHED_BLOCKED;
@@ -1471,11 +1641,12 @@ static void wake_slot(int i, int64_t value) {
     procs[i].wake_at_ns = 0;
     procs[i].state = SCHED_READY;
     vr_place(i);
-    if (procs[i].prio < running_prio()) g_need_resched = 1;
-    // MID-CALL, AT THE SAME LEVEL: it is usually holding the filesystem
-    // lock, so it cuts in -- but only while it has run less than what it
-    // would preempt. That bound is what the unconditional version lacked.
-    else if (procs[i].parked_in_kernel && procs[i].prio == running_prio() &&
+    if (is_rt(i)) procs[i].rt_seq = ++g_rt_seq;
+    if (rank_of(i) > running_rank()) g_need_resched = 1;
+    // MID-CALL, BOTH FAIR: it is usually holding the filesystem lock, so
+    // it cuts in -- but only while it has run less than what it would
+    // preempt. That bound is what the unconditional version lacked.
+    else if (procs[i].parked_in_kernel && !is_rt(i) && running_rank() == 0 &&
              vr_behind_running(i))
         g_need_resched = 1;
 }
@@ -1529,7 +1700,7 @@ int scheduler_wake_one(const void *chan) {
     int pick = -1;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state != SCHED_BLOCKED || procs[i].wait_chan != chan) continue;
-        if (pick < 0 || procs[i].prio < procs[pick].prio) pick = i;
+        if (pick < 0 || rank_of(i) > rank_of(pick)) pick = i;
     }
     if (pick < 0) return 0;
     wake_slot(pick, 0);

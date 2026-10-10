@@ -1,4 +1,4 @@
-"""tools/latency_under_io.py -- what heavy disk I/O does to desktop latency.
+"""tools/latency_under_io.py -- what heavy disk I/O, or a busy CPU, does to desktop latency.
 
 WHY THIS EXISTS
 ---------------
@@ -40,6 +40,15 @@ why the attribution half is trustworthy where the effect half is coarse.
   python3 tools/vm.py --instance 3 start
   python3 tools/latency_under_io.py --instance 3
 
+`--load cpu` swaps diskbench for N busy `/tests/spin_test` processes
+(ordinary, SCHED_OTHER) over a fixed window: "an actively-working app
+measurably degrades the desktop" is the premise of the scheduling-class
+work, and this is its yardstick. The A/B is the SAME build with toywm's
+descriptor (`/etc/services.d/toywm`) with and without its
+`CPUSchedulingPolicy=` lines, a reboot between:
+
+  python3 tools/latency_under_io.py --instance 3 --in-gui --load cpu
+
 For the sharpest numbers, give the guest a TSC-backed clocksource so the
 compositor's half resolves too -- this is the only way to reach it here:
 
@@ -54,6 +63,7 @@ trap-gate work lands and a real number exists, this grows a flag.
 """
 import argparse
 import os
+import re
 import sys
 import time
 
@@ -148,6 +158,53 @@ def fmt_dist(name, quiet, loaded):
             f"max {q.get('max_us', 0):>8} -> {l.get('max_us', 0):<9}")
 
 
+def load_cpu(dbg, args, spun):
+    """N busy spin_tests for a fixed window; the arm read under them.
+
+    SPAWNED BY THE DESKTOP, so ordinary processes whatever the
+    compositor's class is -- realtime is never inherited. Their pids go
+    in `spun` for the caller to end: by pid, never by name, since a
+    guest may have other spin_tests.
+    """
+    for _ in range(args.spinners):
+        out = dbg.send("gui spawn /tests/spin_test 600")
+        m = re.search(r"as pid (\d+)", out)
+        if not m:
+            print(f"latency_under_io: spin_test did not start: {out.strip()}",
+                  file=sys.stderr)
+            return None
+        spun.append(m.group(1))
+    time.sleep(args.load_seconds)
+    return read_arm(dbg)
+
+
+def load_disk(dbg, args):
+    """diskbench to completion (or the timeout); the arm read under it."""
+    out = dbg.send(f"gui spawn /bin/diskbench --size {args.size} --out {BENCH_OUT}")
+    if "spawned" not in out:
+        print(f"latency_under_io: diskbench did not start: {out.strip()}",
+              file=sys.stderr)
+        return None
+
+    # Sample WHILE it runs, and stop at its own `done` line rather
+    # than after a fixed sleep -- a guest under load takes as long as
+    # it takes, and a sleep that ends early measures a quiet machine
+    # and calls it loaded.
+    deadline = time.time() + args.timeout
+    finished = False
+    while time.time() < deadline:
+        time.sleep(2.0)
+        if "diskbench: done" in dbg.send(f"sh cat {BENCH_OUT}"):
+            finished = True
+            break
+    loaded = read_arm(dbg)
+    if not finished:
+        print(f"latency_under_io: diskbench did not finish within "
+              f"{args.timeout:.0f}s -- the numbers below cover a partial run",
+              file=sys.stderr)
+    return loaded
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     port_guard.add_instance_args(ap)
@@ -161,6 +218,12 @@ def main():
                     help="give up on the workload after this long (default 300)")
     ap.add_argument("--top", type=int, default=6,
                     help="how many syscalls to attribute (default 6)")
+    ap.add_argument("--load", choices=("disk", "cpu"), default="disk",
+                    help="diskbench (default), or busy spin_test processes")
+    ap.add_argument("--spinners", type=int, default=4,
+                    help="--load cpu: how many busy processes (default 4)")
+    ap.add_argument("--load-seconds", type=float, default=15.0,
+                    help="--load cpu: how long to sample under load (default 15)")
     args = ap.parse_args()
     port_guard.resolve_instance(args, "latency_under_io")
 
@@ -169,6 +232,7 @@ def main():
         enter_gui(qmp, args.sock)
     dbg = DebugConsole(args.sock)
     quiet = loaded = None
+    spun = []
     try:
         for name in APPS:
             dbg.open_app(name)
@@ -189,40 +253,26 @@ def main():
         if not arm_stalls(dbg):
             return 1
         dbg.send("gui latency reset")
-        out = dbg.send(f"gui spawn /bin/diskbench --size {args.size} --out {BENCH_OUT}")
-        if "spawned" not in out:
-            print(f"latency_under_io: diskbench did not start: {out.strip()}",
-                  file=sys.stderr)
-            return 1
-
-        # Sample WHILE it runs, and stop at its own `done` line rather
-        # than after a fixed sleep -- a guest under load takes as long as
-        # it takes, and a sleep that ends early measures a quiet machine
-        # and calls it loaded.
-        deadline = time.time() + args.timeout
-        finished = False
-        while time.time() < deadline:
-            time.sleep(2.0)
-            if "diskbench: done" in dbg.send(f"sh cat {BENCH_OUT}"):
-                finished = True
-                break
-        loaded = read_arm(dbg)
-        if not finished:
-            print(f"latency_under_io: diskbench did not finish within "
-                  f"{args.timeout:.0f}s -- the numbers below cover a partial run",
-                  file=sys.stderr)
+        loaded = load_cpu(dbg, args, spun) if args.load == "cpu" else load_disk(dbg, args)
     finally:
         if dbg:
+            for pid in spun:
+                dbg.send(f"sh kill {pid}")
             dbg.send("sh stalls track off")
-            dbg.send(f"sh rm {BENCH_OUT}")
+            if args.load == "disk":
+                dbg.send(f"sh rm {BENCH_OUT}")
             dbg.close()
+    return report(args, quiet, loaded)
 
+
+def report(args, quiet, loaded):
     if not quiet or not loaded:
         return 1
 
     clock = loaded.get("clock_ns", 0)
-    print(f"latency_under_io: diskbench --size {args.size}, "
-          f"{args.quiet_seconds:.0f}s quiet baseline")
+    what = (f"{args.spinners} x spin_test for {args.load_seconds:.0f}s" if args.load == "cpu"
+            else f"diskbench --size {args.size}")
+    print(f"latency_under_io: {what}, {args.quiet_seconds:.0f}s quiet baseline")
     # ZERO IS THE WORST READING, NOT THE BEST. The granularity is
     # measured by timing adjacent reads and keeping the smallest
     # INCREASE; 0 means no read ever saw one, i.e. the clock did not

@@ -29,11 +29,10 @@ struct rlimit {
 // The resources POSIX names. All of them read RLIM_INFINITY; they exist
 // so that code naming one compiles, and so a future limit has a number
 // already allocated rather than shifting everything below it.
-// setpriority()/getpriority(): nice-style, LOWER runs first, 0 the
-// default. Strict between levels and round-robin within one -- and it
-// CAN STARVE, because there is no ageing: only a process that BLOCKS
-// promptly should ask for a better one. A ring-3 DRIVER is what it
-// exists for; abi/syscall_abi.h has the measurement.
+// setpriority()/getpriority(): nice, -20..19, LOWER gets MORE of the
+// CPU -- a weight within SCHED_OTHER, never a rank (that is <sched.h>).
+// Anyone may raise its own; only init may lower one, or touch another
+// process (EPERM).
 #define PRIO_PROCESS 0
 
 int setpriority(int which, int who, int value);

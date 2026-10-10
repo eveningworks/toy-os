@@ -13,3 +13,6 @@ Args=--pci
 Restart=on-failure
 Ready=notify
 Before=soundd
+# Above the compositor: a woken driver refills before its buffer drains.
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=20

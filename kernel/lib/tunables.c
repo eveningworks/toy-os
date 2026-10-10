@@ -457,6 +457,65 @@ static const struct setting timeslice_setting = {
     .apply = timeslice_apply,
 };
 
+// ---- kernel.sched_rt_runtime_ms / kernel.sched_rt_watchdog_ms ----------
+//
+// The two realtime guards (api/scheduler.h): Linux's sched_rt_runtime_us
+// in milliseconds of a 1 s period, and RLIMIT_RTTIME's shape as one
+// machine-wide figure. Runtime knobs, so an A/B needs no rebuild.
+
+static int parse_ms(const char *value, unsigned max, unsigned *ms) {
+    if (!value || !value[0]) return 0;
+    *ms = 0;
+    for (const char *c = value; *c; c++) {
+        if (*c < '0' || *c > '9') return 0;
+        *ms = *ms * 10 + (unsigned)(*c - '0');
+        if (*ms > max) return 0;
+    }
+    return 1;
+}
+
+static void rt_runtime_get(char *out, uint32_t cap) {
+    k_snprintf(out, cap, "%u", scheduler_rt_runtime_ms());
+}
+
+static int rt_runtime_apply(const char *value) {
+    unsigned ms;
+    if (!parse_ms(value, 1000, &ms)) return SETTING_INVALID;
+    return scheduler_set_rt_runtime_ms(ms) ? SETTING_SAVED : SETTING_INVALID;
+}
+
+static const struct setting rt_runtime_setting = {
+    .name = "sched_rt_runtime_ms",
+    .label = "Realtime share per second (ms)",
+    .type = SETTING_TYPE_STRING,
+    .file = CONFIG_PATH_RUNTIME,
+    .category = TUNABLE_CATEGORY,
+    .group = "Scheduler",
+    .get = rt_runtime_get,
+    .apply = rt_runtime_apply,
+};
+
+static void rt_watchdog_get(char *out, uint32_t cap) {
+    k_snprintf(out, cap, "%u", scheduler_rt_watchdog_ms());
+}
+
+static int rt_watchdog_apply(const char *value) {
+    unsigned ms;
+    if (!parse_ms(value, SCHED_RT_WATCHDOG_MAX_MS, &ms)) return SETTING_INVALID;
+    return scheduler_set_rt_watchdog_ms(ms) ? SETTING_SAVED : SETTING_INVALID;
+}
+
+static const struct setting rt_watchdog_setting = {
+    .name = "sched_rt_watchdog_ms",
+    .label = "Realtime watchdog (ms, 0 = off)",
+    .type = SETTING_TYPE_STRING,
+    .file = CONFIG_PATH_RUNTIME,
+    .category = TUNABLE_CATEGORY,
+    .group = "Scheduler",
+    .get = rt_watchdog_get,
+    .apply = rt_watchdog_apply,
+};
+
 // ---- system.usb_recover -----------------------------------------------
 //
 // POLICY, not a diagnostic: whether a port that has exhausted every
@@ -669,6 +728,8 @@ void tunables_register(void) {
     setting_register(&usb_replug_setting);
     setting_register(&usb_attach_delay_setting);
     setting_register(&timeslice_setting);
+    setting_register(&rt_runtime_setting);
+    setting_register(&rt_watchdog_setting);
     setting_register(&g_usb_hcreset_setting);
     setting_register(&g_usb_recover_setting);
     setting_register(&ata_nodma_setting);

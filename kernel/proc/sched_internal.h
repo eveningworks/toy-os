@@ -234,23 +234,28 @@ struct sched_process {
     // syscalls land here, this is the decision to revisit.
     uint8_t stopped;
 
-    // SCHEDULING PRIORITY, nice-style: LOWER runs first, 0 is the
-    // default every process starts at, and the range is POSIX's
-    // -20..19. Strict between levels, round-robin within one.
+    // TWO SCHEDULING CLASSES, Linux's shape: a runnable SCHED_FIFO/RR
+    // process always runs before any SCHED_OTHER one, best `rt_prio`
+    // (1..99, HIGHER wins) first; SCHED_OTHER shares what is left by
+    // weighted vruntime, `nice` (-20..19) being the weight and never a
+    // rank. docs/decisions/kernel.md, "Two scheduling classes: realtime
+    // above fair, and nice is a share".
     //
-    // **IT EXISTS FOR ONE MEASURED REASON.** A ring-3 driver is woken
-    // by its device's interrupt and then WAITS ITS TURN: at a 10 ms
-    // timeslice, behind the compositor and the mixer, that was measured
-    // as ~17 ms of dead air 5.6 times a second on a USB audio endpoint
-    // whose buffer holds 12 ms. An in-kernel driver never sees it
-    // because it refills inside the interrupt handler.
-    //
-    // **STRICT PRIORITY CAN STARVE.** A busy process at a better level
-    // will hold the CPU against everything below it -- there is no
-    // ageing here and no budget, deliberately, because the only callers
-    // are drivers that block on a wakeword within microseconds of being
-    // run. A CPU-bound process must not be given one.
-    int8_t prio;
+    // **RT IS NEVER INHERITED** (SCHED_RESET_ON_FORK, always on), so a
+    // realtime compositor cannot start realtime apps; sched_class_reset()
+    // is the one place a new slot gets these.
+    int8_t   nice;
+    uint8_t  policy;     // SCHED_OTHER / SCHED_FIFO / SCHED_RR (abi/syscall_abi.h)
+    uint8_t  rt_prio;    // 1..99 under FIFO/RR, 0 under OTHER
+    // QUEUE ORDER within one rt_prio: lowest goes first. Stamped from a
+    // counter when the process goes to the BACK -- a wake, an RR slice's
+    // end, a yield -- and left alone when it is preempted, so a
+    // preempted FIFO process resumes at the head, as POSIX requires.
+    uint64_t rt_seq;
+    // RT time since this process last BLOCKED: the per-process watchdog
+    // (RLIMIT_RTTIME's shape) demotes it to SCHED_OTHER past
+    // kernel.sched_rt_watchdog_ms. A yield does not reset it.
+    uint64_t rt_run_ns;
     // A SYSCALL REWOUND TO BE RE-ISSUED, NOT RUN YET. Set when a signal
     // wakes this process out of a park (its RIP is put back on the
     // `int $0x80`), cleared when it next enters a syscall. A signal
@@ -420,6 +425,9 @@ uint64_t kernel_stack_top(int idx);
 uint64_t kernel_stack_base(int idx);
 void kstack_arm_slot(int idx);
 void vr_place(int rot);
+// A new slot's class: `nice` from `parent` (a slot, or -1 for the
+// kernel context), SCHED_OTHER regardless -- see `policy` above.
+void sched_class_reset(int slot, int parent);
 int find_next_runnable(int start);
 void trace_sched(const char *what, int idx);
 void proc_start_context(int slot, const uint64_t *tf);

@@ -6,7 +6,7 @@
 
 ## Synopsis
 
-    ps [--tree] [--threads]
+    ps [--tree] [--threads] [--sched]
 
 ## Options
 
@@ -14,11 +14,25 @@
   listing, which is what makes reparenting to init visible.
 - `--threads`, `-T` -- include threads as rows of their own; they are
   hidden without it.
+- `--sched`, `-c` -- add procps' scheduling columns before the name:
+  `CLS` (`TS` an ordinary process, `FF`/`RR` realtime `SCHED_FIFO`/
+  `SCHED_RR`), `RTPRIO` (1..99, `-` for an ordinary one) and `NI`, the
+  nice value.
+- `-h`, `--help` -- the options.
 
 ## Description
 
 One line per process: pid, ppid, pgid, state, CPU time, memory, name.
 Reads `SYS_PROC_INFO`.
+
+**`--sched` is how to see who is realtime.** The compositor and a
+sound driver run realtime because their service descriptors say so
+(`data/etc/services.d/README.md`); everything else is `TS`:
+
+      PID  PPID  PGID STATE          CPU(s)   MEM(K) CLS RTPRIO  NI  NAME
+        1     0     1 block(futex)     0.08      188  TS      -   0  init
+       12     1    12 block(futex)     0.03      720  FF     20   0  snddrv
+       14     1     1 block(futex)     0.55    14216  RR      1   0  toywm
 
 **Threads are hidden unless you ask** (`--threads`, or `-T`), as in
 every Unix `ps`: a program's threads are that program's business, and a

@@ -30,6 +30,10 @@
 #include "proc_info.h"
 #include <unistd.h>
 #include <stdlib.h>
+#include <sched.h>
+#include "lib/uargs.h"
+
+static int o_tree, o_threads, o_sched;
 
 static void put(const char *s) { write(1, s, strlen(s)); }
 
@@ -107,20 +111,30 @@ static void print_row(const struct proc_info *p, const char *prefix) {
     // for a timestamp and wrong for a table. Formatting the number
     // first and padding it as a STRING is how you get a right-aligned
     // column here.
-    char pid[12], ppid[12], pgid[12], state[16], cpu[24], mem[24], line[224];
+    char pid[12], ppid[12], pgid[12], state[16], cpu[24], mem[24], sched[24], line[248];
     snprintf(pid, sizeof pid, "%u", (unsigned)p->pid);
     snprintf(ppid, sizeof ppid, "%u", (unsigned)p->ppid);
     snprintf(pgid, sizeof pgid, "%u", (unsigned)p->pgid);
     fmt_state(p, state, sizeof state);
     fmt_cpu(p->cpu_ns, cpu, sizeof cpu);
     snprintf(mem, sizeof mem, "%u", (unsigned)(p->mem_bytes / 1024));
+    sched[0] = '\0';
+    // procps' letters: TS for the fair class, FF and RR for realtime.
+    if (o_sched) {
+        char rt[8], ni[8];
+        snprintf(rt, sizeof rt, "%u", (unsigned)p->rt_prio);
+        snprintf(ni, sizeof ni, "%d", (int)p->nice);
+        snprintf(sched, sizeof sched, " %3s %6s %3s",
+                 p->policy == SCHED_FIFO ? "FF" : p->policy == SCHED_RR ? "RR" : "TS",
+                 p->policy == SCHED_OTHER ? "-" : rt, ni);
+    }
 
     // A THREAD IS NAMED IN BRACES, because it has no name of its own:
     // it carries its leader's, so `tosh` twice in a listing would look
     // like two shells rather than one with a thread. `htop` colours
     // them instead, which a text column cannot.
-    snprintf(line, sizeof line, "%5s %5s %5s %-12s %8s %8s  %s%s%s%s\n",
-             pid, ppid, pgid, state, cpu, mem, prefix ? prefix : "",
+    snprintf(line, sizeof line, "%5s %5s %5s %-12s %8s %8s%s  %s%s%s%s\n",
+             pid, ppid, pgid, state, cpu, mem, sched, prefix ? prefix : "",
              p->tgid == p->pid ? "" : "{", p->name,
              p->tgid == p->pid ? "" : "}");
     put(line);
@@ -135,7 +149,8 @@ static void header(void) {
     // STATE is twelve wide because the longest thing it holds is
     // `block(child)` -- widened rather than truncated, since it is the
     // one column here whose tail is the whole content.
-    put("  PID  PPID  PGID STATE          CPU(s)   MEM(K)  NAME\n");
+    put(o_sched ? "  PID  PPID  PGID STATE          CPU(s)   MEM(K) CLS RTPRIO  NI  NAME\n"
+                : "  PID  PPID  PGID STATE          CPU(s)   MEM(K)  NAME\n");
 }
 
 // Reads the whole table once. A snapshot rather than a slot-at-a-time
@@ -201,18 +216,25 @@ static void print_tree(struct proc_info *procs, int n, int parent, int depth,
     }
 }
 
+static const struct uargs_opt OPTS[] = {
+    { "tree",    't', 0, "show the parent/child structure", &o_tree, 0 },
+    { "threads", 'T', 0, "include threads as rows of their own", &o_threads, 0 },
+    { "sched",   'c', 0, "add the scheduling class, realtime priority and nice", &o_sched, 0 },
+    { 0 }
+};
+
+static const struct uargs_prog PROG = {
+    .name = "ps",
+    .usage = "[--tree] [--threads] [--sched]",
+    .summary = "What is running, and who started it.",
+    .opts = OPTS,
+};
+
 int main(int argc, char **argv) {
-    int tree = 0, threads = 0;
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--tree") == 0 || strcmp(argv[i], "-t") == 0) {
-            tree = 1;
-        } else if (strcmp(argv[i], "--threads") == 0 || strcmp(argv[i], "-T") == 0) {
-            threads = 1;
-        } else {
-            put("usage: ps [--tree] [--threads]\n");
-            return 1;
-        }
-    }
+    struct uargs a;
+    if (uargs_parse(&a, &PROG, argc, argv)) return a.status;
+    if (a.argc) return uargs_error(&PROG, "unexpected argument '%s'", a.argv[0]);
+    int tree = o_tree, threads = o_threads;
 
     int cap = sys_proc_max();
     struct proc_info *procs = cap > 0 ? malloc((size_t)cap * sizeof *procs) : NULL;

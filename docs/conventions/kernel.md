@@ -1163,8 +1163,11 @@ KTEST fabricates slots.
 `prio` is the case that shipped. Nothing set it at creation, so a
 program started after a `-10` driver exited ran at `-10` without asking,
 and a strict-priority scheduler then let it starve everything below it.
-It read like a driver A/B result that made no sense. `prio_test` covers
-it now through a real spawn, since only a real spawn reuses a slot.
+It read like a driver A/B result that made no sense. The class fields
+that replaced it (`nice`, `policy`, `rt_prio`, ...) are all written by
+one helper, `sched_class_reset()`, at all three sites, and `prio_test`
+covers the reuse through a real spawn, since only a real spawn reuses a
+slot.
 
 ## A BOUNDED WAIT USES A DEADLINE WHERE THE CLOCK ADVANCES WITH INTERRUPTS OFF, AND A POLL COUNT WHERE IT DOES NOT
 

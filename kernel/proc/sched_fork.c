@@ -395,8 +395,8 @@ int spawn_from_fs(const char *path, const char *argvec, size_t argvec_len,
     // "no parent" value, so this needs no special case.
     procs[slot].ppid = scheduler_current_tgid();
     // SET, NOT LEFT: a reused slot otherwise hands the next tenant its
-    // last one's priority. Inherited, as posix_spawn does.
-    procs[slot].prio = current_index >= 0 ? procs[current_index].prio : 0;
+    // last one's class. Nice inherited, as posix_spawn does; RT never.
+    sched_class_reset(slot, current_index);
     procs[slot].vruntime = g_min_vruntime;   // a newcomer joins the pack, not ahead of it
     // NOTHING IS PENDING AND NOTHING IS IGNORED for a fresh process --
     // reset rather than inherited, and both matter. A slot is reused, so
@@ -562,7 +562,7 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
     // never a wait() one.
     procs[slot].ppid     = procs[leader].pid;
     procs[slot].pgid     = procs[leader].pgid;
-    procs[slot].prio     = procs[caller].prio;
+    sched_class_reset(slot, caller);
     procs[slot].vruntime = g_min_vruntime;
     signal_state_reset(slot);
     // DISPOSITIONS ARE INHERITED, which is as close to POSIX's
@@ -657,7 +657,7 @@ int scheduler_fork(const uint64_t *regs) {
     procs[slot].detached = 0;
     fd_clone(as, procs[leader].pml4_phys);
     procs[slot].ppid = procs[leader].pid;
-    procs[slot].prio = procs[caller].prio;
+    sched_class_reset(slot, caller);
     procs[slot].vruntime = g_min_vruntime;
     signal_state_reset(slot);
     for (int i = 0; i <= SIGNAL_MAX; i++)

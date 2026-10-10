@@ -195,6 +195,10 @@ int scheduler_proc_info(int index, struct proc_info *out) {
     out->wait_reason = PROC_WAIT_NONE;
     out->ready = 0;
     out->name[0] = '\0';
+    out->nice = 0;
+    out->policy = 0;
+    out->rt_prio = 0;
+    out->reserved_sched = 0;
 
     if (p->state == SCHED_UNUSED) return 1; // a real answer: slot empty
 
@@ -203,6 +207,9 @@ int scheduler_proc_info(int index, struct proc_info *out) {
     out->ready = p->ready ? 1u : 0u;
     out->cpu_ns = p->cpu_ns;
     out->exit_code = p->exit_code;
+    out->nice = p->nice;
+    out->policy = p->policy;
+    out->rt_prio = p->rt_prio;
     k_strlcpy(out->name, p->name, sizeof out->name);
 
     // A zombie's address space is already gone, so asking for its memory
@@ -273,7 +280,7 @@ int scheduler_test_park(uint64_t *tf, const void *chan, int reason) {
         // be some earlier process's.
         procs[i].pml4_phys = 0;
         procs[i].ppid = 0;
-        procs[i].prio = 0;
+        sched_class_reset(i, -1);
         procs[i].vruntime = g_min_vruntime;
         procs[i].parked_in_kernel = 0;   // a mid-call park is asked for, never inherited
         return i;

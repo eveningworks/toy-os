@@ -22,6 +22,9 @@ so there is no second format to maintain.
 | `Ready` | no | `spawn` (default) or `notify` -- what "started" MEANS. |
 | `ReadyTimeout` | no | Milliseconds to wait for a `Ready=notify` service. Default 5000. |
 | `StopTimeout` | no | Milliseconds between SIGTERM and SIGKILL when the machine shuts down. Default 5000. |
+| `CPUSchedulingPolicy` | no | `other` (default), `fifo` or `rr`. `fifo`/`rr` run the service REALTIME, before every ordinary process. |
+| `CPUSchedulingPriority` | with `fifo`/`rr` | 1..99, higher first. |
+| `Nice` | no | -20..19, the service's share of the CPU among ordinary processes; lower gets more. Default 0. |
 
 **`Args=` UNDERSTANDS TWO SPECIFIERS, `%T` AND `%V`.** They expand to the
 scratch directories -- `storage.tmpdir` and `storage.vartmpdir` -- and
@@ -327,3 +330,22 @@ service not loaded yet is not an error, it is an ordering key init
 correctly ignores, so the service starts in the wrong order and nothing
 looks wrong. Write the file elsewhere and `mv` it in, which is the same
 advice a real system gives for a unit file.
+
+## `CPUSchedulingPolicy=` makes a service realtime
+
+systemd's three keys, with its meanings: `CPUSchedulingPolicy=fifo` or
+`rr` with a `CPUSchedulingPriority=` of 1..99 puts the service in the
+realtime class, which runs before every ordinary process; `Nice=` is its
+weight among ordinary ones. **Init is the only process allowed to ask**,
+so these keys are the only way a service becomes realtime -- a program
+started by hand runs as an ordinary process whatever it would like.
+
+**Only for a service that BLOCKS PROMPTLY** -- a driver refilling a
+buffer, the compositor between frames. One that runs a second without
+blocking is moved to the ordinary class and logged
+(`kernel.sched_rt_watchdog_ms`), and all realtime work together gets
+`kernel.sched_rt_runtime_ms` of each second while anything ordinary
+wants the CPU. What the service starts is ordinary: realtime is never
+inherited. `docs/decisions/kernel.md`, "Two scheduling classes", has
+why.
+`grep CPUScheduling /etc/services.d/*` lists which services use it.

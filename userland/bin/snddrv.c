@@ -31,6 +31,7 @@
 #include <signal.h>
 #include <dirent.h>
 #include <dlfcn.h>
+#include <sched.h>
 #include "rt/sys.h"
 #include "pci.h"
 #include "snd_driver.h"
@@ -38,7 +39,6 @@
 #include "syscall_abi.h"
 #include "query_abi.h"
 #include "lib/uargs.h"
-#include <sys/resource.h>
 
 #define PLUGIN_DIR "/lib/snd"
 #define MAX_PLUGINS 8
@@ -219,8 +219,8 @@ static int bring_up(int index, const struct snd_driver *drv,
     return 0;
 }
 
-static const char *o_dev, *o_drv, *o_usb, *o_clock, *o_prio;
-static int o_pci, o_verbose;
+static const char *o_dev, *o_drv, *o_usb, *o_clock;
+static int o_pci, o_verbose, o_no_rt;
 
 static const struct uargs_opt OPTS[] = {
     { "device",    'd', "INDEX",   "drive the PCI device at this lspci index", 0, &o_dev },
@@ -228,14 +228,14 @@ static const struct uargs_opt OPTS[] = {
     { "pci",       0,   0,         "only a PCI card; leave USB DACs to the kernel", &o_pci, 0 },
     { "usb-id",    0,   "VID:PID", "drive this USB DAC (or a decimal xHCI slot)", 0, &o_usb },
     { "usb-clock", 0,   "ID",      "pin a UAC2 clock entity (a diagnostic)", 0, &o_clock },
-    { "prio",      0,   "N",       "run at this priority instead of -10 (a diagnostic)", 0, &o_prio },
+    { "no-rt",     0,   0,         "drop to SCHED_OTHER even if started realtime (a diagnostic)", &o_no_rt, 0 },
     { "verbose",   'v', 0,         "say which plugins loaded and what was declined", &o_verbose, 0 },
     { 0 }
 };
 
 static const struct uargs_prog PROG = {
     .name = "snddrv",
-    .usage = "[-d INDEX] [--driver NAME] [--pci] [--usb-id VID:PID] [--usb-clock ID] [--prio N] [-v]",
+    .usage = "[-d INDEX] [--driver NAME] [--pci] [--usb-id VID:PID] [--usb-clock ID] [--no-rt] [-v]",
     .summary = "The sound driver host: claim one sound card, drive it from ring 3\n"
                "through a /lib/snd plugin, and register it as the sound device.",
     .opts = OPTS,
@@ -250,7 +250,6 @@ int main(int argc, char **argv) {
     int want_pci = o_dev ? atoi(o_dev) : -1;
     const char *want_drv = o_drv;
     const char *want_usb = o_usb;
-    int prio = o_prio ? atoi(o_prio) : -10;
     g_verbose = o_verbose;
     // A DIAGNOSTIC, not a tuning knob: a UAC2 clock SELECTOR's pins
     // are different clocks (the G6 offers a DSP path and a direct
@@ -264,20 +263,19 @@ int main(int argc, char **argv) {
     // init but keeps the PROCESS GROUP, so the launching shell's SIGHUP
     // arrives here -- and its default action would kill this without
     // the release path, leaving the card unbound and the machine mute.
-    // A DRIVER RUNS WHEN ITS DEVICE ASKS, NOT WHEN ITS TURN COMES: -10,
-    // and the kernel switches to a woken process that outranks the one
-    // running (scheduler_trap_exit()). At the default level a woken
-    // driver waited out every 10 ms slice ahead of it -- a USB endpoint
-    // ran dry every 40 ms while four processes were busy. An in-kernel
-    // driver never sees this; it refills inside the handler.
-    //
-    // SAFE BECAUSE THIS PROCESS BLOCKS within microseconds of running.
-    // Priority is STRICT, so a better level that spun would starve the
-    // machine. `--prio 0` is the old behaviour, for comparing by ear.
+    // A DRIVER RUNS WHEN ITS DEVICE ASKS, NOT WHEN ITS TURN COMES: its
+    // service runs it SCHED_FIFO, so a wake preempts whatever ordinary
+    // process is on the CPU (scheduler_trap_exit()). As an ordinary
+    // process a woken driver waited out every slice ahead of it -- a USB
+    // endpoint ran dry every 40 ms while four processes were busy.
+    // Only init may grant it, so a hand-started snddrv runs SCHED_OTHER
+    // and the serving line says so. `--no-rt` is that, for an A/B by ear.
 
     setsid();
-    if (setpriority(PRIO_PROCESS, 0, prio) != 0)
-        fprintf(stderr, "snddrv: cannot run at priority %d: %s\n", prio, strerror(errno));
+    if (o_no_rt) {
+        struct sched_param sp = { 0 };
+        sched_setscheduler(0, SCHED_OTHER, &sp);
+    }
     signal(SIGHUP, on_term);
     signal(SIGTERM, on_term);
     signal(SIGINT, on_term);
@@ -397,8 +395,17 @@ int main(int argc, char **argv) {
         }
         g_ring = (const int32_t *)(uintptr_t)addr;
     }
-    fprintf(stderr, "snddrv: %s serving pci %d as %s at %u-bit, priority %d\n",
-            g_drv->name, index, m.name, (unsigned)m.bits, getpriority(PRIO_PROCESS, 0));
+    struct sched_param sp = { 0 };
+    int policy = sched_getscheduler(0);
+    sched_getparam(0, &sp);
+    char cls[32];
+    if (policy == SCHED_FIFO || policy == SCHED_RR)
+        snprintf(cls, sizeof cls, "%s %d", policy == SCHED_FIFO ? "SCHED_FIFO" : "SCHED_RR",
+                 sp.sched_priority);
+    else
+        snprintf(cls, sizeof cls, "SCHED_OTHER (not realtime)");
+    fprintf(stderr, "snddrv: %s serving pci %d as %s at %u-bit, %s\n",
+            g_drv->name, index, m.name, (unsigned)m.bits, cls);
     sys_notify_ready();   // the card is registered: soundd may open it
 
     while (!g_quit) {

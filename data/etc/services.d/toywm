@@ -16,3 +16,8 @@ Restart=on-failure
 # desktop actually became usable, and a barrier that works the day
 # something is.
 Ready=notify
+# The compositor outranks every app, as KWin's SCHED_RR main thread does:
+# a frame waits for nothing ordinary. It blocks between frames, which is
+# what makes that safe -- see data/etc/services.d/README.md.
+CPUSchedulingPolicy=rr
+CPUSchedulingPriority=1

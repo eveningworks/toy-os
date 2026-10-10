@@ -1892,6 +1892,13 @@ window without going through it will find its layout polls timing out.
   the point is a BEFORE and an AFTER on one host, never an absolute.
   Exit 1 only when it collected nothing; no threshold on the latency
   itself, because there is no baseline to pick one from yet.
+  **`--load cpu`** swaps diskbench for `--spinners` busy `spin_test`s
+  over `--load-seconds`: the yardstick for the scheduling classes, read
+  as an A/B on ONE build with toywm's descriptor with and without its
+  `CPUSchedulingPolicy=` lines (`vm.py put` the edited file, then a
+  stop and start -- `vm.py reboot` refuses on a guest started without
+  `--reboot`). The spinners are spawned by the desktop, so they are
+  ordinary whatever toywm is, and are ended by pid.
   **`wake` is the number to read**: when another process holds the CPU
   the WM does no work at all, so every frame it eventually runs looks
   fast and only the gap between the wait it asked for and the one it got

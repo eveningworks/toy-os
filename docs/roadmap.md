@@ -59,7 +59,8 @@ and job control is what a terminal on that TTY makes possible.
 
 - [x] ~~Blocking + wait queues~~ DONE 2026-08-20 -- a wait channel is an ADDRESS, so a wake reaches one pipe/client, not a category
 - [x] ~~Retire `uapp_desc.tick_ms` as a REQUIREMENT~~ DONE 2026-10-10 -- 0 is a 33 ms timer; polling is `UAPP_POLL`
-- [ ] Two scheduling classes, Linux-shaped
+- [x] ~~Two scheduling classes, Linux-shaped~~ DONE 2026-10-10 -- RT above fair, nice a weight, init grants it
+- [ ] Realtime for a program started by hand
 - [x] ~~Measure desktop latency under heavy disk I/O, the yardstick for the three items below~~ DONE 2026-09-12
 - [x] ~~A `schedule()` that suspends the KERNEL stack, so a caller can block mid-call~~ DONE 2026-09-18 -- one suspend shape
 - [x] ~~Replace the preemption guard with a real sleeping lock~~ DONE 2026-09-18 -- `ata.c`'s disk waits sleep under it
