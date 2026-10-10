@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>
 #include "rt/sys.h"
 
 
@@ -144,6 +145,17 @@ static void *sse_worker(void *arg) {
     return NULL;
 }
 
+// What a new thread finds blocked, before it changes anything.
+static volatile int g_mask_int = -1;
+
+static void *mask_worker(void *arg) {
+    (void)arg;
+    sigset_t cur;
+    sigemptyset(&cur);
+    if (sigprocmask(SIG_BLOCK, 0, &cur) == 0) g_mask_int = sigismember(&cur, SIGINT);
+    return 0;
+}
+
 static void *forever(void *arg) {
     (void)arg;
     for (;;) sys_yield();
@@ -253,6 +265,19 @@ int main(void) {
     }
 
     utest_check(pthread_equal(pthread_self(), pthread_self()), "pthread_self() is stable");
+
+    // POSIX: a thread starts with its creator's signal mask. Blocking a
+    // signal around the create is how a program keeps it off a worker,
+    // and a kernel that started every thread unmasked let it through.
+    sigset_t intr, old;
+    sigemptyset(&intr);
+    sigaddset(&intr, SIGINT);
+    sigprocmask(SIG_BLOCK, &intr, &old);
+    pthread_t mt;
+    int made = pthread_create(&mt, NULL, mask_worker, NULL) == 0;
+    sigprocmask(SIG_SETMASK, &old, 0);
+    if (made) pthread_join(mt, NULL);
+    utest_check(made && g_mask_int == 1, "a thread starts with its creator's signal mask");
 
     // A THREAD LEFT RUNNING AT EXIT, on purpose and never joined.
     // Without it nothing here reaches the group teardown at all: every

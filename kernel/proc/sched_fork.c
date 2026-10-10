@@ -572,6 +572,9 @@ int scheduler_thread_create(uint64_t entry, uint64_t user_rsp, uint64_t arg,
     // thread existed was not raised at it.
     for (int i = 0; i <= SIGNAL_MAX; i++)
         procs[slot].actions[i] = procs[caller].actions[i];
+    // THE MASK TOO, POSIX's rule for pthread_create(): blocking a signal
+    // around the create is how a program keeps it off a worker.
+    procs[slot].blocked = procs[caller].blocked;
     procs[slot].ready   = 0;
     procs[slot].cpu_ns  = 0;
     k_strlcpy(procs[slot].name, procs[leader].name, sizeof procs[slot].name);
