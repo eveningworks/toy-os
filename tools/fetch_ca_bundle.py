@@ -34,7 +34,8 @@ import argparse
 import os
 import ssl
 import sys
-import urllib.request
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fetch_extras import urlopen  # noqa: E402 -- names itself; see USER_AGENT
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -78,7 +79,7 @@ def main():
         # root store over an UNVERIFIED connection would be a joke at
         # its own expense.
         ctx = ssl.create_default_context()
-        with urllib.request.urlopen(args.url, context=ctx, timeout=60) as r:
+        with urlopen(args.url, context=ctx, timeout=60) as r:
             raw = r.read(MAX_BYTES + 1)
     except Exception as e:
         print(f"fetch_ca_bundle: fetch failed: {e}")

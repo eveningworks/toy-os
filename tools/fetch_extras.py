@@ -47,6 +47,7 @@ import json
 import os
 import subprocess
 import sys
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -162,6 +163,18 @@ EXTRAS = [
         fetch=[sys.executable, os.path.join(HERE, "fetch_video.py")],
     ),
 ]
+
+
+# EVERY FETCH HERE NAMES ITSELF. Python's default User-Agent
+# ("Python-urllib/3.x") is refused outright by Cloudflare-fronted hosts:
+# download.blender.org answered it 403 and a named agent 206 (2026-10-10).
+# The fetchers import this rather than calling urllib.request.urlopen().
+USER_AGENT = "toy-os-fetch (+https://github.com/eveningworks/toy-os)"
+
+
+def urlopen(url, timeout, context=None):
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    return urllib.request.urlopen(req, timeout=timeout, context=context)
 
 
 def load_accepted():

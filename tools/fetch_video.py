@@ -40,7 +40,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import urllib.request
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fetch_extras import urlopen  # noqa: E402 -- names itself; see USER_AGENT
 import zipfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -88,7 +89,7 @@ def main():
             shutil.copyfile(args.src, zpath)
         else:
             print(f"fetch_video: downloading {URL} (121 MB)")
-            with urllib.request.urlopen(URL, timeout=120) as r, open(zpath, "wb") as f:
+            with urlopen(URL, timeout=120) as r, open(zpath, "wb") as f:
                 shutil.copyfileobj(r, f, 1 << 20)
         got = sha256(zpath)
         if got != SHA256:

@@ -45,7 +45,8 @@ import hashlib
 import os
 import shutil
 import sys
-import urllib.request
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fetch_extras import urlopen  # noqa: E402 -- names itself; see USER_AGENT
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # `data/`, NOT `seed/sync/`. seed/sync is a STAGING directory the build
@@ -96,7 +97,7 @@ def fetch_freedoom(force):
         return 0
     os.makedirs(DEST_DIR, exist_ok=True)
     print(f"fetch_wad: fetching {FREEDOOM_URL}")
-    with urllib.request.urlopen(FREEDOOM_URL, timeout=120) as r:
+    with urlopen(FREEDOOM_URL, timeout=120) as r:
         blob = r.read()
     got = hashlib.sha256(blob).hexdigest()
     if got != FREEDOOM_SHA:
@@ -145,7 +146,7 @@ def main():
     for url in MIRRORS:
         print(f"fetch_wad: trying {url}")
         try:
-            with urllib.request.urlopen(url, timeout=60) as r:
+            with urlopen(url, timeout=60) as r:
                 blob = r.read()
         except Exception as e:                      # noqa: BLE001 -- any failure is "try the next mirror"
             print(f"fetch_wad:   failed: {e}")

@@ -38,7 +38,8 @@ import argparse
 import os
 import shutil
 import sys
-import urllib.request
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fetch_extras import urlopen  # noqa: E402 -- names itself; see USER_AGENT
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -67,7 +68,7 @@ def looks_like_sf2(blob):
 
 
 def fetch(url):
-    with urllib.request.urlopen(url, timeout=120) as r:
+    with urlopen(url, timeout=120) as r:
         return r.read()
 
 

@@ -45,7 +45,8 @@ import argparse
 import os
 import re
 import sys
-import urllib.request
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fetch_extras import urlopen  # noqa: E402 -- names itself; see USER_AGENT
 from fractions import Fraction
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -88,7 +89,7 @@ def fetch(src_dir):
             print(f"  read {path} ({lic})")
         else:
             print(f"  fetching {url} ({lic})")
-            with urllib.request.urlopen(url, timeout=60) as r:
+            with urlopen(url, timeout=60) as r:
                 out[name] = r.read().decode("utf-8", "replace")
     return out
 

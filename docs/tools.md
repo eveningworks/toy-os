@@ -2280,6 +2280,11 @@ window without going through it will find its layout polls timing out.
   material, and the licence acceptance in front of it. `make iso
   EXTRAS=1` runs it; nothing else does, so an ordinary build reaches no
   network and an ordinary image carries nothing but ours.
+  **Every fetcher downloads through its `urlopen()`**, which names itself
+  (`USER_AGENT`): Python's default agent is refused by Cloudflare-fronted
+  hosts, and `download.blender.org` answered the video fetch 403 until it
+  did (2026-10-10). A new fetcher imports it rather than calling
+  `urllib.request.urlopen()`.
 
   **The distinction it is built around is that fetching is not
   distributing.** Downloading a file onto your own machine makes you the
