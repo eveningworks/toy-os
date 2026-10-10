@@ -208,6 +208,9 @@ TESTS = [
     # end: never short, operands summed, junk refused. SPAWNED, since it
     # spawns /bin/sleep and waits for it.
     ("duration_test", None, None, None),
+    # lib/uclock.h: the clock's granularity is a real number, never 0.
+    # Discriminates only on a `clocksource=pit` boot (the file says why).
+    ("uclock_test", 0, None, None),
     # lib/ufileundo.h on real files under /home: each kind undone and
     # redone, a new record dropping the redo, a refused step failing
     # alone. SPAWNED: the copy and move engine is ufileop's.

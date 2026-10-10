@@ -273,15 +273,12 @@ def report(args, quiet, loaded):
     what = (f"{args.spinners} x spin_test for {args.load_seconds:.0f}s" if args.load == "cpu"
             else f"diskbench --size {args.size}")
     print(f"latency_under_io: {what}, {args.quiet_seconds:.0f}s quiet baseline")
-    # ZERO IS THE WORST READING, NOT THE BEST. The granularity is
-    # measured by timing adjacent reads and keeping the smallest
-    # INCREASE; 0 means no read ever saw one, i.e. the clock did not
-    # move at all -- which is what the PIT tick counter does over a
-    # window shorter than 10 ms. Printed raw it reads as perfect
-    # precision, which is the opposite of what it says.
-    coarse = clock == 0 or clock > 1_000_000
+    # uclock_granularity_ns() reports a clock that never advanced as
+    # UINT64_MAX; 0 is what a build before that fix said for the same.
+    never = clock == 0 or clock >= 2**64 - 1
+    coarse = never or clock > 1_000_000
     print("  compositor clock granularity "
-          + (f"{clock} ns" if clock else "0 ns (i.e. it never advanced)"))
+          + ("never advanced" if never else f"{clock} ns"))
     if coarse:
         print("      <-- coarser than a millisecond: the avg and p90 columns below\n"
               "          are floor noise and only the max tail is evidence.\n"

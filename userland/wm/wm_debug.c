@@ -1748,8 +1748,12 @@ static void cmd_latency(struct dbg_out *o, char *rest, int json) {
     emit_dist(o, "work", wmwd_work(), 0);
     emit_dist(o, "wake", wmwd_wake(), 0);
     emit_dist(o, "ping", wm_client_ping_dist(), 0);
-    dbg_out_printf(o, "  clock granularity %llu ns -- anything finer is floor-zero noise\r\n",
-                   (unsigned long long)uclock_granularity_ns());
+    uint64_t gran = uclock_granularity_ns();
+    if (gran == UCLOCK_NEVER_MOVED)
+        dbg_out_write(o, "  clock granularity: the clock never advanced -- every figure is noise\r\n");
+    else
+        dbg_out_printf(o, "  clock granularity %llu ns -- anything finer is floor-zero noise\r\n",
+                       (unsigned long long)gran);
     dbg_out_printf(o, "  %u slow frame(s); slowest frame %u ms\r\n",
                    wmwd_slow_frames(), wmwd_peak_ms());
 }

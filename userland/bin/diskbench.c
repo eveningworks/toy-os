@@ -33,7 +33,7 @@
 //   diskbench: result <profile> <milli-MB/s> <iops> <micros>
 //   diskbench: io <profile> <op> <calls> <sectors> <micros>
 //   diskbench: lookup <profile> <calls> <reads> <micros>
-//   diskbench: clock-granularity-ns <n>
+//   diskbench: clock-granularity-ns <n>|never
 //   diskbench: done
 //   diskbench: error <reason>
 //
@@ -415,8 +415,9 @@ int main(int argc, char **argv) {
     // STATED, so a reader of the report knows what "SEQ" meant on the
     // build that produced it.
     emit("diskbench: syscall-bytes %u\n", (unsigned)SEQ_BLOCK);
-    emit("diskbench: clock-granularity-ns %llu\n",
-         (unsigned long long)uclock_granularity_ns());
+    uint64_t gran = uclock_granularity_ns();
+    if (gran == UCLOCK_NEVER_MOVED) emit("diskbench: clock-granularity-ns never\n");
+    else emit("diskbench: clock-granularity-ns %llu\n", (unsigned long long)gran);
 
     uint64_t total = (uint64_t)mib * 1024u * 1024u;
     for (int step = 0; step < PROFILES; step++) {

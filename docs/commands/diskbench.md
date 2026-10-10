@@ -88,7 +88,8 @@ TSC unless the CPU model says `+invtsc` (it blocks migration), so a
 single command rounds to zero and the whole column reads as "this cost
 nothing". Real hardware has the TSC and resolves it. A granularity in
 the millions means the `io` micros are floor-zero noise; use
-`vm.py --kvm --cpu host,+invtsc` to get a real one.
+`vm.py --kvm --cpu host,+invtsc` to get a real one. `never` means the
+clock did not advance at all while it was sampled.
 
 Disk Mark spawns this and displays what it prints; that split is the
 point rather than a convenience, since these passes take minutes and a
