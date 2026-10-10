@@ -295,6 +295,9 @@ TOOLS = [
     # its own guest on a COPY of disk.img.
     ("vnc",         "vnc_test.py",             "remoted's VNC: auth, frames vs screendump, input", True, None,     False),
     ("boot_entry",  "boot_entry_test.py",      "reboot --entry: one boot, cleared by GRUB", True,  None,             False),
+    # A reboot ENDS its guest (-no-reboot), so it boots its own on a COPY
+    # of disk.img and reads init's lines from a file-backed serial log.
+    ("shutdown",    "shutdown_test.py",        "reboot stops the services in reverse order, then the rest", True, None, False),
     # bootcfg on a real /boot, and a trial entry booted once. Reboots
     # its guest twice against a COPY of disk.img, as boot_entry does.
     ("bootcfg",     "bootcfg_test.py",         "bootcfg edits, refusals, and a trial booted once", True, None,     False),

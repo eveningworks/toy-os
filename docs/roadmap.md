@@ -51,7 +51,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~Restart a service that exits unexpectedly, with a backoff so a crash loop doesn't spin the machine~~ DONE 2026-08-18
 - [x] ~~`service start|stop|status|list` as a shell command~~ DONE 2026-08-27 -- a request file plus a `SIGHUP` doorbell
 - [x] ~~Reap orphans -- init adopts them, which is half of why it exists~~ DONE 2026-08-18
-- [ ] Shut services down in reverse order on `reboot`/`poweroff`
+- [x] ~~Shut services down in reverse order on `reboot`/`poweroff`~~ DONE 2026-10-10 -- init does it, `StopTimeout=`, then the rest
 - [x] ~~A service's output routed somewhere readable~~ DONE 2026-09-12 -- `StandardOutput=`, `SPAWN_FD_LOG`, `/var/log`
 - [x] ~~One real service to prove it, rather than a framework with no users~~ DONE 2026-08-18 -- the desktop
 

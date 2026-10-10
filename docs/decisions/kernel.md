@@ -9085,3 +9085,39 @@ are not freed** (under twice the final size together), so a reader
 preempted between loading the array and indexing it never touches freed
 memory. Linux's equivalent is `idr`/`xarray` with RCU; this is the same
 shape with "never free" standing in for the grace period.
+
+## A reboot asks init; SYS_POWEROFF stays a plain stop
+
+`reboot` and the desktop's Restart used to call `SYS_POWEROFF`, which
+stops the machine at once: every service vanished mid-write. Real
+systems put PID 1 in the middle -- `systemctl reboot` asks systemd,
+which stops units in reverse dependency order before `reboot(2)`;
+sysvinit runs its `K` scripts and `killall5` -- and keep the syscall
+itself immediate, with `reboot -f` as the way around the manager.
+
+toy-os does the same. The callers ask init over its channel
+(`INITCTL_REBOOT`/`INITCTL_POWEROFF`, through `uinitctl_shutdown()`),
+init stops the services in the reverse of its start order and then
+everything else, and only init calls `SYS_POWEROFF`.
+
+**Rejected: the kernel redirecting `SYS_POWEROFF` to init** for every
+caller but pid 1. It would catch a future caller that forgot the helper,
+but it puts a policy in the kernel, and the paths that must NOT wait on
+ring 3 -- the kernel shell's and the debug console's -- would need a
+flag to get past it. One helper with four callers is cheaper than that.
+
+**The request is answered before anything stops**, because its sender
+is among what gets stopped. When init does not answer (no channel, no
+reply in 2 s) the helper stops the machine directly, and `reboot
+--force` does so on purpose: a wedged init must not make a machine
+impossible to restart. init serves the channel while services are still
+starting too, or a `reboot` typed during boot would always take that
+fallback.
+
+**One service at a time, five seconds each by default** (`StopTimeout=`).
+systemd stops independent units in parallel; with about ten services
+that saves nothing worth a dependency graph walk, and a sequence is
+what the console can report line by line. Five seconds, not systemd's
+90 or launchd's 20, for the readiness timeout's reason: on a machine
+with one console a long silent pause reads as a hang.
+

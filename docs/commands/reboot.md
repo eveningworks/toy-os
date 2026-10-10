@@ -6,10 +6,12 @@
 
 ## Synopsis
 
-    reboot [--poweroff | --entries | --entry <name|number>]
+    reboot [--force] [--poweroff | --entries | --entry <name|number>]
 
 ## Options
 
+- `--force` -- stop the machine AT ONCE, without asking init to stop the
+  services first (systemd's `reboot -f`): for an init that is wedged.
 - `--poweroff` -- shut down instead.
 - `--entries` -- list the GRUB menu, numbered as GRUB numbers it, with the
   default and any pending one-shot choice marked.
@@ -21,6 +23,27 @@
 `/bin/reboot` — one program for both, with the destructive one not the
 default. It does not sync: the kernel flushes on the way down, and a
 second place that has to remember is the one that gets forgotten.
+
+## It asks init, which stops the services first
+
+`reboot` sends init a request (`lib/uinitctl.h`) and returns; init
+stops every service in the **reverse of the order it started them** --
+SIGTERM, up to the service's `StopTimeout=` (5 s by default), then
+SIGKILL -- sends SIGTERM to every other process, waits up to 2 s,
+SIGKILLs what is left, and only then restarts or powers off. Each step
+is a line on the console and in the kernel log:
+
+    init: shutting down for reboot
+    init: stopping toywm (pid 14)
+    init: stopping remoted (pid 11)
+    ...
+    init: stopping clipboardd (pid 2)
+    init: 1 other process, SIGTERM
+    init: rebooting
+
+The desktop's Restart and Shut down, System Update and Boot Manager ask
+the same way. When init does not answer, the request stops the machine
+directly, as `--force` does. `tools/shutdown_test.py` checks the order.
 
 ## Both are LADDERS, and the log says which rung ran
 

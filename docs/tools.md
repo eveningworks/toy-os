@@ -4275,6 +4275,19 @@ window without going through it will find its layout polls timing out.
   reboots perfectly, because TFS3's 4 KiB blocks are one PRD entry. It
   is a good demonstration of why the check is written as a comparison
   against single-sector reads rather than as "the data came back".
+- **`shutdown_test.py`** -- `reboot` makes init stop the services in
+  the REVERSE of their start order, then everything else (6 checks).
+  Boots its own guest on a copy of `disk.img` with `--serial-log`,
+  because a reboot ends the guest (`-no-reboot`) and init's lines are
+  read from the file afterwards. Adds `/tests/stubborn` as a service at
+  runtime (`After=toywm`, `StopTimeout=1500`; it ignores SIGTERM) and
+  spawns a `/bin/sleep` that is no service, then checks: the shutdown
+  line and QEMU exiting; the `init: stopping` names equal the boot's
+  `init: started` names reversed (at least four); the fixture's
+  `took 1.5 s, killed` line with services still stopped after it; the
+  `other processes, SIGTERM` count; `init: rebooting` last. Positive
+  control: the stop loop walked forwards turns the order and fixture
+  checks red. In `ondemand_sweep.py`.
 - **`poweroff_test.py`** -- proves the machine stops through **its own
   ACPI tables** rather than a hardcoded port, on two chipsets.
   It boots its own guests and deliberately ends three of them.
@@ -4295,8 +4308,12 @@ window without going through it will find its layout polls timing out.
   register; `-machine q35` presents a 244-byte revision-3 FADT with a
   real reset register at port 0xcf9 and an MCFG beside it. The reset
   half can only be tested on the second, and its assertion is that the
-  machine COMES BACK (two "debug console ready" lines on one QEMU
-  process), not merely that the process ended.
+  machine COMES BACK (two kernel banners on one QEMU process), not
+  merely that the process ended. **Not two "debug console ready"
+  lines**: every boot prints that twice, the command goes out between
+  them, and a count taken then was satisfied by the FIRST boot -- the
+  read stopped before the reset, which passed only while a reset was
+  instant.
 
   Its positive control is to make `acpi_poweroff()` return 0 at its
   first line: the two log lines swap over, the guest still powers off,

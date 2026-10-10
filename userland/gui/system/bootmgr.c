@@ -16,6 +16,7 @@
 #include <string.h>
 #include <dirent.h>
 #include "rt/sys.h"
+#include "lib/uinitctl.h"
 #include "keyboard.h"
 #include "ui/uapp.h"
 #include "ui/uui_route.h"   // UUI_REASON_KEY
@@ -539,7 +540,7 @@ static void do_try(int now) {
     if (ubootcfg_save(&t, UBOOTMENU_CFG, &why) < 0) { note(why); return; }
     if (ubootmenu_set_next(t.entry[tr].title) < 0) { note("Saved the trial, but could not choose it for the next boot"); load(); return; }
     load();
-    if (now) sys_poweroff(1);
+    if (now && uinitctl_shutdown(1) == 0) return;   // init is restarting the machine
     note("The trial starts on the next restart");
 }
 

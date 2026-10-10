@@ -300,6 +300,13 @@ on the GRUB line overrides it; killing the desktop leaves its client
 processes adopted by init and reaped when they exit; the desktop comes
 back without the shell being involved.
 
+**And it takes the machine DOWN in order** (built 2026-10-10): `reboot`,
+the desktop's Restart and Shut down, System Update and Boot Manager ask
+init (`INITCTL_REBOOT`/`INITCTL_POWEROFF`, `lib/uinitctl.h`), which
+stops the running services in the reverse of their start order --
+SIGTERM, `StopTimeout=`, SIGKILL -- then every other process, and only
+then calls `SYS_POWEROFF`. `tools/shutdown_test.py` holds it.
+
 ### Stage 3 -- a console device (R8, R9)
 
 A blocking read on fd 0, fed from `scheduler_idle()` draining the

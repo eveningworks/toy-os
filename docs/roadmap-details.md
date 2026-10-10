@@ -1115,8 +1115,9 @@ back.
 Three things that are NOT built, and the middle one is the interesting
 one. Nothing ORDERS the services: they all start at once, because with
 two services' worth of ordering requirements (none) a unit graph with no
-edges would be a data structure pretending to be a design. Nothing shuts
-them down in reverse order on `reboot`. And a service's output still
+edges would be a data structure pretending to be a design. Nothing shut
+them down in reverse order on `reboot` -- built 2026-10-10: init stops
+them, then everything else, before `SYS_POWEROFF`. And a service's output still
 goes to the kernel log via stderr rather than anywhere a person would
 choose -- readable with `dmesg`, which is enough for one service and
 will not be for six.

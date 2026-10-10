@@ -231,6 +231,22 @@ static const int SVC_BACKOFF_MS[] = { 0, 250, 500, 1000, 2000 };
 // remove it, which is the opposite of what the timeout is protecting.
 #define SVC_READY_TIMEOUT_MS 5000
 
+// How long a service gets, after SIGTERM at shutdown, before SIGKILL --
+// unless its descriptor says `StopTimeout=`. systemd's TimeoutStopSec is
+// 90 s and launchd's ExitTimeOut 20 s; five is the readiness timeout's
+// reasoning again: on a machine with one console, a shutdown that sits
+// for a minute and a half looks hung, and a service that needs longer
+// than five seconds to stop says so in its own descriptor.
+#define SVC_STOP_TIMEOUT_MS 5000
+// After SIGKILL, how long init waits for the corpse before going on.
+// SIGKILL cannot be caught, so this only ever covers a process the
+// kernel has not run yet; init never waits on a service unbounded.
+#define SVC_KILL_GRACE_MS 1000
+// What everything that is not a service gets between the final SIGTERM
+// and SIGKILL -- systemd-shutdown's and sysvinit's killall5 pause.
+#define OTHERS_GRACE_MS 2000
+#define STOP_POLL_MS 20
+
 struct service {
     char name[SVC_NAME_MAX];
     char exec[SVC_EXEC_MAX];
@@ -278,6 +294,7 @@ struct service {
     int  ready_timed_out;
     unsigned long long ready_timeout_ms;
     unsigned long long ready_deadline_ms;
+    unsigned long long stop_timeout_ms;   // StopTimeout=: SIGTERM to SIGKILL at shutdown
 };
 
 // Static, not local: USERLAND_CFLAGS carries -Wframe-larger-than=2048
@@ -529,6 +546,16 @@ static void load_service(const char *file) {
         // machine with nothing started.
         if (ms > 0) s->ready_timeout_ms = (unsigned long long)ms;
         else logf1("init: %s has a non-positive ReadyTimeout=, using the default\n",
+                   s->name);
+    }
+
+    // Refused the same way, for the same reason: zero would be SIGKILL at
+    // once, and no key may be able to make a shutdown wait forever.
+    s->stop_timeout_ms = SVC_STOP_TIMEOUT_MS;
+    if (etc_config_buf_get(&g_cfg, "StopTimeout", timeout, sizeof timeout)) {
+        int ms = atoi(timeout);
+        if (ms > 0) s->stop_timeout_ms = (unsigned long long)ms;
+        else logf1("init: %s has a non-positive StopTimeout=, using the default\n",
                    s->name);
     }
 }
@@ -845,6 +872,11 @@ static void start_service(struct service *s) {
 
 // Records an exit and decides what happens next. Returns 1 if `pid`
 // was one of ours.
+// -1 none, else SYS_POWEROFF's argument (1 = reboot): a shutdown asked
+// for, and while it runs, the reason a service's exit is not reported --
+// its "stopping" line already said what is happening to it.
+static int g_shutdown = -1;
+
 static int service_exited(int pid, int code) {
     for (int i = 0; i < g_svc_count; i++) {
         struct service *s = &g_svc[i];
@@ -854,6 +886,7 @@ static int service_exited(int pid, int code) {
         s->pid = 0;
         s->last_exit = code;
 
+        if (g_shutdown >= 0 && s->admin_stopped) return 1;
         snprintf(g_msg, sizeof g_msg,
                  "init: %s (pid %d) exited with code %d after %u ms\n",
                  s->name, pid, code, (unsigned)ran);
@@ -1118,6 +1151,102 @@ static int next_due_ms(void) {
     return in < CHAN_WAIT_MS ? (int)in : CHAN_WAIT_MS;
 }
 
+// --- shutdown ------------------------------------------------------
+//
+// THE REVERSE OF THE START ORDER, one service at a time: SIGTERM, up to
+// its StopTimeout=, then SIGKILL. What started after a service may need
+// it until it stops -- the desktop logs through logd, which therefore
+// goes late -- so the order that was safe to start in is the one that
+// is safe to stop in backwards. systemd stops units in reverse
+// dependency order too; it stops independent ones in parallel, which
+// saves seconds on a machine with hundreds and nothing here.
+//
+// Then EVERYTHING ELSE -- apps, orphans, what a shell spawned -- gets
+// SIGTERM, a grace, and SIGKILL, as systemd-shutdown and sysvinit's
+// killall5 do, and only then SYS_POWEROFF. No sync: the kernel flushes
+// on its way down (reboot.c says why that is the one place).
+//
+// EVERY WAIT IS BOUNDED. A service that ignores SIGTERM delays the
+// shutdown by its timeout and never blocks it.
+
+static void stop_for_shutdown(struct service *s) {
+    int pid = s->pid;
+    s->admin_stopped = 1;   // before the signal: see control_stop()
+    snprintf(g_msg, sizeof g_msg, "init: stopping %s (pid %d)\n", s->name, pid);
+    sys_eprint(g_msg);
+    sys_kill(pid, SIGTERM);
+    unsigned long long t0 = now_ms(), deadline = t0 + s->stop_timeout_ms;
+    int killed = 0;
+    while (s->pid == pid) {
+        int code, got = sys_waitpid_nohang(-1, &code);
+        if (got > 0) { reaped(got, code); continue; }
+        if (now_ms() >= deadline) {
+            if (killed) {
+                logf1("init: %s did not die even of SIGKILL -- going on\n", s->name);
+                return;
+            }
+            unsigned ms = (unsigned)(now_ms() - t0);
+            snprintf(g_msg, sizeof g_msg, "init: %s took %u.%u s, killed\n",
+                     s->name, ms / 1000, ms % 1000 / 100);
+            sys_eprint(g_msg);
+            sys_kill(pid, SIGKILL);
+            killed = 1;
+            deadline = now_ms() + SVC_KILL_GRACE_MS;
+        }
+        sys_sleep_ms(STOP_POLL_MS);
+    }
+}
+
+// Signals every process but init itself -- a thread slot is reached
+// through its leader, and a zombie is past signalling. Returns how many.
+static int signal_others(int sig) {
+    struct proc_info pi;
+    int n = 0;
+    for (int slot = 0; sys_proc_info(slot, &pi) == 0; slot++) {
+        if (pi.pid <= 1 || pi.tgid != pi.pid || pi.state == PROC_STATE_ZOMBIE) continue;
+        if (sys_kill(pi.pid, sig) == 0) n++;
+    }
+    return n;
+}
+
+static int count_others(void) {
+    struct proc_info pi;
+    int n = 0;
+    for (int slot = 0; sys_proc_info(slot, &pi) == 0; slot++)
+        if (pi.pid > 1 && pi.tgid == pi.pid && pi.state != PROC_STATE_ZOMBIE) n++;
+    return n;
+}
+
+static void shutdown_machine(int reboot) {
+    logf1("init: shutting down for %s\n", reboot ? "reboot" : "power-off");
+    for (int oi = g_svc_count - 1; oi >= 0; oi--) {
+        struct service *s = &g_svc[g_order[oi]];
+        if (s->pid) stop_for_shutdown(s);
+    }
+
+    int code, got, n = signal_others(SIGTERM);
+    if (n) {
+        snprintf(g_msg, sizeof g_msg, "init: %d other process%s, SIGTERM\n", n, n == 1 ? "" : "es");
+        sys_eprint(g_msg);
+        unsigned long long deadline = now_ms() + OTHERS_GRACE_MS;
+        while (count_others() && now_ms() < deadline) {
+            while ((got = sys_waitpid_nohang(-1, &code)) > 0) reaped(got, code);
+            sys_sleep_ms(STOP_POLL_MS);
+        }
+        n = signal_others(SIGKILL);
+        if (n) {
+            snprintf(g_msg, sizeof g_msg, "init: %d still running, SIGKILL\n", n);
+            sys_eprint(g_msg);
+        }
+    }
+
+    logf1("init: %s\n", reboot ? "rebooting" : "powering off");
+    sys_poweroff(reboot);
+    // Only reached if the platform refused. The services stay down --
+    // there is nobody left to want them -- and init goes back to reaping.
+    logf1("init: the kernel did not %s the machine\n", reboot ? "restart" : "power off");
+}
+
 static int serve_channel(void) {
     if (!g_chan.beacon) return 0;
     uchan_server_scan(&g_chan, 0, 0);
@@ -1132,6 +1261,12 @@ static int serve_channel(void) {
         m.name[sizeof m.name - 1] = '\0';
         if (m.verb == INITCTL_START)      r = control_start(m.name);
         else if (m.verb == INITCTL_STOP)  r = control_stop(m.name);
+        else if (m.verb == INITCTL_REBOOT || m.verb == INITCTL_POWEROFF) {
+            // ANSWERED FIRST, acted on by the loop: the caller is waiting
+            // for this reply, and it is among what the shutdown stops.
+            g_shutdown = m.verb == INITCTL_REBOOT;
+            r = INITCTL_OK;
+        }
         else logf1("init: unknown control verb over the channel\n", "");
 
         struct initctl_msg reply;
@@ -1416,6 +1551,16 @@ int main(void) {
         if (pending) {
             // A backoff is running, so the wait needs a deadline and
             // waitpid has none. This is the only polling state.
+            //
+            // THE CHANNEL IS ANSWERED HERE TOO, without waiting: a boot
+            // spends its first seconds in this state, and a `reboot` typed
+            // then would otherwise time out and stop the machine with
+            // every service still running.
+            serve_channel();
+            if (g_shutdown >= 0) {
+                shutdown_machine(g_shutdown);
+                g_shutdown = -1;
+            }
             pid = sys_waitpid_nohang(-1, &code);
             if (pid == SYS_RETRY || pid < 0) {
                 sys_sleep_ms(POLL_SLEEP_MS);
@@ -1432,6 +1577,10 @@ int main(void) {
             // should wake this wakes it.
             uchan_server_wait(&g_chan, next_due_ms());
             serve_channel();
+            if (g_shutdown >= 0) {
+                shutdown_machine(g_shutdown);
+                g_shutdown = -1;
+            }
             // DRAIN, THEN PARK. The wakeword counts wakes, not corpses:
             // one bump can stand for several deaths, and re-parking after
             // a single reap left the rest to the next deadline, 2 s each.

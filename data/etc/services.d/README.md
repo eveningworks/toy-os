@@ -21,6 +21,7 @@ so there is no second format to maintain.
 | `StandardError` | no | `kmsg` (default) or `inherit`. Where the service's fd 2 goes. |
 | `Ready` | no | `spawn` (default) or `notify` -- what "started" MEANS. |
 | `ReadyTimeout` | no | Milliseconds to wait for a `Ready=notify` service. Default 5000. |
+| `StopTimeout` | no | Milliseconds between SIGTERM and SIGKILL when the machine shuts down. Default 5000. |
 
 **`Args=` UNDERSTANDS TWO SPECIFIERS, `%T` AND `%V`.** They expand to the
 scratch directories -- `storage.tmpdir` and `storage.vartmpdir` -- and
@@ -189,6 +190,23 @@ Calling it from a program init does not supervise is harmless and does
 nothing, which is deliberate: a program need not know how it was started
 in order to be correct. `tosh` in a terminal window calls it exactly as
 `tosh` on the console does.
+
+### Shutdown: the reverse of the start order
+
+`reboot`, `reboot --poweroff` and the desktop's Restart and Shut down ask
+init, and init stops the running services **in the reverse of the order
+it started them**: what started later may need what started earlier
+until it stops (the desktop logs through `logd`). Each gets SIGTERM and
+up to its `StopTimeout=` to exit, then SIGKILL:
+
+    init: stopping toywm (pid 14)
+    init: stubborn took 1.5 s, killed
+
+Then every other process gets SIGTERM, up to 2 s, and SIGKILL, and only
+then does the machine stop. systemd waits 90 s (`TimeoutStopSec`) and
+launchd 20 s; five is the readiness timeout's reasoning again. A
+non-positive `StopTimeout=` is refused and the default used, so no
+descriptor can make a shutdown wait forever.
 
 ### `ReadyTimeout=` -- the barrier always expires
 

@@ -49,7 +49,7 @@
 | `uhwids.h` | Names for hardware ids, from the pci.ids / usb.ids databases -- the files a Linux distribution ships as hwdata, refreshed by /bin/hwdata. |
 | `uimg.h` | uimg -- decoding an image file into pixels, in RING 3. |
 | `uinflate.h` | DEFLATE, both directions, in ring 3 -- RFC 1951, plus the zlib (RFC 1950) and gzip (RFC 1952) wrappers around it. |
-| `uinitctl.h` | The control protocol between `/bin/service` and init, over uchan. |
+| `uinitctl.h` | The control protocol between init and its clients -- `/bin/service`, and everything that restarts or powers off the machine -- over uchan. |
 | `ukeymap.h` | A keyboard layout read from /usr/share/kbs/<name>: which character each key gives on each level, and which keys are dead -- a snapshot for SHOWING a layout. |
 | `ukeysym.h` | An X11 KEYSYM -- what a VNC viewer sends for a key (RFB 7.5.4) -- as something toy-os's input core takes: a Latin-1 character to type on the active layout, or an evdev keycode (abi/input_keys.h) fo... |
 | `uktest.h` | KTEST's assertions in ring 3, so a test can follow its code out of the kernel with its bodies unchanged: a case is a plain function, and KTEST_ASSERT / KTEST_ASSERT_EQ fail it and return, exactly a... |

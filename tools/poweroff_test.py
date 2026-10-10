@@ -143,6 +143,7 @@ def boot_and_run(iso, disk, machine, qemu_log, command, wait_for, timeout,
 
 
 ACPI_S5 = "acpi: S5 via"
+BANNER = ") built 20"   # the kernel's first line, once per boot: "toy-os <ver> (<id>) built <date>"
 FALLBACK = "no ACPI poweroff path -- trying the QEMU/Bochs port"
 STS_CLEARED = "status cleared at 0x"
 
@@ -230,8 +231,13 @@ def main():
     # 8042 pulse and there is nothing new to check.
     if any(m[0] == "q35" for m in machines):
         print("poweroff_test: q35 -- resetting through the FADT's reset register")
+        # THE BANNER, NOT "debug console ready": every boot prints that
+        # twice, and the command goes out between the two, so a count
+        # taken then was satisfied by the FIRST boot's second line and
+        # the read stopped before the reset. It passed only while reset
+        # was instant; `reboot` now asks init first.
         t, _, err = boot_and_run(args.iso, args.work, "q35", args.qemu_log,
-                                 "reboot", "debug console ready", args.timeout,
+                                 "reboot", BANNER, args.timeout,
                                  reboot_ok=True)
         if t is None:
             print(f"poweroff_test: FAIL -- {err}")
@@ -243,8 +249,7 @@ def main():
         # And it really reset rather than dying: the console comes up a
         # second time on the same QEMU process.
         check("q35: the machine came back up",
-              t.count("debug console ready") >= 2,
-              f"saw {t.count('debug console ready')} boot(s)")
+              t.count(BANNER) >= 2, f"saw {t.count(BANNER)} boot(s)")
 
     failed = [n for n, ok in checks if not ok]
     print(f"\npoweroff_test: {len(checks) - len(failed)}/{len(checks)} checks passed")

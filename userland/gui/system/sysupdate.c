@@ -17,6 +17,7 @@
 
 #include "keyboard.h"   // KEY_PAGE_*, KEY_MOD_CTRL
 #include "rt/sys.h"
+#include "lib/uinitctl.h"
 #include "lib/human.h"
 #include "ui/uapp.h"
 #include "ui/uui.h"
@@ -515,7 +516,7 @@ static void on_action(struct uapp *a, int code) {
     case ID_MAIN:
         if (g_view == V_CHECKING || g_view == V_INSTALLING) g_cancel = 1;
         else if (g_view == V_AVAILABLE) start_job(a, JOB_APPLY);
-        else if (g_view == V_RESTART) { sys_sync(); sys_poweroff(1); }
+        else if (g_view == V_RESTART) { sys_sync(); uinitctl_shutdown(1); }
         break;
     }
 }

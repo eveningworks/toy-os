@@ -4,7 +4,8 @@
 #include <stdint.h>
 #include "lib/uchan_page.h"
 
-// The control protocol between `/bin/service` and init, over uchan.
+// The control protocol between init and its clients -- `/bin/service`,
+// and everything that restarts or powers off the machine -- over uchan.
 //
 // WHAT IT REPLACES, and why the old shape existed: a request was a LINE
 // APPENDED TO /run/init.ctl and the notification was SIGHUP, because
@@ -23,8 +24,13 @@
 
 #define INITCTL_SERVICE "initctl"
 
-#define INITCTL_START 1
-#define INITCTL_STOP  2
+#define INITCTL_START    1
+#define INITCTL_STOP     2
+// The machine, not a service: init stops every service in the reverse of
+// its start order, then everything else, then calls SYS_POWEROFF. `name`
+// is unused. The reply comes BEFORE any of that starts.
+#define INITCTL_REBOOT   3
+#define INITCTL_POWEROFF 4
 
 // A reply's `result`.
 #define INITCTL_OK        0
@@ -39,5 +45,14 @@ struct initctl_msg {
 
 _Static_assert(sizeof(struct initctl_msg) <= UCHAN_SLOT_BYTES,
                "an initctl message must fit one channel slot");
+
+// RESTART (reboot = 1) OR POWER OFF, the way every caller should: asks
+// init, which stops the services first. Returns 0 once init has taken it
+// -- the machine goes down shortly, and the caller is among what init
+// stops. When init cannot be asked (no channel, no answer) it calls
+// SYS_POWEROFF itself, which does not return on success: -1 only if
+// that failed too. `reboot --force` is the one caller that skips init
+// on purpose -- systemd's `reboot -f`.
+int uinitctl_shutdown(int reboot);
 
 #endif

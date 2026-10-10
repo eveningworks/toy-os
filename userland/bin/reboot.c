@@ -1,6 +1,12 @@
 // reboot -- restart the machine. `reboot --poweroff` shuts it down;
 // `reboot --entry <name|number>` restarts into that GRUB entry, once.
 //
+// IT ASKS INIT, which stops the services in reverse order and sweeps up
+// everything else first (lib/uinitctl.h). `--force` skips that and
+// stops the machine at once -- systemd's `reboot -f`, for an init that
+// is wedged; the request falls back to the same thing by itself when
+// init does not answer.
+//
 // SYS_POWEROFF takes the choice as an argument, so one program serves
 // both rather than two programs differing by a constant -- and the
 // destructive one is not the default: a bare `reboot` reboots, and
@@ -18,10 +24,11 @@
 #include "rt/sys.h"
 #include "lib/cmd.h"
 #include "lib/ubootmenu.h"
+#include "lib/uinitctl.h"
 #include <stdio.h>
 #include <string.h>
 
-#define USAGE "reboot [--poweroff | --entries | --entry <name|number>]"
+#define USAGE "reboot [--force] [--poweroff | --entries | --entry <name|number>]"
 
 static struct ubootmenu g_menu;
 
@@ -38,10 +45,11 @@ static int list(void) {
 }
 
 int main(int argc, char **argv) {
-    int poweroff = 0;
+    int poweroff = 0, force = 0;
     const char *entry = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--poweroff")) poweroff = 1;
+        else if (!strcmp(argv[i], "--force")) force = 1;
         else if (!strcmp(argv[i], "--entries")) return list();
         else if (!strcmp(argv[i], "--entry") && i + 1 < argc) entry = argv[++i];
         else { cmd_usage(USAGE); return 1; }
@@ -72,7 +80,11 @@ int main(int argc, char **argv) {
         printf("reboot: next boot: %s\n", g_menu.title[n]);
     }
 
-    sys_poweroff(!poweroff);
+    if (!force && uinitctl_shutdown(!poweroff) == 0) {
+        printf("reboot: init is stopping the services\n");
+        return 0;
+    }
+    if (force) sys_poweroff(!poweroff);
     // Only reached if the call failed -- it does not return on success.
     // A choice made above would outlive this failure and surprise the
     // next ordinary restart, so it is taken back.

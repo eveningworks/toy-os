@@ -18,7 +18,8 @@
 #include "ui/utheme.h"
 #include "kapi.h"
 #include "keyboard.h"   // KEY_ARROW_*
-#include "rt/sys.h"     // sys_poweroff()
+#include "rt/sys.h"
+#include "lib/uinitctl.h" // uinitctl_shutdown()
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -96,9 +97,10 @@ static void perform(void) {
     wm_logf("leave: %s\n", NAME[g_action]);
     switch (g_action) {
     case LEAVE_SHUTDOWN:
-        sys_poweroff(0);
-        // RETURNING IS FAILURE (the firmware refused): say so, once,
+        // 0: init has it, and stops this desktop among the rest. Any
+        // other return is failure (the firmware refused): say so, once,
         // rather than be asked again by every frame's poll.
+        if (uinitctl_shutdown(0) == 0) break;
         refused("The computer could not shut down.");
         break;
     case LEAVE_RESTART:
@@ -110,7 +112,7 @@ static void perform(void) {
             refused("Could not save the boot choice, so nothing restarted.");
             break;
         }
-        sys_poweroff(1);
+        if (uinitctl_shutdown(1) == 0) break;
         if (g_into >= 0) ubootmenu_set_next(0);   // the choice is taken back
         refused("The computer could not restart.");
         break;
