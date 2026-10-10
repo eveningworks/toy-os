@@ -198,20 +198,31 @@ int sys_umount(struct syscall_ctx *c) {
 // run here against the mounted backend (abi/mount_abi.h says why it is
 // not a ring-3 checker). Holds that mount's lock for the whole pass, so
 // every other call on the volume waits it out, as it did when `fsck`
-// was a kernel-shell builtin.
+// was a kernel-shell builtin -- all but FSCK_PROGRESS and FSCK_STOP,
+// which ask about that pass and take no lock (fs_ops.h).
 int sys_fs_check(struct syscall_ctx *c) {
-    if (c->a1 & ~(uint64_t)FSCK_REPAIR) {
+    uint64_t f = c->a1;
+    if ((f & ~(uint64_t)(FSCK_REPAIR | FSCK_PROGRESS | FSCK_STOP)) ||
+        ((f & (FSCK_PROGRESS | FSCK_STOP)) && f != FSCK_PROGRESS && f != FSCK_STOP)) {
         c->regs[14] = (uint64_t)(int64_t)-EINVAL;
         return 0;
     }
     char *path = kpath_get();
     if (!path) { c->regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
-    struct fs_check_result r;
-    k_memset(&r, 0, sizeof r);
     int rc = resolve_user_path(c->pml4, c->a0, path);
-    if (!rc) rc = fs_check_at(path, (int)(c->a1 & FSCK_REPAIR), &r);
+    if (!rc && f == FSCK_PROGRESS) {
+        struct fs_check_progress p;
+        rc = fs_check_progress_at(path, &p);
+        if (!rc && !vmm_copy_to_user(c->pml4, c->a2, &p, sizeof p)) rc = -EFAULT;
+    } else if (!rc && f == FSCK_STOP) {
+        rc = fs_check_stop_at(path);
+    } else if (!rc) {
+        struct fs_check_result r;
+        k_memset(&r, 0, sizeof r);
+        rc = fs_check_at(path, (int)(f & FSCK_REPAIR), &r);
+        if (!rc && !vmm_copy_to_user(c->pml4, c->a2, &r, sizeof r)) rc = -EFAULT;
+    }
     kpath_put(path);
-    if (!rc && !vmm_copy_to_user(c->pml4, c->a2, &r, sizeof r)) rc = -EFAULT;
     c->regs[14] = (uint64_t)(int64_t)rc;
     return 0;
 }

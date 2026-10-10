@@ -5,6 +5,7 @@
 #include "string.h"
 #include "klog.h"
 #include "heap.h"
+#include "errno.h"
 
 // ---- fsck -----------------------------------------------------------------
 //
@@ -28,6 +29,8 @@ struct t3_fsck {
     struct fs_check_result *r;
     int repair;
     int link_mismatches;
+    struct fs_check_live *live;
+    int stopped;         // FSCK_STOP was honoured: unwind, report nothing
 };
 
 static int fsck_block_ok(struct t3_state *sbi, uint32_t blk) {
@@ -117,6 +120,7 @@ static int fsck_ino_reached(struct t3_state *sbi, struct t3_fsck *fk, uint64_t i
 // tree gets a klog and an unwalked subtree (reported as leaks --
 // wrong, but loudly wrong).
 static void fsck_walk_dir(struct t3_state *sbi, struct t3_fsck *fk, uint64_t dir_ino, uint64_t parent_ino, int depth) {
+    if (fk->stopped) return;
     if (depth > 32) {
         klog_write("tfs3 fsck: directory nesting past 32 -- subtree not walked\n");
         return;
@@ -124,17 +128,18 @@ static void fsck_walk_dir(struct t3_state *sbi, struct t3_fsck *fk, uint64_t dir
     struct t3_inode dir;
     if (!t3_read_inode(sbi, dir_ino, &dir) || dir.type != T3_TYPE_DIR) return;
     fk->r->records_used++;
+    if (fsck_step(fk->live, fk->r->records_used, fk->r)) fk->stopped = 1;
     fsck_walk_inode_blocks(sbi, fk, dir_ino, &dir);
 
     uint32_t nblocks = (uint32_t)((dir.size + T3_BLOCK - 1) / T3_BLOCK);
-    for (uint32_t b = 0; b < nblocks; b++) {
+    for (uint32_t b = 0; b < nblocks && !fk->stopped; b++) {
         uint32_t blk;
         if (!t3_block_for_index(sbi, &dir, b, &blk)) continue;
         uint8_t *dirblk = kmalloc(T3_BLOCK);
         if (!dirblk) return;
         if (!blk || !t3_read_block(sbi, blk, dirblk)) { kfree(dirblk); continue; }
         uint32_t off = 0;
-        while (off + 8 <= T3_BLOCK) {
+        while (off + 8 <= T3_BLOCK && !fk->stopped) {
             uint32_t e_ino = rd32(dirblk + off);
             uint16_t rec_len = rd16(dirblk + off + 4);
             uint8_t nl = dirblk[off + 6];
@@ -172,6 +177,7 @@ static void fsck_walk_dir(struct t3_state *sbi, struct t3_fsck *fk, uint64_t dir
                             fsck_walk_dir(sbi, fk, child, dir_ino, depth + 1);
                         } else {
                             fk->r->records_used++;
+                            if (fsck_step(fk->live, fk->r->records_used, fk->r)) fk->stopped = 1;
                             fsck_walk_inode_blocks(sbi, fk, child, &cn);
                         }
                     }
@@ -183,7 +189,21 @@ static void fsck_walk_dir(struct t3_state *sbi, struct t3_fsck *fk, uint64_t dir
     }
 }
 
-int tfs3_check(void *st, int repair, struct fs_check_result *out) {
+// What fsck_begin() names; Disks lists them, `fsck` prints the current one.
+static const struct fsck_stage_desc T3_STAGES[] = {
+    { "Walk every file", "files" },
+    { "Compare the allocation maps", "groups" },
+    { "Check link counts", "inodes" },
+};
+
+// The arrays the pass allocated; every return after them goes through here.
+static void fsck_free(struct t3_fsck *fk) {
+    kfree(fk->breach);
+    kfree(fk->ireach);
+    kfree(fk->names);
+}
+
+int tfs3_check(void *st, int repair, struct fs_check_result *out, struct fs_check_live *live) {
     struct t3_state *sbi = st;
     struct fs_check_result local;
     struct fs_check_result *r = out ? out : &local;
@@ -203,6 +223,7 @@ int tfs3_check(void *st, int repair, struct fs_check_result *out) {
     k_memset(&fk, 0, sizeof(fk));
     fk.r = r;
     fk.repair = repair;
+    fk.live = live;
     size_t bmbytes = (size_t)sbi->sb.gc * T3_BLOCK;
     uint64_t total_inodes = (uint64_t)sbi->sb.gc * sbi->sb.ipg;
     fk.breach = kmalloc(bmbytes);
@@ -219,8 +240,15 @@ int tfs3_check(void *st, int repair, struct fs_check_result *out) {
     k_memset(fk.ireach, 0, bmbytes);
     k_memset(fk.names, 0, (size_t)total_inodes);
 
+    fsck_begin(live, repair, T3_STAGES, 3);
+    uint64_t in_use = total_inodes;
+    for (uint32_t g = 0; g < sbi->sb.gc; g++) in_use -= sbi->gd[g].free_inodes;
+    fsck_stage(live, 0, (uint32_t)in_use);
     fsck_mark_ino(sbi, &fk, T3_INO_ROOT);
     fsck_walk_dir(sbi, &fk, T3_INO_ROOT, T3_INO_ROOT, 0);
+    if (fk.stopped) { fsck_free(&fk); fsck_end(live); return -ECANCELED; }
+
+    fsck_stage(live, 1, sbi->sb.gc);
 
     // Reconcile blocks: reach map vs allocation bitmap, per group.
     // Metadata and backup regions are allocated-by-design and outside
@@ -281,13 +309,17 @@ int tfs3_check(void *st, int repair, struct fs_check_result *out) {
                 t3_mark_dirty(sbi->gdt_dirty, g);
             }
         }
+        if (fsck_step(live, g + 1, r)) { fk.stopped = 1; break; }
     }
+    if (fk.stopped) { fsck_free(&fk); fsck_end(live); return -ECANCELED; }
+    fsck_stage(live, 2, (uint32_t)total_inodes);
 
     // Link counts: observed names vs stored counts. A directory's
     // observed count from the walk is its own dirent + `.` + each
     // child's `..`, which is exactly the 2+subdirs rule -- so one
     // comparison covers both types.
     for (uint64_t ino = 1; ino < total_inodes; ino++) {
+        if (!(ino & 255) && fsck_step(live, (uint32_t)ino, r)) { fk.stopped = 1; break; }
         if (!fsck_ino_reached(sbi, &fk, ino) && ino != T3_INO_ROOT) continue;
         if (!fk.names[ino] && ino != T3_INO_ROOT) continue;
         struct t3_inode node;
@@ -327,8 +359,7 @@ int tfs3_check(void *st, int repair, struct fs_check_result *out) {
         }
     }
 
-    kfree(fk.breach);
-    kfree(fk.ireach);
-    kfree(fk.names);
-    return 1;
+    fsck_free(&fk);
+    fsck_end(live);
+    return fk.stopped ? -ECANCELED : 1;
 }

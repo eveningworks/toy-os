@@ -3685,3 +3685,54 @@ Mount uses `/mnt/<device>`, made at mount and removed at unmount, so
 two volumes never fight over `/mnt` itself. GNOME uses
 `/run/media/$USER/<label>`; toy-os has no per-user runtime directory
 and labels are optional.
+
+## A check's progress is read without the volume's lock, and only a read-only check can be stopped
+
+Disks' Check and Repair were one `SYS_FS_CHECK` on the UI thread: the
+window froze for the whole pass, with nothing to say how far it had got
+(2026-10-10). The pass itself must hold the volume's lock -- it compares
+a reachability map built by walking every file against the allocation
+bitmaps, and a write between the two halves would turn a healthy file
+into "leaked" blocks a repair then reclaims. So the progress cannot come
+from asking the volume; it has to come from beside it.
+
+**`FSCK_PROGRESS` reads a per-mount `struct fs_check_live`** that the
+pass writes with atomic stores (`fsck_begin()`, `fsck_stage()`,
+`fsck_step()` in `fs_ops.h`) and the query reads with no lock at all:
+stage N of M, done of total in that stage's units, problems so far, and
+every stage's name, so a caller can list stages it has not reached. A
+snapshot can disagree with itself by one step; nothing in it is worth a
+lock the pass would share. The obvious alternative -- the pass writing
+into the caller's memory as it goes -- was not taken: it puts a user
+copy, which can fault, inside a walk that holds a sleeping lock, and it
+tells only the caller, where a second program (Disks while `fsck` runs)
+also wants to know.
+
+**`FSCK_STOP` stops a read-only pass and refuses a repair (`-EBUSY`).**
+A read-only pass changes nothing, so stopping it part way is free and
+returns `-ECANCELED` (new; Linux's number). Half a repair is a volume
+in a state nobody chose: some leaks returned, some counts fixed, others
+not. chkdsk's online scan stops; a chkdsk repair does not. A stop asked
+before the pass begins is `-ESRCH`, and `fsck_begin()` clears any stop
+left over, so a caller that wants its own pass stopped asks again until
+it ends -- Disks every tick, `fsck` every redraw.
+
+**The caller polls from a second thread.** The call blocks for the
+whole pass, so Disks and `fsck` run it on a worker and the main thread
+draws. Disks shows nothing for the first 300 ms, so a check of a small
+volume never flashes a dialog, and once shown it stays 500 ms, the
+pattern Qt's `QProgressDialog` (`minimumDuration`) settles on.
+
+**The lock still stalls the volume's other readers, and that bites the
+progress UI first.** A page of code not yet read in is read from the
+volume, so the first time a program runs its progress code it would
+wait for the very pass it reports. Disks draws its progress view once
+into a scratch surface, and `fsck` runs its stop and handler once,
+before the pass begins. The wider stall -- any program paging from that
+volume waits -- is a known limitation in `docs/roadmap.md`, not
+something either can fix: the pass is ~0.35 s for `/` on the ASUS.
+
+Linux's online checkers lock less than this: `xfs_scrub` takes one
+allocation group at a time and the page cache serves faults without the
+filesystem's locks. Copying that means per-group locking inside tfs3,
+which nothing in `docs/fslock-design.md` plans yet.

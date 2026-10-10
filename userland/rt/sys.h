@@ -900,6 +900,13 @@ int sys_mkfs(const struct mkfs_request *req);
 // SYS_FS_CHECK: check (FSCK_REPAIR: and repair) the mounted volume
 // holding `path`, in the kernel. 0 or -1 with errno; abi/mount_abi.h.
 int sys_fs_check(const char *path, unsigned flags, struct fs_check_result *out);
+// How far the check running on that volume has got, read without waiting
+// for it (FSCK_PROGRESS); `running` is 0 when there is none.
+int sys_fs_check_progress(const char *path, struct fs_check_progress *out);
+// Ask the read-only check running on that volume to stop (FSCK_STOP): it
+// then fails with ECANCELED. -1 with ESRCH when none is running, EBUSY
+// for a repair, which is never stopped part way.
+int sys_fs_check_stop(const char *path);
 
 // Makes a disk BOOT: the boot sector at LBA 0, and the core image into
 // that disk's BIOS boot partition, with the two patches that depend on

@@ -5,7 +5,8 @@ The guest boots the ordinary system disk (pinned with `root=ata0p3`) and
 a BLANK 256 MiB virtio disk beside it, and Disks is driven through its
 whole job on the blank one: a new partition table and partition, mount,
 check, unmount, a second partition, a format to FAT32, a delete. Then
-the HOST reads the image's GPT itself.
+the HOST reads the image's GPT itself. Before that, a Check of the
+system volume shows its stages while it runs, and Stop ends it.
 
 Each step is believed from a path that is not the app's own log:
   * the shell's `lsblk` and `df` -- the kernel's block table and mounts;
@@ -26,6 +27,7 @@ guest with a second disk.
 """
 import argparse
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -42,6 +44,7 @@ import install_grub                             # noqa: E402
 import port_guard                               # noqa: E402
 
 SECTOR = 512
+REPAIRS = 3           # passes of / queued ahead of Disks' own, so a key can land in time
 BLANK_BYTES = 256 * 1024 * 1024
 LOG = []
 
@@ -163,6 +166,46 @@ def run(dbg, qmp, res):
     chk(res, said("cannot be changed while it runs", mark) and "dialog.button 0" not in lay.r,
         "and Delete says why, without asking")
 
+    # 1b. Check the system volume. Alone that takes half a second here --
+    # too short to race a key against -- so REPAIRS of / (fsck -r, which
+    # nothing can stop) hold the volume first, and Disks' pass queues
+    # behind them. Its dialog must show WHILE a pass runs on the volume,
+    # and Escape -- the dialog's Stop -- must end Disks' own pass when it
+    # begins, with nothing reported: the stop a fast click asks before
+    # the pass has started, which Disks keeps asking every tick. Escape
+    # goes every 50 ms from the click; before the dialog it does nothing.
+    def hold_volume():
+        for _ in range(REPAIRS):
+            dbg.send("gui spawn /bin/fsck -r /")
+
+    hold_volume()
+    time.sleep(0.3)                          # a repair holds / before Disks asks
+    mark = len(LOG)
+    toolbar(TB_CHECK)
+    deadline = time.time() + 20
+    while time.time() < deadline and not said("stop asked", mark) and not said("problems", mark):
+        dbg.key("0x1b", settle=False)        # Escape
+        poll(dbg)
+        time.sleep(0.05)
+    chk(res, said("check progress shown", mark), "Check on / shows its progress while a pass runs")
+    lay = wait(dbg, c, lambda lay: said("check / stopped", mark) or said("problems", mark), timeout=60)
+    if not chk(res, said("check / stop asked", mark) and said("check / stopped", mark) and not said("problems", mark),
+               "Escape stops Disks' own pass, and nothing is reported"):
+        print("    disks said:", [ln for ln in LOG[mark:] if "layout" not in ln])
+    lay = wait(dbg, c, lambda lay: "dialog.button 0" not in lay.r)
+    chk(res, "dialog.button 0" not in lay.r, "...and the dialog is gone")
+    hold_volume()
+    mark = len(LOG)
+    toolbar(TB_CHECK)
+    lay = wait(dbg, c, lambda lay: said("ask Check", mark), timeout=60)
+    chk(res, said("check progress shown", mark) and said("check / read-only ->", mark),
+        "a second Check shows its progress and runs to its result")
+    dbg.settle()                             # a frame of the RESULT, not the progress
+    lay = wait(dbg, c, lambda lay: "dialog.button 0" in lay.r)
+    press("dialog.button 0")                 # OK, or Close
+    lay = wait(dbg, c, lambda lay: "dialog.button 0" not in lay.r)
+    chk(res, "dialog.button 0" not in lay.r, "...and its answer closes it")
+
     # 2. The blank disk: one free segment and the form.
     x, y, w, h = lay.r["drives.first_cell"]
     dbg.click(lay.cx + x + w // 2, lay.cy + y + h + h // 2)
@@ -203,6 +246,7 @@ def run(dbg, qmp, res):
     mark = len(LOG)
     lay = wait(dbg, c, lambda lay: True)
     toolbar(TB_CHECK)
+    lay = wait(dbg, c, lambda lay: said("check /mnt/virtio0p1 read-only ->", mark))
     lay = wait(dbg, c, lambda lay: "dialog.button 0" in lay.r)
     chk(res, said("check /mnt/virtio0p1 read-only -> 0 problems", mark), "Check finds no problems")
     press("dialog.button 0")
@@ -255,6 +299,15 @@ def main():
         args.instance = port_guard.find_free_instance()
     tmp = args.keep or tempfile.mkdtemp(prefix="disks-")
     os.makedirs(tmp, exist_ok=True)
+    try:
+        return run_in(args, tmp)
+    finally:
+        # Two disk images a run: 43 left behind filled /tmp (8.3 GB).
+        if not args.keep:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_in(args, tmp):
     root = os.path.join(tmp, "root.img")
     blank = os.path.join(tmp, "blank.img")
     copy_disk("disk.img", root, cwd=REPO)

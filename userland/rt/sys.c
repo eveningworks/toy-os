@@ -141,6 +141,7 @@ static const struct { int code; const char *name; const char *msg; } g_errmsg[] 
     { ENETDOWN,     "ENETDOWN", "network is down" },
     { EACCES, "EACCES", "permission denied" },
     { ELOOP,  "ELOOP", "too many levels of symbolic links" },
+    { ECANCELED, "ECANCELED", "stopped on request" },
 };
 
 const char *sys_errname(int e) {
@@ -932,6 +933,15 @@ int sys_mkfs(const struct mkfs_request *req) {
 int sys_fs_check(const char *path, unsigned flags, struct fs_check_result *out) {
     return (int)err(syscall3(SYS_FS_CHECK, (uint64_t)(uintptr_t)path, flags,
                              (uint64_t)(uintptr_t)out));
+}
+
+int sys_fs_check_progress(const char *path, struct fs_check_progress *out) {
+    return (int)err(syscall3(SYS_FS_CHECK, (uint64_t)(uintptr_t)path, FSCK_PROGRESS,
+                             (uint64_t)(uintptr_t)out));
+}
+
+int sys_fs_check_stop(const char *path) {
+    return (int)err(syscall3(SYS_FS_CHECK, (uint64_t)(uintptr_t)path, FSCK_STOP, 0));
 }
 
 int sys_install_boot(const struct install_boot_request *req) {

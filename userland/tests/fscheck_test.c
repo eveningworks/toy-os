@@ -8,8 +8,15 @@
 // -EROFS checks, so the root's repair must succeed. And a /bin/fsck that
 // printed without asking would still exit 0, so its status is compared
 // against a broken invocation's.
+//
+// FSCK_PROGRESS and FSCK_STOP are asked about a pass ANOTHER THREAD is
+// in, which is the only way they are ever used: a progress read that
+// waited for the volume's lock would only ever see an idle volume, and
+// a stop that was ignored would let the pass end with 0 -- so the pass
+// must be SEEN running, by name, and must come back ECANCELED.
 #include <string.h>
 #include <errno.h>
+#include <pthread.h>
 #include "rt/sys.h"
 #include "lib/utest.h"
 
@@ -18,6 +25,29 @@ static struct fs_check_result r;
 static int check(const char *path, unsigned flags) {
     memset(&r, 0xAA, sizeof r);
     return sys_fs_check(path, flags, &r);
+}
+
+// A pass on a second thread, and what it returned.
+static struct fs_check_result g_bg;
+static int g_bg_rc, g_bg_err;
+static volatile int g_bg_done;
+
+static void *bg_check(void *flags) {
+    g_bg_rc = sys_fs_check("/", (unsigned)(unsigned long)flags, &g_bg);
+    g_bg_err = g_bg_rc ? errno : 0;
+    __atomic_store_n(&g_bg_done, 1, __ATOMIC_RELEASE);
+    return 0;
+}
+
+// Starts one and waits, bounded, until a progress read sees it running.
+static int start_bg(pthread_t *th, unsigned flags, struct fs_check_progress *p) {
+    g_bg_done = 0;
+    if (pthread_create(th, 0, bg_check, (void *)(unsigned long)flags)) return 0;
+    for (int i = 0; i < 5000 && !__atomic_load_n(&g_bg_done, __ATOMIC_ACQUIRE); i++) {
+        if (sys_fs_check_progress("/", p) == 0 && p->running && p->stages) return 1;
+        sys_sleep_ms(1);
+    }
+    return 0;
 }
 
 static int run_fsck(const char *args) {
@@ -52,6 +82,42 @@ int main(void) {
                 "a bad result pointer is EFAULT");
     utest_check(check("/", FSCK_REPAIR) == 0 && !strcmp(r.point, "/"),
                 "a repair of the root runs");
+
+    struct fs_check_progress p;
+    utest_check(sys_fs_check_progress("/", &p) == 0 && !p.running, "an idle volume reports no pass running");
+    utest_check(sys_fs_check_stop("/") == -1 && errno == ESRCH, "...and a stop there is ESRCH");
+    utest_check(sys_fs_check("/", FSCK_PROGRESS | FSCK_REPAIR, &r) == -1 && errno == EINVAL,
+                "a progress read mixed with a check is EINVAL");
+
+    pthread_t th;
+    int seen = start_bg(&th, 0, &p);
+    utest_check_detail(seen, "a read-only pass is SEEN running from another thread",
+                       "it finished, or never started, before a progress read caught it");
+    if (seen) {
+        utest_check(p.stages == 3 && !strcmp(p.names[0], "Walk every file") && !p.repair,
+                    "...with tfs3's three stages, by name, and not a repair");
+        unsigned long long first = (unsigned long long)p.stage << 32 | p.done;
+        struct fs_check_progress q;
+        sys_sleep_ms(20);
+        int again = sys_fs_check_progress("/", &q) == 0;
+        utest_check(!again || !q.running || ((unsigned long long)q.stage << 32 | q.done) >= first,
+                    "...and a later read is no earlier");
+        utest_check(sys_fs_check_stop("/") == 0, "...and a stop is taken");
+    }
+    pthread_join(th, 0);
+    if (seen) {
+        utest_check(g_bg_rc == -1 && g_bg_err == ECANCELED, "...and the pass returns ECANCELED");
+        utest_check(sys_fs_check_progress("/", &p) == 0 && !p.running, "...and is over");
+    }
+
+    seen = start_bg(&th, FSCK_REPAIR, &p);
+    utest_check_detail(seen, "a repair is seen running too", "it was not caught running");
+    if (seen) {
+        utest_check(p.repair == 1, "...and says it is a repair");
+        utest_check(sys_fs_check_stop("/") == -1 && errno == EBUSY, "...and refuses a stop with EBUSY");
+    }
+    pthread_join(th, 0);
+    if (seen) utest_check(g_bg_rc == 0, "...and runs to the end");
 
     // The root was just repaired, so it is clean: 0, not 1 or 4.
     utest_check(run_fsck("") == 0, "/bin/fsck exits 0 on a clean root");

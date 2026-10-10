@@ -185,6 +185,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_spinbox.h` | A NUMBER YOU CAN TYPE OR STEP: a text field with up/down steppers, bounded by min/max and moved by `step`. |
 | `uui_splitter.h` | A DRAGGABLE DIVIDER between two things that share a run of space -- Qt's QSplitter, GTK's GtkPaned, Explorer's navigation-pane divider. |
 | `uui_stackbar.h` | A STACKED BAR WITH A LEGEND: how one whole splits into parts, each a coloured segment and a legend row (swatch, label, value). |
+| `uui_stages.h` | A JOB'S STAGES AND HOW FAR IT HAS GOT: "Stage 2 of 3: ...", a bar, a count under it, and every stage listed -- done, running, or still to come -- each with a line of its own. |
 | `uui_statusbar.h` | uui_statusbar -- the strip along the bottom of an application window, as Windows (the common control, `msctls_statusbar32`) and KDE (KStatusBar / QStatusBar) both have it. |
 | `uui_switch.h` | AN ON/OFF SWITCH -- a sliding knob in a capsule, with the state spelled beside it ("On"/"Off", Windows 11's shape; KDE and GNOME show the knob alone). |
 | `uui_table.h` | --- table: rows in columns, with a header --------------------------- |

@@ -716,9 +716,10 @@ static int ramfs_disk_usage(void *st, uint64_t *out_used, uint64_t *out_total) {
     return 1;
 }
 
-static int ramfs_check(void *st, int repair, struct fs_check_result *out) {
+static int ramfs_check(void *st, int repair, struct fs_check_result *out, struct fs_check_live *live) {
     struct ramfs_state *sbi = st;
     (void)repair;
+    (void)live;    // a walk of RAM: over before anyone could draw a bar
     if (!sbi->mounted || !out) return 0;
     k_memset(out, 0, sizeof *out);
     // A filesystem with no on-disk representation cannot be corrupt in

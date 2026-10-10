@@ -2683,7 +2683,11 @@ struct usb_control_msg {
                              // whole pass. Returns 0, or -ENOENT, -EROFS
                              // (a repair on a read-only mount), -ENOTSUP
                              // (a repair the backend cannot do), -EIO,
-                             // -EINVAL (an unknown flag), -EFAULT.
+                             // -EINVAL (an unknown flag), -EFAULT, or
+                             // -ECANCELED (stopped by FSCK_STOP).
+                             // FSCK_PROGRESS and FSCK_STOP, each alone,
+                             // ask about the check RUNNING there instead
+                             // and take no lock (abi/mount_abi.h).
 
 #define SYS_NET_LINK 141     // RDI = a `struct net_linkcfg *` (abi/
                              // net_abi.h): change one card's adapter

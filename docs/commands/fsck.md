@@ -47,6 +47,20 @@ could only do on an unmounted volume, and the root is never unmounted.
 It holds the volume's lock for the whole pass, so other programs'
 reads and writes on that volume wait it out.
 
+**On a terminal it shows how far the pass has got**, one line redrawn
+in place and cleared before the result, e2fsck `-C`'s shape:
+
+```
+fsck: stage 2 of 3, compare the allocation maps: 18 of 28 groups (64%)
+```
+
+TFS3 reports three stages (walk every file, compare the allocation
+maps, check link counts), FAT32 one; a captured stderr gets no line.
+
+**Ctrl-C stops a read-only check part way**, with nothing changed and
+exit status `32`. A repair is never stopped: `fsck -r` says so and runs
+to the end, because half a repair is a volume in a state nobody chose.
+
 **Double-allocated blocks are reported, never repaired**: choosing
 which of two files keeps a shared block destroys the other's data.
 Delete one of the files instead.
@@ -56,7 +70,8 @@ Delete one of the files instead.
 e2fsck's: `0` clean, `1` problems were found and all of them fixed, `4`
 problems are left (always, for a double allocation), `8` the check
 itself failed -- a repair of a read-only mount or a filesystem that can
-only report (`ramfs`, `fat32`). `2` is a usage error.
+only report (`ramfs`, `fat32`), `32` stopped by Ctrl-C (e2fsck's "canceled
+by user request"). `2` is a usage error.
 
 ## When /bin is damaged
 

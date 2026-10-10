@@ -12,6 +12,7 @@
 // runs from (SYS_MKPART). Everything goes through the same calls
 // `mkpart`, `mkfs`, `fsck` and `mount` make.
 #include <errno.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,6 +25,7 @@
 #include "lib/icon_cache.h"
 #include "lib/uimg.h"
 #include "ui/uapp.h"
+#include "ui/uui_anim.h"
 #include "ui/ulog.h"
 #include "ui/utheme.h"
 #include "ui/uui.h"
@@ -35,6 +37,7 @@
 #include "ui/uui_primitives.h"
 #include "ui/uui_segbar.h"
 #include "ui/uui_segmented.h"
+#include "ui/uui_stages.h"
 #include "ui/uui_statusbar.h"
 #include "ui/uui_textbox.h"
 #include "ui/uui_toolbar.h"
@@ -92,6 +95,7 @@ enum {
     CMD_REFRESH = 1, CMD_NEW, CMD_FORMAT, CMD_CHECK, CMD_MOUNT, CMD_DELETE, CMD_EXIT,
     // dialog answers
     ASK_CANCEL = 100, ASK_FORMAT_TFS3, ASK_FORMAT_FAT, ASK_DELETE, ASK_CREATE, ASK_REPAIR, ASK_OK,
+    ASK_STOP, ASK_BUSY,
 };
 
 static struct uui_menubar g_menu;
@@ -335,9 +339,13 @@ static void build_map(void) {
 // --- what may be done --------------------------------------------------------
 
 // Why `cmd` is refused for the selection, or NULL when it may go ahead.
+static int check_running(void);
+
 static const char *refusal(int cmd) {
     struct disk *d = cur_disk();
     struct part *p = cur_part();
+    // Refresh too: reading a volume's usage waits behind the check's lock.
+    if (check_running() && cmd != CMD_EXIT) return "Wait for the check to finish";
     if (!d) return "Volumes in memory cannot be changed";
     switch (cmd) {
     case CMD_NEW:
@@ -377,7 +385,7 @@ static const char *refusal(int cmd) {
 }
 
 static unsigned item_flags(int code) {
-    if (code == CMD_REFRESH || code == CMD_EXIT) return 0;
+    if (code == CMD_EXIT || (code == CMD_REFRESH && !check_running())) return 0;
     return refusal(code) ? UUI_MI_DISABLED : 0;
 }
 
@@ -501,20 +509,157 @@ static void do_mount(void) {
     scan();
 }
 
+// --- Check and Repair, on a worker ----------------------------------------------
+//
+// SYS_FS_CHECK BLOCKS FOR THE WHOLE PASS, so it runs on a worker and this
+// thread reads how far it has got (FSCK_PROGRESS, which takes no lock)
+// on every tick. The worker touches nothing but g_check and posts once.
+
+#define SHOW_AFTER_MS 300   // a check quicker than this never shows a dialog...
+#define SHOW_FOR_MS   500   // ...and one that does stays up this long, so it never flashes
+
+enum { EV_CHECK_DONE = 1 };
+
 static struct fs_check_result g_check;
-static char g_check_point[64];
+static char g_check_point[64], g_check_title[32], g_job_title[48];
+static struct {
+    int running, repair, shown, stopping, finished;
+    unsigned ms;                   // how long the pass took, to the worker's answer
+    unsigned long long started_ns, shown_ns;
+    int rc, err;                   // the worker's answer, read after EV_CHECK_DONE
+} g_job;
+static struct uui_stages g_stages;
+static struct uui_item g_stages_item = { .ops = &uui_stages_ops, .widget = &g_stages, .name = "stages" };
+static struct uapp *g_app;
+
+static int check_running(void) { return g_job.running; }
+
+static void *check_worker(void *arg) {
+    unsigned flags = (unsigned)(uintptr_t)arg;
+    int rc = sys_fs_check(g_check_point, flags, &g_check);
+    g_job.err = rc < 0 ? errno : 0;
+    g_job.rc = rc;
+    uapp_post(g_app, EV_CHECK_DONE, 0);
+    return 0;
+}
+
+// The progress dialog: Stop for a check (Escape too), nothing for a
+// repair -- and reopened if anything closes it while the pass runs.
+static void open_progress(struct uapp *a) {
+    static struct uui_dialog_button stop[1];
+    stop[0] = (struct uui_dialog_button){ g_job.stopping ? "Stopping..." : "Stop", ASK_STOP, 0 };
+    int n = g_job.repair || g_job.stopping || g_job.finished ? 0 : 1;
+    int sw, sh;
+    uui_stages_natural_size(&g_stages, &sw, &sh);
+    uui_dialog_set_body(&g_ask, &g_stages_item, sw, sh);
+    uui_dialog_set_bounds(&g_ask, 0, 0, uapp_width(a), uapp_height(a));
+    uui_dialog_open(&g_ask, g_job_title, 0, 0, stop, n, n ? 0 : -1, n ? ASK_STOP : ASK_BUSY);
+    if (!g_job.shown) g_job.shown_ns = uui_anim_now_ns();
+    g_job.shown = 1;
+}
+
+// 1 while the kernel reports the pass running -- not g_job.running,
+// which stays set until the worker's message is read, after the pass.
+static int poll_progress(void) {
+    struct fs_check_progress p;
+    if (sys_fs_check_progress(g_check_point, &p) < 0 || !p.running) return 0;
+    if (p.stages && (int)p.stages != g_stages.count) {
+        const char *names[FSCK_STAGES_MAX];
+        for (int i = 0; i < FSCK_STAGES_MAX; i++) names[i] = p.names[i];
+        uui_stages_set_names(&g_stages, names, (int)p.stages);
+    }
+    int st = p.stage < FSCK_STAGES_MAX ? (int)p.stage : 0;
+    uint32_t done = p.done > p.total ? p.total : p.done;
+    uui_stages_set(&g_stages, st, p.total ? (int)((uint64_t)done * 1000 / p.total) : -1);
+    if (p.total) snprintf(g_stages.line, sizeof g_stages.line, "%u of %u %s", done, p.total, p.units[st]);
+    else snprintf(g_stages.line, sizeof g_stages.line, "%s", "Starting");
+    snprintf(g_stages.detail[0], sizeof g_stages.detail[0], "%u files, %u blocks", p.records, p.blocks);
+    if (st > 0)
+        snprintf(g_stages.detail[st], sizeof g_stages.detail[st], p.problems == 1 ? "%u problem so far"
+                                                                                  : "%u problems so far", p.problems);
+    return 1;
+}
+
+// THE PASS HOLDS THE VOLUME'S LOCK, AND A PAGE OF libuapp.so NOT YET READ
+// IN IS READ FROM THAT VOLUME -- so the first progress dialog of a boot
+// would wait, undrawn, for the very pass it reports. Drawing it once
+// into a scratch surface first brings those pages in while the volume
+// is free.
+static void warm_progress(void) {
+    static const char *const names[] = { "Walk", "Compare", "Count" };
+    struct uui_stages st;
+    uui_stages_init(&st);
+    uui_stages_set_names(&st, names, 3);
+    uui_stages_set(&st, 1, 500);
+    int w, h;
+    uui_stages_natural_size(&st, &w, &h);
+    struct ugfx_surface surf;
+    memset(&surf, 0, sizeof surf);
+    surf.w = w + 64;
+    surf.h = h + 128;
+    surf.pixels = malloc((size_t)surf.w * (size_t)surf.h * 4);
+    if (!surf.pixels) return;
+    st.x = st.y = 8; st.w = w; st.h = h;
+    uui_stages_draw(&surf, &st);
+    struct uui_dialog d;
+    struct uui_dialog_button b = { "Stop", ASK_STOP, 0 };
+    uui_dialog_init(&d);
+    uui_dialog_set_bounds(&d, 0, 0, surf.w, surf.h);
+    uui_dialog_open(&d, "Checking", 0, 0, &b, 1, 0, ASK_STOP);
+    uui_dialog_draw(&surf, &d);
+    free(surf.pixels);
+}
+
+static void start_check(struct uapp *a, unsigned flags) {
+    g_app = a;
+    warm_progress();
+    memset(&g_check, 0, sizeof g_check);
+    memset(&g_job, 0, sizeof g_job);
+    g_job.repair = flags & FSCK_REPAIR ? 1 : 0;
+    g_job.started_ns = uui_anim_now_ns();
+    snprintf(g_job_title, sizeof g_job_title, "%s %s", g_job.repair ? "Repairing" : "Checking", g_check_title);
+    uui_stages_set_names(&g_stages, 0, 0);
+    uui_stages_set(&g_stages, 0, -1);
+    snprintf(g_stages.line, sizeof g_stages.line, "%s", "Starting");
+    pthread_t th;
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    g_job.running = 1;
+    if (pthread_create(&th, &at, check_worker, (void *)(uintptr_t)flags) != 0) {
+        g_job.running = 0;
+        say("Could not start the check of %s: %s", g_check_point, "no thread");
+        return;
+    }
+    ulogf("disks: check %s %s started\n", g_check_point, g_job.repair ? "repair" : "read-only");
+    say("%s%s", g_job_title, "...");
+}
 
 static void do_check(struct uapp *a, unsigned flags) {
     struct part *p = cur_part();
     if (!flags) {
         if (!p || refusal(CMD_CHECK)) return;
         snprintf(g_check_point, sizeof g_check_point, "%s", p->point);
+        title_of(p, g_check_title, sizeof g_check_title);
     }
-    memset(&g_check, 0, sizeof g_check);
-    int rc = sys_fs_check(g_check_point, flags, &g_check);
-    if (rc < 0) { say("Could not check %s: %s", g_check_point, strerror(sys_errno())); return; }
+    start_check(a, flags);
+}
+
+// The worker is done: say what it found, as the dialog always did.
+static void check_done(struct uapp *a) {
+    unsigned flags = g_job.repair ? FSCK_REPAIR : 0;
+    g_job.running = 0;
+    if (uui_dialog_is_open(&g_ask)) uui_dialog_close(&g_ask);
+    uui_dialog_set_body(&g_ask, 0, 0, 0);
+    unsigned ms = g_job.ms;
+    if (g_job.rc < 0 && g_job.err == ECANCELED) {
+        ulogf("disks: check %s stopped after %u ms\n", g_check_point, ms);
+        say("Stopped checking %s%s", g_check_point, "");
+        return;
+    }
+    if (g_job.rc < 0) { say("Could not check %s: %s", g_check_point, strerror(g_job.err)); return; }
     unsigned bad = g_check.leaked + g_check.referenced_but_free + g_check.double_allocated + g_check.out_of_range;
-    ulogf("disks: check %s %s -> %u problems\n", g_check_point, flags ? "repair" : "read-only", bad);
+    ulogf("disks: check %s %s -> %u problems in %u ms\n", g_check_point, flags ? "repair" : "read-only", bad, ms);
     snprintf(g_ask_line[0], sizeof g_ask_line[0], "%s on %s: %u records, %u blocks in use.", g_check.fstype,
              g_check_point, g_check.records_used, g_check.blocks_referenced);
     static struct uui_dialog_button btns[2];
@@ -532,12 +677,38 @@ static void do_check(struct uapp *a, unsigned flags) {
     ask(a, "Check found problems", 2, btns, 2, 0);
 }
 
+// Every tick while a pass runs: read it, show the dialog once it has
+// taken long enough to be worth one, and keep asking a stop that may
+// have arrived before the pass began (FSCK_STOP is then -ESRCH).
+static int check_tick(struct uapp *a) {
+    if (!g_job.running) return 0;
+    if (g_job.finished) {
+        if (uui_anim_now_ns() - g_job.shown_ns < SHOW_FOR_MS * 1000000ull) return 0;
+        check_done(a);
+        build_map();
+        return 1;
+    }
+    if (g_job.stopping) {
+        static int last = 1;
+        int rc = sys_fs_check_stop(g_check_point) ? -errno : 0;
+        if (rc != last) ulogf("disks: check %s stop asked again -> %d\n", g_check_point, rc);
+        last = rc;
+    }
+    int live = poll_progress();
+    if (!g_job.shown && live && uui_anim_now_ns() - g_job.started_ns >= SHOW_AFTER_MS * 1000000ull) {
+        ulogf("disks: check progress shown\n");
+        open_progress(a);
+    }
+    uui_stages_tick(&g_stages);
+    return g_job.shown;
+}
+
 static void command(struct uapp *a, int cmd) {
     struct disk *d = cur_disk();
     struct part *p = cur_part();
     char size[24], title[32];
     const char *why = refusal(cmd);
-    if (why && cmd != CMD_REFRESH && cmd != CMD_EXIT) { say("%s%s", why, ""); return; }
+    if (why && cmd != CMD_EXIT && (cmd != CMD_REFRESH || check_running())) { say("%s%s", why, ""); return; }
     static struct uui_dialog_button btns[3];
     switch (cmd) {
     case CMD_REFRESH: scan(); build_map(); say("Refreshed%s%s", "", ""); break;
@@ -591,8 +762,15 @@ static void answer(struct uapp *a, int code) {
         break;
     case ASK_CREATE: do_create(); break;
     case ASK_REPAIR: do_check(a, FSCK_REPAIR); break;
+    case ASK_STOP:
+        if (!g_job.running || g_job.repair) break;
+        g_job.stopping = 1;
+        ulogf("disks: check %s stop asked -> %d\n", g_check_point, sys_fs_check_stop(g_check_point) ? -errno : 0);
+        break;
     default: break;
     }
+    // Nothing closes the progress of a pass still running.
+    if (g_job.running && g_job.shown && !uui_dialog_is_open(&g_ask)) open_progress(a);
     build_map();
 }
 
@@ -925,7 +1103,30 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 }
 
 static int on_tick(struct uapp *a) {
-    return uui_toolbar_tick(&g_tb) ? (uapp_redraw(a), 1) : 0;
+    int r = uui_toolbar_tick(&g_tb) | check_tick(a);
+    if (r) uapp_redraw(a);
+    return r;
+}
+
+// The worker's answer. A dialog already up is held to SHOW_FOR_MS, at
+// 100%, before the result replaces it (check_tick() finishes the job).
+static int on_user(struct uapp *a, int a0, int a1) {
+    (void)a1;
+    if (a0 != EV_CHECK_DONE) return 0;
+    g_job.finished = 1;
+    g_job.ms = (unsigned)((uui_anim_now_ns() - g_job.started_ns) / 1000000ull);
+    if (g_job.shown && g_job.rc == 0) {
+        unsigned bad = g_check.leaked + g_check.referenced_but_free + g_check.double_allocated + g_check.out_of_range;
+        uui_stages_set(&g_stages, g_stages.count, 1000);
+        g_stages.line[0] = 0;
+        if (g_stages.count)
+            snprintf(g_stages.detail[g_stages.count - 1], sizeof g_stages.detail[0],
+                     bad == 1 ? "%u problem" : "%u problems", bad);
+        open_progress(a);    // without its Stop: there is nothing left to stop
+    }
+    if (!g_job.shown || uui_anim_now_ns() - g_job.shown_ns >= SHOW_FOR_MS * 1000000ull) check_done(a);
+    build_map();
+    return 1;
 }
 
 static void default_size(int *w, int *h) {
@@ -950,6 +1151,7 @@ int main(void) {
     uui_segmented_init(&g_fs, FS_CHOICES, 3, 0);
     uui_button_init(&g_create, 0, 0, 0, 0, "Create", UTHEME_ACCENT, UTHEME_ACCENT_TEXT, ID_CREATE);
     uui_dialog_init(&g_ask);
+    uui_stages_init(&g_stages);
     uui_statusbar_init(&g_sb);
     g_sb.count = 4;
     g_sb.panes[0].text = g_note;     g_sb.panes[0].chars = 0;
@@ -977,6 +1179,7 @@ int main(void) {
         .focus        = &g_focus,
         .tick_ms      = 100,
         .on_tick      = on_tick,
+        .on_user      = on_user,
         .on_draw      = on_draw,
         .on_widget    = on_widget,
         .on_action    = on_action,

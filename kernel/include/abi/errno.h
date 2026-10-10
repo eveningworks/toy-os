@@ -169,5 +169,7 @@
                    // same answer as "no such fact". Distinguishing them
                    // is the difference between sending a reader to the
                    // right tool and sending them hunting for a typo
+#define ECANCELED 125 // stopped part way because it was ASKED to stop
+                      // (SYS_FS_CHECK's FSCK_STOP), not because it failed
 
 #endif // ABI_ERRNO_H

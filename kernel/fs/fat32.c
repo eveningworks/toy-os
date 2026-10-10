@@ -53,6 +53,7 @@
 // docs/conventions/storage.md states.
 #include "fs.h"
 #include "fs_ops.h"
+#include "errno.h"   // ECANCELED, a check stopped on request
 #include "fat32.h"
 #include "ktime.h"
 #include "caltime.h"
@@ -1898,7 +1899,9 @@ static int fat32_disk_usage(void *st, uint64_t *out_used, uint64_t *out_total) {
 // the bootloader is worse than a clear report. What this DOES check is
 // the pair of things a driver can be sure about: that the FAT copies
 // agree, and that no cluster is claimed by two chains.
-static int fat32_check(void *st, int repair, struct fs_check_result *out) {
+static const struct fsck_stage_desc FAT_STAGES[] = { { "Read the allocation table", "clusters" } };
+
+static int fat32_check(void *st, int repair, struct fs_check_result *out, struct fs_check_live *live) {
     struct fat32_state *sbi = st;
     if (!sbi->v.mounted) return 0;
     if (out) k_memset(out, 0, sizeof *out);
@@ -1914,8 +1917,11 @@ static int fat32_check(void *st, int repair, struct fs_check_result *out) {
     if (!seen) return 0;
     k_memset(seen, 0, nbytes);
 
-    int problems = 0, crosslinked = 0, out_of_volume = 0;
+    int problems = 0, crosslinked = 0, out_of_volume = 0, stopped = 0;
+    fsck_begin(live, repair, FAT_STAGES, 1);
+    fsck_stage(live, 0, sbi->v.cluster_count);
     for (uint32_t c = 2; c < sbi->v.cluster_count + 2; c++) {
+        if (!(c & 1023) && fsck_step(live, c - 2, 0)) { stopped = 1; break; }
         uint32_t v;
         if (!fat_get(sbi, c, &v)) { problems++; break; }
         if (v == FAT_FREE || v == FAT_BAD || fat_is_eoc(v)) continue;
@@ -1932,6 +1938,8 @@ static int fat32_check(void *st, int repair, struct fs_check_result *out) {
         seen[v / 8] |= (uint8_t)(1u << (v % 8));
     }
     kfree(seen);
+    fsck_end(live);
+    if (stopped) return -ECANCELED;
 
     // The fields this format can honestly fill. A cross-linked cluster
     // IS a double allocation, and one pointing off the volume IS an

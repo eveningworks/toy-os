@@ -112,4 +112,33 @@ struct fs_check_result {
 // Refused with -ENOTSUP by a backend that can only report.
 #define FSCK_REPAIR 0x1
 
+// **NOT A CHECK: A QUESTION ABOUT THE ONE RUNNING.** RDX is then a
+// `struct fs_check_progress`, filled WITHOUT the volume's lock -- the
+// running pass holds it -- so a second thread can draw a bar while the
+// first sits in the check. chkdsk's "Stage 2 of 3, 64 percent".
+#define FSCK_PROGRESS 0x2
+// Ask the READ-ONLY check running on the volume to stop; it then returns
+// -ECANCELED. -ESRCH when none is running, -EBUSY for a repair: half a
+// repair is a volume in a state nobody chose.
+#define FSCK_STOP 0x4
+
+#define FSCK_STAGES_MAX 4
+
+// A snapshot, so the fields can disagree by one step: each is stored on
+// its own, and nothing here is worth a lock the check would have to share.
+struct fs_check_progress {
+    uint32_t running;     // a pass is in flight; everything else is stale when 0
+    uint32_t repair;      // ...and it is a repair, which cannot be stopped
+    uint32_t stage;       // 0-based, < stages
+    uint32_t stages;      // 0: the backend reports no progress (draw it busy)
+    uint32_t done, total; // this stage's units; total 0 is "not known yet"
+    uint32_t problems;    // found so far, every kind together
+    uint32_t records;     // fs_check_result's records_used, so far
+    uint32_t blocks;      // ...and blocks_referenced
+    // Each stage's name ("Compare the allocation maps") and what its
+    // units count ("groups"), so a caller lists stages it has not reached.
+    char names[FSCK_STAGES_MAX][32];
+    char units[FSCK_STAGES_MAX][12];
+};
+
 #endif

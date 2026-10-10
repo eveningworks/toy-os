@@ -3,8 +3,64 @@
 
 #include <stdint.h>
 #include "fs.h" // struct fs_stat_info + FS_CAP_* bits, for .stat/.caps below
+#include "string.h" // k_strlcpy, for fsck_begin()
 
 struct block_device; // kernel/block.h -- what probe()/init() are handed
+
+// ---- a check's progress, readable while the check runs ----------------
+//
+// One per mount (mount.h). The pass writes it under the mount's lock;
+// SYS_FS_CHECK's FSCK_PROGRESS reads it WITHOUT that lock, so every
+// field goes through an atomic store and is read as a snapshot.
+struct fs_check_live {
+    struct fs_check_progress prog;
+    int stop;                      // FSCK_STOP asked; honoured only by a read-only pass
+};
+
+struct fsck_stage_desc { const char *name, *units; };
+
+// Starts a pass: names its stages, clears the last pass's numbers and
+// any stop asked before it began. Pair with fsck_end() on every return.
+static inline void fsck_begin(struct fs_check_live *l, int repair,
+                              const struct fsck_stage_desc *st, int n) {
+    if (!l) return;
+    __atomic_store_n(&l->prog.running, 0, __ATOMIC_RELEASE);
+    struct fs_check_progress *p = &l->prog;
+    for (int i = 0; i < FSCK_STAGES_MAX; i++) {
+        k_strlcpy(p->names[i], i < n ? st[i].name : "", sizeof p->names[i]);
+        k_strlcpy(p->units[i], i < n ? st[i].units : "", sizeof p->units[i]);
+    }
+    p->stages = (uint32_t)(n < FSCK_STAGES_MAX ? n : FSCK_STAGES_MAX);
+    p->stage = p->done = p->total = p->problems = p->records = p->blocks = 0;
+    p->repair = repair ? 1u : 0u;
+    __atomic_store_n(&l->stop, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&p->running, 1, __ATOMIC_RELEASE);
+}
+
+static inline void fsck_stage(struct fs_check_live *l, int stage, uint32_t total) {
+    if (!l) return;
+    __atomic_store_n(&l->prog.done, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&l->prog.total, total, __ATOMIC_RELAXED);
+    __atomic_store_n(&l->prog.stage, (uint32_t)stage, __ATOMIC_RELAXED);
+}
+
+// One step of the current stage, with what the pass has found so far.
+// Returns 1 when the pass should STOP: asked to, and not a repair.
+static inline int fsck_step(struct fs_check_live *l, uint32_t done, const struct fs_check_result *r) {
+    if (!l) return 0;
+    __atomic_store_n(&l->prog.done, done, __ATOMIC_RELAXED);
+    if (r) {
+        uint32_t bad = r->leaked + r->referenced_but_free + r->double_allocated + r->out_of_range;
+        __atomic_store_n(&l->prog.problems, bad, __ATOMIC_RELAXED);
+        __atomic_store_n(&l->prog.records, r->records_used, __ATOMIC_RELAXED);
+        __atomic_store_n(&l->prog.blocks, r->blocks_referenced, __ATOMIC_RELAXED);
+    }
+    return !l->prog.repair && __atomic_load_n(&l->stop, __ATOMIC_RELAXED);
+}
+
+static inline void fsck_end(struct fs_check_live *l) {
+    if (l) __atomic_store_n(&l->prog.running, 0, __ATOMIC_RELEASE);
+}
 
 // The VFS backend interface -- fs.h's public fs_* API (kapi.h's stable
 // surface, unchanged by any of this) is implemented by vfs.c as a thin
@@ -256,7 +312,9 @@ struct fs_ops {
     // loop in the kernel.
     void (*idle)(void *st);
 
-    int (*check)(void *st, int repair, struct fs_check_result *out);
+    // `live` is the mount's progress (fsck_begin() and its helpers
+    // below); a backend that reports none leaves it alone.
+    int (*check)(void *st, int repair, struct fs_check_result *out, struct fs_check_live *live);
 
     // ---- optional ops (the caps rule becomes real here) ----
     //

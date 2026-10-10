@@ -2325,7 +2325,12 @@ window without going through it will find its layout polls timing out.
 - **`disks_test.py`** -- Disks on a guest of its own: the system disk
   pinned as the root and a BLANK 256 MiB virtio disk beside it, in
   `ondemand_sweep.py` (it boots its own hardware). On the system disk
-  Format and Mount do nothing and Delete says why; on the blank one a
+  Format and Mount do nothing and Delete says why, and Check shows its
+  stages while a pass runs and Escape (the dialog's Stop) ends Disks'
+  own pass -- REPAIRS of `/` (`fsck -r`, unstoppable) are queued ahead
+  of it so a key can land in time, since `/` alone takes half a second.
+  Positive control: without Disks' warm-up of its progress drawing, the
+  Stop never lands. On the blank one a
   new GPT and partition (believed from `lsblk`), mount (from `df`, and
   a file written through it), Check, unmount, a second partition, a
   format to FAT32 (believed because it then MOUNTS as fat32), a delete;

@@ -489,6 +489,11 @@ int fs_check(int repair, struct fs_check_result *out);
 // repair on a read-only mount), -ENOTSUP (a repair the backend cannot
 // do, FS_CAP_REPAIR), -EIO (the backend could not complete the pass).
 int fs_check_at(const char *path, int repair, struct fs_check_result *out);
+// The check running on that volume, read WITHOUT its lock (`running` 0
+// when there is none), and a request that a read-only one stop -- it
+// then returns -ECANCELED. -ESRCH: none running; -EBUSY: a repair.
+int fs_check_progress_at(const char *path, struct fs_check_progress *out);
+int fs_check_stop_at(const char *path);
 
 // Whether a backend call is in flight on the mount answering for
 // `path`, and the pid holding it (0 for the kernel context). Per MOUNT:

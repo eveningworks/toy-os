@@ -1349,6 +1349,7 @@ this to be better?".
 - [x] ~~A key event carries the translated code only, not the physical keycode~~ DONE 2026-09-29 -- `on_phys_key`
 
 - [ ] The desktop decodes a new wallpaper on the COMPOSITOR's thread -- a 640 ms frame on the laptop; a mode change no longer decodes
+- [ ] A check holds its volume's lock for the whole pass, so any program reading that volume -- even to page in code -- waits it out
 - [x] ~~Four overlays still opt out of damage tracking~~ DONE 2026-10-04 -- each damages its own rects bar the Leave page
 - [ ] `damage_sweep.py`'s random walk can open Notepad's file chooser by chance -- harmless, but it is a second WINDOW in a state dump now
 - [x] ~~`SYS_LISTDIR` truncates at 256 entries and TFS3 has no such cap~~ done -- `SYS_LISTDIR_AT` pages

@@ -89,6 +89,10 @@ struct mount {
     // to wait for a per-object lock (mount_wait()), and waiting released
     // the volume lock, so what it looked up may have changed.
     int restart;
+
+    // How far a check of this volume has got, and a stop asked of it --
+    // written under the lock, READ WITHOUT IT (fs_ops.h).
+    struct fs_check_live check;
 };
 
 // Lock one mount for a backend call; its state is behind it.

@@ -18,6 +18,7 @@
 // t3_ prefix, since they are kernel-global now.
 
 #include "fs.h"
+#include "fs_ops.h"    // struct fs_check_live and the fsck_* progress helpers
 #include "block.h"
 #include "kpath_buf.h" // KPATH_SCRATCH_FOR -- t3_state's path scratch
 #include <stddef.h>
@@ -520,6 +521,6 @@ void *tfs3_write_range_begin(void *st, const char *path, uint64_t offset,
 int tfs3_write_range_step(void *st, void *handle);
 
 // tfs3_fsck.c
-int tfs3_check(void *st, int repair, struct fs_check_result *out);
+int tfs3_check(void *st, int repair, struct fs_check_result *out, struct fs_check_live *live);
 
 #endif

@@ -826,11 +826,16 @@ int fs_mount_usage(const void *mount, uint64_t *out_used_bytes, uint64_t *out_to
     return FS_OP(m, m->gen, disk_usage, out_used_bytes, out_total_bytes);
 }
 
+// The slot's progress is the slot's own mutable state, as its lock is.
+static struct fs_check_live *live_of(const struct mount *m) {
+    return (struct fs_check_live *)&m->check;
+}
+
 int fs_check(int repair, struct fs_check_result *out) {
     const struct mount *m = mount_root();
     if (!m) return 0;
     if (repair && (m->flags & MNT_RDONLY)) return 0;
-    return FS_OP(m, m->gen, check, repair, out);
+    return FS_OP(m, m->gen, check, repair, out, live_of(m)) == 1;
 }
 
 int fs_check_at(const char *path, int repair, struct fs_check_result *out) {
@@ -838,9 +843,43 @@ int fs_check_at(const char *path, int repair, struct fs_check_result *out) {
     if (!path || !resolve(path, &r)) return -ENOENT;
     if (repair && (r.m->flags & MNT_RDONLY)) return -EROFS;
     if (repair && !(r.m->fs->caps & FS_CAP_REPAIR)) return -ENOTSUP;
-    if (!FS_OP(r.m, r.gen, check, repair, out)) return -EIO;
+    int rc = FS_OP(r.m, r.gen, check, repair, out, live_of(r.m));
+    if (rc < 0) return rc;   // -ECANCELED: stopped on request
+    if (!rc) return -EIO;
     k_strlcpy(out->fstype, r.m->fs->name, sizeof out->fstype);
     k_strlcpy(out->point, r.m->point, sizeof out->point);
+    return 0;
+}
+
+// NO LOCK: the pass this reads holds the mount's for its whole length.
+int fs_check_progress_at(const char *path, struct fs_check_progress *out) {
+    struct resolved r;
+    if (!path || !resolve(path, &r)) return -ENOENT;
+    const struct fs_check_progress *p = &r.m->check.prog;
+    k_memset(out, 0, sizeof *out);
+    out->running = __atomic_load_n(&p->running, __ATOMIC_ACQUIRE);
+    if (!out->running) return 0;
+    out->repair = __atomic_load_n(&p->repair, __ATOMIC_RELAXED);
+    out->stage = __atomic_load_n(&p->stage, __ATOMIC_RELAXED);
+    out->stages = __atomic_load_n(&p->stages, __ATOMIC_RELAXED);
+    out->done = __atomic_load_n(&p->done, __ATOMIC_RELAXED);
+    out->total = __atomic_load_n(&p->total, __ATOMIC_RELAXED);
+    out->problems = __atomic_load_n(&p->problems, __ATOMIC_RELAXED);
+    out->records = __atomic_load_n(&p->records, __ATOMIC_RELAXED);
+    out->blocks = __atomic_load_n(&p->blocks, __ATOMIC_RELAXED);
+    // The names are written before `running` is set, and only then.
+    k_memcpy(out->names, p->names, sizeof out->names);
+    k_memcpy(out->units, p->units, sizeof out->units);
+    return 0;
+}
+
+int fs_check_stop_at(const char *path) {
+    struct resolved r;
+    if (!path || !resolve(path, &r)) return -ENOENT;
+    struct fs_check_live *l = live_of(r.m);
+    if (!__atomic_load_n(&l->prog.running, __ATOMIC_ACQUIRE)) return -ESRCH;
+    if (__atomic_load_n(&l->prog.repair, __ATOMIC_RELAXED)) return -EBUSY;
+    __atomic_store_n(&l->stop, 1, __ATOMIC_RELAXED);
     return 0;
 }
 
