@@ -16,6 +16,13 @@ Restart=on-failure
 # desktop actually became usable, and a barrier that works the day
 # something is.
 Ready=notify
+# AFTER THE FONT, so the first frame is drawn in it. Started beside
+# fontd, the desktop drew in the kernel's baked fallback and switched a
+# moment later -- 0.4 s on the ASUS, seconds on a busier boot, measured
+# 2026-10-10. fontd reports ready once it has published (or found
+# nothing to publish), init waits at most ReadyTimeout for it, and a
+# fontd that is down holds nothing up: ordering, not a requirement.
+After=fontd
 # The compositor outranks every app, as KWin's SCHED_RR main thread does:
 # a frame waits for nothing ordinary. It blocks between frames, which is
 # what makes that safe -- see data/etc/services.d/README.md.

@@ -218,7 +218,7 @@ def desktop_menu(g, res):
         g.dbg.send(f"gui rclick {rx} {ry}")
         g.dbg.settle(1.0)
         cm = g.dbg.json("gui ctxmenu --json")
-        row = [r for r in cm["rows"] if r["label"] == "New folder"]
+        row = [r for r in cm["rows"] if r["label"] == "Refresh"]
         if not cm.get("open") or not row:
             res.check(f"{on}: the desktop menu opened", False, str(cm)[:200])
             return
