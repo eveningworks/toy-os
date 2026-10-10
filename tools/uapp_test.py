@@ -43,6 +43,7 @@ before trusting a green run after any change to the handshake.
 
 import argparse
 import os
+import re
 import sys
 import time
 
@@ -405,6 +406,37 @@ def check_worker_post(dbg, qmp, tmp, res):  # noqa: ARG001 -- tmp unused
               f"from_tid={fields.get('from_tid')} on_tid={fields.get('on_tid')}")
 
 
+def check_default_tick(dbg, qmp, tmp, res):  # noqa: ARG001 -- qmp/tmp unused
+    """An on_tick with no tick_ms is a 33 ms TIMER, not a polling loop.
+
+    /tests/tickclient names no rate and counts its ticks over two
+    seconds. UAPP_TICK_DEFAULT_MS makes that about 60; the polling loop
+    it replaced called on_tick on every pass, hundreds of times -- so the
+    count alone tells the two apart, in either direction: a timer that
+    never armed gives none.
+    """
+    dbg.logs("tickclient:", clear=True)
+    dbg.send("gui spawn /tests/tickclient")
+    lines = []
+    deadline = time.time() + 15
+    while time.time() < deadline and len(lines) < 2:
+        lines = dbg.logs("tickclient:", clear=False)
+        time.sleep(0.5)
+    rates = []
+    for ln in lines:
+        m = re.search(r"tickclient: (\d+) ticks in (\d+) ms", ln)
+        if m:
+            rates.append(int(m.group(1)) * 1000.0 / int(m.group(2)))
+    # The SECOND window: the first may include the window opening.
+    rate = rates[1] if len(rates) > 1 else (rates[0] if rates else 0)
+    res.check("7. an on_tick with no tick_ms ticks about every 33 ms, not as a poll",
+              20 <= rate <= 36, f"{rate:.1f} ticks/s from {lines[-2:]}")
+    win = dbg.window("Tick Client")
+    if win:
+        dbg.send(f"gui close {win['z']}")
+        dbg.settle(0.5)
+
+
 def check_focus_caret(dbg, qmp, tmp, res):
     """A caret must not be drawn while its window is unfocused.
 
@@ -528,6 +560,7 @@ def main():
         run(dbg, qmp, args.tmp, res)
         # BEFORE check_focus_caret, which quits winclient with 'q'.
         check_worker_post(dbg, qmp, args.tmp, res)
+        check_default_tick(dbg, qmp, args.tmp, res)
         check_focus_caret(dbg, qmp, args.tmp, res)
 
     n_ok, n_bad = len(res.passes), len(res.fails)

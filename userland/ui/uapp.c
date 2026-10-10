@@ -339,7 +339,12 @@ void uapp_inhibit_shortcuts(struct uapp *a, int on) {
 void uapp_poll_pause(struct uapp *a, int paused) { a->poll_paused = paused ? 1 : 0; }
 
 int uapp_set_tick(struct uapp *a, unsigned ms) {
-    if (!a->timer_armed || !ms) return 0;
+    if (!ms || !a->tick_ms) return 0;   // a UAPP_POLL app, or no on_tick
+    a->tick_ms = ms;
+    if (a->tick_local) {
+        a->tick_due_ms = sys_monotonic_ns() / 1000000ull + ms;
+        return 1;
+    }
     return wmchan_send(WIN_REQ_TIMER, a->window, (int)ms, 0, 0, 0) ? 1 : 0;
 }
 
@@ -1076,20 +1081,19 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     // leaving TWS to assume it would be the inference this protocol
     // deliberately avoids.
     wmchan_send(WIN_REQ_HINTS, a->window,
-                (int)(desc->flags | (desc->on_phys_key ? WIN_HINT_PHYS_KEYS : 0)),
+                (int)((desc->flags & ~UAPP_POLL) | (desc->on_phys_key ? WIN_HINT_PHYS_KEYS : 0)),
                 desc->min_w, desc->min_h, 0);
 
-    // Arm the repeating timer, if the app asked for one. Only useful
-    // alongside an on_tick, which is the only thing it drives -- arming
-    // it without one would wake the process to do nothing, which is a
-    // slower version of the problem it exists to solve.
-    if (desc->tick_ms && desc->on_tick) {
-        // A refusal is survivable and deliberately not fatal: uapp_run()
-        // checks the same condition and falls back to polling, so an
-        // older server that has never heard of this simply gets the old
-        // behaviour instead of an app that never ticks.
-        a->timer_armed = wmchan_send(WIN_REQ_TIMER, a->window,
-                                     (int)desc->tick_ms, 0, 0, 0);
+    // Arm the repeating timer for every on_tick that does not poll --
+    // at the app's rate, or UAPP_TICK_DEFAULT_MS when it named none. Not
+    // without an on_tick, which is the only thing it drives: arming it
+    // then would wake the process to do nothing.
+    if (desc->on_tick && !(desc->flags & UAPP_POLL)) {
+        a->tick_ms = desc->tick_ms ? desc->tick_ms : UAPP_TICK_DEFAULT_MS;
+        // A refusal is survivable: uapp_run() then keeps the same time
+        // itself (tick_local), so an older server that has never heard
+        // of this still gets an app that ticks.
+        a->timer_armed = wmchan_send(WIN_REQ_TIMER, a->window, (int)a->tick_ms, 0, 0, 0);
     }
     // THE BACK BUFFER, never buffer 0: the compositor shows that one
     // from the create on, so painting it reads as a window that opens
@@ -1156,9 +1160,19 @@ static int uapp_pump(struct uapp *a, int block) {
                 break;
             }
             if (caret > 0 && caret < wait) wait = caret;
+            // A tick kept HERE (the server declined the timer) is one
+            // more deadline the park must not outlast.
+            int tick = -1;
+            if (a->tick_local) {
+                uint64_t now = sys_monotonic_ns() / 1000000ull;
+                tick = a->tick_due_ms > now ? (int)(a->tick_due_ms - now) : 0;
+                if (tick == 0) break;
+                if (tick < wait) wait = tick;
+            }
             uchan_client_wait(&g_wmchan, wait);
             if (uchan_client_pending(&g_wmchan) || g_post_head != g_post_tail) break;
             if (animating) break;
+            if (wait == tick) break;       // a tick is due
             if (wait == caret) continue;   // the flip, not a silent server
             // Nothing arrived in a whole wait: is anyone still there to
             // send? A dead compositor's beacon is unlinked with it, so
@@ -1240,18 +1254,11 @@ int uapp_run(const struct uapp_desc *desc) {
 
     if (!uapp_open(&a, desc)) return 1;
 
-    if (desc->on_tick && !a->timer_armed) {
-        // No timer -- either the app named no interval or the server
-        // declined one. Poll rather than block, so the app still keeps
-        // moving with no input. The yield is politeness, not a
-        // workaround: a client doing real work every frame would
-        // otherwise take its whole timeslice and make the desktop feel
-        // sticky.
-        //
-        // This is the OLD path, kept for apps that have not named a
-        // tick_ms. It costs a wake-up per tick whatever the app
-        // actually needed, which is why anything with a real cadence
-        // should set one -- see uapp.h's tick_ms.
+    if (desc->on_tick && (desc->flags & UAPP_POLL)) {
+        // UAPP_POLL: on_tick on every pass, and the loop never blocks.
+        // The yield is politeness, not a workaround: a client doing real
+        // work every frame would otherwise take its whole timeslice and
+        // make the desktop feel sticky.
         while (a->running) {
             if (a->poll_paused) {   // nothing to animate: wait like any app
                 uapp_pump(a, 1);
@@ -1260,6 +1267,20 @@ int uapp_run(const struct uapp_desc *desc) {
             if (desc->on_tick(a)) a->top.dirty = 1;
             uapp_pump(a, 0);
             sys_yield();
+        }
+    } else if (desc->on_tick && !a->timer_armed) {
+        // THE SERVER DECLINED THE TIMER: the same rate, kept here, in the
+        // same blocking wait (uapp_pump() parks no longer than the next
+        // tick). Never the polling loop -- that is UAPP_POLL's alone.
+        a->tick_local = 1;
+        a->tick_due_ms = sys_monotonic_ns() / 1000000ull + a->tick_ms;
+        while (a->running) {
+            uint64_t now = sys_monotonic_ns() / 1000000ull;
+            if (now >= a->tick_due_ms) {
+                a->tick_due_ms = now + a->tick_ms;
+                if (desc->on_tick(a)) a->top.dirty = 1;
+            }
+            if (!uapp_pump(a, 1)) break;
         }
     } else {
         while (uapp_pump(a, 1)) { }

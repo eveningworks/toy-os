@@ -411,10 +411,9 @@ static void on_focus(struct uapp *a, int focused) {
 
 // --- the game loop ------------------------------------------------------
 //
-// `tick_ms` is 0, so the toolkit POLLS: on_tick runs once per pass and
-// yields, which is what ui/uapp.h says an animation with no natural rate
-// wants. Doom has its own rate (it sleeps inside its tick to hold 35Hz),
-// so arming a TWS timer on top would be two clocks fighting.
+// UAPP_POLL, so the toolkit POLLS: on_tick runs once per pass and
+// yields. Doom has its own rate (it sleeps inside its tick to hold
+// 35Hz), so a TWS timer on top would be two clocks fighting.
 static int on_tick(struct uapp *a) {
     struct doom_state *st = uapp_state(a);
     if (!st->started || st->failed) return 0;
@@ -529,7 +528,7 @@ int main(int argc, char **argv) {
         // SCANOUT: the scaler stores every pixel of the content rect
         // and reads none back, so fullscreen may draw the display's own
         // buffer (docs/scanout-design.md).
-        .flags  = UAPP_SINGLE_INSTANCE | UAPP_RESIZABLE | UAPP_SCANOUT,
+        .flags  = UAPP_SINGLE_INSTANCE | UAPP_RESIZABLE | UAPP_SCANOUT | UAPP_POLL,
         // 640x480, not 640x400: see DOOM_ASPECT_W above. The default
         // window is the aspect-corrected size, so it fills exactly.
         .w      = DOOM_RESX,

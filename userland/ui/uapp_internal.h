@@ -159,8 +159,11 @@ struct uapp {
     int running;
     int status;
     int timer_armed; // TWS accepted a WIN_REQ_TIMER, so on_tick arrives
-    int poll_paused; // uapp_poll_pause(): park in the blocking wait instead
                      // as an event and the loop can block
+    int poll_paused; // uapp_poll_pause(): park in the blocking wait instead
+    unsigned tick_ms; // on_tick's interval; 0 for UAPP_POLL or no on_tick
+    int tick_local;   // TWS declined the timer: uapp_run() keeps the time
+    uint64_t tick_due_ms;
 
     // Pointer routing (ui/uui_route.h) is top.router: empty unless the
     // app declared widgets, so an app that does its own hit-testing is

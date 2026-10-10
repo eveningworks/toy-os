@@ -209,8 +209,8 @@ int main(void) {
   with `on_size`, from `ugfx_char_h()` and `ugfx_text_width()`.
 - `app_id` is the app's identity to the desktop (taskbar grouping, single
   instance with `UAPP_SINGLE_INSTANCE`).
-- Everything else is optional: `on_open`, `on_tick` with `tick_ms` for a
-  timer, `on_resize`, `on_close`, raw `on_press`/`on_release`/`on_motion`
+- Everything else is optional: `on_open`, `on_tick` (a timer, every
+  `tick_ms`, 33 ms if you name none), `on_resize`, `on_close`, raw `on_press`/`on_release`/`on_motion`
   for canvas-style apps. `uapp.h` documents each.
 
 ## 6. Into the Start menu

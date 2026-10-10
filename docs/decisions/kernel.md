@@ -1664,10 +1664,12 @@ Four decisions inside it:
 
 **Milliseconds, not ticks.** The tick rate is the kernel's business,
 and a client asking to be woken every 500ms should not have to know it
-is 100Hz today. The server rounds to whole ticks and floors at one --
-an interval faster than the resolution becomes "every tick" rather than
-an error, and crucially rather than zero, which would fire every frame
-and turn a request to slow down into the busiest possible loop.
+is 100Hz today. The server first rounded to whole ticks and floored at
+one; since the kernel's timers became one-shot deadlines it keeps the
+interval in nanoseconds, so 16 ms is 16 ms (`wm_client.c`'s
+`on_window_timer()`). Zero is still never an interval: `uapp_set_tick()`
+refuses it, because zero would fire every frame and turn a request to
+slow down into the busiest possible loop.
 
 **A deadline, not a queue.** The next firing is computed from NOW, not
 by adding the interval to the previous deadline. Those differ only when
@@ -1680,10 +1682,15 @@ wanted. Same reasoning as the event queue dropping the oldest.
 one short interval, exactly as an app does on top of a frame clock. A
 general timer service is a bigger feature than anything here needs.
 
-**Polling stays as the fallback.** `tick_ms` of 0, or a server that
-declines the request, leaves the old loop in place. That is what keeps
-this additive: no existing app changed behaviour by not opting in, and
-an older server does not produce an app that simply never ticks.
+**Polling stayed as the fallback -- until 2026-10-10.** `tick_ms` of 0,
+or a server that declined the request, left the old loop in place, which
+kept this additive. That made the timer a REQUIREMENT: an app that
+forgot `tick_ms` woke 100 times a second. Now 0 means a 33 ms timer
+(`UAPP_TICK_DEFAULT_MS`, what most screensavers chose), a declined
+timer is kept by `uapp` in its blocking wait, and the polling loop is
+`UAPP_POLL`, asked for by name -- by DOOM, which keeps its own 35 Hz
+clock inside `on_tick`. Win32 and SDL draw the same line: a timer by
+default, a `PeekMessage` loop when a game asks for one.
 
 This also fixed `COARSE_HZ` being a bare literal at the `pit_init()` call
 and a "100 Hz" remark in two comments -- fine until something had to

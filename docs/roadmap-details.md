@@ -3797,7 +3797,7 @@ existing.
 
 - [x] ~~**Blocking + wait queues.**~~ DONE 2026-08-20 -- a wait channel is an ADDRESS, so a wake reaches one pipe or one client rather than a category. The roadmap ticked this and this list did not, which is the drift a duplicated item always produces.
 
-- [ ] **Retire `uapp_desc.tick_ms` as a REQUIREMENT.** It exists because an app with no cadence otherwise polls with `sys_yield()` at full speed; Control Panel omits it and burns 100% of every slice it is given. With wait queues it becomes an optimisation rather than the difference between a well-behaved app and a spinning one.
+- [x] **Retire `uapp_desc.tick_ms` as a REQUIREMENT.** DONE 2026-10-10: a `tick_ms` of 0 arms a 33 ms timer, and the polling loop is `UAPP_POLL`'s, which DOOM and `fsclient` set. It exists because an app with no cadence otherwise polls with `sys_yield()` at full speed; Control Panel omits it and burns 100% of every slice it is given. With wait queues it becomes an optimisation rather than the difference between a well-behaved app and a spinning one.
 
 - [ ] **Two scheduling classes, Linux-shaped.** A compositor should outrank a background demo; today they are peers, which is why an actively-working app measurably degrades the desktop. Classes queried in priority order (realtime-ish, then normal), NOT a plugin interface -- see the Details entry for why.
 

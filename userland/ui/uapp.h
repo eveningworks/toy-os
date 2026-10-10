@@ -84,6 +84,18 @@ struct uui_focus;   // ui/uui_focus.h -- desc.focus is a pointer, so a
 // mutual-exclusion primitive to build on.
 #define UAPP_SINGLE_INSTANCE 0x02
 
+// This app POLLS: on_tick runs on every pass of the loop, which yields
+// rather than blocks, so the process is runnable for as long as it
+// lives. For a program that keeps its own clock inside on_tick -- DOOM
+// sleeps there to hold 35 Hz -- and nothing else: everything that
+// merely animates is woken by a timer (`tick_ms`). Win32's PeekMessage
+// game loop is the same opt-in. uapp's own; never sent to TWS.
+// on_tick's rate when the app names no tick_ms: 30 frames a second,
+// what most of the screensavers chose for themselves.
+#define UAPP_TICK_DEFAULT_MS 33
+
+#define UAPP_POLL 0x100
+
 // The drawing context handed to on_draw. Carries the surface AND the
 // theme defaults, which is what takes ugfx_draw_string()'s six
 // arguments down to three for the common case.
@@ -133,17 +145,14 @@ struct uapp_desc {
     // here.
     int x, y;
 
-    // How often on_tick should run, in milliseconds. 0 (the default)
-    // keeps the old behaviour: on_tick runs as fast as the loop goes,
-    // which POLLS -- the loop never blocks, and the process is runnable
-    // every scheduling round for as long as it lives.
+    // How often on_tick should run, in milliseconds. The library arms a
+    // TWS timer and BLOCKS in between, so the app is woken exactly as
+    // often as it asked to be. Pick the rate the app actually needs: a
+    // clock or a process list wants 500-1000, an animation 16-33.
     //
-    // Set it, and the library arms a TWS timer instead and BLOCKS in
-    // between, so the app is woken exactly as often as it asked to be.
-    // Pick the rate the app actually needs: a clock or a process list
-    // wants 500-1000, an animation wants 10-33. Polling to do work
-    // twice a second means waking a hundred times a second to decide
-    // not to.
+    // 0 IS UAPP_TICK_DEFAULT_MS, a frame rate's worth -- not the polling
+    // loop it used to be, which woke the process a hundred times a
+    // second whatever it wanted. Polling is UAPP_POLL, asked for by name.
     //
     // Ignored without an on_tick, which is the only thing it drives.
     unsigned tick_ms;
@@ -631,17 +640,17 @@ int uapp_press_on_popup(struct uapp *a);
 // that it lapses automatically when the window loses the focus.
 void uapp_inhibit_shortcuts(struct uapp *a, int on);
 
-// A POLLING app (on_tick, no tick_ms) with nothing to animate for a
+// A POLLING app (UAPP_POLL) with nothing to animate for a
 // while -- a game's launcher before the game runs -- parks in the
 // blocking wait like any other app until this is cleared, and on_tick
 // is not called meanwhile. Sleeping inside on_tick instead delays every
 // event behind the sleep.
 void uapp_poll_pause(struct uapp *a, int paused);
 
-// A new interval for the timer `tick_ms` armed, counted from NOW -- an
+// A new interval for the app's tick timer, counted from NOW -- an
 // animation whose frames each name their own delay re-arms after every
-// one. Returns 0, changing nothing, for an app that named no tick_ms (it
-// polls) or for 0 ms; set a long interval to slow down, not 0.
+// one. Returns 0, changing nothing, for a UAPP_POLL app or for 0 ms;
+// set a long interval to slow down, not 0.
 int uapp_set_tick(struct uapp *a, unsigned ms);
 
 void uapp_busy_begin(struct uapp *a);

@@ -7,7 +7,7 @@
 // and toggles on F11. With UAPP_SCANOUT the compositor may lend it the
 // display's buffers; the app cannot tell, which is the point.
 //
-// `tick_ms` is 0: it draws CONTINUOUSLY, as a game does, which is what
+// UAPP_POLL: it draws CONTINUOUSLY, as a game does, which is what
 // reproduces the lease-end crash -- a client mid-frame into a buffer
 // the kernel had just unmapped (DOOM, on the laptop, 2026-09-11).
 #include <stdint.h>
@@ -54,10 +54,9 @@ int main(void) {
     struct uapp_desc desc = {
         .title   = "Fullscreen Client",
         .app_id  = "fsclient",
-        .flags   = UAPP_RESIZABLE | UAPP_SCANOUT,
+        .flags   = UAPP_RESIZABLE | UAPP_SCANOUT | UAPP_POLL,
         .w       = 320,
         .h       = 200,
-        .tick_ms = 0,
         .on_open = on_open,
         .on_draw = on_draw,
         .on_tick = on_tick,

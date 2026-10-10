@@ -715,15 +715,20 @@ this the obvious way), not from how much history it accumulated.
   on black -- legible, plausible in a screenshot, and wrong. Found by
   reading pixel values.
 
-- **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
-  `uapp_desc.tick_ms` arms a TWS timer (`WIN_REQ_TIMER` ->
-  `WIN_EV_TIMER`), so `on_tick` arrives as an event instead of the loop
-  spinning. Leaving it 0 keeps the old polling loop, which wakes a
-  process 100 times a second whatever it actually wanted. Three rules:
-  the interval is in MILLISECONDS and is floored at one tick, never
-  zero; the next firing is computed from NOW so a slow client never
-  accumulates a backlog of overdue firings; and there is ONE timer per
-  window. See `docs/decisions.md`.
+- **`on_tick` BLOCKS between ticks; polling is `UAPP_POLL`, asked for by name.**
+  Every `on_tick` gets a TWS timer (`WIN_REQ_TIMER` -> `WIN_EV_TIMER`),
+  so it arrives as an event instead of the loop spinning: at
+  `uapp_desc.tick_ms`, or `UAPP_TICK_DEFAULT_MS` (33 ms) when that is 0.
+  Name the rate the app needs -- a clock or a list 500-1000, an
+  animation 16-33. The loop that runs `on_tick` on every pass and
+  yields is `UAPP_POLL`'s alone: a program keeping its own clock inside
+  `on_tick` (DOOM, and `fsclient` standing in for a game). Three rules:
+  the interval is in MILLISECONDS, kept by the compositor in
+  nanoseconds (a 16 ms timer is 16 ms, not the next kernel tick); the
+  next firing is computed from NOW so a slow client never accumulates a
+  backlog of overdue firings; and there is ONE timer per window. A
+  server that declines the timer gets the same rate kept by `uapp`
+  itself, in the same blocking wait. See `docs/decisions.md`.
 - **An app refuses its OWN second copy -- the launcher never does.** A
   `uapp_desc` with `UAPP_SINGLE_INSTANCE` sends `WIN_REQ_ACTIVATE`
   before creating anything: the compositor raises the twin and the

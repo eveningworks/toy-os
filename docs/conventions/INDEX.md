@@ -377,7 +377,7 @@ whenever a headline here tells you something you did not already know.
   GRID'S FONT IS THE TERMINAL'S WHILE THE CHROME'S IS THE DESKTOP'S**
 - **THE TERMINAL'S SCREEN IS A GRID, AND THE ANSI PARSER IS THE KERNEL'S
   COMPILED TWICE**
-- **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
+- **`on_tick` BLOCKS between ticks; polling is `UAPP_POLL`, asked for by name.**
 - **An app refuses its OWN second copy -- the launcher never does.**
 - **WHAT PROGRAM A CLIENT IS COMES FROM ITS SPAWN PATH
   (`QUERY_PROCPATH`), THE COMPOSITOR ASKS FOR IT, AND `WIN_REQ_ACTIVATE`

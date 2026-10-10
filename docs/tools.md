@@ -5323,7 +5323,9 @@ window without going through it will find its layout polls timing out.
 - **`uapp_test.py`** -- the TWP resize handshake and focus events, via
   `winclient` (which contains no resize code -- it sets
   `.flags = UAPP_RESIZABLE` and nothing else, so what is under test is
-  Toykit's and TWS's). 8 checks. Its focus check is a ROUND TRIP:
+  Toykit's and TWS's). Also the DEFAULT TICK: `/tests/tickclient` has
+  an `on_tick` and no `tick_ms`, and must count about 30 ticks a second
+  -- the old polling loop gave about 15,000. Its focus check is a ROUND TRIP:
   capture a Terminal's content focused, take focus away and require it
   to CHANGE, give focus back and require it to match the first capture
   EXACTLY -- "it changed" alone is satisfied by almost anything.
