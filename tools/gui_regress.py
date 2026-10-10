@@ -190,6 +190,7 @@ TOOLS = [
     ("imgview", "imgview_test.py", "JPEG decoding, the viewer, the wallpaper, GIF playback, BMP"),
     ("icons", "icons_test.py", "app icons: QOI, alpha compositing, three draw sites"),
     ("desktopmenu", "desktop_menu_test.py", "desktop menus, glass, rename, properties, popup corners"),
+    ("deskdrop", "desktop_drop_test.py", "dropping on desktop folders, apps and the Recycle Bin; type art"),
     ("taskbarmenu", "taskbar_menu_test.py", "the taskbar strip's and the Start button's right-click menus"),
     ("player", "player_test.py", "the Audio Player on a machine with NO sound device"),
     ("video", "video_test.py", "the Video Player: drawn, moving, pausing, seeking, both codecs, full screen"),

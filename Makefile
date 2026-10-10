@@ -2082,6 +2082,7 @@ seed: $(DISK_IMG) $(USERLAND_ELVES) $(KERNEL) $(LDSO) $(DYNLIBS) $(SND_PLUGINS) 
 	mkdir -p $(SEED_DIR)/sync/home/desktop $(SEED_DIR)/once/home/desktop
 	@for a in about files notepad settings terminal; do \
 	    cp data/wm/applications/$$a.desktop $(SEED_DIR)/once/home/desktop/; done
+	cp data/wm/desktop/trash.desktop $(SEED_DIR)/once/home/desktop/
 	@for f in data/etc/ssl/certs/*; do \
 	    if [ -f "$$f" ] && [ "$$(basename $$f)" != "README.md" ]; then \
 	        cp "$$f" $(SEED_DIR)/sync/etc/ssl/certs/; fi; \

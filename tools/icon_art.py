@@ -663,6 +663,42 @@ def drive_ram():
     return finish(shadow(im))
 
 
+
+def _bin(im, lid=True):
+    # A Recycle Bin: a tapering metal body under a lid, ribs down its front.
+    body = m_poly(16, 20, 48, 20, 45, 58, 19, 58)
+    fill(im, body, ((206, 214, 228), (150, 162, 184)))
+    edge(im, body, (118, 130, 152))
+    d = D4(im)
+    if lid:
+        lid_m = m_rr(12, 14, 52, 21, 2)
+        fill(im, lid_m, ((176, 186, 204), (134, 146, 170)))
+        d.rounded_rectangle((26, 9, 38, 15), radius=2, outline=(124, 136, 160, 255), width=2)
+    else:
+        rim = m_rr(14, 18, 50, 23, 2)
+        fill(im, rim, ((176, 186, 204), (134, 146, 170)))
+    for x in (25, 32, 39):
+        d.line([x, 26, x - (x - 32) * 0.15, 53], fill=(128, 140, 164, 255), width=2)
+
+
+def trash_empty():
+    im = canvas()
+    _bin(im)
+    return finish(shadow(im))
+
+
+def trash_full():
+    # The same bin with paper over its rim: Windows' and GNOME's "full".
+    im = canvas()
+    paper = canvas()
+    sheet = m_poly(17, 21, 20, 5, 33, 11, 41, 3, 48, 21)
+    fill(paper, sheet, ((255, 255, 255), (222, 226, 236)))
+    edge(paper, sheet, (160, 168, 186))
+    fill(paper, m_poly(27, 21, 29, 9, 45, 7, 43, 21), ((255, 232, 160), (236, 198, 96)))
+    im = Image.alpha_composite(im, paper)
+    _bin(im, lid=False)
+    return finish(shadow(im))
+
 # =====================================================================
 # CATEGORIES (the Start menu's sidebar and System Settings')
 #
@@ -879,6 +915,7 @@ ART = {
     "uidemo": uidemo, "doom": doom, "devmgr": devmgr, "bootmgr": bootmgr,
     "sysupdate": sysupdate, "diskmark": diskmark, "properties": properties,
     "folder": plain_folder, "file": plain_file, "drive": drive, "drive-ram": drive_ram,
+    "trash-empty": trash_empty, "trash-full": trash_full,
     "cat-time": cat_time, "cat-appearance": cat_appearance, "cat-input": cat_input,
     "cat-shortcuts": cat_shortcuts, "cat-kernel": cat_kernel, "cat-display": cat_display,
     "cat-storage": cat_storage, "cat-system": cat_system, "cat-favourites": cat_favourites,

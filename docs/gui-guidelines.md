@@ -620,6 +620,16 @@ The desktop shows a photograph, so nothing on it is a solid fill:
   field, Enter or a click elsewhere commits, Esc abandons. A launcher's
   caption is its `Name=`, so that is what changes -- KDE's rule.
 - **Properties opens the Properties app** with the path (Alt+Enter).
+- **A file is drawn as its type** -- the File Manager's icon for it
+  (`ufiletype_icon()`), so the two views of one folder agree.
+- **An icon a drag rests on says what a release does**, Explorer's
+  rule: it lights like a selection and the drag's label reads "Move to
+  Box" ("Copy to" with Ctrl), "Open with Image Viewer", "Notepad can't
+  open .qoi files" (and the release then does nothing), or "Move to
+  Recycle Bin". A plain file under the pointer is no target. The same
+  for an icon dragged on the desktop and files dragged from a window.
+- **The Recycle Bin is an icon** (a `.desktop` with `AppId=trash`):
+  drawn full or empty, opened in the File Manager, Empty on its menu.
 
 ## Closing a window: Esc doesn't, Alt+F4 does
 

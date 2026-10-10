@@ -11022,3 +11022,35 @@ a thumb in.
 painter's own geometry, so a from-the-top/from-the-bottom slip -- the
 classic upside-down thumb -- fails there.
 
+
+## A desktop icon is a drop target, and the Recycle Bin is a desktop entry
+
+The desktop took a drop only on its background: an icon dropped on a
+folder snapped to a free cell beside it (2026-10-10). Every desktop
+since Windows 95 makes the icon under a drag a TARGET -- Explorer
+highlights it and labels the drag "Move to X" / "+ Copy to X" / "Open
+with X"; GNOME's desktop icons do the same through Nautilus -- so this
+one does: a folder takes the files (Ctrl copies), an app launcher opens
+them, the Recycle Bin deletes them. A plain file is no target.
+
+**ONE FUNCTION ASKS, for every drag that crosses the desktop**
+(`desktop_drop_hover()`): its own icons' and a window's files, so a file
+dragged from the File Manager onto a desktop folder lands in the folder
+exactly as one dragged across the desktop does. It READS NOTHING from
+the disk while a drag moves: an app's `Handles=` is carried in the
+registry the compositor already holds, and the payload's first path is
+read once per icon entered. An app that does not declare the type says
+so and the release does NOTHING -- Explorer instead offers to run the
+app with the file anyway, which here would be an app reporting an error
+the user could have been told before letting go.
+
+**The Recycle Bin is a `.desktop` file with `AppId=trash`**, seeded
+once like the launchers (`data/wm/desktop/trash.desktop`), not a
+virtual item the desktop invents. Being a file is what gives it a saved
+position, a place in the grid's order, and a way to remove it (delete
+it, as Windows lets you hide the bin) with no code. The desktop knows it
+by its AppId: it draws it full or empty from a watch on
+`/home/.Trash/files` (which the compositor creates at start, since a
+watch on a missing folder falls back to every write in the machine),
+opens the File Manager on `trash:/` rather than its Exec, and offers
+Empty on its menu. Linux desktops do the same with a `trash:///` link.

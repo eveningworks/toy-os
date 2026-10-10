@@ -16,6 +16,8 @@
 #include <stdio.h>
 #include "wm/wm_conf.h"
 #include "lib/icon_cache.h"
+#include "lib/ufiletype.h"  // a file's icon, by its type
+#include "lib/uopen.h"      // what a launcher opens, for a file dropped on it
 #include "wm/wm_log.h"
 #include "lib/uimg.h"
 #include "lib/ulivewall.h" // ulivewall_colour() -- the plain colours
@@ -132,6 +134,17 @@ static int drag_moved = 0;
 static int drag_origin_px, drag_origin_py;
 static int drag_start_col[DESKTOP_MAX_ICONS];
 static int drag_start_row[DESKTOP_MAX_ICONS];
+
+// A drag resting ON an icon (desktop_drop_hover()): which one, what a
+// release there does, and what the drag's label says meanwhile.
+enum { DROP_NONE, DROP_MOVE, DROP_COPY, DROP_OPEN, DROP_CANT, DROP_BIN };
+static int g_drop_on = -1;
+static int g_drop_verb = DROP_NONE;
+static char g_drop_label[96];
+static int item_is_bin(int i);
+static int drop_desktop_drag(void);
+static int g_bin_full;          // the Recycle Bin's picture: anything in it
+static void damage_icon_hl(int i);
 
 // The grid geometry, recomputed live (cheap -- a handful of registry
 // entries) rather than cached, same "derive fresh, don't persist a
@@ -296,6 +309,7 @@ static int desktop_files_reload(void) {
             }
         if (edited) {
             desktop_files_parse();
+            wm_damage_rect(0, 0, screen_w, screen_h - taskbar_h);
             redraw_pending = 1;
             wm_damage_rect(0, 0, screen_w, screen_h);
         }
@@ -557,6 +571,19 @@ void desktop_poll_config(void) {
         if (desktop_files_reload()) positions_loaded = 0;
         return;
     }
+    // The Recycle Bin's picture: is anything in it? One entry answers.
+    static uint64_t bin_gen;
+    uint64_t bg = wm_watch_gen(WM_TOPIC_TRASH);
+    if (bg != bin_gen) {
+        static struct sys_dirent one[1];
+        bin_gen = bg;
+        int full = sys_listdir("/home/.Trash/files", one, 1) > 0;
+        if (full != g_bin_full) {
+            g_bin_full = full;
+            for (int i = 0; i < item_count(); i++) if (item_is_bin(i)) damage_icon_hl(i);
+            redraw_pending = 1;
+        }
+    }
     if (gen == seen_gen) return;
     seen_gen = gen;
     icon_size_reload();
@@ -700,6 +727,17 @@ int desktop_icon_geometry(int i, const char **name, int *x, int *y, int *w, int 
 
 int desktop_icon_count(void) { return item_count(); }
 
+// The artwork an icon is drawn with -- one answer for the draw loop and
+// for `gui icons`, so a test reads what is painted.
+const char *desktop_icon_art(int i) {
+    if (!item_visible(i)) return "";
+    if (item_is_bin(i)) return g_bin_full ? "trash-full" : "trash-empty";
+    if (item_is_launcher(i)) return g_launch[i].icon;
+    return ufiletype_icon(item_name(i), item_is_dir(i));
+}
+
+int desktop_drop_target(void) { return g_drop_on; }
+
 int desktop_icon_px(void) { return icon_px(); }
 
 void desktop_draw(void) {
@@ -741,7 +779,8 @@ void desktop_draw(void) {
 
         int selected = rb_is_selected(&sel, i);
         int hovered = i == g_hover && !drag.active;
-        if (selected || hovered) {
+        int target = i == g_drop_on;   // a drag would land on it
+        if (selected || hovered || target) {
             // The whole caption block, icon and both label lines, as on
             // Windows and KDE -- a highlight the width of the column.
             // The rect is icon_hl_rect()'s, so that what is PAINTED and
@@ -750,8 +789,8 @@ void desktop_draw(void) {
             // selected, so the picture still shows through.
             int hx, hy, hw, hh;
             icon_hl_rect(cell_x, y, &hx, &hy, &hw, &hh);
-            uint8_t fill = selected ? (hovered ? 72 : 56) : 28;
-            uint8_t edge = selected ? (hovered ? 160 : 140) : 28;
+            uint8_t fill = target ? 80 : selected ? (hovered ? 72 : 56) : 28;
+            uint8_t edge = target ? 200 : selected ? (hovered ? 160 : 140) : 28;
             uui_glass_round_rect(wm_surface(), hx, hy, hw, hh, ugfx_char_h() / 2,
                                  UTHEME_WHITE, fill, edge);
         }
@@ -761,11 +800,9 @@ void desktop_draw(void) {
         // rounded outline), so it sits on the wallpaper rather than in a
         // rectangle of its own -- which is the entire reason icons
         // waited for a codec with alpha.
-        // A launcher's own artwork; a file's is the File Manager's
-        // "folder"/"file", so the two views of one folder agree.
-        const struct uimg *ico = item_is_launcher(i)
-            ? icon_get(g_launch[i].icon, px)
-            : icon_get(item_is_dir(i) ? "folder" : "file", px);
+        // A launcher's own artwork; a file's is the File Manager's for
+        // its type (ufiletype.h), so the two views of one folder agree.
+        const struct uimg *ico = icon_get(desktop_icon_art(i), px);
         if (ico) {
             ugfx_blit_alpha(wm_surface(), x, y, ico->w, ico->h, ico->px, ico->w);
         } else {
@@ -883,6 +920,12 @@ void desktop_entries_changed(void) {
     band_drawn = 0;
     last_click_index = -1;
     last_click_tick = 0;
+    // EVERY CELL MAY HAVE CHANGED, so all of them are damage. Leaving it
+    // to "a frame with no damage is a full repaint" lost whenever the
+    // clock damaged its strip in the same frame: new icons went undrawn
+    // and old ones stayed where they had been.
+    wm_damage_rect(0, 0, screen_w, screen_h - taskbar_h);
+    redraw_pending = 1;
 }
 
 int desktop_icon_selected(int i) { return rb_is_selected(&sel, i); }
@@ -1209,16 +1252,17 @@ void desktop_update_drag(int mx, int my, uint8_t buttons) {
 
     struct icon_grid g = current_grid();
 
-    // A WINDOW TOOK THE DROP (wm_dnd.c): the file moved or copied
-    // there, and the icon goes back to its cell -- the drag was not a
-    // rearrangement. The folder re-lists on the next generation poll.
-    if (wm_dnd_took_drop()) {
+    // A WINDOW TOOK THE DROP (wm_dnd.c), or an ICON did (a folder, an
+    // app, the Recycle Bin): the icon goes back to its cell -- the drag
+    // was not a rearrangement. The folder re-lists on its next poll.
+    if (wm_dnd_took_drop() || (drag_moved && drop_desktop_drag())) {
         wm_damage_rect(0, 0, screen_w, screen_h - taskbar_h);
         icon_drag_end(&drag);
         group_drag = 0;
         redraw_pending = 1;
         return;
     }
+    desktop_drop_hover(-1, -1);   // a click, or a drop that was nobody's
 
     // Group drop: move every selected icon by the primary's cell delta,
     // then settle each into the nearest free cell so a group landing
@@ -1330,6 +1374,12 @@ void desktop_add_launcher(const struct gui_app *a) {
 
 static void item_activate(int i) {
     if (!item_visible(i)) return;
+    if (item_is_bin(i)) {
+        // The bin is a place, not a program: the File Manager, open on it.
+        char *const argv[] = { "/bin/wm/apps/files", "trash:/", "trash:/", 0 };
+        spawn_argv(argv);
+        return;
+    }
     if (item_is_launcher(i)) { launch_entry(&g_launch[i]); return; }
     static char path[PATH_BUF];
     item_path(i, path, sizeof path);
@@ -1382,11 +1432,20 @@ static void menu_paste(void *ctx) {
 
 // A drop from ANOTHER window onto the desktop background: the files in
 // the drag slot move here, or copy with Ctrl (the toolkit's rule).
+static int drop_onto_target(char paths[][PATH_BUF], int n);
+
 int desktop_drop_here(int mx, int my) {
     (void)mx; (void)my;
     static struct uclip c;
     uclip_drag_load(&c);
     if (uclip_count(&c) <= 0 || uclip_kind(&c) != UCLIP_KIND_FILES) return 0;
+    if (g_drop_on >= 0) {
+        static char paths[DESKTOP_FILES_MAX][PATH_BUF];
+        int n = 0;
+        for (int i = 0; i < uclip_count(&c) && n < DESKTOP_FILES_MAX; i++)
+            if (uclip_path(&c, i)) k_strlcpy(paths[n++], uclip_path(&c, i), PATH_BUF);
+        return drop_onto_target(paths, n);
+    }
     int copy = (wm_rawin_pointer_mods() & KEY_MOD_CTRL) != 0;
     paste_from(&c, copy ? UCLIP_COPY : UCLIP_CUT);
     return 1;
@@ -1411,6 +1470,157 @@ static void paste_from(const struct uclip *c, int op) {
             spawn_argv(argv);
         }
     }
+}
+
+// --- dropping ONTO an icon ------------------------------------------------
+//
+// A folder takes the files (Ctrl copies), an app opens them, the Recycle
+// Bin deletes them -- Explorer's targets and GNOME's (chosen 2026-10-10).
+// Every drag that crosses the desktop is asked here, its own icons' and a
+// window's files alike, so the two cannot answer differently. NOTHING
+// HERE READS THE DISK: an app's Handles= is the registry's, read with
+// the entries, and the drag's first path is what decides what it opens.
+
+static int item_is_bin(int i) {
+    return item_is_launcher(i) && k_strcmp(g_launch[i].app_id, "trash") == 0;
+}
+
+static const struct gui_app *launcher_app(int i) {
+    for (int k = 0; k < gui_app_registry_count; k++)
+        if (k_strcmp(gui_app_registry[k].app_id, g_launch[i].app_id) == 0) return &gui_app_registry[k];
+    return 0;
+}
+
+// Is `i` being dragged itself? It is never its own target.
+static int being_dragged(int i) {
+    if (!drag.active) return 0;
+    return i == drag.index || (rb_is_selected(&sel, drag.index) && rb_is_selected(&sel, i));
+}
+
+// The paths a drag carries: the desktop's own (the selection, or the one
+// icon), else the drag slot a window filled.
+static int drag_paths(char paths[][PATH_BUF], int cap) {
+    if (drag.active) {
+        int n = rb_is_selected(&sel, drag.index) ? selected_paths(paths, cap) : 0;
+        if (n == 0 && cap > 0) { item_path(drag.index, paths[0], PATH_BUF); n = 1; }
+        return n;
+    }
+    static struct uclip c;
+    uclip_drag_load(&c);
+    int n = 0;
+    for (int i = 0; i < uclip_count(&c) && n < cap; i++)
+        if (uclip_path(&c, i)) k_strlcpy(paths[n++], uclip_path(&c, i), PATH_BUF);
+    return n;
+}
+
+static const char *ext_of(const char *path) {
+    const char *base = k_path_basename(path), *dot = 0;
+    for (const char *p = base; *p; p++) if (*p == '.') dot = p;
+    return dot && dot != base ? dot : 0;
+}
+
+static int verb_for(int t, const char *first) {
+    if (item_is_bin(t)) return DROP_BIN;
+    if (item_is_launcher(t)) {
+        const struct gui_app *a = launcher_app(t);
+        const char *ext = ext_of(first);
+        return a && a->handles && ext && uopen_ext_matches(a->handles, ext) ? DROP_OPEN : DROP_CANT;
+    }
+    if (item_is_dir(t)) return (wm_rawin_pointer_mods() & KEY_MOD_CTRL) ? DROP_COPY : DROP_MOVE;
+    return DROP_NONE;
+}
+
+void desktop_drop_hover(int mx, int my) {
+    static char first[PATH_BUF];
+    int t = mx < 0 ? -1 : icon_hit_test(mx, my);
+    if (t >= 0 && being_dragged(t)) t = -1;
+    // The payload's first path is read once per icon entered, not per move.
+    if (t >= 0 && t != g_drop_on) {
+        static char one[1][PATH_BUF];
+        if (drag_paths(one, 1) == 1) k_strlcpy(first, one[0], sizeof first);
+        else first[0] = '\0';
+    }
+    int verb = t >= 0 ? verb_for(t, first) : DROP_NONE;
+    if (verb == DROP_NONE) t = -1;
+    if (t == g_drop_on && verb == g_drop_verb) return;
+    damage_icon_hl(g_drop_on);
+    damage_icon_hl(t);
+    g_drop_on = t;
+    g_drop_verb = verb;
+    const char *name = t >= 0 ? item_name(t) : "";
+    const char *ext = ext_of(first);
+    switch (verb) {
+    case DROP_MOVE: k_snprintf(g_drop_label, sizeof g_drop_label, "Move to %s", name); break;
+    case DROP_COPY: k_snprintf(g_drop_label, sizeof g_drop_label, "Copy to %s", name); break;
+    case DROP_OPEN: k_snprintf(g_drop_label, sizeof g_drop_label, "Open with %s", name); break;
+    case DROP_BIN:  k_snprintf(g_drop_label, sizeof g_drop_label, "Move to %s", name); break;
+    case DROP_CANT:
+        if (ext) k_snprintf(g_drop_label, sizeof g_drop_label, "%s can't open %s files", name, ext);
+        else k_snprintf(g_drop_label, sizeof g_drop_label, "%s can't open this", name);
+        break;
+    default: g_drop_label[0] = '\0'; break;
+    }
+    redraw_pending = 1;
+}
+
+const char *desktop_drop_label(void) { return g_drop_on >= 0 ? g_drop_label : 0; }
+
+// A release over the target: do what its label said, then forget it.
+// Returns 1 when the drop was the target's -- a refusal (CANT) included,
+// so the icons go back to their cells rather than being rearranged.
+static int drop_onto_target(char paths[][PATH_BUF], int n) {
+    int t = g_drop_on, verb = g_drop_verb;
+    if (t < 0 || verb == DROP_NONE) return 0;
+    damage_icon_hl(t);
+    g_drop_on = -1;
+    g_drop_verb = DROP_NONE;
+    redraw_pending = 1;
+    static char dest[PATH_BUF];
+    if (verb == DROP_MOVE || verb == DROP_COPY) {
+        item_path(t, dest, sizeof dest);
+        size_t dl = k_strlen(dest);
+        for (int i = 0; i < n; i++) {
+            // Not into itself, nor into a folder inside itself.
+            size_t pl = k_strlen(paths[i]);
+            if (k_strcmp(paths[i], dest) == 0) continue;
+            if (dl > pl && k_strncmp(dest, paths[i], pl) == 0 && dest[pl] == '/') continue;
+            char *const mv[] = { "/bin/mv", paths[i], dest, 0 };
+            char *const cp[] = { "/bin/cp", "-r", paths[i], dest, 0 };
+            spawn_argv(verb == DROP_MOVE ? mv : cp);
+        }
+        wm_logf("desktop: %s %d item(s) to %s", verb == DROP_MOVE ? "moved" : "copied", n, dest);
+    } else if (verb == DROP_OPEN) {
+        const struct gui_app *a = launcher_app(t);
+        int opened = 0;
+        for (int i = 0; a && i < n && opened < 8; i++) {
+            const char *ext = ext_of(paths[i]);
+            if (!ext || !uopen_ext_matches(a->handles, ext)) continue;
+            char *const argv[] = { (char *)a->exec_path, paths[i], 0 };
+            spawn_argv(argv);
+            opened++;
+        }
+        wm_logf("desktop: opened %d item(s) with %s", opened, item_name(t));
+    } else if (verb == DROP_BIN) {
+        static char *argv[DESKTOP_FILES_MAX + 3];
+        int k = 0;
+        argv[k++] = "/bin/trash";
+        argv[k++] = "put";
+        for (int i = 0; i < n && k < DESKTOP_FILES_MAX + 2; i++) argv[k++] = paths[i];
+        argv[k] = 0;
+        spawn_argv(argv);
+        wm_logf("desktop: %d item(s) to the Recycle Bin", n);
+    } else {
+        wm_logf("desktop: %s refused the drop", item_name(t));
+    }
+    return 1;
+}
+
+// The release of the desktop's OWN icon drag, over an icon.
+static int drop_desktop_drag(void) {
+    if (g_drop_on < 0) return 0;
+    static char paths[DESKTOP_FILES_MAX][PATH_BUF];
+    int n = drag_paths(paths, DESKTOP_FILES_MAX);
+    return drop_onto_target(paths, n);
 }
 
 // Delete asks first, through the WM's own confirm dialog, and moves the
@@ -1466,6 +1676,17 @@ static void menu_new_folder(void *ctx) {
 }
 
 static void menu_open_item(void *ctx) { item_activate((int)(intptr_t)ctx); }
+
+static void bin_empty_confirmed(void) {
+    char *const argv[] = { "/bin/trash", "empty", 0 };
+    spawn_argv(argv);
+    wm_logf("desktop: emptied the Recycle Bin");
+}
+static void menu_empty_bin(void *ctx) {
+    (void)ctx;
+    confirm_dialog_open_labelled("Permanently delete everything in the Recycle Bin?", "Empty", "Cancel",
+                                 bin_empty_confirmed, 0);
+}
 
 // --- rename in place ---------------------------------------------------
 //
@@ -1754,6 +1975,17 @@ void desktop_handle_right_click(int mx, int my) {
         // set -- right-clicking one of five must offer to act on five.
         if (!rb_is_selected(&sel, idx)) { rb_clear(&sel); rb_select(&sel, idx, 1); }
         redraw_pending = 1;
+        // The Recycle Bin alone is a place, not a file: Open and Empty.
+        if (item_is_bin(idx) && rb_selected_count(&sel) == 1) {
+            items[k++] = (struct context_menu_item){ .label = "Open", .on_select = menu_open_item,
+                                                     .ctx = (void *)(intptr_t)idx,
+                                                     .icon = "tb-open", .tint = UTHEME_ACT_NAV };
+            items[k++] = (struct context_menu_item){ .label = "Empty Recycle Bin", .on_select = menu_empty_bin,
+                                                     .icon = "tb-bin-empty", .tint = UTHEME_ACT_DANGER,
+                                                     .disabled = !g_bin_full };
+            context_menu_open_at(mx, my, items, k);
+            return;
+        }
         // Windows 11's shape: the file verbs as a strip of buttons, then
         // the rows. Rename names one thing, so it greys out for several.
         int one = rb_selected_count(&sel) == 1;

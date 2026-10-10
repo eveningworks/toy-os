@@ -207,8 +207,9 @@ def orphans_on_image(disk, writer_dir, seed_root):
 SEED_SOURCES = {
     "usr/wm/applications":    "data/wm/applications",
     # The desktop's seeded launchers are copies of application entries,
-    # staged under seed/once/ (copied only when missing) -- see unsourced_staged_files().
-    "../once/home/desktop": "data/wm/applications",
+    # staged under seed/once/ (copied only when missing), beside the
+    # desktop-only entries (the Recycle Bin) -- see unsourced_staged_files().
+    "../once/home/desktop": ("data/wm/applications", "data/wm/desktop"),
     "usr/wm/startup":    "data/wm/startup",
     "usr/wm/savers":     "data/wm/savers",
     "usr/share/icons":   "data/icons",
@@ -227,17 +228,18 @@ SEED_SOURCES = {
 def unsourced_staged_files(seed_root):
     """Files staged under seed/sync/ with no tracked source behind them."""
     out = []
-    for rel, src in sorted(SEED_SOURCES.items()):
+    for rel, srcs in sorted(SEED_SOURCES.items()):
+        srcs = (srcs,) if isinstance(srcs, str) else srcs   # one source, or several
         staged = os.path.join(seed_root, rel)
-        source = os.path.join(REPO, src)
-        if not os.path.isdir(staged) or not os.path.isdir(source):
+        sources = [os.path.join(REPO, src) for src in srcs if os.path.isdir(os.path.join(REPO, src))]
+        if not os.path.isdir(staged) or not sources:
             continue
         # Cursor themes are a directory per theme; everything else is flat.
         for root, _dirs, files in os.walk(staged):
             for f in files:
                 sub = os.path.relpath(os.path.join(root, f), staged)
-                if not os.path.exists(os.path.join(source, sub)):
-                    out.append((os.path.join(rel, sub), src))
+                if not any(os.path.exists(os.path.join(source, sub)) for source in sources):
+                    out.append((os.path.join(rel, sub), " or ".join(srcs)))
     return out
 
 

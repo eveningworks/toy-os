@@ -24,6 +24,7 @@ enum wm_topic {
     WM_TOPIC_APPS,       // /usr/wm/applications -- the .desktop entries
     WM_TOPIC_DESKTOP,    // /home/desktop -- the icons on the desktop
     WM_TOPIC_EFFECTS,    // /etc/effects -- the effects' options
+    WM_TOPIC_TRASH,      // /home/.Trash/files -- the desktop's Recycle Bin picture
     WM_TOPIC_COUNT
 };
 

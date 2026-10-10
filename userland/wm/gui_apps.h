@@ -307,6 +307,11 @@ struct gui_app {
     // never NULL, so a caller draws an empty strip rather than
     // branching. Same storage rule as `name` and `category`.
     const char *comment;
+
+    // `Handles=`, the extensions the app opens (".jpg .png"), "" for
+    // none -- what a file dropped on the app's desktop launcher is asked
+    // against (lib/uopen.h's rule). Carried by pointer, like exec_path.
+    const char *handles;
 };
 
 // Caps on the live registry. Fixed tables rather than allocation, the
@@ -321,6 +326,7 @@ struct gui_app {
 // sentence that fits the menu's own width at the default font, and no
 // longer: this is a description, not documentation -- `help` is that.
 #define GUI_APP_COMMENT_MAX 64
+#define GUI_APP_HANDLES_MAX 96
 
 // The registry, BUILT AT STARTUP from /usr/wm/applications/ -- see
 // gui_apps.c's top comment and data/wm/applications/README.md. Not const any
@@ -370,6 +376,7 @@ struct gui_app_entry {
     char app_id[GUI_APP_ICON_MAX];
     char category[16];
     char comment[GUI_APP_COMMENT_MAX];
+    char handles[GUI_APP_HANDLES_MAX];
     unsigned show_in;
     int remember_geometry;
 };

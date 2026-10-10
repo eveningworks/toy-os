@@ -109,6 +109,7 @@ void wm_dnd_motion(int mx, int my, uint8_t buttons) {
     if (buttons & 0x1) {
         int over = t >= 0 ? t : -1;
         if (over != g_over) { leave_current(); g_over = over; }
+        desktop_drop_hover(t == NOWHERE ? mx : -1, t == NOWHERE ? my : -1);
         if (t >= 0) wm_client_send_mouse(&windows[t], WIN_EV_DRAG_OVER, mx, my, 0);
         redraw_pending = 1;   // the ghost moved
         return;
@@ -123,6 +124,9 @@ void wm_dnd_motion(int mx, int my, uint8_t buttons) {
     } else if (t == NOWHERE && g_src_pid != 0 && desktop_drop_here(mx, my)) {
         g_took_drop = 1;
     }
+    // A window's drag is over: no icon stays lit. The desktop's own drag
+    // keeps its target for desktop_update_drag(), which runs next.
+    if (g_src_pid != 0) desktop_drop_hover(-1, -1);
     g_over = -1;
     g_active = 0;
     // THE SLOT IS NOT CLEARED HERE. The target reads it when it gets
@@ -146,11 +150,13 @@ void wm_dnd_draw(int mx, int my) {
             uui_hit(w->x, w->y, w->w, w->h, mx, my)) inside_source = 1;
     }
     if (inside_source) return;
-    int tw = ugfx_text_width(g_label);
+    // Over a desktop icon that takes drops, the label says what it does.
+    const char *label = desktop_drop_label() ? desktop_drop_label() : g_label;
+    int tw = ugfx_text_width(label);
     int x = mx + 14, y = my + 14, w = tw + 12, h = ugfx_char_h() + 6;
     ugfx_fill_rect(wm_surface(), x, y, w, h, UTHEME_PANEL_BG);
     ugfx_draw_rect(wm_surface(), x, y, w, h, UTHEME_BORDER);
-    ugfx_draw_string_clipped(wm_surface(), x + 6, y + 3, tw, g_label, UTHEME_TEXT, UTHEME_PANEL_BG);
+    ugfx_draw_string_clipped(wm_surface(), x + 6, y + 3, tw, label, UTHEME_TEXT, UTHEME_PANEL_BG);
     wm_damage_rect(x - 1, y - 1, w + 2, h + 2);
 }
 

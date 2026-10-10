@@ -1960,14 +1960,17 @@ static void cmd_icons(struct dbg_out *o, int json) {
         for (int i = 0; i < desktop_icon_count(); i++) {
             const char *name, *kind; int x, y, w, h, lines;
             if (!desktop_icon_geometry(i, &name, &x, &y, &w, &h, &lines, &kind)) continue;
-            dbg_out_printf(o, "%s{\"name\":\"%s\",\"kind\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"lines\":%d,\"selected\":%s,\"hovered\":%s,\"renaming\":%s}",
-                           first ? "" : ",", name, kind, x, y, w, h, lines,
+            dbg_out_printf(o, "%s{\"name\":\"%s\",\"kind\":\"%s\",\"art\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"lines\":%d,\"selected\":%s,\"hovered\":%s,\"renaming\":%s,\"target\":%s}",
+                           first ? "" : ",", name, kind, desktop_icon_art(i), x, y, w, h, lines,
                            desktop_icon_selected(i) ? "true" : "false",
                            desktop_hovered_icon() == i ? "true" : "false",
-                           desktop_renaming() == i ? "true" : "false");
+                           desktop_renaming() == i ? "true" : "false",
+                           desktop_drop_target() == i ? "true" : "false");
             first = 0;
         }
-        dbg_out_write(o, "]}\r\n");
+        // What a release would do where a drag rests now, "" for nothing.
+        const char *drop = desktop_drop_label();
+        dbg_out_printf(o, "],\"drop\":\"%s\"}\r\n", drop ? drop : "");
         return;
     }
     dbg_out_printf(o, "icons: %d cached (name,size pairs decoded and scaled), "

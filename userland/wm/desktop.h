@@ -139,6 +139,14 @@ int desktop_renaming(void);                // the icon index, or -1
 // drag slot's files move (or copy, with Ctrl) into /home/desktop.
 // Returns 1 if it took them.
 int desktop_drop_here(int mx, int my);
+// A drag resting over the desktop at (mx, my), any drag -- (-1, -1) when
+// it is not: an icon under it that takes drops (a folder, an app, the
+// Recycle Bin) lights up, and the drag's label says what a release does
+// there, or NULL when it would do the plain thing.
+void desktop_drop_hover(int mx, int my);
+const char *desktop_drop_label(void);
+int desktop_drop_target(void);             // the icon lit as a target, or -1
+const char *desktop_icon_art(int i);       // the icon name it is drawn with
 int desktop_icon_px(void);                 // the current size in pixels
 const char *desktop_icon_size_word(void);  // and the setting's word
 

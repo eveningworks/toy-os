@@ -54,6 +54,7 @@ static char g_comments[GUI_APP_MAX][GUI_APP_COMMENT_MAX];
 // struct gui_app holds POINTERS, so these must outlive a reload.
 static char g_icons[GUI_APP_MAX][GUI_APP_ICON_MAX];
 static char g_appids[GUI_APP_MAX][GUI_APP_ICON_MAX];
+static char g_handles[GUI_APP_MAX][GUI_APP_HANDLES_MAX];
 
 // Scanning state: fs_list()'s callback carries no context pointer, so
 // the walk collects filenames here first and parses afterwards. Parsing
@@ -178,6 +179,8 @@ int gui_app_read_entry(const char *path, struct gui_app_entry *e) {
     // say about itself shows its name alone rather than a placeholder.
     if (!entry_get(&cfg, "Comment", e->comment, sizeof e->comment))
         e->comment[0] = '\0';
+    if (!entry_get(&cfg, "Handles", e->handles, sizeof e->handles))
+        e->handles[0] = '\0';
     if (!entry_get(&cfg, "Icon", icon, sizeof icon)) icon[0] = '\0';
     if (!entry_get(&cfg, "AppId", appid, sizeof appid)) appid[0] = '\0';
     if (entry_get(&cfg, "NoDisplay", nodisplay, sizeof nodisplay)
@@ -221,6 +224,7 @@ static void load_entry(const char *file) {
     k_strlcpy(g_comments[i], e.comment, sizeof g_comments[0]);
     k_strlcpy(g_icons[i], e.icon, sizeof g_icons[0]);
     k_strlcpy(g_appids[i], e.app_id, sizeof g_appids[0]);
+    k_strlcpy(g_handles[i], e.handles, sizeof g_handles[0]);
 
     struct gui_app *a = &gui_app_registry[i];
     k_memset(a, 0, sizeof *a);
@@ -230,6 +234,7 @@ static void load_entry(const char *file) {
     a->app_id = g_appids[i];
     a->category = g_cats[i];
     a->comment = g_comments[i];
+    a->handles = g_handles[i];
     a->resizable = 1;
     a->remember_geometry = e.remember_geometry;
     a->show_in = e.show_in;

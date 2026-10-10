@@ -1,0 +1,8 @@
+# The Recycle Bin on the desktop -- seeded ONCE into /home/desktop, so a
+# removed one stays removed. Not an app: userland/wm/desktop.c knows it by
+# AppId=trash, opens the File Manager on trash:/, draws it full or empty,
+# and takes files dropped on it. Exec is only what makes it an entry.
+Name=Recycle Bin
+Exec=/bin/wm/apps/files
+Icon=trash-empty
+AppId=trash
