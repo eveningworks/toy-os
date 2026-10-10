@@ -29,53 +29,182 @@ static void draw_meter(struct ugfx_surface *s, const struct uui_custom *c) {
     }
 }
 
+// --- a speaker tile ------------------------------------------------------
+//
+// A push button, as uui_button is one -- armed on press, committed by a
+// release over it or by Space/Enter -- that draws a speaker cabinet
+// (a woofer under a tweeter) above its name, the S2 mockup's tile.
+
+static void tile_natural(const void *w, int *ow, int *oh) {
+    const struct uui_sndtest_tile *t = w;
+    int ch = ugfx_char_h(), lw = ugfx_text_width(t->label) + 2 * ch;
+    *ow = lw > ch * 6 ? lw : ch * 6;
+    *oh = ch * 5;
+}
+
+static void tile_geometry(void *w, int x, int y, int ww, int hh) {
+    struct uui_sndtest_tile *t = w;
+    t->x = x; t->y = y; t->w = ww; t->h = hh;
+}
+
+static void tile_bounds(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_sndtest_tile *t = w;
+    *x = t->x; *y = t->y; *ow = t->w; *oh = t->h;
+}
+
+static void cabinet(struct ugfx_surface *s, int cx, int top, int ch, uint32_t ink, uint32_t face) {
+    int w = ch * 3 / 2, h = ch * 2, x = cx - w / 2, r = ch / 4;
+    uui_fill_round_rect(s, x, top, w, h, r, ink);
+    uui_fill_round_rect(s, x + 2, top + 2, w - 4, h - 4, r - 1 > 0 ? r - 1 : 1, face);
+    int wy = top + h * 5 / 8, wr = w * 3 / 10;
+    ugfx_fill_circle(s, cx, wy, wr, ink);
+    ugfx_fill_circle(s, cx, wy, wr - 2, face);
+    ugfx_fill_circle(s, cx, wy, wr / 3, ink);
+    ugfx_fill_circle(s, cx, top + h / 5 + 1, ch / 6 + 1, ink);
+}
+
+static void tile_draw(struct ugfx_surface *s, const void *w) {
+    const struct uui_sndtest_tile *t = w;
+    enum uui_state st = t->pressed ? UUI_STATE_PRESSED : t->hovered ? UUI_STATE_HOVER : UUI_STATE_REST;
+    uint32_t face = uui_state_bg(t->latched ? UTHEME_SELECTION : UTHEME_BUTTON_BG, st);
+    uint32_t edge = t->latched ? UTHEME_ACCENT : UTHEME_BORDER;
+    int ch = ugfx_char_h(), r = ch / 2, b = t->latched ? 2 : 1;
+    uui_fill_round_rect(s, t->x, t->y, t->w, t->h, r, edge);
+    uui_fill_round_rect(s, t->x + b, t->y + b, t->w - 2 * b, t->h - 2 * b, r - b, face);
+    int top = t->y + (t->h - ch * 2 - ch - ch / 2) / 2;
+    cabinet(s, t->x + t->w / 2, top, ch, UTHEME_TEXT, face);
+    int lw = ugfx_text_width(t->label);
+    ugfx_draw_string_clipped(s, t->x + (t->w - lw) / 2, top + ch * 2 + ch / 2, t->w, t->label,
+                             UTHEME_TEXT, face);
+    if (t->focused) uui_focus_ring(s, t->x + 3, t->y + 3, t->w - 6, t->h - 6);
+}
+
+static int tile_hit(const void *w, int cx, int cy) {
+    const struct uui_sndtest_tile *t = w;
+    return uui_hit(t->x, t->y, t->w, t->h, cx, cy);
+}
+
+static int tile_press(void *w, int cx, int cy, unsigned mods) {
+    (void)mods;
+    struct uui_sndtest_tile *t = w;
+    int hit = tile_hit(t, cx, cy);
+    if (t->pressed == hit) return 0;
+    t->pressed = hit;
+    return hit;
+}
+
+static int tile_motion(void *w, int cx, int cy, unsigned buttons) {
+    struct uui_sndtest_tile *t = w;
+    int hit = tile_hit(t, cx, cy);
+    int *flag = buttons ? &t->pressed : &t->hovered;
+    if (*flag == hit) return 0;
+    *flag = hit;
+    return 1;
+}
+
+static int tile_release(void *w, int cx, int cy) {
+    (void)cx; (void)cy;
+    struct uui_sndtest_tile *t = w;
+    int was = t->pressed;   // dragged off, motion already disarmed it
+    t->pressed = 0;
+    if (was) t->clicked = 1;
+    return was;
+}
+
+static int tile_key(void *w, int key, unsigned mods) {
+    (void)mods;
+    struct uui_sndtest_tile *t = w;
+    if (key != ' ' && key != '\n' && key != '\r') return 0;
+    t->clicked = 1;
+    return 1;
+}
+
+static void tile_set_focused(void *w, int f) { ((struct uui_sndtest_tile *)w)->focused = f; }
+static int tile_accepts_focus(const void *w) { (void)w; return 1; }
+
+static const struct uui_widget_ops tile_ops = {
+    .natural_size = tile_natural,
+    .set_geometry = tile_geometry,
+    .bounds = tile_bounds,
+    .draw = tile_draw,
+    .hit = tile_hit,
+    .press = tile_press,
+    .motion = tile_motion,
+    .release = tile_release,
+    .key = tile_key,
+    .set_focused = tile_set_focused,
+    .accepts_focus = tile_accepts_focus,
+};
+
+// --- the panel ------------------------------------------------------------
+
 void uui_sndtest_init(struct uui_sndtest *t, int code_base) {
     memset(t, 0, sizeof *t);
     t->code_base = code_base;
     t->playing = -1;
-    for (int i = 0; i < UUI_SNDTEST_IDS; i++) {
-        uui_button_init(&t->btn[i], 0, 0, 0, 0, LABEL[i], UTHEME_BUTTON_BG, UTHEME_TEXT, code_base + i);
-        t->btn[i].outlined = 1;
-    }
+    t->tile[0].label = LABEL[UUI_SNDTEST_LEFT];
+    t->tile[1].label = LABEL[UUI_SNDTEST_RIGHT];
+    uui_button_init(&t->both, 0, 0, 0, 0, LABEL[UUI_SNDTEST_BOTH], UTHEME_BUTTON_BG, UTHEME_TEXT,
+                    code_base + UUI_SNDTEST_BOTH);
+    t->both.outlined = 1;
     strlcpy(t->status, IDLE, sizeof t->status);
     uui_label_init(&t->status_l, t->status);
 }
 
+// [ pad | meter L | Left | Both | Right | meter R | pad ] over [ pad | status | pad ]:
+// the pads take the slack on either side, which centres what is between,
+// and Both sits in a column whose pads centre it on the tiles' height.
 struct uui_item uui_sndtest_item(struct uui_sndtest *t) {
     int ch = ugfx_char_h();
     for (int k = 0; k < 2; k++)
-        t->meter[k] = (struct uui_custom){ .w = ch / 2, .h = ch * 2, .draw = draw_meter,
+        t->meter[k] = (struct uui_custom){ .w = ch / 2, .h = ch * 5, .draw = draw_meter,
                                            .state = &t->level[k] };
-    static const char *const NAME[UUI_SNDTEST_IDS] = { "sndtest_left", "sndtest_both", "sndtest_right" };
+    for (int k = 0; k < 6; k++) t->pad[k] = (struct uui_custom){ .w = 0, .h = 0 };
+    t->mid_it[0] = (struct uui_item){ .ops = &uui_custom_ops, .widget = &t->pad[4], .flags = UUI_FILL_H };
+    t->mid_it[1] = (struct uui_item){ .ops = &uui_button_ops, .widget = &t->both,
+                                      .id = t->code_base + UUI_SNDTEST_BOTH, .name = "sndtest_both" };
+    t->mid_it[2] = (struct uui_item){ .ops = &uui_custom_ops, .widget = &t->pad[5], .flags = UUI_FILL_H };
+    t->mid = (struct uui_layout){ .dir = UUI_COLUMN, .items = t->mid_it, .count = 3 };
     int n = 0;
+    t->row_it[n++] = (struct uui_item){ .ops = &uui_custom_ops, .widget = &t->pad[0], .flags = UUI_FILL_W };
     t->row_it[n++] = (struct uui_item){ .ops = &uui_custom_ops, .widget = &t->meter[0], .name = "sndtest_meter_l" };
-    for (int i = 0; i < UUI_SNDTEST_IDS; i++)
-        t->row_it[n++] = (struct uui_item){ .ops = &uui_button_ops, .widget = &t->btn[i],
-                                            .id = t->code_base + i, .name = NAME[i] };
+    t->row_it[n++] = (struct uui_item){ .ops = &tile_ops, .widget = &t->tile[0],
+                                        .id = t->code_base + UUI_SNDTEST_LEFT, .name = "sndtest_left" };
+    t->row_it[n++] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &t->mid, .flags = UUI_FILL_H };
+    t->row_it[n++] = (struct uui_item){ .ops = &tile_ops, .widget = &t->tile[1],
+                                        .id = t->code_base + UUI_SNDTEST_RIGHT, .name = "sndtest_right" };
     t->row_it[n++] = (struct uui_item){ .ops = &uui_custom_ops, .widget = &t->meter[1], .name = "sndtest_meter_r" };
+    t->row_it[n++] = (struct uui_item){ .ops = &uui_custom_ops, .widget = &t->pad[1], .flags = UUI_FILL_W };
     t->row = (struct uui_layout){ .dir = UUI_ROW, .items = t->row_it, .count = n };
-    t->col_it[0] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &t->row };
-    t->col_it[1] = (struct uui_item){ .ops = &uui_label_ops, .widget = &t->status_l,
-                                      .flags = UUI_FILL_W, .name = "sndtest_status" };
+    n = 0;
+    t->foot_it[n++] = (struct uui_item){ .ops = &uui_custom_ops, .widget = &t->pad[2], .flags = UUI_FILL_W };
+    t->foot_it[n++] = (struct uui_item){ .ops = &uui_label_ops, .widget = &t->status_l, .name = "sndtest_status" };
+    t->foot_it[n++] = (struct uui_item){ .ops = &uui_custom_ops, .widget = &t->pad[3], .flags = UUI_FILL_W };
+    t->foot = (struct uui_layout){ .dir = UUI_ROW, .items = t->foot_it, .count = n };
+    t->col_it[0] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &t->row, .flags = UUI_FILL_W };
+    t->col_it[1] = (struct uui_item){ .ops = &uui_layout_ops, .widget = &t->foot, .flags = UUI_FILL_W };
     t->col = (struct uui_layout){ .dir = UUI_COLUMN, .items = t->col_it, .count = 2 };
     return (struct uui_item){ .ops = &uui_layout_ops, .widget = &t->col, .flags = UUI_FILL_W };
 }
 
 int uui_sndtest_focusables(struct uui_sndtest *t, struct uui_focusable *out, int max) {
     int n = 0;
-    for (int i = 0; i < UUI_SNDTEST_IDS && n < max; i++)
-        out[n++] = (struct uui_focusable){ &t->btn[i], &uui_button_ops };
+    if (n < max) out[n++] = (struct uui_focusable){ &t->tile[0], &tile_ops };
+    if (n < max) out[n++] = (struct uui_focusable){ &t->both, &uui_button_ops };
+    if (n < max) out[n++] = (struct uui_focusable){ &t->tile[1], &tile_ops };
     return n;
 }
 
 int uui_sndtest_playing(const struct uui_sndtest *t) { return t->playing >= 0; }
 
-// The side being tested wears the accent, as a latched control does.
+// The side being tested is LATCHED: the soft accent fill with an accent
+// edge on a tile, the accent itself on Both.
 static void mark(struct uui_sndtest *t) {
-    for (int i = 0; i < UUI_SNDTEST_IDS; i++) {
-        t->btn[i].bg = i == t->playing ? UTHEME_ACCENT : UTHEME_BUTTON_BG;
-        t->btn[i].fg = i == t->playing ? UTHEME_ACCENT_TEXT : UTHEME_TEXT;
-    }
+    t->tile[0].latched = t->playing == UUI_SNDTEST_LEFT;
+    t->tile[1].latched = t->playing == UUI_SNDTEST_RIGHT;
+    int both = t->playing == UUI_SNDTEST_BOTH;
+    t->both.bg = both ? UTHEME_ACCENT : UTHEME_BUTTON_BG;
+    t->both.fg = both ? UTHEME_ACCENT_TEXT : UTHEME_TEXT;
 }
 
 static void chime(struct uui_sndtest *t) {
@@ -120,15 +249,28 @@ static void start(struct uui_sndtest *t, int side) {
     snprintf(t->status, sizeof t->status, "Playing %s. Press %s again to stop.", WHERE[side], LABEL[side]);
 }
 
-int uui_sndtest_on_action(struct uui_sndtest *t, int code) {
-    int side = code - t->code_base;
-    if (side < 0 || side >= UUI_SNDTEST_IDS) return 0;
+static void toggle(struct uui_sndtest *t, int side) {
     if (side == t->playing) {
         uui_sndtest_stop(t);
         strlcpy(t->status, IDLE, sizeof t->status);
     } else {
         start(t, side);
     }
+}
+
+int uui_sndtest_on_widget(struct uui_sndtest *t, int id) {
+    int side = id - t->code_base;
+    if (side != UUI_SNDTEST_LEFT && side != UUI_SNDTEST_RIGHT) return 0;
+    struct uui_sndtest_tile *tile = &t->tile[side == UUI_SNDTEST_RIGHT];
+    if (!tile->clicked) return 1;   // a press or a hover on the tile: only a redraw
+    tile->clicked = 0;
+    toggle(t, side);
+    return 1;
+}
+
+int uui_sndtest_on_action(struct uui_sndtest *t, int code) {
+    if (code != t->code_base + UUI_SNDTEST_BOTH) return 0;
+    toggle(t, UUI_SNDTEST_BOTH);
     return 1;
 }
 

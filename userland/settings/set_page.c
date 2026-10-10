@@ -753,6 +753,7 @@ int refit_prose(void) {
     if (g_show_sysinfo && uui_setting_row_fit(&g_si_debug)) changed = 1;
     if (g_show_startup && startup_fit()) changed = 1;
     if (g_show_adapters && adapters_fit()) changed = 1;
+    if (snd_fit()) changed = 1;
     if (g_show_remote && remote_fit()) changed = 1;
     if (changed) relayout_page();
     return changed;

@@ -348,6 +348,7 @@ int  snd_emit_after(struct uui_item *out, int n, int i,
                     struct uui_focusable *focus, int *nfocus);
 int  snd_on_widget(struct uapp *a, int id);
 int  snd_on_action(struct uapp *a, int code);
+int  snd_fit(void);
 int  snd_tick(struct uapp *a);
 void snd_shutdown(void);
 

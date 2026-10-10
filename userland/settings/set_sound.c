@@ -86,7 +86,17 @@ int snd_emit_after(struct uui_item *out, int n, int i,
 }
 
 int snd_on_widget(struct uapp *a, int id) {
-    (void)a;
+    int was = g_test.playing;
+    char said[sizeof g_test.status];
+    strlcpy(said, g_test.status, sizeof said);
+    if (g_snd_page && uui_sndtest_on_widget(&g_test, id)) {
+        if (g_test.playing != was || strcmp(said, g_test.status)) {   // not a hover or a press
+            ulogf("settings: sndtest %s\n", g_test.status);
+            snd_tick(a);
+            relayout_page();   // the status line is measured for its text
+        }
+        return 1;
+    }
     if (!g_snd_page || !uui_sndformat_on_widget(&g_fmt, id)) return 0;
     ulogf("settings: sndfmt %s match %d fixed %u allowed %#x bits %u\n", g_fmt.card,
           g_fmt.f.match, (unsigned)g_fmt.f.fixed, (unsigned)g_fmt.f.allowed, (unsigned)g_fmt.f.bits);
@@ -94,10 +104,20 @@ int snd_on_widget(struct uapp *a, int id) {
     return 1;
 }
 
+// The Test and Format cards' descriptions, wrapped to the width the
+// page gave them, as refit_prose() does for every setting's card.
+int snd_fit(void) {
+    if (!g_snd_page) return 0;
+    int changed = uui_setting_row_fit(&g_test_row);
+    if (uui_setting_row_fit(&g_fmt_row)) changed = 1;
+    return changed;
+}
+
 int snd_on_action(struct uapp *a, int code) {
     if (!uui_sndtest_on_action(&g_test, code)) return 0;
     ulogf("settings: sndtest %s\n", g_test.status);
     snd_tick(a);   // the tick rate follows at once
+    relayout_page();
     return 1;
 }
 
