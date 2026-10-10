@@ -3404,7 +3404,13 @@ window without going through it will find its layout polls timing out.
   stop on a target and ask (`target`, and the top-level `drop` label):
   a folder lights and takes the file, a plain file is no target (the
   control), Notepad refuses a .qoi and nothing moves, the Recycle Bin
-  takes one and turns `trash-full`, Image Viewer opens one. Positive
+  takes one and turns `trash-full`, Image Viewer opens one. Then the
+  extras: the first move's Undo card (`gui state --json`'s `notice`),
+  Ctrl+Z taking it back, no card for the second operation, New > Text
+  document opening into rename, Sort by > Size leading with the biggest
+  file (and by name not, the control), Auto arrange putting a dropped
+  icon back (and without it the drop moving it, the control), and Show
+  desktop icons off hiding every icon. Positive
   controls: folders never targets turns the three folder checks red; a
   cache the compositor can never read turns the thumbnail check red.
 - **`desktop_menu_test.py`** -- the desktop's menus, glass, Rename and

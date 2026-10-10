@@ -614,8 +614,16 @@ The desktop shows a photograph, so nothing on it is a solid fill:
 - **The menus are the card above.** Over an icon: the file's verbs as a
   strip, then Open and Properties. Over the background: Open > by the
   Start menu's categories (so there is no cap to fall off), the
-  desktop's own verbs (New folder, Paste, Refresh, Sort, Icon size >),
-  then System Settings.
+  desktop's own verbs (New > Folder or Text document, which open into
+  rename; Paste; Undo: <what>; Refresh; Sort by > name, type, size or
+  date; Icon size >; Auto arrange icons; Show desktop icons), then
+  System Settings. Sort by, Auto arrange and Show desktop icons are
+  settings (Desktop > Icons), so the menu and Settings agree.
+- **Undo takes back the desktop's last file operation** (Ctrl+Z, or
+  the menu's row): a move, a copy, a rename, a new item, a delete to
+  the Recycle Bin. The first such operation shows a card with Undo,
+  ONCE EVER -- on every move it was noise; after that the menu and the
+  key carry it, as Explorer's do.
 - **Rename happens in place** (F2, or the strip): the caption becomes a
   field, Enter or a click elsewhere commits, Esc abandons. A launcher's
   caption is its `Name=`, so that is what changes -- KDE's rule.

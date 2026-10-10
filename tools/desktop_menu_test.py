@@ -73,8 +73,8 @@ from qmp_test import QMPSession                      # noqa: E402
 import port_guard  # noqa: E402
 from harness import Results  # noqa: E402
 
-BG_ROWS = ["Open", "-", "New folder", "Paste", "-", "Refresh", "Sort by name",
-           "Icon size", "-", "System Settings"]
+BG_ROWS = ["Open", "-", "New", "Paste", "Undo", "-", "Refresh", "Sort by",
+           "Icon size", "Auto arrange icons", "Show desktop icons", "-", "System Settings"]
 EMPTY = (700, 300)          # a point of bare desktop at the default 1280x720
 GLASS_FILL = 56             # desktop.c's selected (not hovered) fill alpha
 
@@ -466,7 +466,7 @@ def check_menu_spacing(dbg, qmp, res, tmp):
         close_menu(dbg)
         dbg.rclick(*EMPTY)
         m = dbg.ctxmenu()
-        a, b = row(m, "Refresh"), row(m, "Sort by name")
+        a, b = row(m, "Refresh"), row(m, "Sort by")
         last = (m.get("rows") or [{}])[-1]
         # The probe's x is the card's right end, past every label.
         got[word] = {"item_h": m.get("item_h", 0), "pitch": (b["y"] - a["y"]) if a and b else 0,

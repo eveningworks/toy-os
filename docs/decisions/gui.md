@@ -11088,3 +11088,26 @@ waiting on a picture still too new looks again a second later.
 The File Manager and the Image Viewer keep decoding in-process through
 `uthumb_get()`'s worker: a crash there ends one app, which is the
 ordinary cost of an app reading a file.
+
+## The desktop's Undo runs programs, and its card shows once
+
+The desktop keeps its last file operation -- a move, copy, rename, new
+item or delete to the bin -- and Ctrl+Z, or the menu's "Undo: Moved 3
+items to Box" row, takes it back (2026-10-10). ONE operation, not the
+File Manager's journal (`lib/ufileundo.h`): the desktop's Undo is
+Explorer's single step, and what a toast or a menu row can name.
+
+**Taking it back RUNS PROGRAMS, as doing it did** -- `mv` back for a
+move or rename; the Recycle Bin for a copy or a new item, never a
+delete (Explorer's rule: undoing a copy recycles the copy); `trash
+restore /old/path` for a delete, which names the LATEST delete of that
+path. The compositor touches no file itself (`docs/conventions/gui.md`,
+long work belongs in a child process), and a rename it does do in
+place is undone the same way.
+
+**The card that offers Undo is shown ONCE, EVER** (the maintainer:
+"it gets irritating fast"). It teaches that Undo exists; after the
+first, nothing interrupts a move. Its button undoes only the operation
+it named -- a newer operation, or a Ctrl+Z, makes it do nothing --
+since a card left up for twelve seconds could otherwise undo something
+it never mentioned.

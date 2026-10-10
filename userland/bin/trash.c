@@ -18,7 +18,7 @@
 static const struct uargs_cmd CMDS[] = {
     { "put",     "FILE...", "move each FILE into its volume's bin" },
     { "list",    0,         "what is in the bins, newest first" },
-    { "restore", "NAME...", "put an item back where it was deleted from" },
+    { "restore", "NAME...", "put an item back where it was deleted from; a /PATH names it by that" },
     { "empty",   0,         "delete everything in the bins for good" },
     { 0 },
 };
@@ -77,8 +77,11 @@ static int restore(int argc, char **argv) {
     int n = utrash_list(g_items, 256), rc = 0;
     for (int a = 0; a < argc; a++) {
         int found = 0;
+        // A NAME is the bin's; a /PATH is where it was deleted from, and
+        // the list is newest first, so that names the latest delete of it
+        // -- the one an Undo means.
         for (int i = 0; i < n && !found; i++) {
-            if (strcmp(g_items[i].name, argv[a])) continue;
+            if (strcmp(argv[a][0] == '/' ? g_items[i].orig : g_items[i].name, argv[a])) continue;
             found = 1;
             int e = utrash_restore(&g_items[i]);
             if (e == -EEXIST)

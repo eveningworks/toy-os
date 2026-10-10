@@ -20,6 +20,7 @@
 #include "lib/uopen.h"      // what a launcher opens, for a file dropped on it
 #include "lib/uthumb.h"     // thumbnails: made by /bin/thumb, only READ here
 #include "caltime.h"         // cal_rtc_to_epoch(), for a file's age
+#include "crash_notice.h"   // the Undo card
 #include "wm/wm_log.h"
 #include "lib/uimg.h"
 #include "lib/ulivewall.h" // ulivewall_colour() -- the plain colours
@@ -166,6 +167,10 @@ static uint32_t g_files_epoch;   // moves when the list or the icon size does
 static void thumbs_reset(void);
 static void thumbs_refresh(void);
 static void thumb_forget(int i);
+// A new item opens straight into rename once it is listed (Explorer's
+// rule): its name waits here until the folder poll brings it in.
+static char g_rename_pending[64];
+static void begin_rename(int i);
 static void spawn_argv(char *const *argv);
 
 // The grid geometry, recomputed live (cheap -- a handful of registry
@@ -267,7 +272,12 @@ static int item_is_dir(int i) { return g_files[i].is_dir; }
 static const char *item_name(int i) {
     return item_is_launcher(i) ? g_launch[i].name : g_files[i].name;
 }
-static int item_visible(int i) { return i >= 0 && i < item_count(); }
+// The Icons group's other settings (data/etc/settings.d/desktop.*).
+enum { SORT_NAME, SORT_TYPE, SORT_SIZE, SORT_DATE };
+static int g_sort_by = SORT_NAME;
+static int g_auto_arrange;       // icons packed in sort order, no free cells
+static int g_show_icons = 1;     // off: the wallpaper bare, nothing to hit
+static int item_visible(int i) { return g_show_icons && i >= 0 && i < item_count(); }
 // The saved-position key is the FILENAME, so a launcher keeps its cell
 // whatever its Name= says (the "file:" prefix is what older configs
 // keyed files by, kept so their cells survive).
@@ -354,6 +364,7 @@ static int desktop_files_reload(void) {
 }
 
 static void save_position(int i) {
+    if (g_auto_arrange) return;   // nothing stays where it was put
     char value[16], keybuf[80];
     format_pos(value, icon_col[i], icon_row[i]);
     wm_conf_set(DESKTOP_CONF_PATH, item_key(i, keybuf, sizeof keybuf), value);
@@ -367,6 +378,34 @@ static void save_position(int i) {
 // drag, which updates icon_col/icon_row directly, so there's nothing
 // to invalidate this cache.
 static int cell_taken(int col, int row, int exclude);
+
+// The order icons are laid out in: folders first, as Explorer's, then
+// by the desktop.sort_by key, ties by name. An insertion sort: a desktop
+// holds a few dozen icons.
+static int sort_before(int a, int b) {
+    int da = item_is_dir(a) && !item_is_launcher(a), db = item_is_dir(b) && !item_is_launcher(b);
+    if (da != db) return da;
+    long long d = 0;
+    if (g_sort_by == SORT_TYPE) {
+        const char *ta = item_is_launcher(a) ? "App" : ufiletype_name(item_name(a), item_is_dir(a));
+        const char *tb = item_is_launcher(b) ? "App" : ufiletype_name(item_name(b), item_is_dir(b));
+        d = k_strcmp(ta, tb);
+    } else if (g_sort_by == SORT_SIZE) {
+        d = (long long)g_files[b].size - (long long)g_files[a].size;              // biggest first
+    } else if (g_sort_by == SORT_DATE) {
+        d = (long long)cal_rtc_to_epoch(&g_files[b].modified) - (long long)cal_rtc_to_epoch(&g_files[a].modified);   // newest first
+    }
+    if (d) return d < 0;
+    return k_strcmp(item_name(a), item_name(b)) < 0;
+}
+
+static void sort_order(int *order, int n) {
+    for (int i = 0; i < n; i++) {
+        int j = i;
+        while (j > 0 && sort_before(i, order[j - 1])) { order[j] = order[j - 1]; j--; }
+        order[j] = i;
+    }
+}
 
 static void desktop_load_positions(void) {
     if (positions_loaded) return;
@@ -397,6 +436,7 @@ static void desktop_load_positions(void) {
         if (!item_visible(i)) continue;
 
         char value[16], keybuf[80];
+        if (g_auto_arrange) continue;   // packed in sort order, nothing kept where it was put
         if (!wm_conf_get(DESKTOP_CONF_PATH, item_key(i, keybuf, sizeof keybuf), value, sizeof(value))) continue;
 
         // "<col>,<row>" -- split on the comma, then let knum.h's bounded
@@ -420,7 +460,10 @@ static void desktop_load_positions(void) {
     // Bounded by the pigeonhole: at most DESKTOP_MAX_ICONS icons can
     // occupy DESKTOP_MAX_ICONS cells, so one more slot than that is
     // always free.
-    for (int i = 0; i < n; i++) {
+    static int order[DESKTOP_MAX_ICONS];
+    sort_order(order, n);
+    for (int o = 0; o < n; o++) {
+        int i = order[o];
         if (!item_visible(i) || icon_col[i] >= 0) continue;
         for (int slot = 0; slot <= DESKTOP_MAX_ICONS; slot++) {
             int col = slot / per_col, row = slot % per_col;
@@ -571,6 +614,31 @@ static void wallpaper_reload(void) {
 // `desktop.icon_size`, the same way: the registry knows the words, the
 // desktop knows the pixels. A change repaints the whole desktop; saved
 // cell positions are kept, since a cell is a (col, row) and not a pixel.
+static void resort(void);
+
+static void arrange_reload(void) {
+    static int loaded;
+    char v[SETTING_ABI_VALUE_MAX];
+    int sort = SORT_NAME, autoa = 0, show = 1;
+    if (usetting_get("desktop.sort_by", v, sizeof v))
+        sort = !k_strcmp(v, "type") ? SORT_TYPE : !k_strcmp(v, "size") ? SORT_SIZE
+             : !k_strcmp(v, "date") ? SORT_DATE : SORT_NAME;
+    if (usetting_get("desktop.auto_arrange", v, sizeof v)) autoa = !k_strcmp(v, "on");
+    if (usetting_get("desktop.show_icons", v, sizeof v)) show = k_strcmp(v, "off") != 0;
+    if (sort == g_sort_by && autoa == g_auto_arrange && show == g_show_icons) return;
+    // Any of them lays the icons out again: hidden icons were never placed.
+    positions_loaded = 0;
+    int resorted = loaded && sort != g_sort_by;
+    loaded = 1;
+    g_sort_by = sort;
+    g_auto_arrange = autoa;
+    g_show_icons = show;
+    // A new order from anywhere -- the menu or System Settings -- is a sort.
+    if (resorted) resort();
+    redraw_pending = 1;
+    wm_damage_rect(0, 0, screen_w, screen_h);
+}
+
 static void icon_size_reload(void) {
     char value[SETTING_ABI_VALUE_MAX];
     const char *word = "medium";
@@ -600,9 +668,21 @@ void desktop_poll_config(void) {
         primed = 1;
         seen_gen = gen;
         icon_size_reload();
+        arrange_reload();
         wallpaper_reload();      // the first call is the initial load
         if (desktop_files_reload()) positions_loaded = 0;
         return;
+    }
+    // A new item, listed now: into rename, selected.
+    if (g_rename_pending[0] && !desktop_drag_active()) {
+        for (int i = 0; i < item_count(); i++)
+            if (!item_is_launcher(i) && k_strcmp(g_files[i].name, g_rename_pending) == 0) {
+                g_rename_pending[0] = '\0';
+                rb_clear(&sel);
+                rb_select(&sel, i, 1);
+                begin_rename(i);
+                break;
+            }
     }
     // Thumbnails: when the list, the icon size or the cache changes.
     static uint64_t thumbs_gen;
@@ -628,6 +708,7 @@ void desktop_poll_config(void) {
     if (gen == seen_gen) return;
     seen_gen = gen;
     icon_size_reload();
+    arrange_reload();
     wallpaper_reload();
     // The folder, unless a band or a drag indexes the current list --
     // the same rule the .desktop-entry reload follows (wm.c).
@@ -1493,6 +1574,7 @@ void desktop_update_drag(int mx, int my, uint8_t buttons) {
         wm_damage_rect(0, 0, screen_w, screen_h - taskbar_h);
         icon_drag_end(&drag);
         group_drag = 0;
+        if (g_auto_arrange) positions_loaded = 0;
         redraw_pending = 1;
         return;
     }
@@ -1510,6 +1592,10 @@ void desktop_update_drag(int mx, int my, uint8_t buttons) {
     icon_grid_cell_rect(&g, icon_col[drag.index], icon_row[drag.index], &fx, &fy);
     damage_icon_row(&g, fy); // ...and wherever it actually settled (the snap itself)
     icon_drag_end(&drag);
+    if (g_auto_arrange) {   // back into its place in the order
+        positions_loaded = 0;
+        wm_damage_rect(0, 0, screen_w, screen_h - taskbar_h);
+    }
     redraw_pending = 1;
 }
 
@@ -1642,8 +1728,102 @@ int desktop_drop_here(int mx, int my) {
     return 1;
 }
 
+// --- Undo: the desktop's last file operation --------------------------------
+//
+// Ctrl+Z, the background menu's Undo row, or the card the operation shows
+// -- Explorer's single Undo over file operations. ONE operation, the
+// latest: the File Manager keeps a journal (lib/ufileundo.h); the desktop
+// keeps what a toast can offer. Taking it back RUNS PROGRAMS, as doing it
+// did -- the compositor touches no file -- and the way back from a thing
+// that MADE something is the Recycle Bin, never a delete (Explorer's
+// rule: undoing a copy recycles the copy).
+enum { UNDO_NONE, UNDO_MOVE, UNDO_COPY, UNDO_TRASH, UNDO_RENAME, UNDO_CREATE };
+#define UNDO_MAX 32
+static struct {
+    int kind, n;
+    char from[UNDO_MAX][PATH_BUF];   // where each was ("" for a CREATE)
+    char to[UNDO_MAX][PATH_BUF];     // where each is now
+    char label[96];                  // "Moved 3 items to Box"
+    uint32_t seq;                    // moves with every operation kept
+} g_undo;
+static uint32_t g_undo_card_seq;     // the operation the Undo card announced
+
+static void undo_begin(int kind) { g_undo.kind = kind; g_undo.n = 0; g_undo.label[0] = '\0'; }
+
+static void undo_add(const char *from, const char *to) {
+    if (g_undo.n >= UNDO_MAX) return;
+    k_strlcpy(g_undo.from[g_undo.n], from ? from : "", PATH_BUF);
+    k_strlcpy(g_undo.to[g_undo.n], to ? to : "", PATH_BUF);
+    g_undo.n++;
+}
+
+// Where `src` lands in folder `dir`: what a move or copy into it makes.
+static void undo_add_into(const char *src, const char *dir) {
+    char to[PATH_BUF];
+    if (k_path_join(dir, k_path_basename(src), to, sizeof to)) undo_add(src, to);
+}
+
+static void undo_run(void);
+
+// The card's button takes back what the card SAID, or nothing: by the time
+// it is pressed Ctrl+Z may have undone that, or a newer operation be kept.
+static void undo_from_card(void) {
+    if (g_undo.kind != UNDO_NONE && g_undo.seq == g_undo_card_seq) undo_run();
+    else wm_logf("desktop: the Undo card's operation is gone; nothing undone");
+}
+
+static void undo_run(void) {
+    static char *argv[UNDO_MAX + 3];
+    int k = 0;
+    if (g_undo.kind == UNDO_NONE || !g_undo.n) return;
+    if (g_undo.kind == UNDO_MOVE || g_undo.kind == UNDO_RENAME) {
+        for (int i = 0; i < g_undo.n; i++) {
+            char *const mv[] = { "/bin/mv", g_undo.to[i], g_undo.from[i], 0 };
+            spawn_argv(mv);
+        }
+    } else {
+        // A copy or a new item goes to the bin; a delete comes back out,
+        // named by where it was (`trash restore /path`, the latest delete).
+        int back = g_undo.kind == UNDO_TRASH;
+        argv[k++] = "/bin/trash";
+        argv[k++] = back ? "restore" : "put";
+        for (int i = 0; i < g_undo.n; i++) argv[k++] = back ? g_undo.from[i] : g_undo.to[i];
+        argv[k] = 0;
+        spawn_argv(argv);
+    }
+    wm_logf("desktop: undid \"%s\"", g_undo.label);
+    g_undo.kind = UNDO_NONE;
+}
+
+// Keep it, saying what it was; `card` also offers it on a notice card --
+// for what a person may not have meant (a drop, a delete), not for a
+// rename they just typed.
+static void undo_commit(const char *verb, const char *where, int card) {
+    if (!g_undo.n) { g_undo.kind = UNDO_NONE; return; }
+    const char *one = k_path_basename(g_undo.kind == UNDO_CREATE ? g_undo.to[0] : g_undo.from[0]);
+    char what[72];
+    if (g_undo.n == 1) k_strlcpy(what, one, sizeof what);
+    else k_snprintf(what, sizeof what, "%d items", g_undo.n);
+    if (where) k_snprintf(g_undo.label, sizeof g_undo.label, "%s %s to %s", verb, what, where);
+    else k_snprintf(g_undo.label, sizeof g_undo.label, "%s %s", verb, what);
+    g_undo.seq++;
+    wm_logf("desktop: can undo \"%s\"", g_undo.label);
+    // THE CARD IS SHOWN ONCE, EVER: on every move it was noise within a
+    // minute (the maintainer, 2026-10-10). Once teaches that Undo exists;
+    // Ctrl+Z and the menu's Undo row carry it after that, as Explorer's do.
+    char seen[8];
+    if (!card || (wm_conf_get(DESKTOP_CONF_PATH, "UndoCardShown", seen, sizeof seen) && seen[0] == '1')) return;
+    wm_conf_set(DESKTOP_CONF_PATH, "UndoCardShown", "1");
+    g_undo_card_seq = g_undo.seq;
+    crash_notice_action(g_undo.label, "Ctrl+Z or the desktop menu's Undo takes it back",
+                        "tb-undo", "Undo", undo_from_card);
+}
+
+static void menu_undo(void *ctx) { (void)ctx; undo_run(); }
+
 static void paste_from(const struct uclip *c, int op) {
     static char src[PATH_BUF];
+    undo_begin(op == UCLIP_CUT ? UNDO_MOVE : UNDO_COPY);
     for (int i = 0; i < uclip_count(c); i++) {
         const char *p = uclip_path(c, i);
         if (!p) break;
@@ -1660,7 +1840,9 @@ static void paste_from(const struct uclip *c, int op) {
             char *const argv[] = { "/bin/cp", "-r", src, DESKTOP_DIR, 0 };
             spawn_argv(argv);
         }
+        undo_add_into(src, DESKTOP_DIR);
     }
+    undo_commit(op == UCLIP_CUT ? "Moved" : "Copied", "the desktop", 1);
 }
 
 // --- dropping ONTO an icon ------------------------------------------------
@@ -1770,6 +1952,7 @@ static int drop_onto_target(char paths[][PATH_BUF], int n) {
     if (verb == DROP_MOVE || verb == DROP_COPY) {
         item_path(t, dest, sizeof dest);
         size_t dl = k_strlen(dest);
+        undo_begin(verb == DROP_MOVE ? UNDO_MOVE : UNDO_COPY);
         for (int i = 0; i < n; i++) {
             // Not into itself, nor into a folder inside itself.
             size_t pl = k_strlen(paths[i]);
@@ -1778,8 +1961,10 @@ static int drop_onto_target(char paths[][PATH_BUF], int n) {
             char *const mv[] = { "/bin/mv", paths[i], dest, 0 };
             char *const cp[] = { "/bin/cp", "-r", paths[i], dest, 0 };
             spawn_argv(verb == DROP_MOVE ? mv : cp);
+            undo_add_into(paths[i], dest);
         }
         wm_logf("desktop: %s %d item(s) to %s", verb == DROP_MOVE ? "moved" : "copied", n, dest);
+        undo_commit(verb == DROP_MOVE ? "Moved" : "Copied", item_name(t), 1);
     } else if (verb == DROP_OPEN) {
         const struct gui_app *a = launcher_app(t);
         int opened = 0;
@@ -1796,10 +1981,15 @@ static int drop_onto_target(char paths[][PATH_BUF], int n) {
         int k = 0;
         argv[k++] = "/bin/trash";
         argv[k++] = "put";
-        for (int i = 0; i < n && k < DESKTOP_FILES_MAX + 2; i++) argv[k++] = paths[i];
+        undo_begin(UNDO_TRASH);
+        for (int i = 0; i < n && k < DESKTOP_FILES_MAX + 2; i++) {
+            argv[k++] = paths[i];
+            undo_add(paths[i], 0);
+        }
         argv[k] = 0;
         spawn_argv(argv);
         wm_logf("desktop: %d item(s) to the Recycle Bin", n);
+        undo_commit("Moved", "the Recycle Bin", 1);
     } else {
         wm_logf("desktop: %s refused the drop", item_name(t));
     }
@@ -1829,6 +2019,11 @@ static void delete_confirmed(void) {
     for (int i = 0; i < g_del_count; i++) argv[k++] = g_del_paths[i];
     argv[k] = 0;
     spawn_argv(argv);
+    if (!g_del_forever) {   // a delete for good has nothing to take back
+        undo_begin(UNDO_TRASH);
+        for (int i = 0; i < g_del_count; i++) undo_add(g_del_paths[i], 0);
+        undo_commit("Moved", "the Recycle Bin", 1);
+    }
     g_del_count = 0;
 }
 static void delete_selected(int forever) {
@@ -1853,18 +2048,36 @@ static void menu_delete(void *ctx) {
 
 // "New folder", then "New folder 2", ... -- Explorer's and Dolphin's
 // naming. A syscall rather than a child: mkdir is one operation.
-static void menu_new_folder(void *ctx) {
-    (void)ctx;
+
+// "New folder", "New folder 2", ...: the first free name, made, renamed
+// in place, and undoable (to the bin).
+static void make_new(int folder) {
+    const char *stem = folder ? "New folder" : "New text document";
+    const char *ext = folder ? "" : ".txt";
     char path[PATH_BUF];
     for (int n = 1; n < 100; n++) {
-        if (n == 1) k_snprintf(path, sizeof path, DESKTOP_DIR "/New folder");
-        else        k_snprintf(path, sizeof path, DESKTOP_DIR "/New folder %d", n);
+        if (n == 1) k_snprintf(path, sizeof path, DESKTOP_DIR "/%s%s", stem, ext);
+        else        k_snprintf(path, sizeof path, DESKTOP_DIR "/%s %d%s", stem, n, ext);
         struct sys_stat st;
         if (sys_stat(path, &st) == 0) continue;
-        if (sys_mkdir(path) < 0) wm_logf("desktop: mkdir %s failed", path);
+        int ok;
+        if (folder) {
+            ok = sys_mkdir(path) >= 0;
+        } else {
+            int fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | SYS_O_TRUNC);
+            ok = fd >= 0;
+            if (ok) sys_close(fd);
+        }
+        if (!ok) { wm_logf("desktop: could not make %s", path); return; }
+        k_strlcpy(g_rename_pending, k_path_basename(path), sizeof g_rename_pending);
+        undo_begin(UNDO_CREATE);
+        undo_add(0, path);
+        undo_commit("Created", 0, 0);
         return;
     }
 }
+static void menu_new_folder(void *ctx) { (void)ctx; make_new(1); }
+static void menu_new_text(void *ctx) { (void)ctx; make_new(0); }
 
 static void menu_open_item(void *ctx) { item_activate((int)(intptr_t)ctx); }
 
@@ -1973,7 +2186,13 @@ static void end_rename(int commit) {
         char dst[PATH_BUF];
         if (k_strcmp(to, k_path_basename(g_rename_path)) == 0) return;
         if (!k_path_join(DESKTOP_DIR, to, dst, sizeof dst)) return;
-        if (sys_rename(g_rename_path, dst) < 0) wm_logf("desktop: rename to %s refused", to);
+        if (sys_rename(g_rename_path, dst) < 0) {
+            wm_logf("desktop: rename to %s refused", to);
+        } else {
+            undo_begin(UNDO_RENAME);
+            undo_add(g_rename_path, dst);
+            undo_commit("Renamed", to, 0);
+        }
     }
     desktop_entries_changed();
     wm_damage_rect(0, 0, screen_w, screen_h - taskbar_h);
@@ -2047,6 +2266,7 @@ int desktop_handle_key(int key, unsigned mods) {
     if (key == 'c' || key == 'C' || key == 0x03) { menu_copy(0);  return 1; }
     if (key == 'x' || key == 'X' || key == 0x18) { menu_cut(0);   return 1; }
     if (key == 'v' || key == 'V' || key == 0x16) { menu_paste(0); return 1; }
+    if (key == 'z' || key == 'Z' || key == 0x1A) { undo_run(); return 1; }
     return 0;
 }
 
@@ -2087,8 +2307,23 @@ static void menu_refresh(void *ctx) {
 
 // Sort by name: the default layout, re-derived and SAVED, so a desktop
 // rearranged by hand goes back to columns in name order.
+// A two-word setting flipped from its checkbox row.
+static void menu_toggle(void *ctx) {
+    const char *key = ctx;
+    int on = !k_strcmp(key, "desktop.auto_arrange") ? g_auto_arrange : g_show_icons;
+    if (usetting_set(key, on ? "off" : "on") == SETTING_INVALID) wm_logf("desktop: %s refused", key);
+}
+
+// Sort by: the order is the setting, and the icons are laid out in it
+// again -- every cell the user chose forgotten, as Explorer's Sort by.
 static void menu_sort(void *ctx) {
-    (void)ctx;
+    if (ctx && usetting_set("desktop.sort_by", (const char *)ctx) == SETTING_INVALID)
+        wm_logf("desktop: sort by %s refused", (const char *)ctx);
+    arrange_reload();   // a new key sorts there; the same key again sorts here
+    resort();
+}
+
+static void resort(void) {
     char keybuf[80];
     for (int i = 0; i < item_count(); i++)
         wm_conf_set(DESKTOP_CONF_PATH, item_key(i, keybuf, sizeof keybuf), "");
@@ -2156,7 +2391,7 @@ void desktop_handle_right_click(int mx, int my) {
     static struct context_menu_item cats[DESKTOP_OPEN_CATS];
     static struct context_menu_item apps[DESKTOP_OPEN_APPS];
     static struct context_menu_item sizes[3];
-    static struct context_menu_item items[12];
+    static struct context_menu_item items[16];
     int k = 0;
     if (g_rename >= 0) end_rename(1);
 
@@ -2209,21 +2444,42 @@ void desktop_handle_right_click(int mx, int my) {
                                                .checked = k_strcmp(g_icon_size, words[i]) == 0 };
     }
 
+    static struct context_menu_item news[2], sorts[4];
+    static char undo_label[112];
+    news[0] = (struct context_menu_item){ .label = "Folder", .on_select = menu_new_folder,
+                                          .icon = "tb-mkdir", .tint = UTHEME_ACT_CREATE };
+    news[1] = (struct context_menu_item){ .label = "Text document", .on_select = menu_new_text,
+                                          .icon = "tb-new", .tint = UTHEME_ACT_CREATE };
+    static const char *const sort_words[4] = { "name", "type", "size", "date" };
+    static const char *const sort_labels[4] = { "Name", "Type", "Size", "Date modified" };
+    for (int s2 = 0; s2 < 4; s2++)
+        sorts[s2] = (struct context_menu_item){ .label = sort_labels[s2], .on_select = menu_sort,
+                                                .ctx = (void *)sort_words[s2], .checked = g_sort_by == s2 };
+    if (g_undo.kind != UNDO_NONE) k_snprintf(undo_label, sizeof undo_label, "Undo: %s", g_undo.label);
+    else k_strlcpy(undo_label, "Undo", sizeof undo_label);
+
     items[k++] = (struct context_menu_item){ .label = "Open", .sub = cats, .sub_count = ncat,
                                              .icon = "tb-open", .tint = UTHEME_ACT_NAV };
     items[k++] = (struct context_menu_item){ .separator = 1 };
-    items[k++] = (struct context_menu_item){ .label = "New folder", .on_select = menu_new_folder,
-                                             .icon = "tb-mkdir", .tint = UTHEME_ACT_CREATE };
+    items[k++] = (struct context_menu_item){ .label = "New", .sub = news, .sub_count = 2,
+                                             .icon = "tb-new", .tint = UTHEME_ACT_CREATE };
     items[k++] = (struct context_menu_item){ .label = "Paste", .on_select = menu_paste,
                                              .icon = "tb-paste", .tint = UTHEME_ACT_EDIT,
                                              .accel = "Ctrl+V", .disabled = !can_paste() };
+    items[k++] = (struct context_menu_item){ .label = undo_label, .on_select = menu_undo,
+                                             .icon = "tb-undo", .tint = UTHEME_ACT_EDIT,
+                                             .accel = "Ctrl+Z", .disabled = g_undo.kind == UNDO_NONE };
     items[k++] = (struct context_menu_item){ .separator = 1 };
     items[k++] = (struct context_menu_item){ .label = "Refresh", .on_select = menu_refresh,
                                              .icon = "tb-refresh", .tint = UTHEME_ACT_VIEW, .accel = "F5" };
-    items[k++] = (struct context_menu_item){ .label = "Sort by name", .on_select = menu_sort,
+    items[k++] = (struct context_menu_item){ .label = "Sort by", .sub = sorts, .sub_count = 4,
                                              .icon = "tb-sort", .tint = UTHEME_ACT_ARRANGE };
     items[k++] = (struct context_menu_item){ .label = "Icon size", .sub = sizes, .sub_count = 3,
                                              .icon = "tb-icons", .tint = UTHEME_ACT_VIEW };
+    items[k++] = (struct context_menu_item){ .label = "Auto arrange icons", .on_select = menu_toggle,
+                                             .ctx = (void *)"desktop.auto_arrange", .checked = g_auto_arrange };
+    items[k++] = (struct context_menu_item){ .label = "Show desktop icons", .on_select = menu_toggle,
+                                             .ctx = (void *)"desktop.show_icons", .checked = g_show_icons };
     items[k++] = (struct context_menu_item){ .separator = 1 };
     items[k++] = (struct context_menu_item){ .label = "System Settings", .on_select = menu_settings,
                                              .icon = "tb-gear" };

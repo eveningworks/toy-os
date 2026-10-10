@@ -924,12 +924,20 @@ def run(dbg, qmp, tmp, res):
     dbg.rclick(1150, 250)
     time.sleep(0.4)
     m = ctx()
-    nf = [r for r in (m or {}).get("rows", []) if r["label"] == "New folder"]
-    if nf:
-        dbg.click(m["x"] + m["w"] // 2, nf[0]["cy"])
-        time.sleep(1.5)
+    # New > Folder: the row opens its submenu, which `ctx()` reports as "sub".
+    nf = []
+    new_row = [r for r in (m or {}).get("rows", []) if r["label"] == "New"]
+    if new_row:
+        dbg.send(f"gui warp {m['x'] + 20} {new_row[0]['cy']}")
+        dbg.settle()
+        sub = (ctx() or {}).get("sub") or {}
+        nf = [r for r in sub.get("rows", []) if r["label"] == "Folder"]
+        if nf:
+            dbg.click(sub["x"] + sub["w"] // 2, nf[0]["cy"])
+            time.sleep(1.5)
+            dbg.key("0x1b")   # a new folder opens into rename: Esc keeps its name
     listing = (dbg.send("sh ls /home/desktop") or "")
-    res.check("New folder creates one, and it is a dir icon",
+    res.check("New > Folder creates one, and it is a dir icon",
               bool(nf) and "New folder" in listing and
               (icon_rect(desktop_report(dbg), "New folder") or {}).get("kind") == "dir",
               f"rows={[r['label'] for r in (m or {}).get('rows', [])]} ls={listing.strip()[:80]}")

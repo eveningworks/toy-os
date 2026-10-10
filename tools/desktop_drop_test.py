@@ -75,6 +75,13 @@ def release(dbg, qmp):
     dbg.settle()
 
 
+EMPTY_SPOT = (700, 300)   # bare desktop at the default 1280x720
+
+
+def notice_title(dbg):
+    return (dbg.json("gui state --json").get("notice") or {}).get("title")
+
+
 def wait_for(fn, timeout=10.0):
     end = time.time() + timeout
     while time.time() < end:
@@ -131,6 +138,15 @@ def run(dbg, qmp):
     moved = wait_for(lambda: "notes.txt" in dbg.send(f"sh ls {DESK}/Box") and "notes.txt" not in icons(dbg)[0])
     check("the release moves it into the folder", bool(moved), dbg.send(f"sh ls {DESK}/Box")[-120:])
 
+    # 2b. Undo. The FIRST undoable operation shows a card saying what it
+    # did; Ctrl+Z takes it back (the file is on the desktop again and out
+    # of the folder). A second operation shows NO card: once, ever.
+    card = wait_for(lambda: notice_title(dbg) == "Moved notes.txt to Box", timeout=5)
+    check("the first move shows the Undo card, saying what it did", bool(card), repr(notice_title(dbg)))
+    dbg.key("0x1a", mods="ctrl")
+    back = wait_for(lambda: "notes.txt" in icons(dbg)[0] and "notes.txt" not in dbg.send(f"sh ls {DESK}/Box"))
+    check("Ctrl+Z takes the move back", bool(back))
+
     # 3. An app that does not open the type refuses, and nothing moves.
     before = icons(dbg)[0]["pic.qoi"]
     ic, drop = hold_over(dbg, qmp, "pic.qoi", "Notepad")
@@ -149,6 +165,73 @@ def run(dbg, qmp):
     check("the release puts it in the bin", bool(binned))
     full = wait_for(lambda: icons(dbg)[0].get("Recycle Bin", {}).get("art") == "trash-full")
     check("...and the bin is drawn full", bool(full), str(icons(dbg)[0].get("Recycle Bin", {}).get("art")))
+
+    check("a second operation shows no card", "Recycle Bin" not in (notice_title(dbg) or ""),
+          repr(notice_title(dbg)))
+
+    # 4b. New > Text document opens into rename.
+    dbg.rclick(*EMPTY_SPOT)
+    m = dbg.ctxmenu()
+    new = next((r for r in m.get("rows", []) if r["label"] == "New"), None)
+    if new:
+        dbg.send(f"gui warp {m['x'] + 20} {new['cy']}")
+        dbg.settle()
+        sub = dbg.ctxmenu().get("sub") or {}
+        td = next((r for r in sub.get("rows", []) if r["label"] == "Text document"), None)
+        if td:
+            dbg.click(sub["x"] + 20, td["cy"])
+    made = wait_for(lambda: (icons(dbg)[0].get("New text document.txt") or {}).get("renaming"))
+    check("New > Text document makes one, already renaming", bool(made),
+          str(icons(dbg)[0].get("New text document.txt")))
+    dbg.key("0x1b")
+
+    # 4c. Sort by size puts the biggest file first, after the folders --
+    # aurora.jpg dwarfs every other file here. By name it does not lead.
+    def order():
+        d = icons(dbg)[0]
+        return [n for n, _ in sorted(d.items(), key=lambda kv: (kv[1]["x"], kv[1]["y"]))
+                if d[n]["kind"] != "dir"]
+    dbg.send("sh config set desktop.sort_by size")
+    dbg.rclick(*EMPTY_SPOT)
+    m = dbg.ctxmenu()
+    srt = next((r for r in m.get("rows", []) if r["label"] == "Sort by"), None)
+    if srt:
+        dbg.send(f"gui warp {m['x'] + 20} {srt['cy']}")
+        dbg.settle()
+        sub = dbg.ctxmenu().get("sub") or {}
+        sz = next((r for r in sub.get("rows", []) if r["label"] == "Size"), None)
+        if sz:
+            dbg.click(sub["x"] + 20, sz["cy"])
+    first = wait_for(lambda: (order() or [None])[0] == "aurora.jpg")
+    check("Sort by > Size: the biggest file leads", bool(first), str(order()[:4]))
+    dbg.send("sh config set desktop.sort_by name")
+    wait_for(lambda: (order() or [None])[0] != "aurora.jpg")
+    check("...and by name it does not (the control)", order()[:1] != ["aurora.jpg"], str(order()[:4]))
+
+    # 4d. Auto arrange: an icon dropped on bare desktop goes back to its
+    # place in the order. Without it, the same drop moves it (the control).
+    def drop_on_bare(name):
+        i = icons(dbg)[0][name]
+        dbg.drag(*centre(i), *EMPTY_SPOT, steps=16)
+        time.sleep(1.5)
+        dbg.settle()
+        j = icons(dbg)[0][name]
+        return (i["x"], i["y"]), (j["x"], j["y"])
+    a, b = drop_on_bare("pic.qoi")
+    check("without Auto arrange a drop moves the icon", a != b, f"{a} -> {b}")
+    dbg.send("sh config set desktop.auto_arrange on")
+    time.sleep(1.5)
+    dbg.settle()
+    a, b = drop_on_bare("pic.qoi")
+    check("with Auto arrange it goes back into the order", a == b, f"{a} -> {b}")
+    dbg.send("sh config set desktop.auto_arrange off")
+
+    # 4e. Show desktop icons off: none to see or hit; on: all back.
+    dbg.send("sh config set desktop.show_icons off")
+    gone = wait_for(lambda: not icons(dbg)[0])
+    check("Show desktop icons off hides every icon", bool(gone) or not icons(dbg)[0])
+    dbg.send("sh config set desktop.show_icons on")
+    check("...and on brings them back", bool(wait_for(lambda: "pic.qoi" in icons(dbg)[0])))
 
     # 5. An app that opens it. Last: its window covers the icons.
     ic, drop = hold_over(dbg, qmp, "pic.qoi", "Image Viewer")

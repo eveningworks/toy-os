@@ -16,7 +16,9 @@
 - `list` -- everything in the bins, newest first: the item's name in its
   bin, its size (or `folder`), when it was deleted, and where from.
 - `restore NAME...` -- put an item back where it was deleted from. NAME
-  is the first column of `trash list`. Refused when something now has
+  is the first column of `trash list`, or the path it was deleted from
+  (anything starting with `/`), which names the LATEST delete of that
+  path -- what the desktop's Undo runs. Refused when something now has
   that name, or when the folder it came from is gone -- it is not
   re-created.
 - `empty` -- delete everything in the bins for good.

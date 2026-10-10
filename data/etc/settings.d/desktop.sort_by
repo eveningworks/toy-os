@@ -1,0 +1,13 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Sort icons by
+Category=Desktop
+Group=Icons
+Default=name
+Choices=name,type,size,date
+Description=The order icons are laid out in; folders always come first
+Widget=dropdown
+Choice.name=Name
+Choice.type=Type
+Choice.size=Size
+Choice.date=Date modified

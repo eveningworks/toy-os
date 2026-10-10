@@ -1,0 +1,10 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Show desktop icons
+Category=Desktop
+Group=Icons
+Default=on
+Choices=on,off
+Description=Hide every icon to leave the wallpaper bare
+Choice.on=On
+Choice.off=Off

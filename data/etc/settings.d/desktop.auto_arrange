@@ -1,0 +1,10 @@
+Type=enum
+File=/etc/desktop.conf
+Label=Auto arrange icons
+Category=Desktop
+Group=Icons
+Default=off
+Choices=on,off
+Description=Keep icons packed from the corner in their sort order
+Choice.on=On
+Choice.off=Off

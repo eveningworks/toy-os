@@ -34,6 +34,12 @@ int  crash_notice_rect(int *x, int *y, int *w, int *h);
 // rects as {x, y, w, h} (w 0 when the card has no such button).
 const char *crash_notice_describe(int details[4], int reopen[4]);
 
+// A card with ONE action, for the desktop's own news: "Moved 3 items to
+// Box" with Undo. A newer one replaces it -- only the latest can be taken
+// back. `act` runs on the compositor's thread when its button is pressed.
+void crash_notice_action(const char *title, const char *sub, const char *icon,
+                         const char *action, void (*act)(void));
+
 // A client's WIN_REQ_NOTICE, one piece of its path at a time.
 void crash_notice_piece(int pid, int a, int kind, unsigned flags, const char *text);
 // The newest card's action `b` (1..4): its label, and its rect in r.

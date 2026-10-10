@@ -43,7 +43,7 @@ enum { BTN_CLOSE = 0, BTN_A, BTN_B, BTN_C, BTN_D, BTNS };
 #define BTN_VIEW    BTN_B
 #define BTN_ALLOW   BTN_C
 #define BTN_ALWAYS  BTN_D   // its "Always allow" box, a toggle
-enum { KIND_CRASH = 0, KIND_SHOT, KIND_STAYED, KIND_REMOTE };
+enum { KIND_CRASH = 0, KIND_SHOT, KIND_STAYED, KIND_REMOTE, KIND_ACTION };
 #define ASK_NS ((uint64_t)WIN_REMOTE_ASK_S * 1000000000ull)
 
 #define PATH_MAX_NOTICE (WIN_NOTICE_PIECES_MAX * (WIN_TITLE_LEN - 1) + 1)
@@ -65,6 +65,8 @@ struct notice {
     int no_always;                // ...which this request does not offer
     char peer[16];
     int shown_left;               // the countdown's second as last drawn
+    char action[24];              // an action card's one button ("Undo")
+    void (*act)(void);            // ...and what it does
     uint64_t until;
 };
 
@@ -164,6 +166,23 @@ void crash_notice_stayed(const char *title, const char *sub, const char *icon,
     if (n > NOTICE_STAYED_MAX) n = NOTICE_STAYED_MAX;
     for (int k = 0; k < n; k++) c.seq[k] = seq[k];
     c.nwin = n;
+    push(&c);
+}
+
+// --- a card with one action -------------------------------------------------
+
+void crash_notice_action(const char *title, const char *sub, const char *icon,
+                         const char *action, void (*act)(void)) {
+    struct notice c;
+    k_memset(&c, 0, sizeof c);
+    c.kind = KIND_ACTION;
+    k_strlcpy(c.title, title, sizeof c.title);
+    k_strlcpy(c.sub, sub ? sub : "", sizeof c.sub);
+    k_strlcpy(c.icon, icon ? icon : "tb-undo", sizeof c.icon);
+    k_strlcpy(c.action, action, sizeof c.action);
+    c.act = act;
+    // A newer action replaces the old one's card: only the latest can be taken back.
+    for (int i = g_count - 1; i >= 0; i--) if (g_n[i].kind == KIND_ACTION) drop(i);
     push(&c);
 }
 
@@ -452,6 +471,12 @@ static int button_rect(int i, int b, int *x, int *y, int *w, int *h) {
     }
     if (b == BTN_C || b == BTN_D) return 0;
     int right = cx + cw - pad();
+    if (n->kind == KIND_ACTION) {
+        if (b != BTN_A) return 0;
+        *w = ugfx_text_width(n->action) + 2 * ugfx_char_w();
+        *x = right - *w;
+        return 1;
+    }
     if (n->kind == KIND_STAYED) {
         // Right-aligned, Force Quit last: Show it, then the one that loses work.
         int fw = ugfx_text_width(stayed_label(BTN_FORCE)) + 2 * ugfx_char_w();
@@ -489,6 +514,7 @@ const char *crash_notice_button(int b, int r[4]) {
     if (g_n[0].kind == KIND_SHOT) return shot_label(b);
     if (g_n[0].kind == KIND_STAYED) return stayed_label(b);
     if (g_n[0].kind == KIND_REMOTE) return b == BTN_ALWAYS ? "Always allow" : remote_label(b);
+    if (g_n[0].kind == KIND_ACTION) return g_n[0].action;
     return b == BTN_DETAILS ? "Details" : "Reopen";
 }
 
@@ -556,6 +582,10 @@ int crash_notice_handle_click(int mx, int my) {
     struct notice n = g_n[i];
     n.thumb.px = 0;   // drop() frees the card's picture; this copy must not
     drop(i);
+    if (n.kind == KIND_ACTION) {
+        if (b == BTN_A && n.act) n.act();
+        return 1;
+    }
     if (n.kind == KIND_SHOT) {
         if (b == BTN_A) {
             int pid = uopen_spawn(n.path);
@@ -715,11 +745,12 @@ void crash_notice_draw(int mx, int my) {
                 continue;
             }
             int shot = n->kind == KIND_SHOT, stayed = n->kind == KIND_STAYED;
-            int primary = shot ? b == BTN_A : !stayed && b == BTN_REOPEN;
+            int action = n->kind == KIND_ACTION;
+            int primary = shot || action ? b == BTN_A : !stayed && b == BTN_REOPEN;
             int danger = stayed && b == BTN_FORCE;
             uint32_t bg = danger ? utheme_action(UTHEME_ACT_DANGER)
                         : primary ? UTHEME_ACCENT : UTHEME_BUTTON_BG;
-            const char *label = shot ? shot_label(b) : stayed ? stayed_label(b)
+            const char *label = action ? n->action : shot ? shot_label(b) : stayed ? stayed_label(b)
                               : b == BTN_REOPEN ? "Reopen" : "Details";
             uui_button_draw(s, bx, by, bw, bh, label, bg,
                             primary || danger ? UTHEME_ACCENT_TEXT : UTHEME_TEXT,
