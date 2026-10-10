@@ -169,7 +169,7 @@ TOOLS = [
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
     ("devmgr", "devmgr_test.py", "the device tree and its icons, disable/enable through the dialog"),
     ("netadapter", "netadapter_test.py", "a network card's adapter settings: netctl link, Settings > Adapters, saved and restored"),
-    ("sndformat", "sndformat_test.py", "a sound card's Format panel, in Settings and Device Manager"),
+    ("sndformat", "sndformat_test.py", "a sound card's Format panel, in Settings and Device Manager, and Settings' speaker Test card"),
     ("bootmgr", "bootmgr_test.py", "Boot Manager and Settings > Boot menu write grub.cfg; a broken file is refused"),
     ("logview", "logview_test.py", "Log Viewer: severity colours, Errors, repeats, Only this, a kept Mute"),
     ("properties", "properties_test.py", "Properties: hero by pixel, sections, chmod/rename/opens-with/SHA-256 checked outside the app"),
@@ -178,7 +178,7 @@ TOOLS = [
     ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
     ("osk", "osk_test.py", "the on-screen keyboard types, floats, drags, docks and closes"),
     ("settings", "settings_test.py", "the settings registry, in ring 3"),
-    ("galleryset", "settings_gallery_test.py", "System Settings' galleries: cursor themes (stage, apply) and the font faces"),
+    ("galleryset", "settings_gallery_test.py", "System Settings' galleries: cursor themes (stage, apply), the font faces, the window miniatures, the Screen monitor"),
     ("smooth", "smooth_scroll_test.py", "smooth scrolling glides, and desktop.smooth_scroll turns it off"),
     ("shadow", "shadow_test.py", "drop shadows under windows and menus, and desktop.shadows turns them off"),
     ("glass", "glass_test.py", "transparency: clear/frosted/wallpaper glass on the taskbar, Start, menus and windows"),
@@ -306,7 +306,7 @@ COST_S = {
     "singleinst": 16,  # six launches, each waiting out a client's first frame
     "scrollbar": 15,
     "settings": 20,   # +4 scroll checks, incl. a resize and a wheel
-    "galleryset": 14, # one page, one settled frame, an Apply
+    "galleryset": 45, # five pages, three scrolls, settled frames, an Apply
     "smooth": 10,      # three glides waited out, a drag, and a fixture of 40 files
     "shadow": 8,       # two apps, two drags, four screenshots
     "anim": 12,        # eight state changes waited out, three frames each

@@ -6,6 +6,8 @@
 // decided here from what its values ARE -- see pick_kind().
 #include "settings/settings_internal.h"
 #include "lib/usetting_schema.h" // WhenUnmet= and Requires=, read from the declaration
+#include "query_abi.h"
+#include <stdlib.h>
 
 char g_status[160];
 int  g_loaded;
@@ -569,6 +571,48 @@ static void draw_monitor(struct ugfx_surface *s, const struct uui_custom *c) {
     preview_monitor(s, c->x, c->y, c->w, c->h, staged_value((struct slot *)c->state));
 }
 
+// DISPLAY > SCREEN'S MONITOR, above Resolution (mockup D1): the staged
+// mode, placed on the panel as the staged Scaling places it. A scaling
+// row the kernel calls unavailable means no scaler.
+#define SET_RESOLUTION "system.resolution"
+#define SET_SCALING    "system.scaling"
+static struct uui_custom g_screen;
+static struct preview_screen g_screen_ps;
+
+static struct slot *slot_named(const char *name) {
+    for (int i = 0; i < g_slot_count; i++)
+        if (g_slot[i].setting >= 0 && !strcmp(g_name[g_slot[i].setting], name)) return &g_slot[i];
+    return 0;
+}
+
+static void draw_screen(struct ugfx_surface *s, const struct uui_custom *c) {
+    struct slot *res = slot_named(SET_RESOLUTION), *sc = slot_named(SET_SCALING);
+    if (!res) return;
+    char *e;
+    const char *v = staged_value(res);
+    long mw = strtol(v, &e, 10);
+    if (*e != 'x') return;
+    long mh = strtol(e + 1, &e, 10);
+    if (*e || mw <= 0 || mh <= 0) return;
+    g_screen_ps.mode_w = (int)mw;
+    g_screen_ps.mode_h = (int)mh;
+    g_screen_ps.can_scale = sc && !slot_disabled(sc);
+    g_screen_ps.scaling = sc ? staged_value(sc) : "full";
+    preview_screen(s, c->x, c->y, c->w, c->h, &g_screen_ps);
+    uapp_logf_layout("settings: screen %s\n", g_screen_ps.caption);
+}
+
+static void emit_screen(struct uui_item *out, int *n) {
+    struct query_display d;
+    memset(&d, 0, sizeof d);
+    sys_query_record(QUERY_DISPLAY, 0, &d, sizeof d);
+    g_screen_ps.panel_w = (int)d.native_width;
+    g_screen_ps.panel_h = (int)d.native_height;
+    g_screen = (struct uui_custom){ .w = 0, .h = ugfx_char_h() * 12, .draw = draw_screen };
+    out[(*n)++] = (struct uui_item){ .ops = &uui_custom_ops, .widget = &g_screen,
+                                     .flags = UUI_FILL_W, .name = "screen_monitor" };
+}
+
 void relayout_page(void) {
     int n = 0;
     focus_ring_open();          // settings.c: remember what has focus
@@ -609,6 +653,7 @@ void relayout_page(void) {
     // An effect's options live in its Settings... dialog, not on the page.
     int page_slots = (g_saver_slot >= 0 && owner_uses_dialog(g_page_owner_kind))
                      ? g_saver_slot : g_slot_count;
+    if (slot_named(SET_RESOLUTION)) emit_screen(PAGE, &n);   // the page's top, as D1
     for (int i = 0; i < page_slots; i++) {
         struct slot *sl = &g_slot[i];
         if (slot_hidden(i)) continue;

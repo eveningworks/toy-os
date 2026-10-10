@@ -1493,7 +1493,8 @@ this the obvious way), not from how much history it accumulated.
   tile, clipped to it; it knows nothing of what it shows. In System
   Settings a `Widget=gallery` setting's `Preview=<word>` picks the
   painter from `set_preview.c`'s table (`cursor`, `picture`, `live`,
-  `colour`, `saver`, `font`, `fontmono` -- a new picker adds a row), read
+  `colour`, `saver`, `font`, `fontmono`, `winmove`, `winresize`,
+  `shadow`, `seethrough` -- a new picker adds a row), read
   by the app itself with
   `uschema_text_word()` -- no ABI field carries it. A painter that
   decodes anything CACHES it per page (`preview_reset()` from

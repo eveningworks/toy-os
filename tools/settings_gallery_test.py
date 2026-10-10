@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tools/settings_gallery_test.py -- System Settings' cursor theme and font galleries.
+"""tools/settings_gallery_test.py -- System Settings' galleries and previews.
 
 WHAT THIS IS
 ------------
@@ -32,6 +32,19 @@ drawn by ui/uui_fontsample in each face from its own .ttf):
      drawing the same face everywhere is red;
   7. the proportional face's Monospace card says "Not fixed-width" in
      the warning colour, and DejaVu's (the control) does not.
+
+THE WINDOW GALLERIES (`Preview=winmove`, `winresize`, `shadow`,
+`seethrough`: the desktop in miniature, set_preview.c) and the SCREEN
+MONITOR (Display > Screen):
+  8. move_mode and resize_mode are galleries; each Outline card carries
+     the dashed white outline and each Window card does not (the
+     control); a click on Outline stages `outline`;
+  9. the shadows On card darkens the desktop under its windows, Off
+     (the control) not at all;
+ 10. See-through windows: None's bodies are solid, All's are not, and
+     Inactive is between (transparency is turned on for it, then off);
+ 11. the Screen page shows its monitor, captioned with the mode on
+     screen, with the desktop in miniature inside it.
 
 POSITIVE CONTROL, run when this was written: the cursor painter drawing
 the backdrop and no shapes (`if (!c->loaded) continue;` made
@@ -282,6 +295,210 @@ def run_fonts(dbg, qmp, tmp, res):
               w_lib > 20 and w_dvu == 0, f"liberation={w_lib} dejavu={w_dvu}")
 
 
+# --- the window galleries (Appearance > Windows, Effects, Transparency) ---
+
+def gallery_cards(logs, key):
+    """A gallery's cards by label, from the LAST report of each."""
+    return font_cards(logs, key)
+
+
+DESKTOP = (24, 60, 90)   # the miniature's desktop: set_preview.c's PREVIEW_DARK
+
+
+def tile_box(img, c):
+    """The miniature inside a card: the bounding box of its desktop
+    colour, so the card's own white margin is never counted."""
+    xs, ys = [], []
+    for y in range(c["y"], c["y"] + c["h"]):
+        for x in range(c["x"], c["x"] + c["w"]):
+            if img.getpixel((x, y)) == DESKTOP:
+                xs.append(x)
+                ys.append(y)
+    if not xs:
+        return None
+    return {"x": min(xs) + 1, "y": min(ys) + 1, "w": max(xs) - min(xs) - 1, "h": max(ys) - min(ys) - 1}
+
+
+def tile_count(img, c, pred, box=True):
+    """Pixels of a card's miniature (or of the rect `c` itself) that `pred` accepts."""
+    b = tile_box(img, c) if box else c
+    if not b:
+        return -1
+    n = 0
+    for y in range(b["y"], b["y"] + b["h"]):
+        for x in range(b["x"], b["x"] + b["w"]):
+            if pred(img.getpixel((x, y))):
+                n += 1
+    return n
+
+
+def open_page(dbg, key, want, keys):
+    """Settings opened on `key`'s page; the cards of each of `keys` once
+    every label in `want` has been reported."""
+    for w in dbg.windows():
+        if w["title"] == "System Settings":
+            dbg.send(f"gui close {w['z']}")
+            dbg.settle(1.0)
+    dbg.logs()
+    win = dbg.spawn(f"/bin/wm/system/settings {key}", "System Settings")
+    got = {}
+    for _ in range(30):
+        logs = dbg.logs(clear=False)
+        got = {k: gallery_cards(logs, k) for k in keys}
+        if all(want[k] <= set(got[k]) for k in keys):
+            break
+        time.sleep(0.3)
+    return win, got
+
+
+def scroll_to(dbg, qmp, win, key, label):
+    """Wheels the page until `key`'s `label` card is on screen; its rect."""
+    dbg.warp_cursor(qmp, win["x"] + win["w"] * 2 // 3, win["y"] + win["h"] // 2)
+    dbg.settle()
+    dbg.logs()
+    dbg.wheel(-12)
+    cards = {}
+    for _ in range(20):
+        time.sleep(0.3)
+        cards = gallery_cards(dbg.logs(clear=False), key)
+        if label in cards:
+            break
+    return cards
+
+
+def shot(dbg, qmp, win, tmp, name):
+    from PIL import Image
+    # The pointer parked on the window's own footer: off every card, and
+    # off the taskbar, whose hover opens a preview over the page.
+    dbg.warp_cursor(qmp, win["x"] + 20, win["y"] + win["h"] - 12)
+    dbg.settle()
+    path = os.path.join(tmp, name)
+    qmp.stable_pixels(path)
+    return Image.open(path).convert("RGB")
+
+
+def is_white(p):
+    return p == (255, 255, 255)
+
+
+def is_shadow(p):
+    # The desktop (24, 60, 90) darkened; the taskbar (31, 37, 46) is not.
+    return p[0] < 20 and p[1] < 50 and p[2] < 75
+
+
+def is_solid_body(p):
+    # An opaque window body; a see-through one is blended toward the desktop.
+    return min(p) > 200 and max(p) - min(p) < 12
+
+
+def run_windows(dbg, qmp, tmp, res):
+    """move_mode and resize_mode are galleries of the desktop in miniature:
+    an Outline card carries the dashed white rubber band, a Window card
+    does not (the control)."""
+    want = {"desktop.move_mode": {"Window", "Outline"},
+            "desktop.resize_mode": {"Automatic", "Window", "Outline"}}
+    win, got = open_page(dbg, "desktop.move_mode", want, list(want))
+    ok = win is not None and all(want[k] <= set(got[k]) for k in want) and \
+        all(c["tile"] for k in want for c in got[k].values())
+    res.check("Windows: both drag settings are galleries with a painted card per choice", ok,
+              f"{ {k: sorted(v) for k, v in got.items()} }")
+    if not ok:
+        return
+    ox, oy = win["content"]["x"], win["content"]["y"]
+    img = shot(dbg, qmp, win, tmp, "windows.png")
+    for key in want:
+        cs = {n: dict(c, x=c["x"] + ox, y=c["y"] + oy) for n, c in got[key].items()}
+        band, live = tile_count(img, cs["Outline"], is_white), tile_count(img, cs["Window"], is_white)
+        res.check(f"{key}: the Outline card draws the dashed outline, the Window card none",
+                  band > 150 and live < 60, f"outline={band} window={live}")
+    mv = dict(got["desktop.move_mode"]["Outline"])
+    dbg.click(ox + mv["x"] + mv["w"] // 2, oy + mv["y"] + mv["h"] // 2)
+    time.sleep(0.8)
+    st = [l for l in dbg.logs(clear=False) if "settings: staged desktop.move_mode " in l]
+    res.check("a click on the Outline card stages `outline`",
+              bool(st) and st[-1].split()[-1] == "outline", st[-1] if st else "nothing staged")
+    # Reset, or closing the window asks whether to discard it.
+    reset = (dbg.widgets("System Settings").get("reset") or {}).get("screen")
+    if reset:
+        dbg.click(reset["x"] + 10, reset["y"] + 8)
+        dbg.settle(0.6)
+
+
+def run_effects(dbg, qmp, tmp, res):
+    """desktop.shadows: the On card darkens the desktop under its windows,
+    Off (the control) has no darkened desktop at all. See-through windows:
+    None keeps both window bodies opaque, All lets the desktop through."""
+    key = "desktop.shadows"
+    win, got = open_page(dbg, key, {key: {"On", "Off"}}, [key])
+    cards = scroll_to(dbg, qmp, win, key, "Off") if win else {}
+    if not res.check("Effects: Window shadows is a gallery, On and Off", {"On", "Off"} <= set(cards),
+                     f"{sorted(cards)}"):
+        return
+    ox, oy = win["content"]["x"], win["content"]["y"]
+    img = shot(dbg, qmp, win, tmp, "effects.png")
+    on = tile_count(img, dict(cards["On"], x=cards["On"]["x"] + ox, y=cards["On"]["y"] + oy), is_shadow)
+    off = tile_count(img, dict(cards["Off"], x=cards["Off"]["x"] + ox, y=cards["Off"]["y"] + oy), is_shadow)
+    res.check("the On card draws a shadow, the Off card none", on > 40 and off == 0,
+              f"on={on} off={off}")
+
+    dbg.send("sh config set desktop.transparency on")   # the gallery Requires= it
+    try:
+        key = "desktop.transparency_windows"
+        names = {"None", "Title bars", "Inactive", "All"}
+        win, got = open_page(dbg, key, {key: names}, [key])
+        cards = scroll_to(dbg, qmp, win, key, "All") if win else {}
+        if not res.check("Transparency: See-through windows is a gallery of four",
+                         names <= set(cards), f"{sorted(cards)}"):
+            return
+        ox, oy = win["content"]["x"], win["content"]["y"]
+        img = shot(dbg, qmp, win, tmp, "seethrough.png")
+        n = {k: tile_count(img, dict(c, x=c["x"] + ox, y=c["y"] + oy), is_solid_body)
+             for k, c in cards.items() if k in names}
+        res.check("None keeps both window bodies solid, Inactive one, All neither",
+                  n["None"] > 400 and n["All"] < n["None"] // 10 and
+                  n["All"] < n["Inactive"] < n["None"], f"{n}")
+    finally:
+        dbg.send("sh config set desktop.transparency off")
+
+
+def run_screen(dbg, qmp, tmp, res):
+    """Display > Screen's monitor: the mode on screen, drawn as a desktop on
+    a monitor at the top of the page, and the caption names the mode."""
+    dbg.send("sh config set desktop.layout_log on")
+    try:
+        for w in dbg.windows():
+            if w["title"] == "System Settings":
+                dbg.send(f"gui close {w['z']}")
+                dbg.settle(1.0)
+        dbg.logs()
+        win = dbg.spawn("/bin/wm/system/settings system.resolution", "System Settings")
+        rect, caption = None, None
+        for _ in range(30):
+            for line in dbg.logs(clear=False):
+                m = re.search(r"settings: layout screen_monitor (-?\d+) (-?\d+) (\d+) (\d+)$", line)
+                if m:
+                    rect = tuple(int(v) for v in m.groups())
+                m = re.search(r"settings: screen (.+)$", line)
+                if m:
+                    caption = m.group(1).strip()
+            if rect and caption:
+                break
+            time.sleep(0.3)
+        if not res.check("Screen: the monitor is on the page", win is not None and rect is not None,
+                         f"rect={rect}"):
+            return
+        img = shot(dbg, qmp, win, tmp, "screen.png")
+        mode = f"{img.width}x{img.height}"
+        res.check("the caption names the mode on screen", bool(caption) and caption.startswith(mode),
+                  f"caption={caption!r} mode={mode}")
+        x, y, w, h = rect
+        box = {"x": win["content"]["x"] + x, "y": win["content"]["y"] + y, "w": w, "h": h * 3 // 2}
+        desk = tile_count(img, box, lambda p: p == DESKTOP, box=False)
+        res.check("the monitor shows the desktop in miniature", desk > 2000, f"{desk} desktop px")
+    finally:
+        dbg.send("sh config set desktop.layout_log off")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     port_guard.add_instance_args(ap)
@@ -301,6 +518,9 @@ def main():
         run(dbg, qmp, tmp, res)
         dbg.close_window("System Settings")
         run_fonts(dbg, qmp, tmp, res)
+        run_windows(dbg, qmp, tmp, res)
+        run_effects(dbg, qmp, tmp, res)
+        run_screen(dbg, qmp, tmp, res)
     finally:
         dbg.close()
     print(f"\nsettings_gallery_test: {len(res.passes)} passed, {len(res.fails)} failed")

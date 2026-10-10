@@ -13,3 +13,5 @@ Choice.inactive=Inactive
 Choice.all=All
 Requires=desktop.transparency=on
 RequiresReason=Turn on Transparency effects first
+Widget=gallery
+Preview=seethrough

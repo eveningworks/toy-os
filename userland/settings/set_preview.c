@@ -191,16 +191,28 @@ static void saver_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h
 // Windows' preview runs the saver into a child window, and nothing here
 // can host another program's window yet.
 
-void preview_monitor(struct ugfx_surface *s, int x, int y, int w, int h, const char *saver) {
+// The bezel and stand, centred in (x, y, w, h), for a screen of aspect
+// aw:ah; the screen's rect comes back black in *sx.. . 0 when it cannot fit.
+static int monitor_frame(struct ugfx_surface *s, int x, int y, int w, int h, int aw, int ah,
+                         int *sx, int *sy, int *sw, int *sh) {
     int bez = ugfx_char_h() / 2 + 2, stand = ugfx_char_h();
-    int sh = h - 2 * bez - stand, sw = sh * 16 / 9;
-    if (sw + 2 * bez > w) { sw = w - 2 * bez; sh = sw * 9 / 16; }
-    if (sw <= 0 || sh <= 0) return;
-    int mx = x + (w - sw - 2 * bez) / 2;
-    uui_fill_round_rect(s, mx, y, sw + 2 * bez, sh + 2 * bez, bez, 0x2b2d31);
-    ugfx_fill_rect(s, mx + (sw + 2 * bez) / 2 - stand, y + sh + 2 * bez, 2 * stand, stand / 2, 0x2b2d31);
-    ugfx_fill_rect(s, mx + (sw + 2 * bez) / 2 - 2 * stand, y + sh + 2 * bez + stand / 2, 4 * stand, stand / 2, 0x2b2d31);
-    ugfx_fill_rect(s, mx + bez, y + bez, sw, sh, 0);
+    *sh = h - 2 * bez - stand;
+    *sw = *sh * aw / ah;
+    if (*sw + 2 * bez > w) { *sw = w - 2 * bez; *sh = *sw * ah / aw; }
+    if (*sw <= 0 || *sh <= 0) return 0;
+    int mx = x + (w - *sw - 2 * bez) / 2;
+    uui_fill_round_rect(s, mx, y, *sw + 2 * bez, *sh + 2 * bez, bez, 0x2b2d31);
+    ugfx_fill_rect(s, mx + (*sw + 2 * bez) / 2 - stand, y + *sh + 2 * bez, 2 * stand, stand / 2, 0x2b2d31);
+    ugfx_fill_rect(s, mx + (*sw + 2 * bez) / 2 - 2 * stand, y + *sh + 2 * bez + stand / 2, 4 * stand, stand / 2, 0x2b2d31);
+    *sx = mx + bez;
+    *sy = y + bez;
+    ugfx_fill_rect(s, *sx, *sy, *sw, *sh, 0);
+    return 1;
+}
+
+void preview_monitor(struct ugfx_surface *s, int x, int y, int w, int h, const char *saver) {
+    int sx, sy, sw, sh;
+    if (!monitor_frame(s, x, y, w, h, 16, 9, &sx, &sy, &sw, &sh)) return;
     if (!saver || !saver[0]) return;
     if (strcmp(g_mon_name, saver) != 0 || g_mon.w < sw || g_mon.h < sh) {
         uimg_free(&g_mon);
@@ -209,7 +221,7 @@ void preview_monitor(struct ugfx_surface *s, int x, int y, int w, int h, const c
     }
     if (!g_mon.px) return;
     int ox = (g_mon.w - sw) / 2, oy = (g_mon.h - sh) / 2;
-    ugfx_blit(s, mx + bez, y + bez, sw, sh, g_mon.px + (size_t)oy * (size_t)g_mon.w + ox, g_mon.w);
+    ugfx_blit(s, sx, sy, sw, sh, g_mon.px + (size_t)oy * (size_t)g_mon.w + ox, g_mon.w);
 }
 
 static void live_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h, void *ctx) {
@@ -286,6 +298,185 @@ static void font_labels(struct slot *sl) {
     }
 }
 
+// --- window behaviour: the desktop in miniature ---------------------------
+//
+// One scene for four settings (mockups W1, W3): the desktop's colour, a
+// taskbar strip, and windows drawn the way the choice draws them. Every
+// size is a fraction of the tile, which the gallery derives from the font.
+
+#define MINI_TITLE_ON  ugfx_rgb(50, 90, 160)     // wm_render.c's title bars
+#define MINI_TITLE_OFF ugfx_rgb(120, 120, 130)
+#define MINI_TASKBAR   ugfx_rgb(31, 37, 46)
+#define MINI_GLASS_A   140
+
+enum { MW_SHADOW = 1, MW_FOCUSED = 2, MW_GLASS_TITLE = 4, MW_GLASS_BODY = 8 };
+
+// The desktop and its taskbar, on a card's rounded tile or (square) a
+// monitor's screen; returns the height above the taskbar.
+static int mini_desktop(struct ugfx_surface *s, int x, int y, int w, int h, int icons, int square) {
+    uui_fill_round_rect(s, x, y, w, h, square ? 0 : ugfx_char_h() / 3, PREVIEW_DARK);
+    int bar = h / 9 < 3 ? 3 : h / 9;
+    ugfx_fill_rect(s, x, y + h - bar, w, bar, MINI_TASKBAR);
+    // Desktop icons, so a see-through window has something to show.
+    static const uint32_t ICON[] = { 0xE2A33B, 0x5FA866, 0x7FA7D6, 0xC8CCD4 };
+    int is = h / 6;
+    for (int i = 0; i < icons; i++)
+        uui_fill_round_rect(s, x + is / 2 + (i / 2) * (is * 3 / 2), y + is / 2 + (i % 2) * (is * 3 / 2),
+                            is, is, is / 4, ICON[i]);
+    return h - bar;
+}
+
+static void mini_window(struct ugfx_surface *s, int x, int y, int w, int h, int flags) {
+    int tb = h / 6 < 4 ? 4 : h / 6;
+    // Three nested panes, offset down and right: the soft edge a real
+    // shadow has, at a size where one dark band would read as a border.
+    for (int k = 3; (flags & MW_SHADOW) && k >= 1; k--)
+        uui_glass_round_rect(s, x + 2 - k, y + 3 - k, w + 2 * k, h + 2 * k, k + 2, 0, 55, 0);
+    uint32_t title = (flags & MW_FOCUSED) ? MINI_TITLE_ON : MINI_TITLE_OFF;
+    if (flags & MW_GLASS_BODY) uui_glass_round_rect(s, x, y + tb, w, h - tb, 1, UTHEME_WINDOW_BG, MINI_GLASS_A, 0);
+    else ugfx_fill_rect(s, x, y + tb, w, h - tb, UTHEME_WINDOW_BG);
+    if (flags & MW_GLASS_TITLE) uui_glass_round_rect(s, x, y, w, tb, 1, title, MINI_GLASS_A, 0);
+    else ugfx_fill_rect(s, x, y, w, tb, title);
+    // Two lines of content, where they fit.
+    for (int k = 0; k < 2; k++) {
+        int ly = y + tb * (2 + k * 3 / 2);
+        if (ly + tb / 2 < y + h - 2) ugfx_fill_rect(s, x + tb, ly, w * (3 - k) / 5, tb / 2 > 1 ? tb / 2 : 2, UTHEME_BORDER);
+    }
+}
+
+// The rubber band a move or resize drags instead of the window.
+static void dashed_rect(struct ugfx_surface *s, int x, int y, int w, int h) {
+    int d = ugfx_char_h() / 5 + 1, t = 2;
+    for (int i = 0; i < w; i += 2 * d) {
+        int n = w - i < d ? w - i : d;
+        ugfx_fill_rect(s, x + i, y, n, t, 0xFFFFFF);
+        ugfx_fill_rect(s, x + i, y + h - t, n, t, 0xFFFFFF);
+    }
+    for (int i = 0; i < h; i += 2 * d) {
+        int n = h - i < d ? h - i : d;
+        ugfx_fill_rect(s, x, y + i, t, n, 0xFFFFFF);
+        ugfx_fill_rect(s, x + w - t, y + i, t, n, 0xFFFFFF);
+    }
+}
+
+// An arrow pointer with its tip at (x, y), sized from the font.
+static void mini_pointer(struct ugfx_surface *s, int x, int y) {
+    static const int PX[] = { 0, 0, 4, 7, 9, 7, 11 }, PY[] = { 0, 16, 12, 18, 17, 11, 11 };
+    int k = ugfx_char_h() >= 24 ? 2 : 1, n = (int)(sizeof PX / sizeof PX[0]);
+    int xs[7], ys[7];
+    for (int i = 0; i < n; i++) { xs[i] = x + PX[i] * k * 3 / 4; ys[i] = y + PY[i] * k * 3 / 4; }
+    ugfx_fill_polygon(s, xs, ys, n, 0xFFFFFF);
+    ugfx_draw_polyline(s, xs, ys, n, 1, 0x141414, GEOM_AA);
+}
+
+static const char *choice_word(const struct slot *sl, int i) {
+    return i >= 0 && i < sl->choice_count ? sl->choice_raw[i] : "";
+}
+
+// desktop.move_mode: the window where it was dragged to, or the window
+// left behind with the outline there instead.
+static void winmove_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h, void *ctx) {
+    int dh = mini_desktop(s, x, y, w, h, 0, 0);
+    int ww = w * 2 / 5, wh = dh * 3 / 5, tx = x + w - ww - w / 8, ty = y + dh / 4;
+    int outline = !strcmp(choice_word(ctx, i), "outline");
+    if (outline) {
+        mini_window(s, x + w / 10, y + dh / 10, ww, wh, MW_SHADOW | MW_FOCUSED);
+        dashed_rect(s, tx, ty, ww, wh);
+    } else {
+        mini_window(s, tx, ty, ww, wh, MW_SHADOW | MW_FOCUSED);
+    }
+    mini_pointer(s, tx + ww / 2, ty + 2);
+}
+
+// desktop.resize_mode: the window grown to the pointer, or kept and the
+// outline grown. Automatic shows what it shows when the app keeps up.
+static void winresize_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h, void *ctx) {
+    int dh = mini_desktop(s, x, y, w, h, 0, 0);
+    int wx = x + w / 10, wy = y + dh / 10, bw = w * 3 / 4, bh = dh * 4 / 5;
+    if (!strcmp(choice_word(ctx, i), "outline")) {
+        mini_window(s, wx, wy, bw * 3 / 5, bh * 3 / 5, MW_SHADOW | MW_FOCUSED);
+        dashed_rect(s, wx, wy, bw, bh);
+    } else {
+        mini_window(s, wx, wy, bw, bh, MW_SHADOW | MW_FOCUSED);
+    }
+    mini_pointer(s, wx + bw - 2, wy + bh - 2);
+}
+
+// Two windows, one behind the other: the shadow and see-through settings
+// both read in how the pair overlaps.
+static void window_pair(struct ugfx_surface *s, int x, int y, int w, int h, int back, int front) {
+    int dh = mini_desktop(s, x, y, w, h, 4, 0);
+    mini_window(s, x + w / 40, y + dh / 14, w / 2, dh * 2 / 3, back);
+    mini_window(s, x + w * 3 / 10, y + dh / 4, w / 2, dh * 2 / 3, front | MW_FOCUSED);
+}
+
+// desktop.shadows
+static void shadow_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h, void *ctx) {
+    int f = !strcmp(choice_word(ctx, i), "off") ? 0 : MW_SHADOW;
+    window_pair(s, x, y, w, h, f, f);
+}
+
+// desktop.transparency_windows: which of the two lets the desktop through.
+static void seethrough_tile(struct ugfx_surface *s, int i, int x, int y, int w, int h, void *ctx) {
+    const char *c = choice_word(ctx, i);
+    int title = MW_GLASS_TITLE, all = MW_GLASS_TITLE | MW_GLASS_BODY, back = 0, front = 0;
+    if (!strcmp(c, "titlebars")) back = front = title;
+    else if (!strcmp(c, "inactive")) back = all;
+    else if (!strcmp(c, "all")) back = front = all;
+    window_pair(s, x, y, w, h, back | MW_SHADOW, front | MW_SHADOW);
+}
+
+// --- the Screen page's monitor (mockup D1) ---------------------------------
+//
+// The panel, and the mode on it the way the scaler places it. A mode the
+// panel shows natively, or a display with no scaler or no EDID, fills it.
+
+static void place_mode(int pw, int ph, int mw, int mh, const char *scaling,
+                       int *ow, int *oh) {
+    *ow = pw; *oh = ph;
+    if (!strcmp(scaling, "center")) {
+        *ow = mw < pw ? mw : pw;
+        *oh = mh < ph ? mh : ph;
+    } else if (!strcmp(scaling, "aspect")) {
+        if ((int64_t)mw * ph > (int64_t)pw * mh) *oh = (int)((int64_t)pw * mh / mw);
+        else *ow = (int)((int64_t)ph * mw / mh);
+    }
+}
+
+void preview_screen(struct ugfx_surface *s, int x, int y, int w, int h, struct preview_screen *ps) {
+    int ch = ugfx_char_h(), cap = ch + ch / 2;
+    ps->caption[0] = '\0';
+    int pw = ps->panel_w, ph = ps->panel_h, mw = ps->mode_w, mh = ps->mode_h;
+    if (mw <= 0 || mh <= 0) return;
+    int scaled = pw > 0 && ph > 0 && ps->can_scale && (pw != mw || ph != mh);
+    if (!scaled) { pw = mw; ph = mh; }
+    int sx, sy, sw, sh;
+    if (!monitor_frame(s, x, y, w, h - cap, pw, ph, &sx, &sy, &sw, &sh)) return;
+    int ow, oh;
+    place_mode(pw, ph, mw, mh, scaled ? ps->scaling : "full", &ow, &oh);
+    int rw = (int)((int64_t)sw * ow / pw), rh = (int)((int64_t)sh * oh / ph);
+    int rx = sx + (sw - rw) / 2, ry = sy + (sh - rh) / 2;
+    // The scene in the mode's own pixels, so a stretch shows as one.
+    int dh = mini_desktop(s, rx, ry, rw, rh, 0, 1);
+    int sun = mh / 7;
+    ugfx_fill_ellipse(s, rx + rw * (mw - sun) / mw, ry + rh * sun * 3 / 2 / mh,
+                      rw * sun / 2 / mw, rh * sun / 2 / mh, 0xE2A33B);
+    mini_window(s, rx + rw / 9, ry + dh / 6, rw / 2, dh / 2, MW_SHADOW | MW_FOCUSED);
+
+    char *text = ps->caption;
+    size_t cap_n = sizeof ps->caption;
+    if (!scaled)
+        snprintf(text, cap_n, "%dx%d%s", mw, mh,
+                 ps->panel_w == mw && ps->panel_h == mh ? ", the panel's own size" : "");
+    else
+        snprintf(text, cap_n, "%dx%d on a %dx%d panel: %s", mw, mh, pw, ph,
+                 !strcmp(ps->scaling, "center") ? "centred, not scaled"
+                 : !strcmp(ps->scaling, "full") ? "stretched to fill" : "scaled, shape kept");
+    int tw = ugfx_text_width(text);
+    ugfx_draw_string_clipped(s, x + (tw < w ? (w - tw) / 2 : 0), y + h - ch - ch / 4, w, text,
+                             UTHEME_TEXT, UTHEME_WINDOW_BG);
+}
+
 // --- the table -----------------------------------------------------------
 
 static const struct {
@@ -299,6 +490,10 @@ static const struct {
     { "saver", saver_tile },
     { "font", font_tile },
     { "fontmono", fontmono_tile },
+    { "winmove", winmove_tile },
+    { "winresize", winresize_tile },
+    { "shadow", shadow_tile },
+    { "seethrough", seethrough_tile },
 };
 
 void preview_attach(struct slot *sl, int idx) {

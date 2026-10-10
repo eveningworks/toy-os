@@ -38,7 +38,7 @@ static int on_tick(struct uapp *a) {
     if (g_show_sysinfo && sysinfo_tick()) return 1;
     int clock = clock_tick();   // the live clock's second moved
     clock |= kbd_tick();        // Try it took or left focus
-    clock |= snd_tick();        // the card's rate moved under "Playing now"
+    clock |= snd_tick(a);       // the card's rate moved, or a test's meters
     clock |= adapters_tick();   // a network card's link moved under Connection
     clock |= remote_tick();     // somebody connected or left
     if (registry_generation() == g_generation && !g_stale) return clock;
@@ -238,7 +238,7 @@ static void leave(struct uapp *a) {
 
 static int on_close(struct uapp *a) {
     if (uapp_question_open(a)) return 0;   // its answer decides (uapp_desc.on_close)
-    if (!page_dirty()) { kbd_shutdown(); return 1; }
+    if (!page_dirty()) { kbd_shutdown(); snd_shutdown(); return 1; }
     ask_leave(a, -1);
     uapp_redraw(a);
     return 0;
@@ -353,6 +353,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
 // ids.
 static void on_action(struct uapp *a, int code) {
     if (kbd_on_action(a, code)) { uapp_redraw(a); return; }
+    if (snd_on_action(a, code)) { uapp_redraw(a); return; }
     if (adapters_on_action(code)) { relayout_page(); uapp_redraw(a); return; }
     if (remote_on_action(code)) { relayout_page(); uapp_redraw(a); return; }
     switch (code) {
@@ -774,7 +775,7 @@ int main(int argc, char **argv) {
         .on_font = on_font,
         .on_close = on_close,
         .on_tick = on_tick,
-        .tick_ms = 500,
+        .tick_ms = SETTINGS_TICK_MS,
     };
     return uapp_run(&desc);
 }

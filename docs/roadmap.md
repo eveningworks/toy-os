@@ -807,6 +807,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Device Manager round 2: resources, events, drivers, disks, monitors, a filter, a report~~ DONE 2026-10-06
 - [ ] The hardware report's own dialog: a preview, and what to include -- Export is a plain Save today
 - [ ] Device Manager's network card links to Settings > Network, and a device's Events open the Log Viewer at that device's lines
+- [ ] Device Manager's sound card shows the speaker Test card under its Format panel -- `uui_sndtest`, as Settings > Sound > Output has it
 - [ ] Properties' and the File Manager's `uui_fileinfo` on `uui_props`, whose sections it draws by hand
 - [x] ~~A Network tab in Task Manager~~ DONE 2026-09-29 -- an Ethernet device on the Performance page, as Windows has it
 - [x] ~~A boot menu editor~~ DONE 2026-10-03 -- `bootcfg`, the Boot Manager and Settings > System > Boot menu, over one checked model

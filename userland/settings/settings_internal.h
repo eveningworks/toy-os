@@ -94,6 +94,7 @@ enum { ID_TREE = 1, ID_SIDE_SPLIT, ID_BODY, ID_PAGE, ID_ADVANCED, ID_TEST,
        ID_RD_VNC, ID_RD_RDP, ID_RD_PORT, ID_RD_PW, ID_RD_PW_SAVE, ID_RD_WHEN, ID_RD_FROM,
        ID_RD_TRUSTED, ID_RD_ADD_ADDR, ID_RD_ADD_LABEL, ID_RD_ADD, ID_RD_CONN, ID_RD_ENC,
        ID_SNDFMT = 60,          // .. + UUI_SNDFORMAT_IDS, Sound > Output's Format
+       ID_SNDTEST = 76,         // .. + UUI_SNDTEST_IDS, Sound > Output's Test
        ID_NETADP = 80,          // .. + UUI_NETADAPTER_IDS, Network > Adapters' panel
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
 
@@ -314,6 +315,14 @@ void preview_attach(struct slot *sl, int idx);
 void preview_reset(void);
 // The chosen saver's picture on a monitor, filling (x, y, w, h).
 void preview_monitor(struct ugfx_surface *s, int x, int y, int w, int h, const char *saver);
+// Display > Screen's monitor: the panel, and the mode placed on it as
+// `scaling` ("aspect", "full", "center") places it. panel_w 0 = no EDID.
+struct preview_screen {
+    int panel_w, panel_h, mode_w, mode_h, can_scale;
+    const char *scaling;
+    char caption[96];   // OUT: the line under the monitor
+};
+void preview_screen(struct ugfx_surface *s, int x, int y, int w, int h, struct preview_screen *ps);
 int slot_disabled(const struct slot *sl);
 
 // set_keyboard.c -- Input > Keyboard's layout list, preview and Try it.
@@ -330,14 +339,17 @@ int  kbd_on_action(struct uapp *a, int code);
 int  kbd_tick(void);
 void kbd_shutdown(void);
 
-// set_sound.c -- Sound > Output's Format card (ui/uui_sndformat.h)
+// set_sound.c -- Sound > Output's Test and Format cards
+#define SETTINGS_TICK_MS 500   // the window's idle tick (settings.c)
 extern int g_snd_page;
 void snd_init(void);
 void snd_page_opened(void);
 int  snd_emit_after(struct uui_item *out, int n, int i,
                     struct uui_focusable *focus, int *nfocus);
 int  snd_on_widget(struct uapp *a, int id);
-int  snd_tick(void);
+int  snd_on_action(struct uapp *a, int code);
+int  snd_tick(struct uapp *a);
+void snd_shutdown(void);
 
 // set_clock.c -- Time & Locale's live clock, Change... and preview
 extern int g_clock_page, g_region_page;

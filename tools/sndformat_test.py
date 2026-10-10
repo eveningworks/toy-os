@@ -12,6 +12,11 @@ reader, since the panel's own state is what is under test:
       `rate=48000` and takes the Allowed row away; Match brings it back;
       unticking 44.1 saves `allowed=48000`; unticking the last one left is
       refused; Bit depth 16-bit saves `bits=16`.
+    Settings, the Test card: Left starts a test on the left, the left
+      meter lights and the right one (the control) does not; Left again
+      stops it. With `--wav PATH` (the guest's `vm.py --audio-wav`), the
+      recording must hold the chime on the left channel and silence on
+      the right -- the host-side oracle the meters cannot fake.
     Device Manager: the panel is under a sound card's properties and not
       under any other device's.
 
@@ -68,12 +73,91 @@ def conf(dbg):
     return dbg.send(f"sh cat {CONF}") or ""
 
 
+def sndtest(dbg, qmp, win, args, res):
+    """The Test card (ui/uui_sndtest.h): Left plays on the left, the left
+    meter moves and the right one (the control) never does; pressed again
+    it stops and gives the card back. With --wav, the guest's recording
+    must show the chimes on the left channel and nothing on the right."""
+    from PIL import Image
+    lay = wait_for(dbg, "settings", lambda l: "sndtest_left" in l and "sndtest_meter_r" in l)
+    if not res.check("Settings shows the Test card with Left, Both and Right",
+                     all(k in _seen for k in ("sndtest_left", "sndtest_both", "sndtest_right",
+                                              "sndtest_meter_l", "sndtest_meter_r")),
+                     f"{sorted(k for k in lay if k.startswith('sndtest'))}"):
+        return
+    c = win["content"]
+
+    def click(name):
+        x, y, w, h = _seen[name]
+        dbg.send(f"gui click {c['x'] + x + w // 2} {c['y'] + y + h // 2}")
+
+    def lit(im, name):
+        x, y, w, h = _seen[name]
+        acc = utheme_accent()
+        return sum(1 for yy in range(c["y"] + y, c["y"] + y + h) for xx in range(c["x"] + x, c["x"] + x + w)
+                   if im.getpixel((xx, yy)) == acc)
+
+    start = wav_frames(args.wav)
+    dbg.logs("settings:", clear=True)
+    click("sndtest_left")
+    shot = os.path.join(args.tmp, f"sndtest_{os.getpid()}.png")
+    left = right = 0
+    # A chime is under half of each second: look several times.
+    for _ in range(12):
+        qmp.screenshot(shot, stable=False)
+        im = Image.open(shot).convert("RGB")
+        left, right = max(left, lit(im, "sndtest_meter_l")), max(right, lit(im, "sndtest_meter_r"))
+        time.sleep(0.15)
+    said = [ln for ln in dbg.logs("settings:") if "sndtest" in ln]
+    res.check("Left starts a test on the left", any("on the left" in ln for ln in said), f"{said}")
+    res.check("...the left meter moves and the right one does not", left > 20 and right == 0,
+              f"left={left} right={right} px")
+    time.sleep(1.5)
+    click("sndtest_left")
+    dbg.settle(0.8)
+    said = [ln for ln in dbg.logs("settings:") if "sndtest" in ln]
+    res.check("Left again stops it", any("Press a side" in ln for ln in said), f"{said}")
+    if args.wav:
+        time.sleep(0.5)
+        lpk, rpk = channel_peaks(args.wav, start)
+        res.check("the recording has the chime on the left channel only", lpk > 4000 and rpk < 200,
+                  f"left peak {lpk}, right peak {rpk}")
+
+
+def utheme_accent():
+    """The default theme's accent (ui/utheme.c), which a playing meter
+    segment is filled with."""
+    return (70, 110, 160)
+
+
+def wav_frames(path):
+    """How many frames QEMU's wav audiodev has written so far. Its header
+    sizes are filled in only when QEMU exits, so the data is measured off
+    the file length past the canonical 44-byte header."""
+    if not path or not os.path.exists(path):
+        return 0
+    return max(0, os.path.getsize(path) - 44) // 4
+
+
+def channel_peaks(path, start):
+    """Peak |sample| of each channel in what was recorded after frame `start`."""
+    import array
+    with open(path, "rb") as f:
+        f.seek(44 + start * 4)
+        a = array.array("h", f.read())
+    if len(a) % 2:
+        a = a[:-1]
+    return max((abs(v) for v in a[0::2]), default=0), max((abs(v) for v in a[1::2]), default=0)
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     port_guard.add_instance_args(ap)
     ap.add_argument("--in-gui", action="store_true")
     ap.add_argument("--tmp", default="/tmp")
+    ap.add_argument("--wav", default=None, metavar="PATH",
+                    help="the guest's --audio-wav recording: also judge the Test card by ear")
     args = ap.parse_args()
     port_guard.resolve_instance(args, "sndformat_test")
 
@@ -163,6 +247,8 @@ def main():
     # Rows: Automatic (16-bit), 16-bit.
     choose("sndfmt_bits", 1)
     res.check("Bit depth 16-bit is saved", "bits=16" in conf(dbg), conf(dbg).strip()[-160:])
+
+    sndtest(dbg, qmp, win, args, res)
     w = [x for x in dbg.windows() if x["title"] == "System Settings"]
     if w:
         dbg.send(f"gui close {w[-1]['z']}")

@@ -180,6 +180,7 @@ Private seams of a split module, not for apps: `uimg_jpeg_int.h`, `usnd_internal
 | `uui_sidebar.h` | A NAVIGATION SIDEBAR: bold section headings with selectable items under them. |
 | `uui_slider.h` | A slider with DISCRETE STOPS -- one per option, not a continuous range. |
 | `uui_sndformat.h` | uui_sndformat -- one sound card's output FORMAT as a panel: a Sample rate list (Match what plays, then each rate the card takes), the rates Match may switch to as checkboxes, a Bit depth list (Auto... |
+| `uui_sndtest.h` | uui_sndtest -- a SPEAKER TEST as a panel: a button per side, Both between them, a level meter beside each side, and a line saying what plays. |
 | `uui_spinbox.h` | A NUMBER YOU CAN TYPE OR STEP: a text field with up/down steppers, bounded by min/max and moved by `step`. |
 | `uui_splitter.h` | A DRAGGABLE DIVIDER between two things that share a run of space -- Qt's QSplitter, GTK's GtkPaned, Explorer's navigation-pane divider. |
 | `uui_stackbar.h` | A STACKED BAR WITH A LEGEND: how one whole splits into parts, each a coloured segment and a legend row (swatch, label, value). |

@@ -4703,7 +4703,16 @@ window without going through it will find its layout polls timing out.
   DejaVu's carries none. **To scroll, warp the REAL pointer first** -- an
   injected `gui move` lasts one compositor iteration and the wheel goes
   where the pointer is; the card lines are re-logged after a scroll, so
-  read the fresh ones. In `gui_regress.py`.
+  read the fresh ones. Then the WINDOW galleries and the Screen monitor
+  (6 checks): each drag setting's Outline card carries the dashed white
+  outline and its Window card none, a click stages `outline` (and Reset
+  takes it back, or closing asks to discard), the shadows On card
+  darkens the desktop under its windows and Off not at all, See-through
+  None's bodies are solid and All's are not, and Display > Screen's
+  monitor is captioned with the mode on screen and holds the desktop in
+  miniature. **A card's miniature is found by its DESKTOP colour's
+  bounding box**, so the card's white margin is never counted. In
+  `gui_regress.py`.
 - **`settings_test.py`** -- the ring-3 System Settings app and, through
   it, the settings registry. Run it after touching
   `kernel/lib/setting.c`, `SYS_SETTING`/`SYS_SYSINFO`, or
@@ -5064,7 +5073,15 @@ window without going through it will find its layout polls timing out.
   and what they SAVE read back from `/etc/sound-cards.conf` through the
   shell. A row that went away is seen as no ink where it was; Device
   Manager's own `format 0|1` on its `selected` line says whether the
-  panel is up.
+  panel is up. Then the Test card (`ui/uui_sndtest.h`): Left starts a
+  test, the left meter lights in at least one of a dozen frames (a chime
+  is under half of each second) and the right one never does, Left
+  again stops it. **`--wav PATH`** -- the guest's `vm.py --audio-wav` --
+  also reads the recording past the frames written before the click
+  (QEMU fills the header only on exit, so it is measured off the file
+  length) and wants the chime on the left channel and silence on the
+  right: the oracle the meters cannot fake. `gui_regress.py` passes no
+  recording.
 - **`netadapter_test.py`** -- a network card's ADAPTER SETTINGS end to
   end on QEMU's e1000: `netctl link` refuses a setting the driver lacks
   (EEE) and changes nothing, applies and saves interrupt moderation, and
