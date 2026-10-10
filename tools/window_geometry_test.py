@@ -18,6 +18,8 @@ geometry cannot be satisfied by a symmetric bug.
 
 WHAT IT ASSERTS
 ---------------
+- a restored window's FIRST frame is already the restored size -- not
+  the app's default size followed by a resize, which shows as a flash
 - a geometry that FITS is restored verbatim, including a window sitting
   over the taskbar (that is a legal placement here, so restoring must
   not "helpfully" move it -- an earlier version clamped to the work
@@ -101,6 +103,13 @@ def run(dbg, qmp, res):
     got = (w["x"], w["y"], w["w"], w["h"]) if w else None
     res.check("a geometry that fits is restored verbatim", got == want,
               f"wanted {want}, got {got}")
+    # ...AND IT APPEARS AT THAT SIZE: its FIRST frame is already the
+    # restored content size, not the app's default followed by a resize
+    # -- the flash Wayland's initial configure exists to prevent.
+    first = (w["first_frame"]["w"], w["first_frame"]["h"]) if w else None
+    content = (w["content"]["w"], w["content"]["h"]) if w else None
+    res.check("...and its first frame is already that size, with no flash of the default",
+              bool(first) and first == content, f"first frame {first}, content {content}")
     close_all(dbg)
 
     # 2. Larger than the screen: clamped to the work area, not restored

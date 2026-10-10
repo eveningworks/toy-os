@@ -514,6 +514,7 @@ static void reap_children(void) {
 }
 
 static void dispatch(struct uapp *a, const struct win_event *in);
+static int next_event(struct win_event *ev);
 
 // The release a closed popup owes its press (g_press_slot above).
 static void owed_release(struct uapp *a) {
@@ -1107,7 +1108,16 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     uui_router_init(&a->top.router, desc->widgets, desc->widget_count);
 
     if (desc->on_open) desc->on_open(a);
-    flush(a); // the first frame, from the dirty flag set above
+    // THE INBOX BEFORE THE FIRST FRAME. The compositor proposes a
+    // remembered size while it creates the window (wm_geometry.c), so
+    // that WIN_EV_RESIZE is already queued when the create returns --
+    // and a window is on screen from its first frame. Drawn first, the
+    // window appeared at the app's default size and then jumped:
+    // Wayland's initial configure, answered before the first commit,
+    // exists for exactly this.
+    struct win_event ev;
+    while (a->running && next_event(&ev)) dispatch(a, &ev);
+    flush(a); // the first frame, at the size the compositor asked for
 
     *out = a;
     return 1;

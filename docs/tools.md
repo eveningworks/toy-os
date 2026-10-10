@@ -3794,7 +3794,10 @@ window without going through it will find its layout polls timing out.
   broken the same way -- save the wrong rect, restore the wrong rect,
   get it back. Writing a known geometry and demanding exactly that one
   cannot be satisfied by a symmetric bug. The SAVE half is covered
-  separately by dragging a window and reading the file.
+  separately by dragging a window and reading the file. A restored
+  window's FIRST frame (`gui windows`' `first_frame`) must already be
+  its restored content size: drawn before the queued resize was read,
+  Settings first appeared at its default 896x704 and then jumped.
 
   **Its checks were written twice, and the first set was nearly
   worthless**: with restore disabled entirely, five of six still passed,
