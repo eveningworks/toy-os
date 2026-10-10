@@ -39,6 +39,9 @@ GENERATED = {
     "kernel/drivers/font_ttf.c",        # tools/genttf.py -- baked glyph tables
     "kernel/include/api/version.h",     # tools/gen_version.sh
     "kernel/include/api/build_date.h",  # tools/gen_version.sh
+    "kernel/include/api/build_stamp.h", # tools/gen_version.sh, every build
+    "userland/lib/ubootwords.h",        # tools/gen_bootwords.py, from
+                                        # docs/boot-flags.md
     "userland/tests/uimg_vectors.h",    # tools/gen_imgdata.py -- decoder vectors
     "userland/lib/usnd_mp3_tables.h",   # tools/gen_mp3_tables.py -- ISO's
                                         # Layer III tables, recovered and
