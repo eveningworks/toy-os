@@ -1,7 +1,7 @@
 Type=keycombo
 File=/etc/shortcuts.conf
-Label=Screenshot
+Label=Screenshot: choose what to capture
 Category=Shortcuts
 Group=Applications
 Default=Shift+Super+S, Print Screen
-Description=Open the screenshot tool
+Description=Opens the capture bar to pick a region, a window or the whole screen

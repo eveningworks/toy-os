@@ -39,7 +39,7 @@ struct uui_keycapture {
     int x, y, w, h;
 
     // The value, canonically spelled. Empty means unbound, which this
-    // draws as "Disabled" rather than as a blank box -- a blank control
+    // draws as "None" rather than as a blank box -- a blank control
     // reads as one that failed to load.
     char text[KEYCOMBO_TEXT_MAX];
 

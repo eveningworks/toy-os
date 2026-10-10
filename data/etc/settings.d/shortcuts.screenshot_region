@@ -4,4 +4,4 @@ Label=Screenshot of a region
 Category=Shortcuts
 Group=Applications
 Default=
-Description=Open the screenshot tool ready to drag an area
+Description=Goes straight to dragging an area, skipping the capture bar. No key by default

@@ -8,7 +8,7 @@
 #include <string.h>
 
 #define PROMPT "Press the new shortcut"
-#define UNBOUND "Disabled"
+#define UNBOUND "None"   // KDE's and Windows' word; "Disabled" read as "this is off"
 // WHAT THIS CONTROL IS SIZED FROM: the widest thing it can ever be asked
 // to show, as a CONSTANT. Not the current value -- a natural size that
 // depends on state is a feedback loop between layout and measurement
