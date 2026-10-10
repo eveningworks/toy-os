@@ -653,7 +653,9 @@ KTEST("setting", "a real setting's value matches its subsystem") {
     // a settings UI show a value that is not in effect.
     char v[SETTING_VALUE_MAX];
     KTEST_ASSERT_EQ(setting_get("font_size", v, sizeof v), 1);
-    KTEST_ASSERT_EQ(k_strcmp(v, gfx_font_size_name(gfx_font_size())), 0);
+    char want[16];
+    k_snprintf(want, sizeof want, "%d", font_config_px());
+    KTEST_ASSERT_EQ(k_strcmp(v, want), 0);
 }
 
 KTEST("setting", "setting a value it already has does no work at all") {

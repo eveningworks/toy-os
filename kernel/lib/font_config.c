@@ -33,6 +33,15 @@
 // a missing key.
 #define FACE_BUILTIN "builtin"
 
+// The size asked for, which is what the desktop draws at (fontd
+// rasterizes it); gfx_font_px() is the console's, snapped to a baked
+// size. 0 until font_config_init() has run.
+static int g_px;
+
+static int font_faces_is_builtin(void) {
+    return k_strcmp(font_faces_selected(), FACE_BUILTIN) == 0;
+}
+
 // What a machine with no `font_face` key uses, when the file is there.
 //
 // **A NAME, NOT A GUARANTEE.** If /usr/share/fonts/dejavu-sans-mono.ttf
@@ -99,8 +108,8 @@ void font_config_init(void) {
     // and "bold looks the same as regular" is exactly how it surfaced.
     uint32_t px = 0;
     if (etc_config_get(FONT_CONFIG_FILE, FONT_CONFIG_KEY, value, sizeof(value))
-        && k_parse_u32(value, &px) && px > 0) {
-        gfx_set_font_px((int)px);
+        && k_parse_u32(value, &px) && px > 0 && gfx_set_font_px((int)px)) {
+        g_px = font_faces_is_builtin() ? gfx_font_px() : (int)px;
     } else {
         // No size on record: build the face at whatever size is already
         // in effect, so the choice takes effect rather than being a
@@ -126,6 +135,8 @@ int font_config_save_px(int px) {
                ? SETTING_SAVED : SETTING_UNSAVED;
 }
 
+int font_config_px(void) { return g_px ? g_px : gfx_font_px(); }
+
 // --- the one place a font change is APPLIED for the machine ---------
 //
 // Set it, persist it, and tell every GUI client its cached metrics are
@@ -137,7 +148,10 @@ int font_config_save_px(int px) {
 // business repainting the user's desktop twice.
 int font_config_apply_px(int px) {
     if (!gfx_set_font_px(px)) return SETTING_INVALID;
-    int r = font_config_save_px(gfx_font_px());
+    // The baked font has only its eight sizes, so with no face the
+    // snapped one is the truth; with a face, fontd draws any size.
+    g_px = font_faces_is_builtin() ? gfx_font_px() : px;
+    int r = font_config_save_px(g_px);
     win_server_font_changed();
     return r;
 }
@@ -165,33 +179,15 @@ int font_config_save_face(const char *name) {
 
 // --- the registry descriptor (see setting.h) -------------------------
 //
-// The choice list is derived from gfx_font_size_name() for every baked
-// size, for the same reason name_to_size() above matches against it: a
-// second list of size names would need keeping in step with
-// font_ttf_variants[] and would silently stop matching if one moved.
-
-static int font_choice(int index, char *out, uint32_t out_size) {
-    if (index < 0 || index >= (int)FONT_SIZE_COUNT) return 0;
-    k_strlcpy(out, gfx_font_size_name((enum font_size)index), out_size);
-    return 1;
-}
+// AN INT, NOT THE BAKED LADDER: fontd rasterizes any size, so 13 is as
+// valid as 14 (it was an ENUM of the eight baked sizes, which refused
+// it). The console snaps to a baked size either way (gfx_set_font_px).
 
 static void font_get(char *out, uint32_t out_size) {
-    k_strlcpy(out, gfx_font_size_name(gfx_font_size()), out_size);
+    k_snprintf(out, out_size, "%d", font_config_px());
 }
 
 static int font_apply(const char *value) {
-    // **THIS ACCEPTS ANY NUMBER AND THE REGISTRY DOES NOT, so a size
-    // outside the list above never reaches here.** `setting_set()`
-    // gates an ENUM on `choice_valid()` first, so `config set
-    // system.font_size 13` is refused with "try one of: 8 10 12 ..."
-    // even though the rasterizer would manage 13 perfectly well.
-    //
-    // The comment here used to claim the opposite -- that the list was
-    // only what Settings SHOWS -- which was the intent when faces
-    // became loadable and was never true of the registry. See
-    // docs/bugs.md; the fix is a type that means "an INT with
-    // suggestions", which this setting wants and none exists.
     uint32_t px = 0;
     if (!k_parse_u32(value, &px) || px == 0) return SETTING_INVALID;
     return font_config_apply_px((int)px);
@@ -267,11 +263,11 @@ static const struct setting g_face_setting = {
 static const struct setting g_font_setting = {
     .name   = FONT_CONFIG_KEY,
     .label  = "Size",
-    .type   = SETTING_TYPE_ENUM,
+    .type   = SETTING_TYPE_INT,
     .file   = FONT_CONFIG_FILE,
     .category = "Appearance",
     .group = "Fonts",
-    .choice = font_choice,
+    .min = 8, .max = 32, .step = 1, .unit = "px",
     .get    = font_get,
     .apply  = font_apply,
 };

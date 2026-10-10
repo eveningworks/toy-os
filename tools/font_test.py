@@ -701,13 +701,20 @@ def main():
 
     # --- a size change re-rasterizes ----------------------------------
     # A loaded face has no bitmaps until fontd rasterizes it, so a new
-    # size is a new atlas at THAT size. (An off-ladder size like 13 is
-    # refused by the setting itself -- docs/bugs.md.)
+    # size is a new atlas at THAT size.
     big = set_size(dbg, 18)
     big_cell = ui_regular(big)
     check("a size change makes fontd re-rasterize at that size",
           big.get("px") == 18 and big_cell is not None and prop_cell is not None
           and big_cell[1] > prop_cell[1], f"{prop_cell} -> {big.get('px')}px {big_cell}")
+
+    # A SIZE NOBODY BAKED: the setting is an INT, and it reports what
+    # was asked for rather than the console's snapped size -- 18 above
+    # is on the baked ladder and would pass either way.
+    odd = set_size(dbg, 13)
+    got = config_get(dbg, "system.font_size")
+    check("a size nobody baked (13) is accepted and rasterized at 13",
+          odd.get("px") == 13 and got == "13", f"fontd {odd.get('px')}px, setting {got!r}")
 
     # --- and the baked font is still there -----------------------------
     set_size(dbg, 14)

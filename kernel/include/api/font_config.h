@@ -40,6 +40,11 @@ int font_config_apply_px(int px);
 int font_config_apply_face(const char *name);
 
 int font_config_save_px(int px);
+
+// The size the desktop draws at, as `system.font_size` reports it --
+// any size with a face loaded, a baked one without (gfx_font_px() is
+// always baked: the console's).
+int font_config_px(void);
 int font_config_save_face(const char *name);
 
 // Announces this setting to the registry (setting.h), so it appears in
